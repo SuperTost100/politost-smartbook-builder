@@ -1,0 +1,28 @@
+{
+  "name": "politost-smart-builder",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Local authoring app that turns course material into PoliTost smartbooks (.ptsb).",
+  "license": "AGPL-3.0-or-later",
+  "type": "module",
+  "engines": {
+    "node": ">=22.13"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "start": "npm run build -w @smartbuilder/web && node --import tsx apps/service/src/bin/start.ts",
+    "dev": "node scripts/dev.mjs",
+    "doctor": "node --import tsx apps/service/src/bin/doctor.ts",
+    "typecheck": "tsc -p packages/domain && tsc -p packages/content && tsc -p apps/service && tsc -p apps/web",
+    "test": "npm test -w @smartbuilder/content -w @smartbuilder/service",
+    "test:e2e": "npm run test:e2e -w @smartbuilder/web"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.1",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9"
+  }
+}

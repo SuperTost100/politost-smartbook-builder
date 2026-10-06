@@ -1,0 +1,14 @@
+{ "name": "@smartbuilder/service", "version": "0.1.0", "private": true, "type": "module", "license": "AGPL-3.0-or-later",
+  "scripts": { "test": "tsx --test src/**/*.test.ts", "dev": "tsx watch src/bin/start.ts --dev" },
+  "dependencies": {
+    "@fastify/cookie": "^11.0.0",
+    "@fastify/multipart": "^9.0.0",
+    "@fastify/static": "^8.0.0",
+    "@smartbuilder/content": "*",
+    "@smartbuilder/domain": "*",
+    "cli-funnel": "0.3.0",
+    "fastify": "^5.0.0",
+    "mupdf": "^1.28.1",
+    "pyodide": "^0.29.0",
+    "zod": "^4.1.0"
+  } }
