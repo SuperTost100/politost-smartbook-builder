@@ -1,0 +1,20 @@
+{
+  "id": "esempio",
+  "title": "Guida di esempio",
+  "subject": "Esempio",
+  "specVersion": "1.1",
+  "sections": {
+    "smartbook": { "enabled": true, "label": "Capitoli" },
+    "formulario": { "enabled": true, "label": "Formulario" },
+    "esercizi": { "enabled": true, "label": "Esercizi" },
+    "esami": { "enabled": true, "label": "Prove d'esame" },
+    "ide": { "enabled": true, "label": "Laboratorio" },
+    "grafici": { "enabled": true, "label": "Grafici & Calcoli" },
+    "risposte": { "enabled": false, "label": "Soluzioni" }
+  },
+  "chapters": [
+    { "id": "benvenuto", "number": 1, "title": "Benvenuto", "file": "01-benvenuto.md", "printable": true },
+    { "id": "nel-libro", "number": 2, "title": "Cosa trovi nel libro", "file": "02-nel-libro.md", "printable": true },
+    { "id": "prova-tu", "number": 3, "title": "Prova tu", "file": "03-prova-tu.md", "printable": true }
+  ]
+}

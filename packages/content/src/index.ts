@@ -7,3 +7,4 @@ export * from './plot.ts';
 export * from './blocks.ts';
 export * from './ptsb.ts';
 export * from './verify.ts';
+export * from './decompile.ts';

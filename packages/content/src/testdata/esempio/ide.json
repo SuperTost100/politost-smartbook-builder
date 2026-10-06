@@ -1,0 +1,23 @@
+[
+  {
+    "id": "ciao",
+    "title": "Primo programma",
+    "language": "python",
+    "description": "Un semplice saluto — prova a premere Esegui",
+    "code": "nome = \"Studente\"\nprint(f\"Ciao, {nome}! Benvenuto nel laboratorio.\")\nprint(\"Qui puoi provare piccoli calcoli.\")"
+  },
+  {
+    "id": "area-cerchio",
+    "title": "Area del cerchio",
+    "language": "python",
+    "description": "Calcola l'area per diversi raggi",
+    "code": "import math\n\nfor r in [1, 2, 3, 5]:\n    area = math.pi * r ** 2\n    print(f\"r = {r} m  →  area = {area:.2f} m²\")"
+  },
+  {
+    "id": "ciao-matlab",
+    "title": "Stesso saluto in MATLAB",
+    "language": "matlab",
+    "description": "Versione per chi usa MATLAB o Octave",
+    "code": "nome = 'Studente';\nfprintf('Ciao, %s!\\n', nome);\nfprintf('Benvenuto nel laboratorio.\\n');"
+  }
+]

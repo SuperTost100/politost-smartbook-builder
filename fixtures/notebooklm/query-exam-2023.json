@@ -1,0 +1,30 @@
+{
+  "answer": "Nell'esame del **25 gennaio 2023 (Turno 1)**, l'Esercizio 1 recita testualmente:\n\n> *\"Si consideri la funzione \\\\(f : \\text{dom } f \\subseteq \\mathbb{R} \\to \\mathbb{R}\\\\) definita da \\\\(f(x) = \\sqrt{x^2 + 3x} - |x|\\\\).\"* [1]\n>\n> *(a) Determinare il dominio di definizione \\\\(\\text{dom } f\\\\)...* [2]\n\n---\n\n### Determinazione del Dominio\n\nCome indicato nello svolgimento ufficiale riportato nel testo d'esame [3]:\n\n> *\"Le condizioni di esistenza richiedono che l’argomento della radice sia non negativo, quindi il dominio della funzione è\"* [3]\n> \\\\[\\text{dom } f = \\{x \\in \\mathbb{R} \\mid x^2 + 3x = x(x+ 3) \\ge 0\\} = (-\\infty,-3] \\cup [0,\\infty)\\\\] [3]\n\n### Passaggi nel dettaglio\n1. **Condizione di esistenza**: Il termine \\\\(|x|\\\\) è definito per ogni \\\\(x \\in \\mathbb{R}\\\\), perciò l'unica limitazione deriva dalla radice quadrata, il cui radicando deve essere maggiore o uguale a zero (\\\\(x^2 + 3x \\ge 0\\\\)) [3].\n2. **Studio del segno**: Scomponendo in fattori il polinomio di secondo grado si ottiene \\\\(x(x + 3) \\ge 0\\\\) [3].\n3. **Soluzione**: La disequazione è verificata per valori esterni o uguali alle radici \\\\(x = -3\\\\) e \\\\(x = 0\\\\), determinando così il dominio **\\\\((-\\infty, -3] \\cup [0, +\\infty)\\\\)** [3].\n\n💡 *Vuoi analizzare i limiti agli estremi del dominio e gli asintoti di questa funzione, oppure passare allo studio della derivata e della monotonia?*",
+  "question": "Come si determina il dominio di f(x)=sqrt(x^2+3x)-|x| nell'esame del 25 gennaio 2023? Cita il testo.",
+  "conversation_id": "91afcf25-c678-4b90-afbe-6632baa68784",
+  "sources_used": [
+    "e6a6d3f5-3b28-4779-b87a-a45234087fb4"
+  ],
+  "citations": {
+    "1": "e6a6d3f5-3b28-4779-b87a-a45234087fb4",
+    "2": "e6a6d3f5-3b28-4779-b87a-a45234087fb4",
+    "3": "e6a6d3f5-3b28-4779-b87a-a45234087fb4"
+  },
+  "references": [
+    {
+      "source_id": "e6a6d3f5-3b28-4779-b87a-a45234087fb4",
+      "citation_number": 1,
+      "cited_text": "Esami scritti di Analisi Matematica I 2022-2023 1 Esame del 25 gennaio 2023 - turno 1 . . . . . . . . . . . . . . . . . . . . . . . . . . . 2 2 Esame del 25 gennaio 2023 - turno 2 . . . . . . . . . . . . . . . . . . . . . . . . . . . 8 3 Esame del 10 febbraio 2023 . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . . 14 c© 2023 Politecnico di Torino 1 Esame del 25 gennaio 2023 - turno 1 Esercizio 1. (9 punti) Si consideri la funzione f : dom f ⊆ R → R definita da f(x) = √ x2 + 3x− |x|."
+    },
+    {
+      "source_id": "e6a6d3f5-3b28-4779-b87a-a45234087fb4",
+      "citation_number": 2,
+      "cited_text": "(a) Determinare il dominio di definizione dom f , eventuali proprietà di simmetria, i limiti agli estremi di dom f e gli eventuali asintoti. (b) Studiare la continuità e la derivabilità della funzione, individuando e classificando eventuali punti di discontinuità e di non derivabilità in dom f . (c) Determinare gli intervalli di monotonia e gli eventuali punti di massimo e di minimo locale di f , precisando se questi ultimi sono anche globali o meno. (d) Tracciare un grafico qualitativo di f . (e) Studiare il comportamento, per n −→ +∞, della successione reale (an)n∈N i cui termini sono"
+    },
+    {
+      "source_id": "e6a6d3f5-3b28-4779-b87a-a45234087fb4",
+      "citation_number": 3,
+      "cited_text": "f(2) = −1 non è iniettiva. c© 2023 Politecnico di Torino SVOLGIMENTO Esercizio 1. Si consideri la funzione f : dom f ⊆ R → R definita da f(x) = √ x2 + 3x− |x|. (a) Determinare il dominio di definizione dom f , eventuali proprietà di simmetria, i limiti agli estremi di dom f e gli eventuali asintoti. Le condizioni di esistenza richiedono che l’argomento della radice sia non negativo, quindi il dominio della funzione è dom f = {x ∈ R | x2 + 3x = x(x+ 3) ≥ 0} = (−∞,−3] ∪ [0,∞). La funzione non può essere né pari né dispari perché il suo dominio non è un insieme sim-"
+    }
+  ]
+}

@@ -1,0 +1,34 @@
+[
+  {
+    "id": "sinusoide",
+    "title": "Curva di esempio",
+    "type": "function",
+    "config": {
+      "functions": [
+        { "fn": "sin(x)", "label": "sin(x)" }
+      ],
+      "xDomain": [0, 6.28],
+      "yDomain": [-1.2, 1.2],
+      "xLabel": "x",
+      "yLabel": "y"
+    }
+  },
+  {
+    "id": "confronto",
+    "title": "Confronto valori",
+    "type": "plotly",
+    "config": {
+      "data": [{
+        "type": "bar",
+        "x": ["Lun", "Mar", "Mer", "Gio", "Ven"],
+        "y": [3, 5, 4, 7, 6],
+        "name": "Ore di studio"
+      }],
+      "layout": {
+        "title": "Esempio di grafico a barre",
+        "xaxis": { "title": "Giorno" },
+        "yaxis": { "title": "Ore" }
+      }
+    }
+  }
+]

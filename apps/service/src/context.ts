@@ -1,5 +1,5 @@
 import { mkdirSync } from 'node:fs';
-import { DEFAULT_ROUTES, settingsSchema, type Settings } from '@smartbuilder/domain';
+import { DEFAULT_ROUTES, ROLES, settingsSchema, type Role, type Settings } from '@smartbuilder/domain';
 import { type Config, paths } from './config.ts';
 import { Db, json } from './db/db.ts';
 import { Events } from './events.ts';
@@ -37,7 +37,9 @@ export function createContext(config: Config): AppContext {
   const queue = new Queue(db, events, (pool) => {
     if (pool === 'local') return 2;
     if (pool === '*') return 12;
-    return settings().concurrency[pool] ?? 1;
+    // Pools named after a role share the limit of that role's provider.
+    const provider = (ROLES as readonly string[]).includes(pool) ? settings().routes[pool as Role].primary.provider : pool;
+    return settings().concurrency[provider] ?? 1;
   });
 
   return { config, db, events, queue, settings, saveSettings };
