@@ -1,7 +1,7 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { extname, isAbsolute, join, basename } from 'node:path';
+import { extname, join, basename } from 'node:path';
 import type { Asset } from '@smartbuilder/domain';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { badInput, notFound } from './errors.ts';
@@ -54,7 +54,7 @@ export function assertSafeSvg(svg: string): void {
 }
 
 export function assetPath(ctx: AppContext, r: { path: string; project_id: string }): string {
-  return isAbsolute(r.path) ? r.path : join(paths.assets(ctx.config, r.project_id), r.path);
+  return resolveDataPath(ctx.config, r.path);
 }
 
 export function listAssets(ctx: AppContext, projectId: string): Asset[] {
@@ -109,7 +109,7 @@ export function storeAsset(ctx: AppContext, projectId: string, input: NewAsset):
   renameSync(tmp, path);
   try {
     ctx.db.insert('assets', {
-      id, project_id: projectId, node_id: input.nodeId ?? null, filename, mime, path, origin: input.origin, spec: input.spec ?? null,
+      id, project_id: projectId, node_id: input.nodeId ?? null, filename, mime, path: toDataPath(ctx.config, path), origin: input.origin, spec: input.spec ?? null,
       caption: input.caption ?? '', alt: input.alt ?? '', checks: input.checks ?? [], created_at: now(),
     });
   } catch (err) {

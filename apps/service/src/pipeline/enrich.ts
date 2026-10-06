@@ -1,13 +1,19 @@
 // Extras: the bulk model picks where graphs and Python examples help; the writer creates them; we check them.
 import { sampleFunctionGraph } from '@smartbuilder/content';
-import { Worker } from 'node:worker_threads';
 import type { AppContext } from '../context.ts';
-import { newId, now, json } from '../db/db.ts';
+import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
-import type { TaskContext } from '../queue/queue.ts';
+import type { TaskContext, TaskSpec } from '../queue/queue.ts';
+import { runPython } from './python.ts';
 import { enrichPickPrompt, enrichPickSchema, graphPrompt, graphSchema, idePrompt, ideSchema } from './prompts.ts';
 import { headRevision, loadOutline, loadProject, truncate } from './util.ts';
 
+const ENRICH_KINDS = ['enrich.graph', 'enrich.ide'];
+
+/**
+ * Picks where graphs and Python examples help (one bulk call) and enqueues one child task per extra. A retry finds the
+ * children already in the run and reuses them instead of picking again.
+ */
 export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const chapterId = t.task.input.chapterId as string;
@@ -16,8 +22,11 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
   const outline = loadOutline(ctx, projectId);
   const chapter = outline?.outline.chapters.find((c) => c.id === chapterId);
   if (!chapter) return { skipped: true };
-  const existing = ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM enrichments WHERE project_id = ? AND node_id IN (${chapter.sections.map(() => '?').join(',')})`, projectId, ...chapter.sections.map((s) => s.id));
-  if (existing && existing.n > 0 && !t.task.input.force) return { reused: existing.n };
+  const ids = new Set(chapter.sections.map((s) => s.id));
+
+  const children = ctx.db.all<{ kind: string; input: string }>(`SELECT kind, input FROM tasks WHERE run_id = ? AND kind IN (${ENRICH_KINDS.map(() => '?').join(',')})`, t.task.runId, ...ENRICH_KINDS)
+    .filter((c) => ids.has(json<{ nodeId?: string }>(c.input, {}).nodeId ?? ''));
+  if (children.length && !t.task.input.force) return { reused: children.length };
 
   const sections = chapter.sections.map((s) => {
     const head = headRevision(ctx, projectId, s.id);
@@ -27,31 +36,55 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
     role: 'bulk', ...enrichPickPrompt({ sections: sections.map((s) => `${s.id} | ${s.title} | ${truncate(s.text.replace(/\s+/g, ' '), 600)}`).join('\n'), graphs: project.options.graphs, ide: project.options.ide }),
     schema: enrichPickSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
-  const byId = new Map(sections.map((s) => [s.id, s]));
-  let made = 0;
-  for (const pick of project.options.graphs ? data.graphs.slice(0, 2) : []) {
-    const s = byId.get(pick.sectionId);
-    if (!s) continue;
-    const g = await runRole(ctx, { role: 'writer', ...graphPrompt({ language: project.language, purpose: pick.purpose, section: truncate(s.text, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-    const sampled = sampleFunctionGraph({
-      id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
-      functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
-    });
-    saveEnrichment(ctx, projectId, s.id, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }]);
-    made++;
-  }
-  for (const pick of project.options.ide ? data.ide.slice(0, 1) : []) {
-    const s = byId.get(pick.sectionId);
-    if (!s) continue;
-    const g = await runRole(ctx, { role: 'writer', ...idePrompt({ language: project.language, purpose: pick.purpose, section: truncate(s.text, 8000) }), schema: ideSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-    const payload = { id: g.data.id, title: g.data.title, language: 'python', description: g.data.description, code: g.data.code };
-    t.progress('Running the Python example');
-    const run = await runPython(g.data.code, 20_000);
-    const ok = run.ok && run.stdout.trim().length > 0;
-    saveEnrichment(ctx, projectId, s.id, 'ide', payload, [{ method: 'numeric', ok, detail: ok ? `Ran in Pyodide ${run.version}. Output:\n${truncate(run.stdout, 800)}` : `Did not run: ${run.error ?? 'no output'}` }]);
-    made++;
-  }
-  return { made };
+  const have = new Set(sections.map((s) => s.id));
+  const force = t.task.input.force ? { force: true } : {};
+  const titleOf = (id: string) => chapter.sections.find((s) => s.id === id)?.title ?? '';
+  const specs: TaskSpec[] = [
+    ...(project.options.graphs ? data.graphs.slice(0, 2) : []).filter((p) => have.has(p.sectionId))
+      .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'writer' })),
+    ...(project.options.ide ? data.ide.slice(0, 1) : []).filter((p) => have.has(p.sectionId))
+      .map((p) => ({ kind: 'enrich.ide', key: `enrich.ide:${p.sectionId}`, label: `Write a Python example for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'writer' })),
+  ];
+  t.enqueue(specs);
+  return { picked: specs.length };
+}
+
+function existingEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind: 'graph' | 'ide') {
+  return ctx.db.get('SELECT id FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = ?', projectId, nodeId, kind);
+}
+
+/** One graph for one section. Idempotent: skipped when the section already has a graph. */
+export async function enrichGraph(ctx: AppContext, t: TaskContext) {
+  const { projectId } = t.task;
+  const nodeId = t.task.input.nodeId as string;
+  if (!t.task.input.force && existingEnrichment(ctx, projectId, nodeId, 'graph')) return { reused: true };
+  const head = headRevision(ctx, projectId, nodeId);
+  if (!head) return { skipped: 'no text yet' };
+  const project = loadProject(ctx, projectId);
+  const g = await runRole(ctx, { role: 'writer', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const sampled = sampleFunctionGraph({
+    id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
+    functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
+  });
+  saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }]);
+  return { made: 1 };
+}
+
+/** One Python example for one section, run in the sandbox. Idempotent: skipped when the section already has one. */
+export async function enrichIde(ctx: AppContext, t: TaskContext) {
+  const { projectId } = t.task;
+  const nodeId = t.task.input.nodeId as string;
+  if (!t.task.input.force && existingEnrichment(ctx, projectId, nodeId, 'ide')) return { reused: true };
+  const head = headRevision(ctx, projectId, nodeId);
+  if (!head) return { skipped: 'no text yet' };
+  const project = loadProject(ctx, projectId);
+  const g = await runRole(ctx, { role: 'writer', ...idePrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: ideSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const payload = { id: g.data.id, title: g.data.title, language: 'python', description: g.data.description, code: g.data.code };
+  t.progress('Running the Python example');
+  const run = await runPython(g.data.code, 20_000);
+  const ok = run.ok && run.stdout.trim().length > 0;
+  saveEnrichment(ctx, projectId, nodeId, 'ide', payload, [{ method: 'numeric', ok, detail: ok ? `Ran in Pyodide ${run.version}. Output:\n${truncate(run.stdout, 800)}` : `Did not run: ${run.error ?? 'no output'}` }]);
+  return { made: 1 };
 }
 
 function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind: 'ide' | 'graph', payload: Record<string, unknown>, checks: { method: string; ok: boolean; detail: string }[]) {
@@ -66,34 +99,4 @@ function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind
   }
 }
 
-/**
- * Runs Python in Pyodide inside a worker thread with a hard timeout. Pyodide is WebAssembly: the code has no access to
- * the host filesystem or network beyond what we pass in (we pass nothing), and terminating the worker frees everything.
- */
-export function runPython(code: string, timeoutMs: number): Promise<{ ok: boolean; stdout: string; error?: string; version: string }> {
-  const src = `
-    const { parentPort, workerData } = require('node:worker_threads');
-    (async () => {
-      const { loadPyodide } = await import('pyodide');
-      const py = await loadPyodide({ stdout: () => {}, stderr: () => {} });
-      let out = '';
-      py.setStdout({ batched: (s) => { out += s + '\\n'; } });
-      py.setStderr({ batched: (s) => { out += s + '\\n'; } });
-      try {
-        // Block modules that reach outside the sandbox.
-        py.runPython("import sys\\nfor m in ['js','pyodide.http','micropip','socket','urllib.request']: sys.modules[m] = None");
-        py.runPython(workerData.code);
-        parentPort.postMessage({ ok: true, stdout: out, version: py.version });
-      } catch (e) {
-        parentPort.postMessage({ ok: false, stdout: out, error: String(e && e.message || e).slice(-1500), version: py.version });
-      }
-    })().catch((e) => parentPort.postMessage({ ok: false, stdout: '', error: String(e), version: 'unavailable' }));`;
-  return new Promise((resolve) => {
-    const w = new Worker(src, { eval: true, workerData: { code }, resourceLimits: { maxOldGenerationSizeMb: 512 } });
-    const timer = setTimeout(() => { void w.terminate(); resolve({ ok: false, stdout: '', error: `Timed out after ${timeoutMs / 1000} s`, version: '?' }); }, timeoutMs);
-    w.once('message', (m) => { clearTimeout(timer); void w.terminate(); resolve(m); });
-    w.once('error', (e) => { clearTimeout(timer); resolve({ ok: false, stdout: '', error: e.message, version: '?' }); });
-  });
-}
-
-export { json };
+export { runPython };

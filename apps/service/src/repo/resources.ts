@@ -1,7 +1,7 @@
 import { existsSync, rmSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
 import type { Page, PageQuality, Resource, ResourceKind, ResourceRole, ResourceStatus, SourceIndex, SourceIndexEntry, Topic } from '@smartbuilder/domain';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json } from '../db/db.ts';
 import { notFound } from './errors.ts';
@@ -60,7 +60,7 @@ export function deleteResource(ctx: AppContext, id: string): void {
   const shared = ctx.db.get(
     'SELECT 1 FROM resources WHERE (sha256 = ? AND project_id = ?) OR path = ?', row.sha256, row.project_id, row.path ?? '');
   const projectDir = resolve(paths.project(ctx.config, row.project_id)) + sep;
-  const file = typeof row.path === 'string' && row.path ? resolve(row.path) : null;
+  const file = typeof row.path === 'string' && row.path ? resolve(resolveDataPath(ctx.config, row.path)) : null;
   if (!shared && file && file.startsWith(projectDir) && existsSync(file)) rmSync(file, { force: true });
   rmSync(paths.pageCache(ctx.config, row.project_id, id), { recursive: true, force: true });
 }

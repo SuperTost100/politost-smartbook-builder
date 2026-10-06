@@ -11,7 +11,13 @@ import type { RunStatus, RunSummary, TaskRow, TaskState } from '@smartbuilder/do
 import { type Db, json, newId, now } from '../db/db.ts';
 import type { Events } from '../events.ts';
 
-export type ErrorKind = 'temporary' | 'quota' | 'auth' | 'input' | 'fatal';
+/**
+ * 'later' is not a problem: the task is only waiting for other work (a barrier). It retries in a few seconds,
+ * does not consume attempts and shows no wait reason.
+ */
+export type ErrorKind = 'temporary' | 'quota' | 'auth' | 'input' | 'fatal' | 'later';
+
+const LATER_MS = 10_000;
 
 /** Throw from a handler to control retry behaviour. */
 export class TaskError extends Error {
@@ -333,6 +339,12 @@ export class Queue {
       return;
     }
     const te = err instanceof TaskError ? err : new TaskError(err instanceof Error ? err.message : String(err), 'temporary');
+    if (te.kind === 'later') {
+      const at = Date.now() + (te.retryAfterMs ?? LATER_MS);
+      this.db.run(`UPDATE tasks SET state = 'retry_wait', retry_at = ?, attempts = attempts - 1, wait_reason = NULL, error = NULL, lease_owner = NULL WHERE id = ?`, at, t.id);
+      this.emitTask(t, 'retry_wait', { retryAt: new Date(at).toISOString() });
+      return;
+    }
     const body = JSON.stringify({ message: te.message, action: te.action, kind: te.kind });
     if (te.kind === 'auth') {
       this.db.run(`UPDATE tasks SET state = 'waiting_for_user', wait_reason = ?, error = ?, lease_owner = NULL WHERE id = ?`, te.message, body, t.id);
@@ -377,23 +389,35 @@ export class Queue {
       const c = Object.fromEntries(this.db.all<{ state: TaskState; n: number }>('SELECT state, COUNT(*) AS n FROM tasks WHERE run_id = ? GROUP BY state', r.id).map((x) => [x.state, x.n])) as Partial<Record<TaskState, number>>;
       const active = (c.queued ?? 0) + (c.running ?? 0) + (c.retry_wait ?? 0) + busy;
       const waiting = c.waiting_for_user ?? 0;
-      if (waiting && r.status === 'running') {
-        // Still running if other independent work can proceed.
-        const runnable = this.db.get<{ n: number }>(`
-          SELECT COUNT(*) AS n FROM tasks t WHERE t.run_id = ? AND t.state IN ('queued', 'running', 'retry_wait')
-          AND NOT EXISTS (SELECT 1 FROM task_deps d JOIN tasks dt ON dt.id = d.dep_id WHERE d.task_id = t.id AND dt.state IN ('waiting_for_user', 'failed', 'cancelled'))`, r.id)?.n ?? 0;
-        if (!runnable && !busy) this.setRunStatus(r.id, 'waiting');
+      // Work that can still happen without the author: not blocked, however far up the chain, by a failed or cancelled task
+      // or by one that waits for the author.
+      const runnable = this.countRunnable(r.id, ['waiting_for_user', 'failed', 'cancelled']);
+      if (busy || runnable) {
+        if (r.status === 'waiting') this.setRunStatus(r.id, 'running');
         continue;
       }
-      if (active === 0 && !waiting) {
-        this.setRunStatus(r.id, c.failed ? 'failed' : 'completed');
-      } else if (c.failed && !busy) {
-        // Remaining queued tasks may be blocked forever by a failed dependency.
-        const runnable = this.db.get<{ n: number }>(`
-          SELECT COUNT(*) AS n FROM tasks t WHERE t.run_id = ? AND t.state IN ('queued', 'retry_wait')
-          AND NOT EXISTS (SELECT 1 FROM task_deps d JOIN tasks dt ON dt.id = d.dep_id WHERE d.task_id = t.id AND dt.state IN ('failed', 'cancelled'))`, r.id)?.n ?? 0;
-        if (!runnable) this.setRunStatus(r.id, 'failed');
+      if (waiting) {
+        if (r.status === 'running') this.setRunStatus(r.id, 'waiting');
+        continue;
       }
+      // Nothing can run and nobody is asked: finished, or stuck behind failures for good.
+      this.setRunStatus(r.id, active === 0 && !c.failed ? 'completed' : 'failed');
     }
+  }
+
+  /**
+   * Queued and retrying tasks that no blocking task stands in the way of, directly or through other tasks.
+   * A task is blocked when any task it depends on, at any depth, is in one of the blocking states.
+   */
+  private countRunnable(runId: string, blocking: TaskState[]): number {
+    const marks = blocking.map(() => '?').join(',');
+    return this.db.get<{ n: number }>(`
+      WITH RECURSIVE blocked(id) AS (
+        SELECT d.task_id FROM task_deps d JOIN tasks dt ON dt.id = d.dep_id WHERE dt.run_id = ? AND dt.state IN (${marks})
+        UNION
+        SELECT d.task_id FROM task_deps d JOIN blocked b ON d.dep_id = b.id
+      )
+      SELECT COUNT(*) AS n FROM tasks t WHERE t.run_id = ? AND t.state IN ('queued', 'retry_wait') AND t.id NOT IN (SELECT id FROM blocked)`,
+    runId, ...blocking, runId)?.n ?? 0;
   }
 }

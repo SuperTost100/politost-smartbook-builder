@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { assertSafeSvg, insertProposal, saveHuman, usageForRun } from '../repo/index.ts';
 import { newId, now } from '../db/db.ts';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath } from '../config.ts';
 import { installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -87,7 +87,7 @@ describe('resources', () => {
     assert.equal(fakes.calls.startRun.length, before + 1);
     assert.equal(fakes.calls.startRun.at(-1)!.kind, 'prepare');
 
-    const path = (t.ctx.db.get<{ path: string }>('SELECT path FROM resources WHERE id = ?', res.body[0].id))!.path;
+    const path = resolveDataPath(t.ctx.config, (t.ctx.db.get<{ path: string }>('SELECT path FROM resources WHERE id = ?', res.body[0].id))!.path);
     assert.ok(existsSync(path));
     await t.req('DELETE', `/api/resources/${res.body[0].id}`);
     assert.ok(!existsSync(path));

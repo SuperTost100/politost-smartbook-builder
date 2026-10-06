@@ -1,5 +1,5 @@
 import { homedir, platform } from 'node:os';
-import { join, resolve } from 'node:path';
+import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { mkdirSync } from 'node:fs';
 
 export interface Config {
@@ -59,3 +59,20 @@ export const paths = {
   scratch: (c: Config) => join(c.dataDir, 'scratch'),
   lanToken: (c: Config) => join(c.dataDir, 'lan-token'),
 };
+
+/**
+ * Paths stored in the database (resources.path, assets.path, exports.path) are relative to the data directory,
+ * with forward slashes, so a restored backup works in any folder.
+ */
+export function toDataPath(c: Pick<Config, 'dataDir'>, abs: string): string {
+  if (!isAbsolute(abs)) return abs;
+  const root = resolve(c.dataDir);
+  const full = resolve(abs);
+  if (full !== root && !full.startsWith(root + sep)) return abs;
+  return relative(root, full).split(sep).join('/');
+}
+
+/** Absolute file path of a stored path. Absolute values (rows from before relative paths, or outside the data dir) pass through. */
+export function resolveDataPath(c: Pick<Config, 'dataDir'>, stored: string): string {
+  return isAbsolute(stored) || /^[a-zA-Z]:[\\/]/.test(stored) ? stored : resolve(c.dataDir, stored);
+}

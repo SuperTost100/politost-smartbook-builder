@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildFormulaIndex, parseChapterMarkdown, parseExercises, validateExercises } from '@politost/content-core';
-import { compileBook, compileChapter } from './compile.ts';
+import { compileBook, compileChapter, numberChapters } from './compile.ts';
 import { enrichment, fixtureBook, question } from './fixtures.ts';
 import type { BookInput, CompiledBook } from './types.ts';
 
@@ -298,4 +298,12 @@ test('book-wide formula index of the compiled book is complete', () => {
   const book = compileBook(fixtureBook());
   const chapters = [1, 2].map((n) => parseChapterMarkdown(text(book, `chapters/0${n}-${n === 1 ? 'cinematica' : 'dinamica'}.md`), n));
   assert.deepEqual([...buildFormulaIndex(chapters).keys()], ['1.1', '1.2', '1.3', '2.1']);
+});
+
+test('numberChapters gives the same section and formula numbers as the full compile, chapter introductions included', () => {
+  const input = fixtureBook();
+  const book = compileBook(input);
+  const n = numberChapters(input.chapters, input.meta.language);
+  assert.deepEqual(n.sectionNumbers, book.sectionNumbers);
+  assert.deepEqual(n.formulaNumbers, book.formulaNumbers);
 });

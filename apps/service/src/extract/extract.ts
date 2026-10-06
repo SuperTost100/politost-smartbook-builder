@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import type { SourceIndex, SourceIndexEntry } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath } from '../config.ts';
 import { ExtractError } from './errors.ts';
 import { extractPdfInWorker, renderPdfInWorker, abortError } from './pdf-runner.ts';
 import type { ExtractedPage, OutlineFlat } from './pdf-types.ts';
@@ -31,7 +31,7 @@ function loadResource(ctx: AppContext, resourceId: string): ResourceRow {
   return row;
 }
 
-const dataFile = (ctx: AppContext, p: string) => (p.startsWith('/') || /^[a-zA-Z]:[\\/]/.test(p) ? p : join(ctx.config.dataDir, p));
+const dataFile = (ctx: AppContext, p: string) => resolveDataPath(ctx.config, p);
 
 function setStatus(ctx: AppContext, row: ResourceRow, status: 'extracting' | 'ready' | 'failed' | 'queued', extra: Record<string, unknown> = {}) {
   ctx.db.update('resources', row.id, { status, ...extra });

@@ -261,6 +261,20 @@ function emitChapter(chapter: ChapterInput, number: number, numbering: Numbering
   return withChapterFrontmatter(parts.join('\n\n') + '\n', number, title);
 }
 
+/**
+ * Numbers of every section (chapter introductions included, as the compiler numbers them) and every keyed formula of a
+ * set of chapters. This is the compiler's own numbering pass, so previews and checks agree with the full book.
+ */
+export function numberChapters(
+  chapters: ChapterInput[],
+  language = 'it',
+): { formulaNumbers: Record<string, string>; sectionNumbers: Record<string, { chapter: number; paragraph: number }> } {
+  const formulaNumbers: Record<string, string> = {};
+  const sectionNumbers: Record<string, { chapter: number; paragraph: number }> = {};
+  for (const ch of [...chapters].sort((a, b) => a.number - b.number)) numberChapter(ch, ch.number, language, formulaNumbers, sectionNumbers, []);
+  return { formulaNumbers, sectionNumbers };
+}
+
 /** Compile one chapter to reader Markdown, for preview. */
 export function compileChapter(
   chapter: ChapterInput,

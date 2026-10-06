@@ -6,7 +6,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { detectKind, storeResource, extractResource, renderPageImage, findPassage, searchPages, segmentQuestions, ExtractError, isBlockedAddress, safeFetch, htmlToMarkdown, LIBREOFFICE_MISSING } from './index.ts';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath } from '../config.ts';
 import { makeCtx, makePdf, makeZip, makeDocx } from './testkit.ts';
 
 const SRC = '/home/tost/politost-sources/Analisi';
@@ -50,8 +50,9 @@ test('storeResource: content-addressed file, dedupe by sha256, queued row', asyn
   assert.equal(row.filename, 'Appunti.pdf');
   assert.equal(row.sha256, sha);
   assert.equal(row.size, bytes.length);
-  assert.equal(row.path, join(paths.resources(ctx.config, projectId), `${sha}.pdf`));
-  assert.deepEqual(readFileSync(row.path as string), bytes);
+  assert.equal(row.path, `projects/${projectId}/resources/${sha}.pdf`, 'stored relative to the data directory');
+  assert.deepEqual(readFileSync(resolveDataPath(ctx.config, row.path as string)), bytes);
+  assert.equal(resolveDataPath(ctx.config, row.path as string), join(paths.resources(ctx.config, projectId), `${sha}.pdf`));
   assert.equal(readdirSync(paths.resources(ctx.config, projectId)).filter((f) => f.endsWith('.tmp')).length, 0);
   assert.equal(ctx.db.get<{ n: number }>('SELECT count(*) AS n FROM resources')!.n, 1);
   await assert.rejects(storeResource(ctx, projectId, { filename: 'a.txt', bytes: Buffer.from('x'), role: 'theory' }), /not supported/);
@@ -217,6 +218,33 @@ test('safeFetch against a local fixture server: HTML to Markdown, redirects, siz
   }
 });
 
+test('safeFetch settles when a compressed response is cut off after the headers', async () => {
+  const server = http.createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' });
+    res.write(Buffer.from([0x1f, 0x8b, 0x08, 0x00]));
+    setTimeout(() => res.socket?.destroy(), 50);
+  });
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
+  const base = `http://127.0.0.1:${(server.address() as { port: number }).port}`;
+  try {
+    const started = Date.now();
+    await assert.rejects(safeFetch(`${base}/`, { allowPrivate: true, timeoutMs: 5000 }), /could not be fetched/);
+    assert.ok(Date.now() - started < 3000, 'settled long before the overall timeout');
+    // Headers only, then silence: the overall timeout settles it.
+    const silent = http.createServer((req, res) => { res.writeHead(200, { 'content-type': 'text/html', 'content-encoding': 'gzip' }); res.flushHeaders(); });
+    await new Promise<void>((r) => silent.listen(0, '127.0.0.1', r));
+    try {
+      await assert.rejects(safeFetch(`http://127.0.0.1:${(silent.address() as { port: number }).port}/`, { allowPrivate: true, timeoutMs: 300 }), /longer than 20 seconds/);
+    } finally {
+      silent.closeAllConnections();
+      silent.close();
+    }
+  } finally {
+    server.closeAllConnections();
+    server.close();
+  }
+});
+
 test('URL resource: raw HTML and derived Markdown stored, fetch date and final URL in meta, pages split by heading', async () => {
   const { ctx, projectId } = makeCtx();
   const html = '<html><head><title>Limiti di funzioni</title></head><body><nav>menu</nav><h1>Limiti</h1><p>Un limite descrive il comportamento.</p><h2>Teorema del confronto</h2><p>Se f &lt;= g allora i limiti si confrontano.</p></body></html>';
@@ -238,8 +266,8 @@ test('URL resource: raw HTML and derived Markdown stored, fetch date and final U
     const meta = JSON.parse(row.meta);
     assert.equal(meta.finalUrl, `${base}/corso/limiti.html`);
     assert.match(meta.fetchedAt, /^\d{4}-\d\d-\d\dT/);
-    assert.equal(readFileSync(row.path, 'utf8'), html);
-    assert.equal(row.path, join(paths.resources(ctx.config, projectId), `${row.sha256}.html`));
+    assert.equal(readFileSync(resolveDataPath(ctx.config, row.path), 'utf8'), html);
+    assert.equal(row.path, `projects/${projectId}/resources/${row.sha256}.html`);
     assert.match(readFileSync(join(paths.resources(ctx.config, projectId), `${row.sha256}.md`), 'utf8'), /^# Limiti\n\nUn limite/);
     const out = await extractResource(ctx, id, signal());
     assert.equal(out.pages, 2);

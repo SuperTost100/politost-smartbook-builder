@@ -1,6 +1,6 @@
 import { mkdirSync } from 'node:fs';
 import { DEFAULT_ROUTES, ROLES, settingsSchema, type Role, type Settings } from '@smartbuilder/domain';
-import { type Config, paths } from './config.ts';
+import { type Config, paths, toDataPath } from './config.ts';
 import { Db, json } from './db/db.ts';
 import { Events } from './events.ts';
 import { Queue } from './queue/queue.ts';
@@ -20,6 +20,7 @@ export function createContext(config: Config): AppContext {
   mkdirSync(paths.scratch(config), { recursive: true });
   const db = new Db(paths.db(config));
   const events = new Events(db);
+  relativizeStoredPaths(db, config);
 
   const settings = (): Settings => {
     const row = db.get<{ value: string }>(`SELECT value FROM settings WHERE key = 'settings'`);
@@ -43,4 +44,24 @@ export function createContext(config: Config): AppContext {
   });
 
   return { config, db, events, queue, settings, saveSettings };
+}
+
+const PATHS_KEY = 'paths_relative';
+const PATH_COLUMNS: [table: string, column: string][] = [['resources', 'path'], ['assets', 'path'], ['exports', 'path']];
+
+/**
+ * One-time pass: stored file paths used to be absolute. Rows under the configured data directory become relative to
+ * it (so backups restore anywhere); rows pointing elsewhere stay as they are.
+ */
+export function relativizeStoredPaths(db: Db, config: Config) {
+  if (db.get(`SELECT 1 FROM settings WHERE key = ?`, PATHS_KEY)) return;
+  db.tx(() => {
+    for (const [table, column] of PATH_COLUMNS) {
+      for (const r of db.all<{ id: string; p: string }>(`SELECT id, ${column} AS p FROM ${table}`)) {
+        const rel = toDataPath(config, r.p);
+        if (rel !== r.p) db.run(`UPDATE ${table} SET ${column} = ? WHERE id = ?`, rel, r.id);
+      }
+    }
+    db.run(`INSERT INTO settings (key, value) VALUES (?, '1')`, PATHS_KEY);
+  });
 }

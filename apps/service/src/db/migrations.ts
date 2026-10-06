@@ -274,4 +274,10 @@ export const MIGRATIONS: string[] = [
     status TEXT NOT NULL
   );
   `,
+  // 2: producing task on AI revisions (checkpoint), topic-map fingerprint.
+  `
+  ALTER TABLE content_revisions ADD COLUMN task_id TEXT;
+  CREATE INDEX content_task ON content_revisions(task_id) WHERE task_id IS NOT NULL;
+  ALTER TABLE projects ADD COLUMN topic_fingerprint TEXT;
+  `,
 ];

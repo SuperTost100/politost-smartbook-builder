@@ -6,7 +6,7 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import type { CompiledBook, LintFinding } from '@smartbuilder/content';
 import type { RunSummary } from '@smartbuilder/domain';
-import { paths, type Config } from '../config.ts';
+import { paths, toDataPath, type Config } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { buildServer } from '../server.ts';
@@ -80,7 +80,7 @@ export function installFakes(patch: Partial<RouteDeps> = {}): { calls: Calls; re
       mkdirSync(dir, { recursive: true });
       const path = join(dir, `${sha}.pdf`);
       writeFileSync(path, input.bytes);
-      ctx.db.insert('resources', { id, project_id: projectId, kind: 'pdf', role: input.role, filename: input.filename, sha256: sha, size: input.bytes.length, path, created_at: now() });
+      ctx.db.insert('resources', { id, project_id: projectId, kind: 'pdf', role: input.role, filename: input.filename, sha256: sha, size: input.bytes.length, path: toDataPath(ctx.config, path), created_at: now() });
       return id;
     },
     compileChapter: (chapter) => ({ markdown: chapter.sections.map((s) => `## ${s.title}\n\n${s.markdown}`).join('\n\n'), formulaNumbers: {}, sectionNumbers: {}, findings: [] }),

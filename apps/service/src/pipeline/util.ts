@@ -44,6 +44,12 @@ export function headRevision(ctx: AppContext, projectId: string, nodeId: string)
     projectId, nodeId) ?? null;
 }
 
+/** The revision a task committed in an earlier attempt, if any (checkpoint for retries). */
+export function revisionForTask(ctx: AppContext, projectId: string, nodeId: string, taskId: string): { id: string; markdown: string; status: string } | null {
+  return ctx.db.get<{ id: string; markdown: string; status: string }>(
+    'SELECT id, markdown, status FROM content_revisions WHERE project_id = ? AND node_id = ? AND task_id = ? ORDER BY rowid DESC LIMIT 1', projectId, nodeId, taskId) ?? null;
+}
+
 /** Formula keys defined in a source-dialect text. */
 export function formulaKeys(markdown: string): string[] {
   return [...markdown.matchAll(/:::formula\{[^}]*key="([^"]+)"[^}]*label="([^"]*)"/g)].map((m) => m[1]);

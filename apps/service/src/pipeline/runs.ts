@@ -99,8 +99,10 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
     specs.push({ kind: 'chapter.enrich', key: `enrich:${c.id}`, label: `Add graphs and examples to "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'bulk' });
     specs.push({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id }, deps: [`intro:${c.id}`, `enrich:${c.id}`], pool: 'reviewer' });
     if (gated && i === 0) {
+      // The planner only enqueues the practice work; this barrier waits until all of it (imports, generation, checks) is done.
+      specs.push({ kind: 'practice.done', key: `practice-done:${c.id}`, label: `Wait for the practice of "${c.title}"`, input: { chapterId: c.id }, deps: [`practice:${c.id}`] });
       specs.push({
-        kind: 'gate', key: 'gate:first-chapter', label: 'Your review of the first chapter', deps: [`review:${c.id}`, `practice:${c.id}`],
+        kind: 'gate', key: 'gate:first-chapter', label: 'Your review of the first chapter', deps: [`review:${c.id}`, `practice-done:${c.id}`],
         input: { reason: `"${c.title}" is ready for your review.`, action: 'Read it in the Manuscript tab and fix what you need, then press Continue to write the remaining chapters.' },
       });
     }

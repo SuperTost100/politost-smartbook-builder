@@ -1,16 +1,17 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
 import { lintSection, renderPlotSvg, splitBlocks, validatePlotSpec, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
-import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
+import { insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { draftPrompt, draftSchema, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
-import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
+import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
 const MAX_TRANSCRIBED_PAGES = 4;
 
@@ -84,19 +85,16 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
   return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars) };
 }
 
-/** Commit AI text: becomes current if nobody edited since baseRevId, otherwise a proposal. */
-export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string }) {
+/**
+ * Commit AI text: becomes current if nobody edited since baseRevId, otherwise (or with forceProposal) a proposal whose
+ * parent is baseRevId. One implementation with the repo (older pending proposals of the node become 'superseded').
+ * `taskId` is stored so a retried task returns its own committed revision instead of calling the model again.
+ */
+export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string; taskId?: string }) {
   return ctx.db.tx(() => {
-    const head = headRevision(ctx, p.projectId, p.nodeId);
-    const asCurrent = !p.forceProposal && (head?.id ?? null) === p.baseRevId;
-    const id = newId();
-    if (asCurrent && head) ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, head.id);
-    ctx.db.insert('content_revisions', {
-      id, project_id: p.projectId, node_id: p.nodeId, kind: p.kind, markdown: p.markdown, origin: p.origin ?? 'ai', model: p.model,
-      parent_rev_id: head?.id ?? null, status: asCurrent ? 'current' : 'proposal', citations: p.citations ?? {}, created_at: now(),
-    });
-    ctx.events.emit(asCurrent ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: id, origin: p.origin ?? 'ai' }, { projectId: p.projectId, runId: p.runId ?? null });
-    return { revId: id, status: asCurrent ? 'current' as const : 'proposal' as const };
+    const { revision, applied } = insertProposal(ctx, p.projectId, p.nodeId, p.markdown, p.baseRevId, p.origin ?? 'ai', p.model, p.citations ?? {}, { kind: p.kind, forceProposal: p.forceProposal, taskId: p.taskId });
+    ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai' }, { projectId: p.projectId, runId: p.runId ?? null });
+    return { revId: revision.id, status: applied ? 'current' as const : 'proposal' as const };
   });
 }
 
@@ -122,6 +120,9 @@ export function bookFormulaKeys(ctx: AppContext, projectId: string, excludeNode?
 export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
+  // Checkpoint: this task already committed its text in an earlier attempt.
+  const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
+  if (mine) return { revId: mine.id, nodeId, status: mine.status, reused: true };
   const head = headRevision(ctx, projectId, nodeId);
   // Never overwrite existing text during a full generation run; regeneration uses section.revise.
   if (head && !t.task.input.force) return { revId: head.id, reused: true };
@@ -163,12 +164,18 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
   const knownKeys = new Set([...known.map((k) => k.key), ...formulaKeyLabels(markdown).map((k) => k.key)]);
 
-  // Figures: render plots deterministically; drop image blocks whose plot is invalid.
+  // Figures: render plots deterministically; drop image blocks whose plot is invalid. File names are scoped to the
+  // section (`<node>-<key>.svg`) so two sections can use the same figure key without touching each other's drawing.
   const figureNotes: string[] = [];
   const assetDir = paths.assets(ctx.config, projectId);
   mkdirSync(assetDir, { recursive: true });
+  const prefix = nodeId.slice(0, 8);
+  const cleanKey = (key: string) => key.replace(/[^a-z0-9-]/g, '-').slice(0, 50);
+  const renames = new Map<string, string>(); // name the model wrote -> stored name
+  const newAssets: { id: string; file: string; row: Record<string, unknown> }[] = [];
   for (const fig of data.figures ?? []) {
-    const filename = `${fig.key.replace(/[^a-z0-9-]/g, '-').slice(0, 50)}.svg`;
+    const wrote = [`${fig.key}.svg`, `${cleanKey(fig.key)}.svg`];
+    const stored = `${prefix}-${cleanKey(fig.key)}.svg`;
     const spec = {
       xRange: fig.plot.xRange, yRange: fig.plot.yRange, xLabel: fig.plot.xLabel ?? undefined, yLabel: fig.plot.yLabel ?? undefined,
       functions: fig.plot.functions.map((f) => ({ expr: f.expr, label: f.label ?? undefined, domain: f.domain ?? undefined, style: f.style ?? undefined })),
@@ -177,24 +184,28 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     };
     const v = validatePlotSpec(spec);
     if (!v.ok) {
-      markdown = removeImageBlock(markdown, filename);
-      figureNotes.push(`${filename}: ${v.errors.join('; ')}`);
+      for (const w of wrote) markdown = removeImageBlock(markdown, w);
+      figureNotes.push(`${stored}: ${v.errors.join('; ')}`);
       continue;
     }
-    const svg = renderPlotSvg(v.spec);
+    if (newAssets.some((a) => a.row.filename === stored)) continue;
     const assetId = newId();
     const file = join(assetDir, `${assetId}.svg`);
-    writeFileSync(`${file}.tmp`, svg);
+    writeFileSync(`${file}.tmp`, renderPlotSvg(v.spec));
     renameSync(`${file}.tmp`, file);
-    ctx.db.run('DELETE FROM assets WHERE project_id = ? AND filename = ?', projectId, filename);
-    ctx.db.insert('assets', {
-      id: assetId, project_id: projectId, node_id: nodeId, filename, mime: 'image/svg+xml', path: file, origin: 'plot', spec: v.spec,
-      caption: fig.caption, alt: fig.alt, checks: [{ method: 'lint', ok: true, detail: 'Plot rendered from a validated spec.' }], created_at: now(),
+    for (const w of wrote) renames.set(w, stored);
+    newAssets.push({
+      id: assetId, file,
+      row: {
+        id: assetId, project_id: projectId, node_id: nodeId, filename: stored, mime: 'image/svg+xml', path: toDataPath(ctx.config, file), origin: 'plot', spec: v.spec,
+        caption: fig.caption, alt: fig.alt, checks: [{ method: 'lint', ok: true, detail: 'Plot rendered from a validated spec.' }], created_at: now(),
+      },
     });
   }
-  // Image blocks without a figure entry would be broken references.
-  const figureFiles = new Set((data.figures ?? []).map((f) => `${f.key.replace(/[^a-z0-9-]/g, '-').slice(0, 50)}.svg`));
-  for (const m of markdown.matchAll(/:::image\{[^}]*src="assets\/([^"]+)"/g)) if (!figureFiles.has(m[1])) markdown = removeImageBlock(markdown, m[1]);
+  // Image blocks without a rendered figure would be broken references; the others point at the stored names.
+  for (const m of [...markdown.matchAll(/:::image\{[^}]*src="assets\/([^"]+)"/g)]) if (!renames.has(m[1])) markdown = removeImageBlock(markdown, m[1]);
+  markdown = markdown.replace(/(:::image\{[^}]*src="assets\/)([^"]+)(")/g, (all, a: string, name: string, c: string) => (renames.has(name) ? `${a}${renames.get(name)}${c}` : all));
+  const figureFiles = new Set(newAssets.map((a) => a.row.filename as string));
 
   // One repair round for problems that break rendering or meaning.
   let findings = lintSection(markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
@@ -216,12 +227,29 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     }
   }
 
-  const committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head?.id ?? null, model: route.model, citations, runId: t.task.runId });
-  recordLintIssues(ctx, projectId, nodeId, committed.revId, findings);
-  return { revId: committed.revId, status: committed.status, summary: data.summary, figures: figureFiles.size, figureProblems: figureNotes, findings: findings.length, model: route.model };
+  // Files are on disk; the asset rows and the revision become visible together, or not at all.
+  let committed!: ReturnType<typeof commitAiRevision>;
+  const replaced: string[] = [];
+  try {
+    ctx.db.tx(() => {
+      for (const a of newAssets) {
+        const old = ctx.db.all<{ id: string; path: string }>('SELECT id, path FROM assets WHERE project_id = ? AND node_id = ? AND filename = ?', projectId, nodeId, a.row.filename as string);
+        for (const o of old) { ctx.db.run('DELETE FROM assets WHERE id = ?', o.id); replaced.push(o.path); }
+        ctx.db.insert('assets', a.row);
+      }
+      committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head?.id ?? null, model: route.model, citations, runId: t.task.runId, taskId: t.task.id });
+      recordLintIssues(ctx, projectId, nodeId, committed.revId, findings);
+    });
+  } catch (err) {
+    for (const a of newAssets) rmSync(a.file, { force: true });
+    throw err;
+  }
+  for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
+  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: figureFiles.size, figureProblems: figureNotes, findings: findings.length, model: route.model };
 }
 
-function withMarkers(markdown: string, citations: Record<string, string[]>) {
+/** Puts [[nX]] citation markers back after their blocks (inverse of extractCitations). */
+export function withMarkers(markdown: string, citations: Record<string, string[]>) {
   return splitBlocks(markdown).map((b, i) => (citations[String(i)]?.length ? `${b.text} [[${citations[String(i)].join(',')}]]` : b.text)).join('\n\n');
 }
 
@@ -233,6 +261,8 @@ function removeImageBlock(markdown: string, filename: string) {
 export async function chapterIntro(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const chapterId = t.task.input.chapterId as string;
+  const mine = revisionForTask(ctx, projectId, chapterId, t.task.id);
+  if (mine) return { revId: mine.id, reused: true };
   const head = headRevision(ctx, projectId, chapterId);
   if (head && !t.task.input.force) return { revId: head.id, reused: true };
   const project = loadProject(ctx, projectId);
@@ -249,7 +279,7 @@ export async function chapterIntro(ctx: AppContext, t: TaskContext) {
     schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const { markdown } = extractCitations(data.markdown, splitBlocks);
-  const committed = commitAiRevision(ctx, { projectId, nodeId: chapterId, kind: 'chapter-intro', markdown, baseRevId: head?.id ?? null, model: route.model, runId: t.task.runId });
+  const committed = commitAiRevision(ctx, { projectId, nodeId: chapterId, kind: 'chapter-intro', markdown, baseRevId: head?.id ?? null, model: route.model, runId: t.task.runId, taskId: t.task.id });
   recordLintIssues(ctx, projectId, chapterId, committed.revId, lintSection(markdown, { sectionId: chapterId, language: project.language }));
   return { revId: committed.revId };
 }

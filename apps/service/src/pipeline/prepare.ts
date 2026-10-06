@@ -1,4 +1,5 @@
 // Prepare: extract sources, recover their indexes, split exams into questions, build the topic map.
+import { createHash } from 'node:crypto';
 import type { Question } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -85,16 +86,54 @@ export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
   return { questions: inserted, duplicates };
 }
 
-/** Topic map from all source indexes, then question → topic classification and exam frequency. */
-export async function topicsMap(ctx: AppContext, t: TaskContext) {
+/** One topic-map task at a time per project: two prepare tasks must not rebuild and classify over each other. */
+const topicLocks = new Map<string, Promise<unknown>>();
+
+function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
+  const run = (topicLocks.get(key) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.then(() => undefined, () => undefined);
+  topicLocks.set(key, tail);
+  void tail.then(() => { if (topicLocks.get(key) === tail) topicLocks.delete(key); });
+  return run;
+}
+
+/** Labels R1, R2, ... for the resources shown to the model, assigned once and used for both the prompt and decoding the answer. */
+export function labelResources(resources: { id: string }[]) {
+  const byLabel = new Map<string, string>();
+  const labelOf = new Map<string, string>();
+  resources.forEach((r, i) => { byLabel.set(`R${i + 1}`, r.id); labelOf.set(r.id, `R${i + 1}`); });
+  return { byLabel, labelOf };
+}
+
+/** Changes whenever the sources behind the topic map change: which resources, their role and content, and their index entries. */
+export function topicFingerprint(ctx: AppContext, resources: { id: string; role: string; sha256: string }[]): string {
+  const parts = resources.map((r) => {
+    const idx = ctx.db.get<{ origin: string; entries: string }>('SELECT origin, entries FROM source_indexes WHERE resource_id = ?', r.id);
+    return [r.id, r.role, r.sha256, idx ? createHash('sha256').update(`${idx.origin}\n${idx.entries}`).digest('hex') : ''];
+  });
+  return createHash('sha256').update(JSON.stringify(parts)).digest('hex');
+}
+
+/** Topic map from the theory source indexes, then question → topic classification and exam frequency. */
+export function topicsMap(ctx: AppContext, t: TaskContext) {
+  return serialized(t.task.projectId, () => topicsMapLocked(ctx, t));
+}
+
+async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
   const projectId = t.task.projectId;
   const project = loadProject(ctx, projectId);
-  const resources = ctx.db.all<{ id: string; filename: string; role: string }>(`SELECT id, filename, role FROM resources WHERE project_id = ? AND included = 1 AND status = 'ready' ORDER BY created_at`, projectId);
-  const labels = new Map(resources.map((r, i) => [`R${i + 1}`, r.id]));
+  const resources = ctx.db.all<{ id: string; filename: string; role: string; sha256: string }>(`SELECT id, filename, role, sha256 FROM resources WHERE project_id = ? AND included = 1 AND status = 'ready' ORDER BY created_at`, projectId);
+  // The sources that describe the subject (exams and exercise collections do not).
+  const theory = resources.filter((r) => r.role !== 'exams' && r.role !== 'exercises');
+  const { byLabel, labelOf } = labelResources(theory);
+  const fingerprint = topicFingerprint(ctx, theory);
+  const stored = ctx.db.get<{ topic_fingerprint: string | null }>('SELECT topic_fingerprint FROM projects WHERE id = ?', projectId)?.topic_fingerprint ?? null;
 
   let topicCount = ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM topics WHERE project_id = ?', projectId)?.n ?? 0;
-  if (!topicCount || t.task.input.force) {
-    const indexes = sourceIndexesText(ctx, resources.filter((r) => r.role !== 'exams' && r.role !== 'exercises'));
+  // A map made before fingerprints existed is kept as it is (the author may already have an outline on it) unless forced.
+  if (stored === null && topicCount && !t.task.input.force) ctx.db.run('UPDATE projects SET topic_fingerprint = ? WHERE id = ?', fingerprint, projectId);
+  else if (!topicCount || stored !== fingerprint || t.task.input.force) {
+    const indexes = sourceIndexesText(ctx, theory, labelOf);
     if (!indexes.trim()) throw new TaskError('No theory source has a usable index yet.', 'input', 'Add at least one theory source (notes or a textbook), then run Prepare again.');
     const { data } = await runRole(ctx, {
       role: 'writer', ...topicsPrompt({ subject: project.subject, language: project.language, goals: project.goals, indexes }), schema: topicsSchema,
@@ -106,19 +145,22 @@ export async function topicsMap(ctx: AppContext, t: TaskContext) {
         ctx.db.insert('topics', {
           id: `${projectId.slice(0, 8)}-${tp.key}`.slice(0, 80), project_id: projectId, name: tp.name, aliases: tp.aliases, description: tp.description,
           prerequisites: tp.prerequisites.map((k) => `${projectId.slice(0, 8)}-${k}`.slice(0, 80)),
-          sources: tp.sources.filter((s) => labels.has(s.resource)).map((s) => ({ resourceId: labels.get(s.resource), pageFrom: s.pageFrom - 1, pageTo: s.pageTo - 1 })),
+          sources: tp.sources.filter((s) => byLabel.has(s.resource)).map((s) => ({ resourceId: byLabel.get(s.resource), pageFrom: s.pageFrom - 1, pageTo: s.pageTo - 1 })),
           exam_sessions: 0, priority: 'normal',
         });
       }
+      // New topics: every authentic exam question is classified again against them.
+      ctx.db.run(`UPDATE questions SET topic_ids = '[]', updated_at = ? WHERE project_id = ? AND origin = 'authentic' AND kind = 'exam'`, now(), projectId);
+      ctx.db.run('UPDATE projects SET topic_fingerprint = ? WHERE id = ?', fingerprint, projectId);
     });
     topicCount = data.topics.length;
   }
 
-  // Classify questions that have no topics yet, in batches.
+  // Classify exam questions that have no topics yet, in batches. (Exercise collections are not used for priorities or practice.)
   const topics = ctx.db.all<{ id: string; name: string }>('SELECT id, name FROM topics WHERE project_id = ?', projectId);
   const keyOf = (id: string) => id.slice(9);
   const topicList = topics.map((tp) => `${keyOf(tp.id)}: ${tp.name}`).join('\n');
-  const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null }>(`SELECT id, statement, exam_group FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic'`, projectId);
+  const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null }>(`SELECT id, statement, exam_group FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind = 'exam'`, projectId);
   let classified = 0;
   for (const group of chunk(pending, 40)) {
     if (t.signal.aborted) break;
@@ -143,12 +185,12 @@ export async function topicsMap(ctx: AppContext, t: TaskContext) {
   return { topics: topicCount, classified };
 }
 
-export function sourceIndexesText(ctx: AppContext, resources: { id: string; filename: string }[]) {
-  return resources.map((r, i) => {
+export function sourceIndexesText(ctx: AppContext, resources: { id: string; filename: string }[], labelOf: Map<string, string> = labelResources(resources).labelOf) {
+  return resources.map((r) => {
     const idx = ctx.db.get<{ origin: string; entries: string }>('SELECT origin, entries FROM source_indexes WHERE resource_id = ?', r.id);
     if (!idx) return '';
     const entries = json<{ title: string; level: number; page: number }[]>(idx.entries, []);
-    return `R${i + 1} ${r.filename} (${idx.origin})\n${entries.map((e) => `${e.level} | ${e.title} | ${e.page + 1}`).join('\n')}`;
+    return `${labelOf.get(r.id)} ${r.filename} (${idx.origin})\n${entries.map((e) => `${e.level} | ${e.title} | ${e.page + 1}`).join('\n')}`;
   }).filter(Boolean).join('\n\n');
 }
 

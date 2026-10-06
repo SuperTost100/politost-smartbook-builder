@@ -4,7 +4,7 @@ import { basename, join } from 'node:path';
 import type { ResourceKind } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
-import { paths } from '../config.ts';
+import { paths, toDataPath } from '../config.ts';
 import { ExtractError } from './errors.ts';
 import { safeFetch, type SafeFetchOptions } from './safe-fetch.ts';
 import { htmlToMarkdown } from './html.ts';
@@ -136,7 +136,7 @@ export async function storeResource(
   const id = newId();
   try {
     ctx.db.insert('resources', {
-      id, project_id: projectId, kind, role: input.role, filename, url, sha256: hash, size: bytes.length, path: file,
+      id, project_id: projectId, kind, role: input.role, filename, url, sha256: hash, size: bytes.length, path: toDataPath(ctx.config, file),
       included: 1, status: 'queued', error: null, page_count: 0, meta, created_at: now(),
     });
   } catch (err) {

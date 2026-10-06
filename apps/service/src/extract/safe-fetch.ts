@@ -5,7 +5,8 @@ import http from 'node:http';
 import https from 'node:https';
 import net from 'node:net';
 import zlib from 'node:zlib';
-import { Readable } from 'node:stream';
+import { Writable } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
 import { ExtractError } from './errors.ts';
 
 export const MAX_BYTES = 10 * 1024 * 1024;
@@ -80,6 +81,22 @@ export interface SafeFetchOptions {
   timeoutMs?: number;
 }
 
+/** The error for a signal that fired: timeout or cancellation. */
+function abortError(signal: AbortSignal): Error {
+  const timedOut = (signal.reason as { name?: string } | undefined)?.name === 'TimeoutError';
+  return timedOut ? new ExtractError('The page took longer than 20 seconds to answer.', 400, 'url_timeout') : Object.assign(new Error('Fetch was cancelled.'), { name: 'AbortError' });
+}
+
+/** Settles with the promise, or with the abort error as soon as the signal fires (for steps that cannot be cancelled, like DNS). */
+function abortable<T>(p: Promise<T>, signal: AbortSignal): Promise<T> {
+  if (signal.aborted) return Promise.reject(abortError(signal));
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(abortError(signal));
+    signal.addEventListener('abort', onAbort, { once: true });
+    p.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort));
+  });
+}
+
 function refuse(url: string, why: string): never {
   throw new ExtractError(`That address cannot be fetched (${why}).`, 400, 'url_refused', 'Use a public http or https page, or upload the file instead.');
 }
@@ -115,7 +132,7 @@ export async function safeFetch(input: string, opts: SafeFetchOptions = {}): Pro
   for (let hop = 0; ; hop++) {
     if (current.protocol !== 'http:' && current.protocol !== 'https:') refuse(current.href, `only http and https are supported, not ${current.protocol}`);
     if (current.username || current.password) refuse(current.href, 'addresses with a user name or password are not supported');
-    const addrs = await resolvePublic(current.hostname, current.href, !!opts.allowPrivate);
+    const addrs = await abortable(resolvePublic(current.hostname, current.href, !!opts.allowPrivate), signal);
     const res = await requestOnce(current, addrs, signal, maxBytes);
     if (res.status >= 300 && res.status < 400 && res.location) {
       if (hop >= MAX_REDIRECTS) throw new ExtractError(`The page redirected more than ${MAX_REDIRECTS} times.`, 400, 'url_redirects');
@@ -177,33 +194,33 @@ function requestOnce(url: URL, addrs: { address: string; family: number }[], sig
           return reject(tooLarge(maxBytes));
         }
         const enc = String(res.headers['content-encoding'] ?? '').toLowerCase();
-        let stream: Readable = res;
-        if (enc === 'gzip' || enc === 'x-gzip') stream = res.pipe(zlib.createGunzip());
-        else if (enc === 'deflate') stream = res.pipe(zlib.createInflate());
-        else if (enc === 'br') stream = res.pipe(zlib.createBrotliDecompress());
+        const decoder = enc === 'gzip' || enc === 'x-gzip' ? zlib.createGunzip() : enc === 'deflate' ? zlib.createInflate() : enc === 'br' ? zlib.createBrotliDecompress() : null;
         const chunks: Buffer[] = [];
         let size = 0;
-        stream.on('data', (c: Buffer) => {
-          size += c.length;
-          if (size > maxBytes) {
-            req.destroy();
-            return reject(tooLarge(maxBytes));
-          }
-          chunks.push(c);
+        const sink = new Writable({
+          write(c: Buffer, _enc, cb) {
+            size += c.length;
+            if (size > maxBytes) return cb(tooLarge(maxBytes));
+            chunks.push(c);
+            cb();
+          },
         });
-        stream.on('end', () => resolve({ status, location, contentType, body: Buffer.concat(chunks) }));
-        stream.on('error', (e) => reject(e));
+        // pipeline forwards errors and premature close of the response to the decoder and sink, and the signal ends all of them.
+        pipeline(decoder ? [res, decoder, sink] : [res, sink], { signal }).then(
+          () => resolve({ status, location, contentType, body: Buffer.concat(chunks) }),
+          (err: Error) => {
+            req.destroy();
+            if (err instanceof ExtractError) return reject(err);
+            if (signal.aborted) return reject(abortError(signal));
+            reject(unreachable(err));
+          },
+        );
       },
     );
-    req.on('error', (err) => {
-      if (signal.aborted) {
-        const timedOut = (signal.reason as { name?: string } | undefined)?.name === 'TimeoutError';
-        return reject(timedOut ? new ExtractError('The page took longer than 20 seconds to answer.', 400, 'url_timeout') : Object.assign(new Error('Fetch was cancelled.'), { name: 'AbortError' }));
-      }
-      reject(new ExtractError(`The page could not be fetched (${(err as Error).message}).`, 400, 'url_unreachable', 'Check the address and your connection.'));
-    });
+    req.on('error', (err) => reject(signal.aborted ? abortError(signal) : unreachable(err)));
     req.end();
   });
 }
 
+const unreachable = (err: Error) => new ExtractError(`The page could not be fetched (${err.message}).`, 400, 'url_unreachable', 'Check the address and your connection.');
 const tooLarge = (max: number) => new ExtractError(`The page is larger than ${Math.round(max / 1024 / 1024)} MB.`, 400, 'url_size', 'Save the page as PDF and upload that instead.');

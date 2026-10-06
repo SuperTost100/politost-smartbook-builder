@@ -50,12 +50,12 @@ export function pendingProposals(ctx: AppContext, projectId: string): Map<string
 
 function insertRevision(ctx: AppContext, v: {
   projectId: string; nodeId: string; kind: ContentNodeKind; markdown: string; origin: ContentOrigin; model: string | null;
-  parentRevId: string | null; status: ContentRevision['status']; citations: Record<string, string[]>;
+  parentRevId: string | null; status: ContentRevision['status']; citations: Record<string, string[]>; taskId?: string | null;
 }): ContentRevision {
   const id = newId();
   ctx.db.insert('content_revisions', {
     id, project_id: v.projectId, node_id: v.nodeId, kind: v.kind, markdown: v.markdown, origin: v.origin, model: v.model,
-    parent_rev_id: v.parentRevId, status: v.status, citations: v.citations, created_at: now(),
+    parent_rev_id: v.parentRevId, status: v.status, citations: v.citations, task_id: v.taskId ?? null, created_at: now(),
   });
   return getRevision(ctx, v.projectId, id);
 }
@@ -77,17 +77,18 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
 /**
  * Stores model output. It becomes the current text only when baseRevId (the head the model started from) is still
  * the head and `forceProposal` is not set; otherwise it waits as a proposal for the author. Older pending proposals
- * of the node become 'superseded'.
+ * of the node become 'superseded'. A proposal's parent is the revision the model started from (baseRevId), not the
+ * head it arrived after. `taskId` records the producing task so a retried task finds its own result.
  */
 export function insertProposal(
   ctx: AppContext, projectId: string, nodeId: string, markdown: string, baseRevId: string | null,
   origin: Exclude<ContentOrigin, 'human'>, model: string | null, citations: Record<string, string[]> = {},
-  opts: { kind?: ContentNodeKind; forceProposal?: boolean } = {},
+  opts: { kind?: ContentNodeKind; forceProposal?: boolean; taskId?: string } = {},
 ): { revision: ContentRevision; applied: boolean } {
   return ctx.db.tx(() => {
     const head = currentHead(ctx, projectId, nodeId);
     const kind = opts.kind ?? 'section';
-    const fresh = { projectId, nodeId, kind, markdown, origin, model, parentRevId: baseRevId, status: 'current' as const, citations };
+    const fresh = { projectId, nodeId, kind, markdown, origin, model, parentRevId: baseRevId, status: 'current' as const, citations, taskId: opts.taskId ?? null };
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE project_id = ? AND node_id = ? AND status = 'proposal'`, projectId, nodeId);
     if (!opts.forceProposal && (head?.id ?? null) === baseRevId) return { revision: makeCurrent(ctx, projectId, nodeId, head, fresh), applied: true };
     return { revision: insertRevision(ctx, { ...fresh, status: 'proposal' }), applied: false };

@@ -1,5 +1,5 @@
 // Manuscript read models: outline + current text + proposals + evidence + issues + compiled Markdown.
-import type { ChapterInput } from '@smartbuilder/content';
+import { numberChapters, type ChapterInput } from '@smartbuilder/content';
 import type { ChapterView, Outline, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { HttpError } from '../server.ts';
@@ -21,11 +21,9 @@ export function requireOutline(ctx: AppContext, projectId: string): Outline {
   return o;
 }
 
-/** Chapter number and paragraph number of every section, for cross references. */
-export function knownSections(outline: Outline): Known {
-  const known: Known = {};
-  outline.chapters.forEach((c, i) => c.sections.forEach((s, j) => { known[s.id] = { chapter: i + 1, paragraph: j + 1 }; }));
-  return known;
+/** Chapter and paragraph number of every section and keyed formula, from the compiler's own numbering pass (introductions count as p1). */
+export function bookNumbering(outline: Outline, heads: Map<string, { markdown: string }>, language: string) {
+  return numberChapters(outline.chapters.map((_, i) => chapterInput(outline, i, heads)), language);
 }
 
 export function chapterInput(outline: Outline, index: number, heads: Map<string, { markdown: string }>): ChapterInput {
@@ -62,19 +60,11 @@ export function compileSections(chapter: ChapterInput, known: Known, opts: Compi
   return { intro: introOut.trim(), sections };
 }
 
-/** Formula keys to numbers across the whole outline, so a reference to another chapter's formula resolves. */
-function compileOptions(ctx: AppContext, projectId: string, outline: Outline, heads: Map<string, { markdown: string }>): CompileOpts {
-  const known = knownSections(outline);
+/** Reference context of the whole book: section and formula numbers of every chapter, and the known assets. */
+export function bookContext(ctx: AppContext, projectId: string, outline: Outline, heads: Map<string, { markdown: string }>): { known: Known; opts: CompileOpts } {
   const language = getProject(ctx, projectId).language;
-  const knownFormulas: Record<string, string> = {};
-  outline.chapters.forEach((_, i) => {
-    try {
-      Object.assign(knownFormulas, deps.compileChapter(chapterInput(outline, i, heads), known, { language }).formulaNumbers);
-    } catch {
-      // A chapter that does not compile contributes no numbers; its own view shows the empty result.
-    }
-  });
-  return { language, knownFormulas, assets: new Set(listAssets(ctx, projectId).map((a) => a.filename)) };
+  const numbering = bookNumbering(outline, heads, language);
+  return { known: numbering.sectionNumbers, opts: { language, knownFormulas: numbering.formulaNumbers, assets: new Set(listAssets(ctx, projectId).map((a) => a.filename)) } };
 }
 
 function viewsFor(ctx: AppContext, projectId: string, outline: Outline, only?: { chapterIndex: number; sectionIndex: number | null }) {
@@ -82,8 +72,7 @@ function viewsFor(ctx: AppContext, projectId: string, outline: Outline, only?: {
   const proposals = pendingProposals(ctx, projectId);
   const evidence = latestEvidenceByNode(ctx, projectId);
   const issues = activeIssuesByNode(ctx, projectId);
-  const known = knownSections(outline);
-  const opts = compileOptions(ctx, projectId, outline, heads);
+  const { known, opts } = bookContext(ctx, projectId, outline, heads);
   const view = (chapterId: string, nodeId: string, title: string, compiled: string): SectionView => ({
     chapterId, sectionId: nodeId, title, current: heads.get(nodeId) ?? null, proposal: proposals.get(nodeId) ?? null,
     evidence: evidence.get(nodeId) ?? null, issues: issues.get(nodeId) ?? [], compiled,
@@ -123,7 +112,8 @@ export function previewChapter(ctx: AppContext, projectId: string, chapterId: st
   const index = outline.chapters.findIndex((c) => c.id === chapterId);
   if (index < 0) throw new HttpError(404, 'not_found', 'This chapter is not in the outline.', 'Reload the page.');
   const heads = currentHeads(ctx, projectId);
-  const markdown = safeCompile(chapterInput(outline, index, heads), knownSections(outline), compileOptions(ctx, projectId, outline, heads)) ?? '';
+  const { known, opts } = bookContext(ctx, projectId, outline, heads);
+  const markdown = safeCompile(chapterInput(outline, index, heads), known, opts) ?? '';
   const assets: Record<string, string> = {};
   for (const a of listAssets(ctx, projectId)) assets[a.filename] = `/api/assets/${a.id}/file`;
   return { markdown, number: index + 1, assets };

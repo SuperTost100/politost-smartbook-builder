@@ -146,3 +146,73 @@ test('pause lets running tasks finish and dispatches nothing new', async () => {
   await until(() => queue.runSummary(runId)!.status === 'completed');
   await queue.stop();
 });
+
+test('a failure blocks everything downstream, however deep: A -> B -> C fails the run', async () => {
+  const { queue, projectId } = setup();
+  queue.register('boom', async () => { throw new TaskError('no', 'fatal'); });
+  queue.register('work', async () => 'ok');
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'boom', key: 'a', label: 'a' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['a'] },
+    { kind: 'work', key: 'c', label: 'c', deps: ['b'] },
+  ]);
+  queue.start();
+  await until(() => queue.runSummary(runId)!.status === 'failed');
+  await queue.stop();
+  assert.deepEqual(queue.tasks(runId).map((t) => t.state), ['failed', 'queued', 'queued']);
+});
+
+test('independent work keeps a run going while a deep chain is blocked by a failure', async () => {
+  const { queue, projectId } = setup();
+  let release!: () => void;
+  queue.register('boom', async () => { throw new TaskError('no', 'fatal'); });
+  queue.register('work', async () => 'ok');
+  queue.register('hold', () => new Promise((r) => { release = () => r('ok'); }));
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'boom', key: 'a', label: 'a' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['a'] },
+    { kind: 'work', key: 'c', label: 'c', deps: ['b'] },
+    { kind: 'hold', key: 'h', label: 'h' },
+  ]);
+  queue.start();
+  await until(() => queue.tasks(runId).find((t) => t.kind === 'hold')!.state === 'running');
+  await new Promise((r) => setTimeout(r, 900));
+  assert.equal(queue.runSummary(runId)!.status, 'running');
+  release();
+  await until(() => queue.runSummary(runId)!.status === 'failed');
+  await queue.stop();
+});
+
+test('a gate waiting two levels up makes the run wait for the author, not run forever', async () => {
+  const { queue, projectId } = setup();
+  queue.register('gate', async () => { throw new WaitForUser('Review', 'Press Continue'); });
+  queue.register('work', async () => 'ok');
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'gate', key: 'g', label: 'g' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['g'] },
+    { kind: 'work', key: 'c', label: 'c', deps: ['b'] },
+  ]);
+  queue.start();
+  await until(() => queue.runSummary(runId)!.status === 'waiting');
+  const gateId = queue.tasks(runId).find((t) => t.kind === 'gate')!.id;
+  queue.resolve(gateId, 'skip');
+  await until(() => queue.runSummary(runId)!.status === 'completed');
+  await queue.stop();
+});
+
+test("'later' retries without consuming attempts and shows no wait reason", async () => {
+  const { queue, projectId, db } = setup();
+  let calls = 0;
+  queue.register('barrier', async () => { calls++; if (calls < 3) throw new TaskError('not yet', 'later'); return 'done'; });
+  const runId = queue.createRun(projectId, 'generate', [{ kind: 'barrier', key: 'b', label: 'b', maxAttempts: 1 }]);
+  const tick = setInterval(() => db.run(`UPDATE tasks SET retry_at = 0 WHERE state = 'retry_wait'`), 10);
+  queue.start();
+  await until(() => calls === 1 && queue.tasks(runId)[0].state === 'retry_wait');
+  assert.equal(queue.tasks(runId)[0].attempts, 0);
+  assert.equal(queue.tasks(runId)[0].waitReason, null);
+  assert.equal(queue.runSummary(runId)!.waiting, null);
+  await until(() => queue.runSummary(runId)!.status === 'completed');
+  clearInterval(tick);
+  await queue.stop();
+  assert.equal(calls, 3);
+});

@@ -6,7 +6,7 @@ import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
-import type { TaskContext, TaskSpec } from '../queue/queue.ts';
+import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { loadOutline, loadProject, loadTopics, truncate } from './util.ts';
@@ -52,7 +52,10 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
     specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
     specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, deps: [`import:${q.id}`], pool: 'reviewer' });
   }
-  specs.push({ kind: 'practice.generate', key: `generate:${chapterId}`, label: `Write exercises for "${chapter.title}"`, input: { chapterId, examStyle: authentic.length === 0 }, pool: 'writer', deps: authentic.map((q) => `import:${q.id}`) });
+  const imports = authentic.map((q) => `import:${q.id}`);
+  specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exercise`, label: `Write exercises for "${chapter.title}"`, input: { chapterId, kind: 'exercise' }, pool: 'writer', deps: imports });
+  // Without observed exams for this chapter, add labeled exam-style practice.
+  if (authentic.length === 0) specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exam`, label: `Write exam-style practice for "${chapter.title}"`, input: { chapterId, kind: 'exam' }, pool: 'writer', deps: imports });
   t.enqueue(specs);
   t.progress(`${authentic.length} exam questions from past sessions; exercises to write next`);
   return { authentic: authentic.length, language: project.language };
@@ -65,6 +68,8 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   const question = rowToQuestion(q);
   if (question.checks.some((c) => c.method === 'lint' && c.detail === 'imported')) return { reused: true };
   if (question.resourceId === null || question.pageFrom === null) return { skipped: 'no page range' };
+  // Every update below applies only if the author has not edited the question since this read.
+  const rev = question.rev;
   const project = loadProject(ctx, question.projectId);
   const last = Math.min(question.pageTo ?? question.pageFrom, question.pageFrom + MAX_PAGES_PER_QUESTION - 1);
   const pages: string[] = [];
@@ -78,44 +83,74 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   if (!data.readable) {
-    ctx.db.run(`UPDATE questions SET status = 'issue', updated_at = ? WHERE id = ?`, now(), question.id);
+    const changed = ctx.db.run(`UPDATE questions SET status = 'issue', rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;
+    if (!changed) return { stale: true };
     addIssue(ctx, question, 'major', 'unreadable', 'This exam question could not be read from its pages.', 'Open the source pages and type the statement, or remove the question.');
     return { readable: false };
   }
   const checks = [...question.checks, { method: 'lint' as const, ok: true, detail: 'imported' }];
-  ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ?', data.statement, data.solution, JSON.stringify(checks), now(), question.id);
+  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, data.solution, JSON.stringify(checks), now(), question.id, rev).changes;
+  if (!changed) {
+    keepStaleOutput(ctx, question, data.statement, data.solution);
+    return { stale: true };
+  }
   return { readable: true };
 }
 
+/** The question was edited while the model worked: keep the model's text in an issue instead of overwriting the author. */
+function keepStaleOutput(ctx: AppContext, q: Question, statement: string, solution: string, hint?: string) {
+  addIssue(ctx, q, 'minor', 'stale-ai-output', 'This question was edited while the AI was working, so the AI result was not applied. It is kept here.',
+    `STATEMENT:\n${statement}\n${hint !== undefined ? `\nHINT:\n${hint}\n` : ''}\nSOLUTION:\n${solution}`);
+}
+
+/**
+ * One stage of chapter practice: `kind` is 'exercise' or 'exam' (inputs from before the split have no kind and do both when
+ * `examStyle` is set). A stage reuses the generated questions of its (chapter, kind) instead of calling the model again, and
+ * always enqueues their verification (idempotent by key), so a retry rebuilds whatever downstream work is missing.
+ */
 export async function practiceGenerate(ctx: AppContext, t: TaskContext) {
+  const kinds: ('exercise' | 'exam')[] = t.task.input.kind === 'exam' ? ['exam'] : t.task.input.kind === 'exercise' ? ['exercise'] : t.task.input.examStyle ? ['exercise', 'exam'] : ['exercise'];
+  let generated = 0;
+  let reused = 0;
+  for (const kind of kinds) {
+    const r = await generateStage(ctx, t, kind);
+    if ('skipped' in r) return r;
+    generated += r.generated;
+    reused += r.reused;
+  }
+  return { generated, reused };
+}
+
+async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' | 'exam') {
   const { projectId } = t.task;
   const chapterId = t.task.input.chapterId as string;
-  const done = ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM questions WHERE project_id = ? AND chapter_id = ? AND origin = 'generated'`, projectId, chapterId);
-  if (done && done.n > 0 && !t.task.input.force) return { reused: done.n };
-  const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const chapter = outline?.outline.chapters.find((c) => c.id === chapterId);
-  if (!chapter) return { skipped: true };
+  if (!chapter) return { skipped: true as const };
   const chapterNumber = outline!.outline.chapters.indexOf(chapter) + 1;
-  const topics = loadTopics(ctx, projectId).filter((tp) => chapter.sections.some((s) => s.topicIds.includes(tp.id)));
-  const keyOf = (id: string) => id.slice(9);
-  const target = (p: string) => (p === 'high' ? project.options.exercisesPerHotTopic : project.options.exercisesPerTopic);
-  const known = bookFormulaKeys(ctx, projectId).map((k) => `${k.key}: ${k.label}`).join('\n');
-  const examples = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND chapter_id = ? AND kind = 'exam' AND origin = 'authentic'`, projectId, chapterId)
-    .map(rowToQuestion).slice(0, 3).map((q) => `${q.examGroup}, Esercizio ${q.number}:\n${truncate(q.statement, 1500)}`).join('\n\n');
 
-  const created: string[] = [];
-  const write = async (kind: 'exercise' | 'exam', list: { key: string; name: string; n: number }[]) => {
+  let ids = t.task.input.force ? [] : ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND chapter_id = ? AND origin = 'generated' AND kind = ? ORDER BY rowid`, projectId, chapterId, kind).map((r) => r.id);
+  const reused = ids.length;
+  if (!ids.length) {
+    const project = loadProject(ctx, projectId);
+    const topics = loadTopics(ctx, projectId).filter((tp) => chapter.sections.some((s) => s.topicIds.includes(tp.id)));
+    const keyOf = (id: string) => id.slice(9);
+    const target = (p: string) => (p === 'high' ? project.options.exercisesPerHotTopic : project.options.exercisesPerTopic);
+    const known = bookFormulaKeys(ctx, projectId).map((k) => `${k.key}: ${k.label}`).join('\n');
+    const examples = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND chapter_id = ? AND kind = 'exam' AND origin = 'authentic'`, projectId, chapterId)
+      .map(rowToQuestion).slice(0, 3).map((q) => `${q.examGroup}, Esercizio ${q.number}:\n${truncate(q.statement, 1500)}`).join('\n\n');
+    const list = kind === 'exercise'
+      ? topics.map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: target(tp.priority) }))
+      : topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 }));
     const count = list.reduce((a, b) => a + b.n, 0);
-    if (!count) return;
-    const { data } = await runRole(ctx, {
-      role: 'writer',
-      ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, knownFormulas: known }),
-      schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-    });
-    const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));
-    ctx.db.tx(() => {
-      for (const g of data.questions) {
+    if (count) {
+      const { data } = await runRole(ctx, {
+        role: 'writer',
+        ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, knownFormulas: known }),
+        schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+      });
+      const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));
+      ids = ctx.db.tx(() => data.questions.map((g) => {
         const id = newId();
         ctx.db.insert('questions', {
           id, project_id: projectId, kind, origin: 'generated', resource_id: null, page_from: null, page_to: null, exam_group: null, exam_date: null,
@@ -123,16 +158,32 @@ export async function practiceGenerate(ctx: AppContext, t: TaskContext) {
           topic_ids: g.topics.map((k) => valid.get(k)).filter(Boolean), chapter_id: chapterId, status: 'draft',
           checks: [{ method: 'lint', ok: true, detail: `final answer: ${g.finalAnswer}` }], rev: 1, created_at: now(), updated_at: now(),
         });
-        created.push(id);
-      }
-    });
-  };
-  await write('exercise', topics.map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: target(tp.priority) })));
-  // Without observed exams for this chapter, add labeled exam-style practice.
-  if (t.task.input.examStyle) await write('exam', topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 })));
+        return id;
+      }));
+    }
+  }
+  // Always: enqueue is idempotent by key, so questions that lost their verification task get it back.
+  t.enqueue(ids.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: `Check generated ${kind === 'exam' ? 'exam question' : 'exercise'} (chapter ${chapterNumber})`, input: { questionId: id }, pool: 'reviewer' })));
+  return { generated: ids.length - reused, reused };
+}
 
-  t.enqueue(created.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: `Check generated exercise (chapter ${chapterNumber})`, input: { questionId: id }, pool: 'reviewer' })));
-  return { generated: created.length };
+/**
+ * Barrier for the first-chapter gate: succeeds when every task of the chapter's practice in this run (imports, generation,
+ * verification) has finished. Until then it asks the queue to try again shortly.
+ */
+export async function practiceDone(ctx: AppContext, t: TaskContext) {
+  const chapterId = t.task.input.chapterId as string;
+  const rows = ctx.db.all<{ state: string }>(
+    `SELECT t.state FROM tasks t WHERE t.run_id = ? AND (
+       (t.kind = 'practice.generate' AND json_extract(t.input, '$.chapterId') = ?)
+       OR (t.kind IN ('question.import', 'question.verify') AND json_extract(t.input, '$.questionId') IN (SELECT id FROM questions WHERE project_id = ? AND chapter_id = ?)))`,
+    t.task.runId, chapterId, t.task.projectId, chapterId);
+  const open = rows.filter((r) => !['succeeded', 'failed', 'cancelled', 'skipped'].includes(r.state)).length;
+  if (open) {
+    t.progress(`${open} practice task${open > 1 ? 's' : ''} still running`);
+    throw new TaskError(`${open} practice tasks are still running.`, 'later');
+  }
+  return { tasks: rows.length, failed: rows.filter((r) => r.state === 'failed').length };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
@@ -147,13 +198,16 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   });
   const ok = data.agrees && !data.problems.some((p) => p.severity !== 'minor');
   const checks = [...q.checks.filter((c) => c.method !== 'independent-solve'), { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model }];
-  ctx.db.tx(() => {
-    ctx.db.run('UPDATE questions SET status = ?, checks = ?, updated_at = ? WHERE id = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id);
+  return ctx.db.tx(() => {
+    // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
+    const changed = ctx.db.run('UPDATE questions SET status = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id, q.rev).changes;
+    if (!changed) return { stale: true };
     ctx.db.run(`DELETE FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id);
     for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
-    if (!data.agrees && !data.problems.length) addIssue(ctx, q, 'major', 'solution', `The independent solution disagrees: ${data.independentAnswer}`, 'Compare both results and correct the solution.');
+    // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
+    if (!data.agrees && !data.problems.some((p) => p.severity === 'blocker')) addIssue(ctx, q, 'blocker', 'solution', `The independent solution disagrees: ${data.independentAnswer}`, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
+    return { ok, problems: data.problems.length };
   });
-  return { ok, problems: data.problems.length };
 }
 
 function addIssue(ctx: AppContext, q: Question, severity: string, category: string, message: string, suggestion: string) {
@@ -180,10 +234,14 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
-  ctx.db.tx(() => {
-    ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ?',
-      data.statement, data.hint, data.solution, q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id);
+  return ctx.db.tx(() => {
+    const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
+      data.statement, data.hint, data.solution, q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
+    if (!changed) {
+      keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
+      return { stale: true };
+    }
     if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Rewritten by ${route.model}`, ...issues.map((i) => i.id));
+    return { revised: true };
   });
-  return { revised: true };
 }

@@ -29,9 +29,10 @@ export const roleRouteSchema = z.object({ primary: routeSchema, fallback: routeS
 export type RoleRoute = z.infer<typeof roleRouteSchema>;
 
 export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
-  bulk: { primary: { provider: 'antigravity', model: 'gemini-3.8-flash' }, fallback: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' } },
+  // Antigravity runs a full agent per call (~4-5 min and ~90k tokens measured), so it is only a fallback for batch work.
+  bulk: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'antigravity', model: 'gemini-3.8-flash' } },
   vision: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'low' } },
-  evidence: { primary: { provider: 'antigravity', model: 'gemini-3.8-flash' }, fallback: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' } },
+  evidence: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'antigravity', model: 'gemini-3.8-flash' } },
   planner: { primary: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'high' } },
   writer: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },

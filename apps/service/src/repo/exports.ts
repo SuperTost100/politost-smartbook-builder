@@ -1,4 +1,5 @@
 import type { ExportRow, ValidationReport } from '@smartbuilder/domain';
+import { resolveDataPath, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { notFound } from './errors.ts';
@@ -19,11 +20,11 @@ export function listExports(ctx: AppContext, projectId: string): ExportRow[] {
 export function getExport(ctx: AppContext, id: string): ExportRow & { projectId: string; path: string } {
   const r = ctx.db.get<Rec>('SELECT * FROM exports WHERE id = ?', id);
   if (!r) throw notFound('This export');
-  return { ...mapExport(r), projectId: r.project_id, path: r.path };
+  return { ...mapExport(r), projectId: r.project_id, path: resolveDataPath(ctx.config, r.path) };
 }
 
 export function insertExport(ctx: AppContext, e: { projectId: string; filename: string; path: string; sha256: string; size: number; approved: boolean; report: ValidationReport }): ExportRow {
   const id = newId();
-  ctx.db.insert('exports', { id, project_id: e.projectId, filename: e.filename, path: e.path, sha256: e.sha256, size: e.size, approved: e.approved, report: e.report, created_at: now() });
+  ctx.db.insert('exports', { id, project_id: e.projectId, filename: e.filename, path: toDataPath(ctx.config, e.path), sha256: e.sha256, size: e.size, approved: e.approved, report: e.report, created_at: now() });
   return getExport(ctx, id);
 }

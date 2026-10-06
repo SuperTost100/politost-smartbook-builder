@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { rm } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { TaskError } from '../queue/queue.ts';
-import { paths } from '../config.ts';
+import { paths, resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { addFileSource, createNotebook, deleteSource, isSourceLimit, listSources, nlmFailure, NlmCallError, notebookCapacity, usageRetryAfter } from './nlm.ts';
@@ -154,7 +154,7 @@ function rethrowNlm(err: unknown): never {
 /** The file to upload: the original for pdf/docx/pptx, a Markdown file built from the extracted text for md and url resources. */
 async function materialize(ctx: AppContext, projectId: string, r: ResourceRow): Promise<{ file: string; cleanup: () => Promise<void> }> {
   if (r.kind === 'pdf' || r.kind === 'docx' || r.kind === 'pptx') {
-    const candidates = [r.path, join(ctx.config.dataDir, r.path), join(paths.project(ctx.config, projectId), r.path), join(paths.resources(ctx.config, projectId), r.filename)];
+    const candidates = [resolveDataPath(ctx.config, r.path), join(paths.project(ctx.config, projectId), r.path), join(paths.resources(ctx.config, projectId), r.filename)];
     const found = candidates.find((c) => existsSync(c));
     if (!found) throw new TaskError(`The stored file for ${r.filename} is missing.`, 'input', 'Remove the source and add it again.');
     return { file: found, cleanup: async () => undefined };
@@ -163,7 +163,8 @@ async function materialize(ctx: AppContext, projectId: string, r: ResourceRow): 
   let text = pages.map((p) => (p.transcript?.trim() ? p.transcript : p.text)).join('\n\n').trim();
   if (!text) {
     const meta = json<{ derivedFile?: string }>(ctx.db.get<{ meta: string }>('SELECT meta FROM resources WHERE id = ?', r.id)?.meta, {});
-    const stored = [meta.derivedFile ? join(dirname(r.path), meta.derivedFile) : '', r.path, join(ctx.config.dataDir, r.path)].find((c) => c && existsSync(c));
+    const abs = resolveDataPath(ctx.config, r.path);
+    const stored = [meta.derivedFile ? join(dirname(abs), meta.derivedFile) : '', abs].find((c) => c && existsSync(c));
     if (stored) text = readFileSync(stored, 'utf8');
   }
   if (!text) throw new TaskError(`${r.filename} has no text to upload.`, 'input');
