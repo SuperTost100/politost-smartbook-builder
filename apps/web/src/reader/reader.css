@@ -1,0 +1,97 @@
+/* Adapted from politost-smartbook (AGPL-3.0). Tokens mapped to the builder's variables. */
+.content-flow {
+  font-family: var(--font-serif);
+  font-size: 18px;
+  line-height: 1.7;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  color: var(--text);
+}
+.content-flow-inline { display: inline; }
+.content-flow p.content-paragraph { margin: 0 0 0.85em; }
+.content-flow p.content-paragraph:last-child { margin-bottom: 0; }
+.content-flow h3.content-subheading {
+  font-family: var(--font-ui);
+  font-size: 1.05rem;
+  font-weight: 600;
+  margin: 0.2em 0 0.45em;
+  color: var(--text);
+}
+.content-flow .katex, .content-flow-inline .katex { padding: 0 0.05em; }
+.content-flow ul.content-list { margin: 0.5em 0 1em 1.25em; padding: 0; }
+.content-flow ul.content-list li { margin-bottom: 0.45em; }
+.content-flow ul.content-list li strong { font-weight: 600; }
+.content-flow .katex-block { display: block; margin: 1rem 0; overflow-x: auto; max-width: 100%; }
+.content-flow .katex-error { color: var(--danger); font-family: var(--font-mono); font-size: 14px; }
+
+.smartbook-ref {
+  display: inline; color: var(--primary); font-weight: 500; text-decoration: underline; text-decoration-style: dotted;
+  cursor: pointer; padding: 0 0.05em; white-space: nowrap;
+}
+button.smartbook-ref, button.formula-hover-trigger { background: none; border: none; font: inherit; cursor: pointer; }
+
+.numbered-formula {
+  margin: 1.1rem 0;
+  padding: 1rem 1.25rem;
+  background: var(--primary-soft);
+  border-left: 3px solid var(--primary);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  max-width: 100%;
+  overflow-wrap: break-word;
+  word-break: normal;
+}
+.numbered-formula .katex-display, .numbered-formula .katex-block { overflow-x: auto; overflow-y: hidden; max-width: 100%; -webkit-overflow-scrolling: touch; }
+.formula-header { font-family: var(--font-ui); font-size: 0.8rem; color: var(--muted); margin-bottom: 0.5rem; overflow-wrap: break-word; }
+.formula-prose { margin: 0; line-height: 1.55; overflow-wrap: break-word; word-break: normal; }
+.formula-num { font-weight: 700; color: var(--primary); }
+.formula-missing { color: var(--muted); font-style: italic; }
+
+.formula-hover-wrapper { position: relative; display: inline; white-space: nowrap; }
+.formula-hover-trigger { color: var(--primary); font-weight: 600; cursor: help; border-bottom: 1px dashed var(--primary); padding: 0 0.1em; margin-left: 0.15em; }
+button.formula-hover-trigger { border: none; border-bottom: 1px dashed var(--primary); }
+.formula-tooltip {
+  position: absolute; bottom: calc(100% + 8px); left: 50%; transform: translateX(-50%);
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 0.75rem 1rem; min-width: 200px; z-index: 100; pointer-events: none; white-space: normal;
+}
+.formula-tooltip-header { font-family: var(--font-ui); font-size: 0.75rem; color: var(--muted); margin-bottom: 0.4rem; }
+
+.smartbook-figure { max-width: 100%; margin: 1.25rem auto; text-align: center; }
+.smartbook-figure img { max-width: 100%; height: auto; border-radius: var(--radius); border: 1px solid var(--border); background: #fff; }
+.smartbook-figure figcaption { font-family: var(--font-ui); font-size: 0.9rem; color: var(--muted); margin-top: 0.5rem; line-height: 1.4; }
+.smartbook-figure-missing .smartbook-figure-placeholder {
+  padding: 1.25rem; border: 1px dashed var(--border); border-radius: var(--radius); color: var(--muted);
+  font-family: var(--font-ui); font-size: 0.9rem; background: var(--surface);
+}
+
+/* Exercises, hints, solutions */
+.exercise-card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 1.25rem; box-shadow: var(--shadow-sm); }
+.exercise-actions { display: flex; flex-direction: column; gap: 0.6rem; margin-top: 1rem; padding-top: 1rem; border-top: 1px dashed var(--border); }
+.exercise-header { display: flex; gap: 0.75rem; align-items: center; margin-bottom: 1rem; font-family: var(--font-ui); font-size: 0.8rem; flex-wrap: wrap; }
+.exercise-id { font-weight: 700; color: var(--primary); }
+.exercise-ch { color: var(--muted); }
+.difficulty { padding: 0.1rem 0.45rem; border-radius: 4px; font-size: 0.72rem; text-transform: capitalize; font-weight: 600; }
+.difficulty-facile { background: var(--success-soft); color: var(--success); }
+.difficulty-medio { background: var(--warning-soft); color: var(--warning); }
+.difficulty-difficile { background: var(--danger-soft); color: var(--danger); }
+
+.reveal-block { margin: 0; font-family: var(--font-ui); }
+.reveal-block .content-flow { font-family: var(--font-serif); }
+.reveal-content { display: none; padding: 1rem; border-radius: var(--radius); border: 1px solid var(--border); }
+.reveal-content.is-open { display: block; animation: reader-reveal 0.3s var(--ease); }
+.reveal-btn {
+  display: flex; align-items: center; gap: 0.5rem; padding: 0.6rem 1rem; border-radius: var(--radius-sm); cursor: pointer;
+  font-size: 0.875rem; font-weight: 500; width: 100%; text-align: left; color: var(--text);
+}
+.reveal-btn[hidden] { display: none; }
+.reveal-hint .reveal-btn, .reveal-hint .reveal-content { background: var(--success-soft); border: 1px solid color-mix(in srgb, var(--success) 35%, var(--border)); }
+.reveal-solution .reveal-btn, .reveal-solution .reveal-content { background: var(--warning-soft); border: 1px solid color-mix(in srgb, var(--warning) 40%, var(--border)); }
+.reveal-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem; font-size: 0.8rem; font-weight: 600; color: var(--muted); }
+.reveal-hide { border: none; background: none; cursor: pointer; font-size: 0.75rem; color: var(--muted); text-decoration: underline; }
+@keyframes reader-reveal { from { opacity: 0; transform: translateY(-8px); } to { opacity: 1; transform: none; } }
+
+/* Whole-chapter preview */
+.reader-preview { max-width: 760px; margin: 0 auto; }
+.paragraph-section { margin-bottom: 2.5rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border); }
+.paragraph-title { font-family: var(--font-serif); font-size: 1.2rem; margin: 0 0 1rem; color: var(--text); font-weight: 700; }
+.para-num { color: var(--primary); font-weight: 600; margin-right: 0.4rem; }

@@ -1,0 +1,23 @@
+.ex2-actions { display: flex; flex-direction: column; gap: 10px; }
+.ex2-why { font-size: 14px; }
+.ex2-report { display: flex; flex-direction: column; gap: 14px; margin-top: 10px; }
+.ex2-verdict { display: flex; align-items: center; gap: 8px; font-weight: 600; flex-wrap: wrap; }
+.ex2-verdict.is-ok svg { color: var(--success); }
+.ex2-verdict.is-bad svg { color: var(--danger); }
+.ex2-h { margin: 0 0 6px; }
+.ex2-h--danger { color: var(--danger); }
+.ex2-h--warning { color: var(--warning); }
+.ex2-file { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; background: var(--surface); }
+.ex2-file__name { font-size: 12.5px; padding: 6px 12px; background: var(--surface-2); border-bottom: 1px solid var(--border); }
+.ex2-rows { list-style: none; margin: 0; padding: 0; }
+.ex2-row { display: flex; gap: 8px; align-items: flex-start; padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
+.ex2-row:last-child { border-bottom: 0; }
+.ex2-row--danger { background: var(--danger-soft); }
+.ex2-row--warning { background: var(--warning-soft); }
+.ex2-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.ex2-item { display: flex; gap: 16px; padding: 14px 16px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
+.ex2-item__main { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.ex2-item__meta { display: flex; gap: 4px 16px; flex-wrap: wrap; font-size: 13px; }
+.ex2-hash { font-size: 12.5px; text-decoration: none; color: var(--muted); }
+.ex2-hash:hover { color: var(--primary); text-decoration: underline; }
+.ex2-details > summary { cursor: pointer; font-size: 13.5px; color: var(--muted); }

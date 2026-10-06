@@ -1,0 +1,76 @@
+/* Design tokens. Light is the default; the theme script in index.html sets data-theme before paint. */
+:root {
+  color-scheme: light;
+  --bg: #f0f2f7;
+  --surface: #ffffff;
+  --surface-2: #f7f8fb;
+  --border: #e2e6ef;
+  --text: #1a1d2e;
+  --muted: #636b7f;
+
+  --primary: #c2410c;
+  --primary-hover: #9a3412;
+  --on-primary: #ffffff;
+  --primary-soft: rgba(194, 65, 12, 0.08);
+  --marker: rgba(232, 93, 38, 0.28);
+  --accent-graphic: #e85d26;
+
+  --success: #15803d;
+  --warning: #a16207;
+  --danger: #b91c1c;
+  --info: #1d4ed8;
+
+  --success-soft: color-mix(in srgb, var(--success) 6%, var(--surface));
+  --warning-soft: color-mix(in srgb, var(--warning) 5%, var(--surface));
+  --danger-soft: color-mix(in srgb, var(--danger) 9%, var(--surface));
+  --info-soft: color-mix(in srgb, var(--info) 9%, var(--surface));
+
+  --radius-sm: 8px;
+  --radius: 12px;
+  --radius-lg: 16px;
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.06), 0 1px 2px rgba(0, 0, 0, 0.04);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.06), 0 1px 4px rgba(0, 0, 0, 0.04);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.08), 0 2px 8px rgba(0, 0, 0, 0.04);
+  --scrim: rgba(18, 22, 34, 0.42);
+
+  --font-ui: 'Inter Variable', 'Inter', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-serif: Georgia, 'Times New Roman', serif;
+  --font-mono: ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --ease: cubic-bezier(0.4, 0, 0.2, 1);
+  --topbar-h: 52px;
+  --bar-h: 52px;
+  --focus: 2px solid var(--primary);
+}
+
+[data-theme='dark'] {
+  color-scheme: dark;
+  --bg: #0b0f19;
+  --surface: #141821;
+  --surface-2: #1a1f2c;
+  --border: #262d3d;
+  --text: #e4e8f1;
+  --muted: #8690a5;
+
+  --primary: #fdba74;
+  --primary-hover: #fed7aa;
+  --on-primary: #1a1d2e;
+  --primary-soft: rgba(253, 186, 116, 0.12);
+  --marker: rgba(245, 149, 94, 0.3);
+  --accent-graphic: #f5955e;
+
+  --success: #86efac;
+  --warning: #fde68a;
+  --danger: #fca5a5;
+  --info: #93c5fd;
+
+  --success-soft: color-mix(in srgb, var(--success) 12%, var(--surface));
+  --warning-soft: color-mix(in srgb, var(--warning) 12%, var(--surface));
+  --danger-soft: color-mix(in srgb, var(--danger) 12%, var(--surface));
+  --info-soft: color-mix(in srgb, var(--info) 12%, var(--surface));
+
+  --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.2);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.4);
+  --scrim: rgba(3, 5, 10, 0.62);
+}
