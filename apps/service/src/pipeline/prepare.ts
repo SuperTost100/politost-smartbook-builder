@@ -162,9 +162,9 @@ async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
   const topicList = topics.map((tp) => `${keyOf(tp.id)}: ${tp.name}`).join('\n');
   const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null }>(`SELECT id, statement, exam_group FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind = 'exam'`, projectId);
   let classified = 0;
-  for (const group of chunk(pending, 40)) {
+  for (const group of chunk(pending, 20)) {
     if (t.signal.aborted) break;
-    const questions = group.map((q) => `[${q.id}] ${truncate(q.statement.replace(/\s+/g, ' '), 500)}`).join('\n\n');
+    const questions = group.map((q) => `[${q.id}] ${truncate(q.statement.replace(/\s+/g, ' '), 1500)}`).join('\n\n');
     const { data } = await runRole(ctx, {
       role: 'bulk', ...classifyPrompt({ topics: topicList, questions }), schema: classifySchema,
       projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
