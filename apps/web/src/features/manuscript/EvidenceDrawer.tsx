@@ -7,7 +7,15 @@ import type { MappedBlock } from '../../lib/blocks';
 import { CiteMark } from '../../components/CiteMark';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/Toast';
+import { ContentFlow } from '../../reader/ContentFlow';
 import './evidence.css';
+
+/** NotebookLM writes math as \\( … \\) and \\[ … \\]; the reader renderer expects $ … $ and $$ … $$. */
+function texDelimiters(text: string) {
+  return text
+    .replace(/\\{1,2}\[([\s\S]+?)\\{1,2}\]/g, (_, m) => `$$${m}$$`)
+    .replace(/\\{1,2}\(([\s\S]+?)\\{1,2}\)/g, (_, m) => `$${m}$`);
+}
 
 interface Props {
   pid: string;
@@ -85,7 +93,7 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
           <Icon name={note.verified ? 'check' : 'alert'} size={12} />{note.verified ? 'verified' : 'not located'}
         </span>
       </div>
-      {note.claim && <p className="ev-note__claim">{note.claim}</p>}
+      {note.claim && <div className="ev-note__claim"><ContentFlow content={texDelimiters(note.claim)} /></div>}
 
       {src && !failed && (
         <figure className="ev-page">

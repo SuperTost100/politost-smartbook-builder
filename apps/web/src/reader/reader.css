@@ -95,3 +95,4 @@ button.formula-hover-trigger { border: none; border-bottom: 1px dashed var(--pri
 .paragraph-section { margin-bottom: 2.5rem; padding-bottom: 2rem; border-bottom: 1px solid var(--border); }
 .paragraph-title { font-family: var(--font-serif); font-size: 1.2rem; margin: 0 0 1rem; color: var(--text); font-weight: 700; }
 .para-num { color: var(--primary); font-weight: 600; margin-right: 0.4rem; }
+.ms-content .katex-display { overflow-x: auto; overflow-y: hidden; max-width: 100%; padding-bottom: 2px; }
