@@ -1,3 +1,4 @@
+import { latexToPlain } from './plaintext.ts';
 import { isValidAssetPath, validateBundle, withChapterFrontmatter } from '@politost/content-core';
 import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
@@ -193,6 +194,8 @@ function resolveFormula(byKey: boolean, key: string, label: string | null, full:
 interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
   assets: Set<string> | null;
   language: string;
+  /** Figures emitted so far per chapter number. */
+  figureCounts: Map<number, number>;
 }
 
 function emitUnit(unit: Unit, number: number, env: CompileEnv): string {
@@ -224,11 +227,16 @@ function emitUnit(unit: Unit, number: number, env: CompileEnv): string {
       continue;
     }
     if (l.kind === 'image-open') {
-      const src = parseAttrs(l.raw).src;
+      const attrs = parseAttrs(l.raw);
+      const src = attrs.src;
       if (src && env.assets && !env.assets.has(src)) {
         env.findings.push(finding('image', 'blocker', unit.id, `Image "${src}" is not among the book's assets.`, l.n, l.raw));
       }
-      out.push('', l.raw.trim());
+      // Figures are numbered per chapter, and captions/alt lose their LaTeX: the reader prints them as plain text.
+      const n = (env.figureCounts.get(number) ?? 0) + 1;
+      env.figureCounts.set(number, n);
+      const caption = latexToPlain(attrs.caption ?? '').replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
+            out.push('', `:::image{src="${src ?? ''}" alt="${latexToPlain(attrs.alt ?? '')}"${caption ? ` caption="Fig. ${number}.${n} — ${caption}"` : ''}}`);
       i++;
       continue;
     }
@@ -294,6 +302,7 @@ export function compileChapter(
   const numbering = numberChapter(chapter, number, language, formulaNumbers, sectionNumbers, findings);
   const allFormulas = { ...(opts.knownFormulas ?? {}), ...formulaNumbers };
   const env: CompileEnv = {
+    figureCounts: new Map(),
     formulaNumbers: allFormulas,
     sectionNumbers: { ...(knownSections ?? {}), ...sectionNumbers },
     knownFormulaIds: new Set(Object.values(allFormulas)),
@@ -445,6 +454,7 @@ export function compileBook(input: BookInput): CompiledBook {
 
   // Pass 2: emit.
   const env: CompileEnv = {
+    figureCounts: new Map(),
     formulaNumbers,
     sectionNumbers,
     knownFormulaIds,

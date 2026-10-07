@@ -307,3 +307,9 @@ test('numberChapters gives the same section and formula numbers as the full comp
   assert.deepEqual(n.sectionNumbers, book.sectionNumbers);
   assert.deepEqual(n.formulaNumbers, book.formulaNumbers);
 });
+
+test('figure captions lose LaTeX and get chapter numbers', async () => {
+  const { latexToPlain } = await import('./plaintext.ts');
+  assert.equal(latexToPlain('La funzione $f(x) = \\frac{\\sin x}{x}$ per $x\\to 0$ vale $1$'), 'La funzione f(x) = (sin x)/x per x→0 vale 1');
+  assert.equal(latexToPlain('$x^{10} = o(x^2)$'), 'x¹⁰ = o(x²)');
+});

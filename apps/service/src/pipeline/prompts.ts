@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 1;
+export const PROMPT_VERSION = 2;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -172,6 +172,8 @@ export interface DraftPromptInput {
   sectionIds: string;
   evidence: string;
   pages: string;
+  /** The evidence reader's answer: clean formulas, unverified wording. */
+  summary: string;
   figures: boolean;
   outside: boolean;
 }
@@ -210,6 +212,9 @@ ${p.sectionIds}
 EVIDENCE NOTES (verbatim passages from the course sources; cite them):
 ${p.evidence || '(no notes)'}
 
+SOURCE SUMMARY (the evidence reader's synthesis of the notes; its LaTeX is usually cleaner than the quotes, but it is not itself evidence — cite the notes, never this summary):
+${p.summary || '(none)'}
+
 SOURCE PAGES (clean transcriptions of the pages the notes come from; use them for exact formulas and statements):
 ${p.pages || '(none)'}
 
@@ -218,7 +223,7 @@ INSTRUCTIONS
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.
-- ${p.figures ? 'If a function graph would help (a limit, an asymptote, a discontinuity, a derivative as slope), request up to 2 figures in "figures" and place each one in the text with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own. Plot expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; the plot must match the text exactly.' : 'Do not add figures; return an empty "figures" array.'}
+- ${p.figures ? 'If a function graph would help (a limit, an asymptote, a discontinuity, a derivative as slope), request up to 2 figures in "figures" and place each one in the text with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own. Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0"); do not number figures, the builder does. Plot expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; the plot must match the text exactly.' : 'Do not add figures; return an empty "figures" array.'}
 - Return JSON: markdown (the section body, without the section title), figures, summary.`,
   };
 }

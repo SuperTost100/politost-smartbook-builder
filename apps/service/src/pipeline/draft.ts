@@ -71,7 +71,7 @@ function latestPacket(ctx: AppContext, projectId: string, nodeId: string): Evide
 }
 
 export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, maxChars = 24_000) {
-  if (!packet) return { notes: '', pages: '' };
+  if (!packet) return { notes: '', pages: '', summary: '' };
   const files = new Map(ctx.db.all<{ id: string; filename: string }>('SELECT id, filename FROM resources WHERE project_id = ?', packet.projectId).map((r) => [r.id, r.filename]));
   const notes = packet.notes.filter((n) => n.verified).map((n) => {
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : 'source';
@@ -82,7 +82,9 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
     if (!row) return '';
     return `--- ${files.get(p.resourceId)}, page ${row.label} ---\n${truncate(row.transcript || row.text, 6000)}`;
   }).filter(Boolean).join('\n\n');
-  return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars) };
+  // The evidence reader's own answer often has the formulas in clean LaTeX, while quotes from the text layer do not.
+  const summary = truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
+  return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars), summary };
 }
 
 /**
@@ -155,7 +157,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
     topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
     earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
-    evidence: ev.notes, pages: ev.pages, figures: project.options.figures, outside: project.options.outsideMaterial,
+    evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, outside: project.options.outsideMaterial,
   });
   t.progress(`Writing "${section.title}"`);
   const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
