@@ -1,5 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
+import { separateDisplayMath as layout } from '@smartbuilder/content';
 import type { Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -118,7 +119,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     checks.push({ method: 'lint', ok: true, detail: `No official solution; written by ${solved.route.model}` });
   }
   const at = now();
-  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, solution, JSON.stringify(checks), at, at, question.id, rev).changes;
+  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', layout(data.statement), layout(solution), JSON.stringify(checks), at, at, question.id, rev).changes;
   if (!changed) {
     keepStaleOutput(ctx, question, data.statement, data.solution);
     return { stale: true };
@@ -184,7 +185,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
         const id = newId();
         ctx.db.insert('questions', {
           id, project_id: projectId, kind, origin: 'generated', resource_id: null, page_from: null, page_to: null, exam_group: null, exam_date: null,
-          number: null, statement: g.statement, hint: g.hint, solution: g.solution, difficulty: g.difficulty,
+          number: null, statement: layout(g.statement), hint: layout(g.hint), solution: layout(g.solution), difficulty: g.difficulty,
           topic_ids: g.topics.map((k) => valid.get(k)).filter(Boolean), chapter_id: chapterId, status: 'draft',
           checks: [{ method: 'lint', ok: true, detail: `final answer: ${g.finalAnswer}` }], rev: 1, created_at: now(), updated_at: now(),
         });
@@ -278,7 +279,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   });
   return ctx.db.tx(() => {
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
-      data.statement, data.hint, data.solution, q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
+      layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
     if (!changed) {
       keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
       return { stale: true };

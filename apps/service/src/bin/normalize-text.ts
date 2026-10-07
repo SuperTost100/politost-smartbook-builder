@@ -7,19 +7,21 @@ import { pathToFileURL } from 'node:url';
 import { separateDisplayMath } from '@smartbuilder/content';
 import { parseArgs, paths } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
-import { currentHeads, getProject, repairHead } from '../repo/index.ts';
+import { currentHeads, getProject, repairHead, repairQuestionText } from '../repo/index.ts';
 import { relint } from '../routes/views.ts';
 
-/** Rewrites the sections (and chapter introductions) of a project that the fix changes; returns how many changed. */
-export function normalizeText(ctx: AppContext, projectId: string): number {
+/** Rewrites the sections (and chapter introductions) and the questions of a project that the fix changes. */
+export function normalizeText(ctx: AppContext, projectId: string): { sections: number; questions: number } {
   getProject(ctx, projectId);
-  let changed = 0;
+  let sections = 0;
   for (const nodeId of currentHeads(ctx, projectId).keys()) {
     if (!repairHead(ctx, projectId, nodeId, separateDisplayMath)) continue;
     relint(ctx, projectId, nodeId);
-    changed++;
+    sections++;
   }
-  return changed;
+  let questions = 0;
+  for (const { id } of ctx.db.all<{ id: string }>('SELECT id FROM questions WHERE project_id = ?', projectId)) if (repairQuestionText(ctx, id, separateDisplayMath)) questions++;
+  return { sections, questions };
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
@@ -36,7 +38,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   }
   const ctx = createContext(config);
   try {
-    console.log(`Changed ${normalizeText(ctx, projectId)} sections.`);
+    const { sections, questions } = normalizeText(ctx, projectId);
+    console.log(`Changed ${sections} sections and ${questions} questions.`);
   } finally {
     ctx.db.close();
   }

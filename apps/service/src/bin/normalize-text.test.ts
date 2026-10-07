@@ -18,7 +18,7 @@ test('mixed display math is repaired as a new current revision; clean sections a
   const clean = saveHuman(ctx, 'p1', 's2', 'Solo $x$ qui.', null);
   replaceLintIssues(ctx, 'p1', 's1', a.id, [{ rule: 'math-mixed', severity: 'minor', message: 'mixed', quote: 'g(x)' }]);
 
-  assert.equal(normalizeText(ctx, 'p1'), 1);
+  assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 1, questions: 0 });
   const head = currentHead(ctx, 'p1', 's1')!;
   assert.equal(head.markdown, 'Introduzione con $x$.\n\nStudiamo ora $f$ e\n\n$$\ng(x) = x^3\n$$\n\npoi basta.');
   assert.equal(head.origin, 'repair');
@@ -29,8 +29,23 @@ test('mixed display math is repaired as a new current revision; clean sections a
   assert.equal(listIssues(ctx, 'p1', { nodeId: 's1' }).filter((i) => i.category === 'math-mixed').length, 0);
   assert.equal(currentHead(ctx, 'p1', 's2')!.id, clean.id);
 
-  assert.equal(normalizeText(ctx, 'p1'), 0);
+  assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 0, questions: 0 });
   assert.equal(listRevisions(ctx, 'p1', 's1').length, 2);
+});
+
+test('question text is repaired without losing its verified status', () => {
+  ctx.db.insert('questions', {
+    id: 'q1', project_id: 'p1', kind: 'exam', origin: 'authentic', resource_id: null, page_from: null, page_to: null, exam_group: null, exam_date: null,
+    number: null, statement: MIXED, hint: '', solution: 'Vale $$x=1$$. Dunque $x$ è uno.', difficulty: 'medium', topic_ids: [], chapter_id: null, status: 'verified',
+    checks: [{ method: 'model', ok: true, detail: 'ok' }], rev: 1, created_at: '2026-01-01', updated_at: '2026-01-01',
+  });
+  assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 0, questions: 1 });
+  const q = ctx.db.get<{ status: string; checks: string; solution: string; rev: number }>('SELECT status, checks, solution, rev FROM questions WHERE id = ?', 'q1')!;
+  assert.equal(q.status, 'verified');
+  assert.equal(JSON.parse(q.checks).length, 1);
+  assert.equal(q.solution, 'Vale\n\n$$\nx=1.\n$$\n\nDunque $x$ è uno.');
+  assert.equal(q.rev, 2);
+  assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 0, questions: 0 });
 });
 
 test('an unknown project is an error', () => {

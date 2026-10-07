@@ -81,6 +81,21 @@ export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: 
   });
 }
 
+/**
+ * Applies a layout-only repair to a question's text. Unlike an edit it keeps the status and the checks, because the
+ * mathematics does not change. Returns whether the text changed.
+ */
+export function repairQuestionText(ctx: AppContext, id: string, fix: (text: string) => string): boolean {
+  return ctx.db.tx(() => {
+    const cur = getQuestion(ctx, id);
+    const next = { statement: fix(cur.statement), hint: fix(cur.hint), solution: fix(cur.solution) };
+    if (next.statement === cur.statement && next.hint === cur.hint && next.solution === cur.solution) return false;
+    ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, rev = rev + 1, updated_at = ? WHERE id = ?', next.statement, next.hint, next.solution, now(), id);
+    questionsChanged(ctx, cur.projectId, [id]);
+    return true;
+  });
+}
+
 export function deleteQuestion(ctx: AppContext, id: string): void {
   const q = getQuestion(ctx, id);
   ctx.db.run('DELETE FROM questions WHERE id = ?', id);
