@@ -142,7 +142,21 @@ const REF_TOKEN =
 
 const WORD = /[\p{L}\p{N}]/u;
 
+/**
+ * Square brackets inside math (Italian intervals like ]a,b[ or [2,+\infty[) are written as \lbrack and \rbrack.
+ * KaTeX renders them the same, but a raw "[" in math lets the Markdown link syntax later in the line
+ * ("[label](ref:...)") swallow the math as link text, in this compiler and in the reader alike.
+ * Optional arguments such as \sqrt[3]{x} keep their brackets.
+ */
+export function protectMathBrackets(line: string): string {
+  return line.replace(/\$\$[^$]*\$\$|\$[^$\n]+\$/g, (math) =>
+    math.replace(/(\\sqrt)\[([^\[\]]*)\]/g, '$1\u0000$2\u0001')
+      .replace(/\[/g, '\\lbrack ').replace(/\]/g, '\\rbrack ')
+      .replace(/\u0000/g, '[').replace(/\u0001/g, ']'));
+}
+
 function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
+  line = protectMathBrackets(line);
   return line.replace(REF_TOKEN, (full, hoverAt: string | undefined, hoverKey: string | undefined, label: string | undefined, kind: string | undefined, target: string | undefined, offset: number) => {
     let out: string;
     if (hoverKey !== undefined) {

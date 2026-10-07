@@ -367,3 +367,19 @@ test('a "# comment" inside a fenced code block of a section stays code (not turn
   assert.ok(md.includes('```python\n# commento\nx = 1\n```'), md);
   assert.ok(!md.includes('### commento'));
 });
+
+test('brackets in math cannot be captured by a later link', async () => {
+  const { protectMathBrackets, compileBook } = await import('./compile.ts');
+  assert.equal(protectMathBrackets('di $[2,+\\infty[$ e $\\sqrt[3]{x}$'), 'di $\\lbrack 2,+\\infty\\lbrack $ e $\\sqrt[3]{x}$');
+  const book = compileBook({
+    meta: { slug: 'b', title: 'B', subject: 'S', authors: [], language: 'it', version: '1.0.0' },
+    chapters: [{ id: 'c1', slug: 'uno', number: 1, title: 'Uno', intro: '', sections: [
+      { id: 's1', title: 'A', markdown: 'Ad esempio $ [2, +\\infty[ $ è illimitato. Vedi [la sezione B](ref:section/s2).' },
+      { id: 's2', title: 'B', markdown: 'Testo.' },
+    ] }],
+    questions: [], enrichments: [], assets: [], sections: { esercizi: false, esami: false, ide: false, grafici: false },
+  });
+  const ch = Object.entries(book.files).find(([k]) => k.startsWith('chapters/'))![1] as string;
+  assert.ok(ch.includes('[la sezione B](ref:chapter/1#p2)'), ch);
+  assert.ok(!/\$[^$]*\[[^$]*\$/.test(ch.split('\n').find((l) => l.startsWith('Ad esempio'))!), ch);
+});
