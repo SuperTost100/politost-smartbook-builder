@@ -53,6 +53,8 @@ What changed:
 
 On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
 
+On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The book now has no blockers and no majors, 10 minor review notes and 16 lint warnings, and it validates with 0 errors. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+
 ## Open issues on the Analisi book
 
 Four issues were accepted as exceptions and are visible in the Review tab:
