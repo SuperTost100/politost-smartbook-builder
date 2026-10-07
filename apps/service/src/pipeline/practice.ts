@@ -66,7 +66,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   const q = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!q) return { skipped: true };
   const question = rowToQuestion(q);
-  if (question.checks.some((c) => c.method === 'lint' && c.detail === 'imported')) return { reused: true };
+  if (question.checks.some((c) => c.method === 'lint' && c.detail === 'imported') && question.solution.trim()) return { reused: true };
   if (question.resourceId === null || question.pageFrom === null) return { skipped: 'no page range' };
   // Every update below applies only if the author has not edited the question since this read.
   const rev = question.rev;
@@ -83,13 +83,27 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   if (!data.readable) {
-    const changed = ctx.db.run(`UPDATE questions SET status = 'issue', rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;
+    // Out of the book until the author types it in: its raw text-layer statement is garbled.
+    const changed = ctx.db.run(`UPDATE questions SET status = 'issue', chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;
     if (!changed) return { stale: true };
-    addIssue(ctx, question, 'major', 'unreadable', 'This exam question could not be read from its pages.', 'Open the source pages and type the statement, or remove the question.');
+    addIssue(ctx, question, 'major', 'unreadable', 'This exam question could not be read from its pages, so it was left out of the book.', 'Open the source pages, type the statement and solution in Practice, and assign it to a chapter.');
     return { readable: false };
   }
   const checks = [...question.checks, { method: 'lint' as const, ok: true, detail: 'imported' }];
-  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, data.solution, JSON.stringify(checks), now(), question.id, rev).changes;
+  let solution = data.solution;
+  if (!solution.trim()) {
+    // Some sessions are published without solutions; the book needs a worked one, which verification then checks.
+    t.progress('Writing the missing solution');
+    const solved = await runRole(ctx, {
+      role: 'writer',
+      system: `You solve a university exam exercise for a textbook in ${project.language === 'it' ? 'Italian' : project.language}, with every step and the final results clearly stated.\n\n${formatRules(project.language)}`,
+      prompt: `EXERCISE:\n${data.statement}\n\nReturn JSON {"markdown": "<the worked solution>"}.`,
+      schema: z.object({ markdown: z.string() }), projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    solution = solved.data.markdown;
+    checks.push({ method: 'lint', ok: true, detail: `No official solution; written by ${solved.route.model}` });
+  }
+  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, solution, JSON.stringify(checks), now(), question.id, rev).changes;
   if (!changed) {
     keepStaleOutput(ctx, question, data.statement, data.solution);
     return { stale: true };

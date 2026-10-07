@@ -38,7 +38,12 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
     case 'regenerate': runId = ctx.queue.createRun(projectId, 'regenerate', regenerateSpecs(ctx, projectId, scope)); break;
     case 'review': {
       const specs: TaskSpec[] = scope.questionIds?.length
-        ? scope.questionIds.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: 'Check the solution again', input: { questionId: id }, pool: 'reviewer' }))
+        ? scope.questionIds.flatMap((id) => {
+          // Authentic questions go through import first (a no-op once imported), which also writes missing solutions.
+          const authentic = ctx.db.get<{ origin: string }>('SELECT origin FROM questions WHERE id = ?', id)?.origin === 'authentic';
+          const verify: TaskSpec = { kind: 'question.verify', key: `verify:${id}`, label: 'Check the solution again', input: { questionId: id }, pool: 'reviewer', deps: authentic ? [`import:${id}`] : [] };
+          return authentic ? [{ kind: 'question.import', key: `import:${id}`, label: 'Read the exam question', input: { questionId: id }, pool: 'vision' }, verify] : [verify];
+        })
         : (loadOutline(ctx, projectId)?.outline.chapters ?? []).map((c) => ({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id, force: true }, pool: 'reviewer' }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
       runId = ctx.queue.createRun(projectId, 'review', specs);
