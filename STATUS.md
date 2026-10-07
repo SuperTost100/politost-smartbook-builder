@@ -53,7 +53,7 @@ What changed:
 
 On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
 
-On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The book now has no blockers and no majors, 10 minor review notes and 16 lint warnings, and it validates with 0 errors. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors. The only warnings left are 80 exam questions without hints. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
 
 ## Open issues on the Analisi book
 
@@ -83,7 +83,7 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 
 ## Tests and CI
 
-`npm test` runs 110 content tests and 183 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 124 content tests and 187 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
 
 ## Your running instance
 
