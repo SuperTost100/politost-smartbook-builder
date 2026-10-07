@@ -423,7 +423,7 @@ function Coverage({ outline, topics, total, onExclude, loading }: { outline: Out
                 </form>
               )}
               {excludedReason !== null && <p className="ol-topic__where">Left out: {excludedReason}</p>}
-              {sections.length > 0 && <p className="ol-topic__where">Covered in {sections.map((s) => `${s.chapter}. ${s.title}`).join('; ')}</p>}
+              {sections.length > 0 && <p className="ol-topic__where">Covered in {sections.map((s) => `${s.number} ${s.title}`).join('; ')}</p>}
             </li>
           );
         })}

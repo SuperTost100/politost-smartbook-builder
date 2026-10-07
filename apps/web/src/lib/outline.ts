@@ -40,13 +40,13 @@ const rank = (d: OutlineSection['depth']) => ({ brief: 0, standard: 1, deep: 2 }
 
 export interface TopicCoverage {
   topic: Topic;
-  sections: { id: string; title: string; chapter: number }[];
+  sections: { id: string; title: string; chapter: number; number: string }[];
   excludedReason: string | null;
 }
 
 export function coverage(outline: Outline, topics: Topic[]): TopicCoverage[] {
-  const bySection = new Map<string, { id: string; title: string; chapter: number }[]>();
-  outline.chapters.forEach((c, ci) => c.sections.forEach((s) => s.topicIds.forEach((t) => bySection.set(t, [...(bySection.get(t) ?? []), { id: s.id, title: s.title, chapter: ci + 1 }]))));
+  const bySection = new Map<string, { id: string; title: string; chapter: number; number: string }[]>();
+  outline.chapters.forEach((c, ci) => c.sections.forEach((s, si) => s.topicIds.forEach((t) => bySection.set(t, [...(bySection.get(t) ?? []), { id: s.id, title: s.title, chapter: ci + 1, number: `${ci + 1}.${si + 1}` }]))));
   const excl = new Map(outline.exclusions.map((e) => [e.topicId, e.reason]));
   return topics.map((topic) => ({ topic, sections: bySection.get(topic.id) ?? [], excludedReason: excl.get(topic.id) ?? null }));
 }

@@ -1,3 +1,4 @@
+import { splitBlocks } from '@smartbuilder/content/blocks';
 import type { ContentNodeKind, ContentOrigin, ContentRevision, EvidenceNote, EvidencePacket } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -70,8 +71,46 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
   return ctx.db.tx(() => {
     const head = currentHead(ctx, projectId, nodeId);
     if ((head?.id ?? null) !== baseRevId) throw conflict(STALE, undefined, nodeId);
-    return makeCurrent(ctx, projectId, nodeId, head, { projectId, nodeId, kind, markdown, origin: 'human', model: null, parentRevId: null, status: 'current', citations: {} });
+    const citations = head ? carryCitations(head.markdown, markdown, head.citations) : {};
+    return makeCurrent(ctx, projectId, nodeId, head, { projectId, nodeId, kind, markdown, origin: 'human', model: null, parentRevId: head?.id ?? null, status: 'current', citations });
   });
+}
+
+/**
+ * Moves block citations from an old text to an edited one. Blocks with identical text keep theirs; the remaining
+ * blocks are aligned from the start and from the end, so editing, inserting or deleting one block does not shift
+ * the evidence of the others.
+ */
+export function carryCitations(oldMd: string, newMd: string, old: Record<string, string[]>): Record<string, string[]> {
+  const a = splitBlocks(oldMd).map((b) => b.text.trim());
+  const b = splitBlocks(newMd).map((x) => x.text.trim());
+  const out: Record<string, string[]> = {};
+  const used = new Set<number>();
+  const take = (i: number, j: number) => {
+    used.add(i);
+    if (old[String(i)]?.length) out[String(j)] = old[String(i)];
+  };
+  const matched = new Set<number>();
+  b.forEach((text, j) => {
+    const i = a.findIndex((t, k) => !used.has(k) && t === text);
+    if (i >= 0) { take(i, j); matched.add(j); }
+  });
+  // Edited blocks: align the unmatched ones from both ends.
+  let i = 0;
+  for (let j = 0; j < b.length && i < a.length; j++, i++) {
+    if (matched.has(j)) continue;
+    if (a[i] === undefined || used.has(i)) break;
+    take(i, j);
+    matched.add(j);
+  }
+  let k = a.length - 1;
+  for (let j = b.length - 1; j >= 0 && k >= 0; j--, k--) {
+    if (matched.has(j)) continue;
+    if (used.has(k)) break;
+    take(k, j);
+    matched.add(j);
+  }
+  return out;
 }
 
 /**

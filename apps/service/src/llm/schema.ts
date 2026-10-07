@@ -32,6 +32,15 @@ function walk(node: unknown): unknown {
   const out: Json = {};
   for (const [k, v] of Object.entries(node)) {
     if (k === 'default' || k === 'propertyNames' || k === '$schema') continue;
+    // Tuples (z.tuple) become "prefixItems", which Claude Code's strict validator rejects. Send a plain array schema;
+    // zod still checks the exact length when the answer is validated.
+    if (k === 'prefixItems' && Array.isArray(v)) {
+      const items = v.map(walk);
+      const same = items.every((it) => JSON.stringify(it) === JSON.stringify(items[0]));
+      out.items = same ? items[0] : { anyOf: items };
+      continue;
+    }
+    if ((k === 'minItems' || k === 'maxItems' || k === 'items') && Array.isArray(node.prefixItems)) continue;
     if (k === 'properties' && isObj(v)) {
       out.properties = Object.fromEntries(Object.entries(v).map(([pk, pv]) => [pk, walk(pv)]));
     } else if (k === 'additionalProperties' && isObj(v)) {

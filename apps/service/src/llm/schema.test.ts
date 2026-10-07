@@ -67,3 +67,11 @@ test('parseJsonAnswer tolerates fences and surrounding prose', () => {
   assert.deepEqual(parseJsonAnswer('Sure! {"a": "}"} bye'), { a: '}' });
   assert.throws(() => parseJsonAnswer('no json here'));
 });
+
+test('tuples become plain arrays that strict validators accept', async () => {
+  const { z } = await import('zod');
+  const { toProviderSchema } = await import('./schema.ts');
+  const out = JSON.stringify(toProviderSchema(z.object({ range: z.tuple([z.number(), z.number()]) })));
+  assert.ok(!out.includes('prefixItems'), out);
+  assert.ok(out.includes('"items":{"type":"number"}'), out);
+});
