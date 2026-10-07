@@ -38,3 +38,6 @@
   .pj-step { font-size: 12.5px; gap: 5px; }
   .pj-secondary { justify-content: flex-start; }
 }
+.pj-note { margin: 0; font-size: 14px; color: var(--warning); overflow-wrap: anywhere; }
+/* Buttons in the narrow card may wrap rather than push the card wider than the screen. */
+.pj-side .ui-btn { max-width: 100%; white-space: normal; text-align: center; }

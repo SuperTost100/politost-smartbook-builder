@@ -117,6 +117,7 @@ function ProjectCard({ p, lead }: { p: ProjectSummary; lead: boolean }) {
           <li><strong>{counts.questions}</strong> {counts.questions === 1 ? 'question' : 'questions'}</li>
           <li className={counts.openIssues > 0 ? 'pj-counts__issues' : ''}><strong>{counts.openIssues}</strong> open {counts.openIssues === 1 ? 'issue' : 'issues'}</li>
         </ul>
+        {action.note && <p className="pj-note" role="status">{action.note}</p>}
       </div>
 
       <div className="pj-side">

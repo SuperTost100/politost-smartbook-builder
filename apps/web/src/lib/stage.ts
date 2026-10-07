@@ -12,13 +12,13 @@ export function stepIndex(stage: ProjectStage): number {
   }
 }
 
-export interface NextAction { label: string; to: string; kind?: 'download' }
+export interface NextAction { label: string; to: string; kind?: 'download'; /** Why this action is needed, shown as text next to the button. */ note?: string }
 
 /** The one thing the author should do next, named as the action it performs. */
 export function nextAction(p: ProjectSummary): NextAction {
   const base = `/books/${p.id}`;
   const run = p.activeRun;
-  if (run && run.status === 'waiting') return { label: run.waiting?.action || 'Answer waiting step', to: `${base}/run` };
+  if (run && run.status === 'waiting') return { label: 'Resolve waiting step', to: `${base}/run`, note: run.waiting?.reason };
   switch (p.stage) {
     case 'sources':
     case 'mapping':
