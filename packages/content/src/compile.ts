@@ -382,7 +382,8 @@ function compileQuestions(
     const file = `question:${q.id}`;
     const refEnv: RefEnv = { ...env, file, chapterNumber: chapter, hoverSameChapterOnly: false };
     const prep = (text: string, part: string): string => {
-      const src = text.replace(/\r\n?/g, '\n').trim();
+      // Headings would break the exercise card's own "## Domanda" structure; keep them as bold lines.
+      const src = text.replace(/\r\n?/g, '\n').trim().replace(/^#{1,6}\s+(.+?)\s*#*\s*$/gm, '**$1**');
       for (const f of lintQuestionText(src, { file, language, knownFormulaKeys: knownKeys, skipRules: ['formula-ref-unknown'] })) {
         findings.push({ ...f, message: `[${part}] ${f.message}` });
       }
