@@ -219,7 +219,8 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     ctx.db.run(`DELETE FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id);
     for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
-    if (!data.agrees && !data.problems.some((p) => p.severity === 'blocker')) addIssue(ctx, q, 'blocker', 'solution', `The independent solution disagrees: ${data.independentAnswer}`, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
+    // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
+    if (!data.resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) addIssue(ctx, q, 'blocker', 'solution', `The independent solution reaches a different result: ${data.independentAnswer}`, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
     return { ok, problems: data.problems.length };
   });
 }

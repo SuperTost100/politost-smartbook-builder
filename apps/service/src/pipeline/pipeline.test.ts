@@ -85,7 +85,7 @@ describe('1. question updates do not overwrite author edits', () => {
 
   test('verify: an edit during the check leaves the status alone and reports stale', async () => {
     const id = q();
-    fake.next(() => { edit(id)(); return { structured: { independentAnswer: '1', agrees: true, problems: [] } as never, text: '{}', usage: usageOf(1, 1) }; });
+    fake.next(() => { edit(id)(); return { structured: { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] } as never, text: '{}', usage: usageOf(1, 1) }; });
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { stale: true });
     assert.equal(row(id).status, 'draft');
@@ -95,7 +95,7 @@ describe('1. question updates do not overwrite author edits', () => {
 
   test('verify: without an edit the question is verified and rev moves on', async () => {
     const id = q();
-    fake.next(answer({ independentAnswer: '1', agrees: true, problems: [] }));
+    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.equal(row(id).status, 'verified');
     assert.equal(row(id).rev, 2);
@@ -141,20 +141,26 @@ describe('1. question updates do not overwrite author edits', () => {
 describe('15. disagreement is a blocker', () => {
   test('agrees=false with no problems, or only minor/major ones, adds a blocker; an existing blocker is not duplicated', async () => {
     const a = q();
-    fake.next(answer({ independentAnswer: '2', agrees: false, problems: [] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.deepEqual(issues(`question_id = '${a}'`).map((i) => i.severity), ['blocker']);
 
     const b = q();
-    fake.next(answer({ independentAnswer: '2', agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.severity).sort(), ['blocker', 'major']);
 
     const c = q();
-    fake.next(answer({ independentAnswer: '2', agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: c }));
     assert.deepEqual(issues(`question_id = '${c}'`).map((i) => i.severity), ['blocker']);
     assert.equal(row(c).status, 'issue');
+
+    // Same result, gap in the argument: the reviewer's severity stands, no extra blocker.
+    const d = q();
+    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: d }));
+    assert.deepEqual(issues(`question_id = '${d}'`).map((i) => i.severity), ['major']);
   });
 });
 

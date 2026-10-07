@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 2;
+export const PROMPT_VERSION = 3;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -314,7 +314,8 @@ Return JSON with the statement of "Esercizio ${p.number}" of this session (all i
 
 export const verifySchema = z.object({
   independentAnswer: z.string(),
-  agrees: z.boolean(),
+  resultsAgree: z.boolean().describe('the final results of the given solution match yours'),
+  agrees: z.boolean().describe('results match and the reasoning has no major gap'),
   problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
 });
 
@@ -327,7 +328,7 @@ ${p.statement}
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), agrees (true only if the given solution's results are correct and its reasoning is valid), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.`,
+Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.`,
   };
 }
 
