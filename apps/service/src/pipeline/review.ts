@@ -34,7 +34,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   const objectives = chapter.sections.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
 
   const { data, route } = await runRole(ctx, {
-    role: 'reviewer', ...reviewPrompt({ language: project.language, chapterTitle: chapter.title, chapter: truncate(text, 120_000), evidence: truncate(evidence, 40_000), objectives }),
+    role: 'reviewer', ...reviewPrompt({ language: project.language, notation: outline!.outline.notation, chapterTitle: chapter.title, chapter: truncate(text, 120_000), evidence: truncate(evidence, 40_000), objectives }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const valid = new Map(sections.map(({ s, head }) => [s.id, head!.id]));

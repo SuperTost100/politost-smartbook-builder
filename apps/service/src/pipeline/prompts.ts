@@ -403,13 +403,16 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Ignore matters of taste. Quote the exact text each issue refers to.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
+
+Notation fixed for the whole book (symbols defined here need no definition in the chapter):
+${p.notation || '(standard)'}
 
 CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
