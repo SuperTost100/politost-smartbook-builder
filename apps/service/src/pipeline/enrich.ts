@@ -41,9 +41,9 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
   const titleOf = (id: string) => chapter.sections.find((s) => s.id === id)?.title ?? '';
   const specs: TaskSpec[] = [
     ...(project.options.graphs ? data.graphs.slice(0, 2) : []).filter((p) => have.has(p.sectionId))
-      .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'writer' })),
+      .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
     ...(project.options.ide ? data.ide.slice(0, 1) : []).filter((p) => have.has(p.sectionId))
-      .map((p) => ({ kind: 'enrich.ide', key: `enrich.ide:${p.sectionId}`, label: `Write a Python example for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'writer' })),
+      .map((p) => ({ kind: 'enrich.ide', key: `enrich.ide:${p.sectionId}`, label: `Write a Python example for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
   ];
   t.enqueue(specs);
   return { picked: specs.length };
@@ -61,7 +61,7 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const head = headRevision(ctx, projectId, nodeId);
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
-  const g = await runRole(ctx, { role: 'writer', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const sampled = sampleFunctionGraph({
     id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
     functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
@@ -78,7 +78,7 @@ export async function enrichIde(ctx: AppContext, t: TaskContext) {
   const head = headRevision(ctx, projectId, nodeId);
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
-  const g = await runRole(ctx, { role: 'writer', ...idePrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: ideSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const g = await runRole(ctx, { role: 'editor', ...idePrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: ideSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const payload = { id: g.data.id, title: g.data.title, language: 'python', description: g.data.description, code: g.data.code };
   t.progress('Running the Python example');
   const run = await runPython(g.data.code, 20_000);

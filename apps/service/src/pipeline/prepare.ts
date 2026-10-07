@@ -141,7 +141,7 @@ async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
     const indexes = sourceIndexesText(ctx, theory, labelOf);
     if (!indexes.trim()) throw new TaskError('No theory source has a usable index yet.', 'input', 'Add at least one theory source (notes or a textbook), then run Prepare again.');
     const { data } = await runRole(ctx, {
-      role: 'writer', ...topicsPrompt({ subject: project.subject, language: project.language, goals: project.goals, indexes }), schema: topicsSchema,
+      role: 'editor', ...topicsPrompt({ subject: project.subject, language: project.language, goals: project.goals, indexes }), schema: topicsSchema,
       projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     ctx.db.tx(() => {

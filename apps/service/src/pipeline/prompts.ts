@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 3;
+export const PROMPT_VERSION = 4;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -442,5 +442,34 @@ CURRENT SECTION:
 ${p.markdown}
 
 Return JSON {"markdown": "..."} with the full revised section.`,
+  };
+}
+
+// ---------- targeted revision ----------
+
+export const patchSchema = z.object({
+  changes: z.array(z.object({
+    block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
+    text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
+  })),
+});
+
+/** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string }) {
+  return {
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full. Keep [[nX]] citation markers and formula keys of text you keep.\n\n${formatRules(p.language)}`,
+    prompt: `PROBLEMS TO FIX:
+${p.requests}
+
+EVIDENCE NOTES:
+${p.evidence || '(none)'}
+
+Known formula keys: ${p.knownFormulas || '(none)'}
+Section ids you may link to: ${p.sectionIds}
+
+SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
+${p.blocks}
+
+Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
   };
 }

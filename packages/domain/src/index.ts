@@ -6,7 +6,7 @@ export * from './api.ts';
 
 // ---------- Model routing ----------
 
-export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'reviewer'] as const;
+export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'editor', 'exercises', 'checker', 'reviewer'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
@@ -14,7 +14,10 @@ export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
   vision: { label: 'Read pages', help: 'Transcribes pages whose math or handwriting the PDF text layer garbles.' },
   evidence: { label: 'Evidence reader', help: 'Reads source pages and returns verbatim quotes when NotebookLM is unavailable.' },
   planner: { label: 'Plan the book', help: 'Builds the common index. Runs once per outline.' },
-  writer: { label: 'Write', help: 'Explanations, exercises and solutions in the book language.' },
+  writer: { label: 'Write sections', help: 'The explanations of each section, and fixes of blocker issues in them. The text students read most; use your best writer here.' },
+  editor: { label: 'Edit and fix', help: 'Chapter introductions, formatting repairs, fixes of non-blocker issues, exercise corrections, topic map, graphs and Python examples.' },
+  exercises: { label: 'Write exercises', help: 'Generated exercises and missing official solutions. Every one is checked afterwards.' },
+  checker: { label: 'Check solutions', help: 'First, cheap check of every exercise solution. Disagreements go to the reviewer for a second opinion.' },
   reviewer: { label: 'Review', help: 'Independent check of drafts and solutions. Prefer a different vendor from the writer.' },
 };
 
@@ -35,6 +38,9 @@ export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
   evidence: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'antigravity', model: 'gemini-3.8-flash' } },
   planner: { primary: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'high' } },
   writer: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
+  editor: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'low' } },
+  exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
+  checker: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
 };
 

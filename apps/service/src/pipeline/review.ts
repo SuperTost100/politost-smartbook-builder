@@ -8,7 +8,7 @@ import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
-import { revisePrompt, reviewPrompt, reviewSchema, repairSchema } from './prompts.ts';
+import { patchPrompt, patchSchema, reviewPrompt, reviewSchema, repairSchema } from './prompts.ts';
 import { extractCitations, findSection, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 export async function chapterReview(ctx: AppContext, t: TaskContext) {
@@ -91,7 +91,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext) {
   const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
-  const issues = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string }>(`SELECT id, quote, message, suggestion FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
+  const issues = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string }>(`SELECT id, quote, message, suggestion, severity FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
   const requests = [
     t.task.input.instruction ? `Author's instruction: ${t.task.input.instruction}` : '',
     t.task.input.selection ? `Apply it to this passage: "${t.task.input.selection}"` : '',
@@ -104,11 +104,15 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext) {
   const sectionIds = outline ? outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n') : '';
   // Stored text has no citation markers; put the base revision's back so the model can keep them.
   const baseCitations = json<Record<string, string[]>>(ctx.db.get<{ citations: string }>('SELECT citations FROM content_revisions WHERE id = ?', head.id)?.citations, {});
+  const blocks = splitBlocks(withMarkers(head.markdown, baseCitations)).map((b) => b.text);
+  // Blockers and the author's own instructions get the strongest writer; everything else the cheaper editor.
+  const role = t.task.input.instruction || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   const { data, route } = await runRole(ctx, {
-    role: 'writer', ...revisePrompt({ language: project.language, markdown: withMarkers(head.markdown, baseCitations), requests, evidence: ev, knownFormulas: known, sectionIds }),
-    schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds }),
+    schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
-  const { markdown, citations } = extractCitations(data.markdown, splitBlocks);
+  for (const c of data.changes) if (c.block >= 0 && c.block < blocks.length) blocks[c.block] = c.text.trim();
+  const { markdown, citations } = extractCitations(blocks.filter((b) => b.trim()).join('\n\n'), splitBlocks);
   const isIntro = !findSection(outline?.outline ?? { chapters: [], exclusions: [], notation: '' }, nodeId);
   const committed = commitAiRevision(ctx, { projectId, nodeId, kind: isIntro ? 'chapter-intro' : 'section', markdown, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: true, runId: t.task.runId, taskId: t.task.id });
   if (issues.length) {

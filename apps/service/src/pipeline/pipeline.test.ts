@@ -143,24 +143,24 @@ describe('1. question updates do not overwrite author edits', () => {
 describe('15. disagreement is a blocker', () => {
   test('agrees=false with no problems, or only minor/major ones, adds a blocker; an existing blocker is not duplicated', async () => {
     const a = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.deepEqual(issues(`question_id = '${a}'`).map((i) => i.severity), ['blocker']);
 
     const b = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.severity).sort(), ['blocker', 'major']);
 
     const c = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: c }));
     assert.deepEqual(issues(`question_id = '${c}'`).map((i) => i.severity), ['blocker']);
     assert.equal(row(c).status, 'issue');
 
     // Same result, gap in the argument: the reviewer's severity stands, no extra blocker.
     const d = q();
-    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
+    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }), answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: d }));
     assert.deepEqual(issues(`question_id = '${d}'`).map((i) => i.severity), ['major']);
   });
@@ -345,7 +345,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('citation markers of the base revision are sent to the model and come back as citations', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Prima frase.\n\nSeconda frase.', { citations: { '0': ['n1'], '1': ['n2', 'n3'] } });
-    fake.next(answer({ markdown: 'Prima frase corretta. [[n1]]\n\nSeconda frase. [[n2,n3]]' }));
+    fake.next(answer({ changes: [{ block: 0, text: 'Prima frase corretta. [[n1]]' }] }));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'correggi' }));
     assert.match(fake.calls[0].prompt, /Prima frase\. \[\[n1\]\]/);
     assert.match(fake.calls[0].prompt, /\[\[n2,n3\]\]/);
@@ -357,7 +357,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('same task again: no second model call and no second proposal; a new task supersedes the older pending proposal', async () => {
     seedOutline([['c1', ['s1']]]);
     const head = seedRevision('s1', 'Testo.');
-    fake.next(answer({ markdown: 'Testo uno.' }), answer({ markdown: 'Testo due.' }));
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ changes: [{ block: 0, text: 'Testo due.' }] }));
     const t1 = startTask('section.revise', { nodeId: 's1', instruction: 'a' });
     const a = await sectionRevise(ctx, t1);
     const a2 = await sectionRevise(ctx, t1);
@@ -605,7 +605,7 @@ describe('r5. a superseded proposal gives its issues back', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     ctx.db.insert('review_issues', { id: 'iA', project_id: P, node_id: 's1', source: 'review', severity: 'blocker', category: 'math', message: 'A', suggestion: 'a', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ markdown: 'Testo uno.' }), answer({ markdown: 'Testo due.' }), answer({ markdown: 'Testo tre.' }));
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ changes: [{ block: 0, text: 'Testo due.' }] }), answer({ changes: [{ block: 0, text: 'Testo tre.' }] }));
     const first = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
     const issue = () => ({ ...ctx.db.get<Record<string, any>>(`SELECT status, resolution FROM review_issues WHERE id = 'iA'`)! });
     assert.deepEqual(issue(), { status: 'proposed', resolution: `Proposal ${first.revId}` });
@@ -778,5 +778,21 @@ describe('author-set topic priority', () => {
     updateTopic(ctx, id, { priority: 'high' });
     computePriorities(ctx, P);
     assert.equal(ctx.db.get<{ priority: string }>('SELECT priority FROM topics WHERE id = ?', id)!.priority, 'high');
+  });
+});
+
+describe('cheap check first', () => {
+  test('a clean check stays on the checker; a problem goes to the reviewer for the recorded verdict', async () => {
+    const a = q();
+    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: a }));
+    assert.equal(fake.calls.at(-1)!.selection.model, ctx.settings().routes.checker.primary.model);
+    const before = fake.calls.length;
+    const b = q();
+    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: b }));
+    assert.equal(fake.calls.length, before + 2);
+    assert.equal(fake.calls.at(-1)!.selection.model, ctx.settings().routes.reviewer.primary.model);
+    assert.deepEqual(issues(`question_id = '${b}'`), []);
   });
 });

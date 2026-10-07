@@ -15,12 +15,12 @@ Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost1
 
 | Tool | Sign in | Used by default for |
 |---|---|---|
-| Claude Code | `claude` then `/login` | Writing (Sonnet), planning the index once per book (Opus) |
-| Codex | `codex login` | Reading pages with math (GPT-6-Luna), reviewing (GPT-6-Sol) |
-| Antigravity | `agy` | Classification and the local evidence reader (Gemini Flash) |
+| Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the outline once per book (Opus) |
+| Codex | `codex login` | Everything routine on GPT-6-Luna: classification, page reading, exercises, introductions, non-blocker fixes, first solution checks. GPT-6-Sol reviews chapters and gives a second opinion when a solution check finds a problem |
+| Antigravity | `agy` | Fallback for classification and the local evidence reader (Gemini Flash) |
 | Cursor Agent | `cursor-agent login` | Nothing by default |
 
-Each job (a *role*) has a primary model and a fallback; change them under **Connections**. A few rules behind the defaults:
+Each job (a *role*) has a primary model and a fallback; change them under **Connections**. The defaults spend the expensive models only where a student would notice: Sonnet writes the section text and fixes blockers in it, and fixes change only the paragraphs involved. Everything else runs on GPT-6-Luna, with GPT-6-Sol as a second opinion. A few rules behind the defaults:
 
 - The reviewer should come from a different vendor than the writer, so it does not share the writer's blind spots.
 - Reading pages needs a model that accepts images (Claude or Codex).

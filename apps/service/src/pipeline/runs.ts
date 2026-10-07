@@ -45,7 +45,7 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
           // Text the author edited or that was already imported is verified as it is.
           const row = ctx.db.get<{ origin: string; edited_at: string | null; imported_at: string | null; solution: string }>('SELECT origin, edited_at, imported_at, solution FROM questions WHERE id = ?', id);
           const authentic = row?.origin === 'authentic' && !row.edited_at && !(row.imported_at && row.solution.trim());
-          const verify: TaskSpec = { kind: 'question.verify', key: `verify:${id}`, label: 'Check the solution again', input: { questionId: id }, pool: 'reviewer', deps: authentic ? [`import:${id}`] : [] };
+          const verify: TaskSpec = { kind: 'question.verify', key: `verify:${id}`, label: 'Check the solution again', input: { questionId: id }, pool: 'checker', deps: authentic ? [`import:${id}`] : [] };
           return authentic ? [{ kind: 'question.import', key: `import:${id}`, label: 'Read the exam question', input: { questionId: id }, pool: 'vision' }, verify] : [verify];
         })
         : (loadOutline(ctx, projectId)?.outline.chapters ?? [])
@@ -76,7 +76,7 @@ function prepareRun(ctx: AppContext, projectId: string) {
   }
   specs.push({
     kind: 'topics.map', key: `topics:${set}`, label: 'Map topics and exam frequency',
-    deps: specs.filter((s) => s.kind === 'resource.index' || s.kind === 'resource.questions').map((s) => s.key), pool: 'writer',
+    deps: specs.filter((s) => s.kind === 'resource.index' || s.kind === 'resource.questions').map((s) => s.key), pool: 'editor',
   });
   ctx.db.run(`UPDATE projects SET stage = 'mapping', updated_at = ? WHERE id = ? AND stage = 'sources'`, now(), projectId);
   const existing = activeRun(ctx, projectId, 'prepare');
@@ -126,10 +126,10 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
         specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
       }
       const drafts = picked.map((s) => `draft:${s.id}`);
-      if (introAsked) specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'writer' });
+      if (introAsked) specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'editor' });
       const complete = picked.length > 0 && c.sections.every((s) => asked.has(s.id) || headRevision(ctx, projectId, s.id));
       if (!complete) continue;
-      if (!introAsked) specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'writer' });
+      if (!introAsked) specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'editor' });
       specs.push({ kind: 'chapter.practice', key: `practice:${c.id}`, label: `Plan practice for "${c.title}"`, input: { chapterId: c.id }, deps: drafts });
       specs.push({ kind: 'chapter.enrich', key: `enrich:${c.id}`, label: `Add graphs and examples to "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'bulk' });
       specs.push({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id }, deps: [`intro:${c.id}`, `enrich:${c.id}`], pool: 'reviewer' });
@@ -147,7 +147,7 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
       specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
     }
     const drafts = c.sections.map((s) => `draft:${s.id}`);
-    specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'writer' });
+    specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'editor' });
     specs.push({ kind: 'chapter.practice', key: `practice:${c.id}`, label: `Plan practice for "${c.title}"`, input: { chapterId: c.id }, deps: drafts });
     specs.push({ kind: 'chapter.enrich', key: `enrich:${c.id}`, label: `Add graphs and examples to "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'bulk' });
     specs.push({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id }, deps: [`intro:${c.id}`, `enrich:${c.id}`], pool: 'reviewer' });
@@ -177,10 +177,10 @@ function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunScope): T
       if (i.question_id) byQuestion.set(i.question_id, [...(byQuestion.get(i.question_id) ?? []), i.id]);
       else if (i.node_id) byNode.set(i.node_id, [...(byNode.get(i.node_id) ?? []), i.id]);
     }
-    for (const [nodeId, ids] of byNode) specs.push({ kind: 'section.revise', key: `fix:${nodeId}:${stamp}`, label: `Fix ${ids.length} issue${ids.length > 1 ? 's' : ''}`, input: { nodeId, issueIds: ids }, pool: 'writer' });
+    for (const [nodeId, ids] of byNode) specs.push({ kind: 'section.revise', key: `fix:${nodeId}:${stamp}`, label: `Fix ${ids.length} issue${ids.length > 1 ? 's' : ''}`, input: { nodeId, issueIds: ids }, pool: 'editor' });
     for (const [questionId, ids] of byQuestion) {
-      specs.push({ kind: 'question.revise', key: `qfix:${questionId}:${stamp}`, label: 'Fix an exercise', input: { questionId, issueIds: ids }, pool: 'writer' });
-      specs.push({ kind: 'question.verify', key: `qverify:${questionId}:${stamp}`, label: 'Check the corrected exercise', input: { questionId }, deps: [`qfix:${questionId}:${stamp}`], pool: 'reviewer' });
+      specs.push({ kind: 'question.revise', key: `qfix:${questionId}:${stamp}`, label: 'Fix an exercise', input: { questionId, issueIds: ids }, pool: 'editor' });
+      specs.push({ kind: 'question.verify', key: `qverify:${questionId}:${stamp}`, label: 'Check the corrected exercise', input: { questionId }, deps: [`qfix:${questionId}:${stamp}`], pool: 'checker' });
     }
   }
   if (!specs.length) throw new HttpError(400, 'empty', 'Select a passage or at least one issue.');

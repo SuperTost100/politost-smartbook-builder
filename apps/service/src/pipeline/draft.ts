@@ -216,7 +216,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     t.progress(`Fixing ${serious.length} formatting problems`);
     const listing = serious.map((f) => `${f.rule}: ${f.message}${f.line ? ` (line ${f.line})` : ''}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`).join('\n');
     try {
-      const fix = await runRole(ctx, { role: 'writer', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+      const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
       const repaired = extractCitations(fix.data.markdown, splitBlocks);
       const after = lintSection(repaired.markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: new Set([...known.map((k) => k.key), ...formulaKeyLabels(repaired.markdown).map((k) => k.key)]) });
       if (after.filter((f) => f.severity !== 'minor').length < serious.length) {
@@ -278,7 +278,7 @@ export async function chapterIntro(ctx: AppContext, t: TaskContext) {
     return `- ${s.title}: ${done.summary ?? s.objectives.join('; ')}`;
   }).join('\n');
   const { data, route } = await runRole(ctx, {
-    role: 'writer', ...introPrompt({ language: project.language, chapterTitle: chapter.title, objectives: chapter.objectives, prerequisites: chapter.prerequisites, summaries }),
+    role: 'editor', ...introPrompt({ language: project.language, chapterTitle: chapter.title, objectives: chapter.objectives, prerequisites: chapter.prerequisites, summaries }),
     schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const { markdown } = extractCitations(data.markdown, splitBlocks);

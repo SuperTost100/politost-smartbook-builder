@@ -60,12 +60,12 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   for (const q of authentic) {
     const label = `${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim();
     if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
-    specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${label}`, input: { questionId: q.id }, deps: editedIds.has(q.id) ? [] : [`import:${q.id}`], pool: 'reviewer' });
+    specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${label}`, input: { questionId: q.id }, deps: editedIds.has(q.id) ? [] : [`import:${q.id}`], pool: 'checker' });
   }
   const imports = imported.map((q) => `import:${q.id}`);
-  specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exercise`, label: `Write exercises for "${chapter.title}"`, input: { chapterId, kind: 'exercise' }, pool: 'writer', deps: imports });
+  specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exercise`, label: `Write exercises for "${chapter.title}"`, input: { chapterId, kind: 'exercise' }, pool: 'exercises', deps: imports });
   // Without observed exams for this chapter, add labeled exam-style practice.
-  if (authentic.length === 0) specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exam`, label: `Write exam-style practice for "${chapter.title}"`, input: { chapterId, kind: 'exam' }, pool: 'writer', deps: imports });
+  if (authentic.length === 0) specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exam`, label: `Write exam-style practice for "${chapter.title}"`, input: { chapterId, kind: 'exam' }, pool: 'exercises', deps: imports });
   t.enqueue(specs);
   t.progress(`${authentic.length} exam questions from past sessions; exercises to write next`);
   return { authentic: authentic.length, language: project.language };
@@ -109,7 +109,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     // Some sessions are published without solutions; the book needs a worked one, which verification then checks.
     t.progress('Writing the missing solution');
     const solved = await runRole(ctx, {
-      role: 'writer',
+      role: 'exercises',
       system: `You solve a university exam exercise for a textbook in ${project.language === 'it' ? 'Italian' : project.language}, with every step and the final results clearly stated.\n\n${formatRules(project.language)}`,
       prompt: `EXERCISE:\n${data.statement}\n\nReturn JSON {"markdown": "<the worked solution>"}.`,
       schema: z.object({ markdown: z.string() }), projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
@@ -175,7 +175,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
     const count = list.reduce((a, b) => a + b.n, 0);
     if (count) {
       const { data } = await runRole(ctx, {
-        role: 'writer',
+        role: 'exercises',
         ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, knownFormulas: known }),
         schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
       });
@@ -194,7 +194,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
   }
   questionsChanged(ctx, projectId, ids.slice(reused));
   // Always: enqueue is idempotent by key, so questions that lost their verification task get it back.
-  t.enqueue(ids.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: `Check generated ${kind === 'exam' ? 'exam question' : 'exercise'} (chapter ${chapterNumber})`, input: { questionId: id }, pool: 'reviewer' })));
+  t.enqueue(ids.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: `Check generated ${kind === 'exam' ? 'exam question' : 'exercise'} (chapter ${chapterNumber})`, input: { questionId: id }, pool: 'checker' })));
   return { generated: ids.length - reused, reused };
 }
 
@@ -223,10 +223,17 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   const q = rowToQuestion(r);
   if (!q.statement.trim() || !q.solution.trim()) return { skipped: 'missing statement or solution' };
   const project = loadProject(ctx, q.projectId);
-  const { data, route } = await runRole(ctx, {
-    role: 'reviewer', ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution }), schema: verifySchema,
+  const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
+    role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution }), schema: verifySchema,
     projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
+  // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.
+  let { data, route } = await check('checker');
+  const suspicious = !data.resultsAgree || data.problems.some((p) => p.severity !== 'minor');
+  if (suspicious && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
+    t.progress('Asking the reviewer for a second opinion');
+    ({ data, route } = await check('reviewer'));
+  }
   const ok = data.agrees && !data.problems.some((p) => p.severity !== 'minor');
   const checks = [...q.checks.filter((c) => c.method !== 'independent-solve'), { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model }];
   return ctx.db.tx(() => {
@@ -264,7 +271,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string }>(`SELECT id, message, suggestion FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
   const project = loadProject(ctx, q.projectId);
   const { data, route } = await runRole(ctx, {
-    role: 'writer',
+    role: 'editor',
     system: `You correct a textbook exercise in ${project.language === 'it' ? 'Italian' : project.language}. Fix exactly the reported problems; keep everything else.\n\n${formatRules(project.language)}`,
     prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
