@@ -24,13 +24,13 @@ export function createContext(config: Config): AppContext {
 
   const settings = (): Settings => {
     const row = db.get<{ value: string }>(`SELECT value FROM settings WHERE key = 'settings'`);
-    const parsed = settingsSchema.parse(json(row?.value, {}));
-    // New roles added in later versions get their defaults.
-    parsed.routes = { ...DEFAULT_ROUTES, ...parsed.routes };
-    return parsed;
+    // Settings saved by an older version lack roles added since; they get their defaults before validation.
+    const raw = json<Record<string, unknown>>(row?.value, {});
+    return settingsSchema.parse({ ...raw, routes: { ...DEFAULT_ROUTES, ...(raw.routes as object | undefined) } });
   };
   const saveSettings = (patch: Partial<Settings>) => {
-    const next = settingsSchema.parse({ ...settings(), ...patch });
+    const current = settings();
+    const next = settingsSchema.parse({ ...current, ...patch, routes: { ...current.routes, ...(patch.routes ?? {}) } });
     db.run(`INSERT INTO settings (key, value) VALUES ('settings', ?) ON CONFLICT(key) DO UPDATE SET value = excluded.value`, JSON.stringify(next));
     return next;
   };
