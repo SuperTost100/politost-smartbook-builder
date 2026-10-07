@@ -33,6 +33,21 @@ async function overflow(page: Page) {
   return page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 }
 
+/** The deepest elements that stick out past the right edge, for a readable failure message. */
+async function offenders(page: Page) {
+  return page.evaluate(() => {
+    const vw = document.documentElement.clientWidth;
+    const out: string[] = [];
+    for (const el of Array.from(document.querySelectorAll('body *'))) {
+      const r = el.getBoundingClientRect();
+      if (r.right > vw + 1 && ![...el.children].some((c) => c.getBoundingClientRect().right > vw + 1)) {
+        out.push(`${el.tagName.toLowerCase()}.${(el.getAttribute('class') ?? '').split(' ').join('.')} right=${Math.round(r.right)} "${(el.textContent ?? '').trim().slice(0, 40)}"`);
+      }
+    }
+    return out.slice(0, 6).join(' | ') || 'none found';
+  });
+}
+
 async function seedOutline(request: APIRequestContext) {
   const put = await request.put(`/api/projects/${bookId}/outline`, { headers: H, data: { outline, baseRevId: null } });
   expect(put.ok(), await put.text()).toBeTruthy();
@@ -174,7 +189,7 @@ test.describe('mobile layout at 390px', () => {
     test(`no horizontal overflow: ${path}`, async ({ page }) => {
       await page.goto(path.startsWith('/') ? path : `/books/${bookId}/${path}`);
       await page.waitForTimeout(600);
-      expect(await overflow(page)).toBeLessThanOrEqual(1);
+      expect(await overflow(page), `Elements wider than the viewport: ${await offenders(page)}`).toBeLessThanOrEqual(1);
     });
   }
 });
