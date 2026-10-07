@@ -40,7 +40,7 @@ async function offenders(page: Page) {
     const out: string[] = [];
     for (const el of Array.from(document.querySelectorAll('body *'))) {
       const r = el.getBoundingClientRect();
-      if (r.right > vw + 1 && ![...el.children].some((c) => c.getBoundingClientRect().right > vw + 1)) {
+      if (r.right > vw + 1 && !Array.from(el.children).some((c) => c.getBoundingClientRect().right > vw + 1)) {
         out.push(`${el.tagName.toLowerCase()}.${(el.getAttribute('class') ?? '').split(' ').join('.')} right=${Math.round(r.right)} "${(el.textContent ?? '').trim().slice(0, 40)}"`);
       }
     }
