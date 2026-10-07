@@ -64,7 +64,7 @@ export function compileSections(chapter: ChapterInput, known: Known, opts: Compi
 export function bookContext(ctx: AppContext, projectId: string, outline: Outline, heads: Map<string, { markdown: string }>): { known: Known; opts: CompileOpts } {
   const language = getProject(ctx, projectId).language;
   const numbering = bookNumbering(outline, heads, language);
-  return { known: numbering.sectionNumbers, opts: { language, knownFormulas: numbering.formulaNumbers, assets: new Set(listAssets(ctx, projectId).map((a) => a.filename)) } };
+  return { known: numbering.sectionNumbers, opts: { language, knownFormulas: numbering.formulaNumbers, assets: new Set(listAssets(ctx, projectId).map((a) => `assets/${a.filename}`)) } };
 }
 
 function viewsFor(ctx: AppContext, projectId: string, outline: Outline, only?: { chapterIndex: number; sectionIndex: number | null }) {
