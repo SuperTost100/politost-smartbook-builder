@@ -23,6 +23,8 @@ let kit: ReturnType<typeof makeCtx>;
 let ctx: AppContext;
 const P = 'project01';
 const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) });
+/** The cheap check's answer: every listed block good, every issue (1..n) fixed. */
+const checkGood = (blocks: number[], n = 1) => ({ changes: blocks.map((block) => ({ block, verdict: 'good', reason: '' })), issues: Array.from({ length: n }, (_, k) => ({ index: k + 1, fixed: true, reason: '' })) });
 
 beforeEach(() => {
   fake = new FakeFunnel();
@@ -601,31 +603,39 @@ describe('r4. classification does not overwrite question edits', () => {
 });
 
 describe('r5. a superseded proposal gives its issues back', () => {
+  // The author edits the section while the model runs: the fix cannot be applied and waits as a proposal.
+  const editDuring = (obj: unknown) => () => {
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
+    seedRevision('s1', 'Testo dell\'autrice.');
+    return { structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) };
+  };
+
   test('regenerating before accepting reopens the issues of the replaced proposal; accepting the replacement fixes the right ones', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     ctx.db.insert('review_issues', { id: 'iA', project_id: P, node_id: 's1', source: 'review', severity: 'blocker', category: 'math', message: 'A', suggestion: 'a', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ changes: [{ block: 0, text: 'Testo due.' }] }), answer({ changes: [{ block: 0, text: 'Testo tre.' }] }));
+    fake.next(editDuring({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer(checkGood([0])));
     const first = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
     const issue = () => ({ ...ctx.db.get<Record<string, any>>(`SELECT status, resolution FROM review_issues WHERE id = 'iA'`)! });
+    assert.equal(first.status, 'proposal');
     assert.deepEqual(issue(), { status: 'proposed', resolution: `Proposal ${first.revId}` });
 
-    // Regenerate the same section without the issue: the first proposal is superseded.
+    // Regenerate the same section with an instruction: the first proposal is superseded.
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo due.' }] }));
     const second = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'più breve' }));
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', first.revId!)!.status, 'superseded');
     assert.deepEqual(issue(), { status: 'open', resolution: '' });
     assert.ok(events('issue.updated').some((e) => e.issueIds.includes('iA')));
 
-    // The issue can be sent to the AI again and the replacement fixes it when accepted.
+    // The issue can be sent to the AI again and, with the head unchanged, the fix is applied.
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo tre dell\'autrice.' }] }), answer(checkGood([0])));
     const third = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
-    assert.equal(issue().status, 'proposed');
-    const head = ctx.db.get<{ id: string }>(`SELECT id FROM content_revisions WHERE node_id = 's1' AND status = 'current'`)!.id;
-    acceptProposal(ctx, P, 's1', third.revId!, head);
-    assert.deepEqual(issue(), { status: 'fixed', resolution: `Fixed by accepting proposal ${third.revId}` });
-    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', second.revId!)!.status, 'superseded');
+    assert.equal(third.status, 'current');
+    assert.deepEqual(issue(), { status: 'fixed', resolution: `Fixed by AI in revision ${third.revId}` });
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', second.revId!)!.status, 'proposal', 'the author\'s instruction proposal survives an applied fix');
   });
 
-  test('a replacement that applies directly also reopens, and rejecting reopens too', () => {
+  test('a replacement proposal reopens, an applied one leaves other proposals alone, and rejecting reopens too', () => {
     seedOutline([['c1', ['s1']]]);
     const head = seedRevision('s1', 'Testo.');
     ctx.db.insert('review_issues', { id: 'iB', project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'x', message: 'B', status: 'proposed', resolution: 'Proposal p-old', created_at: now() });
@@ -635,9 +645,14 @@ describe('r5. a superseded proposal gives its issues back', () => {
     assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'iB'`)!.status, 'open');
     ctx.db.run(`UPDATE review_issues SET status = 'proposed', resolution = ? WHERE id = 'iB'`, `Proposal ${p1}`);
     ctx.db.run(`UPDATE content_revisions SET status = 'proposal' WHERE id = ?`, p1);
-    const out = insertProposal(ctx, P, 's1', 'Nuovo', head, 'ai', 'm');
-    assert.equal(out.applied, true);
+    const applied = insertProposal(ctx, P, 's1', 'Nuovo', head, 'ai', 'm');
+    assert.equal(applied.applied, true);
+    assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'iB'`)!.status, 'proposed', 'applied text does not reopen issues of a pending proposal');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', p1)!.status, 'proposal');
+    const replacement = insertProposal(ctx, P, 's1', 'Altro', head, 'ai', 'm');
+    assert.equal(replacement.applied, false);
     assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'iB'`)!.status, 'open');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', p1)!.status, 'superseded');
   });
 
   test('accepting is refused when the head is not the one the author compared with, and nothing changes', () => {
@@ -655,6 +670,238 @@ describe('r5. a superseded proposal gives its issues back', () => {
     const none = seedRevision('s2', 'P', { status: 'proposal' });
     assert.throws(() => acceptProposal(ctx, P, 's2', none, 'something'), (e: any) => e.status === 409);
     acceptProposal(ctx, P, 's2', none, null);
+  });
+});
+
+describe('fixes are applied directly, behind guards and a cheap check', () => {
+  const FORMULA = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
+  const issue = (id: string, o: Record<string, unknown> = {}) => ctx.db.insert('review_issues', { id, project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'clarity', quote: '', message: `Problema ${id}`, suggestion: '', status: 'open', resolution: '', created_at: now(), ...o });
+  const state = (id: string) => ({ ...ctx.db.get<Record<string, any>>('SELECT status, resolution FROM review_issues WHERE id = ?', id)! });
+  const head = () => ctx.db.get<Record<string, any>>(`SELECT * FROM content_revisions WHERE node_id = 's1' AND status = 'current' ORDER BY rowid DESC`)!;
+  const fix = (ids: string[]) => sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ids }));
+
+  test('the fix becomes the current text, the issue is fixed, lints and events follow, and the check ran on the checker model', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const before = seedRevision('s1', 'Prima frase.\n\nSeconda frase.');
+    issue('i1', { quote: 'Prima frase.' });
+    ctx.db.insert('review_issues', { id: 'lint-old', project_id: P, node_id: 's1', source: 'lint', severity: 'minor', category: 'old', quote: '', message: 'vecchio', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    fake.next(answer({ changes: [{ block: 0, text: 'Prima frase corretta.' }] }), answer(checkGood([0])));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'current');
+    assert.equal(head().markdown, 'Prima frase corretta.\n\nSeconda frase.');
+    assert.equal(head().id, r.revId);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', before)!.status, 'superseded');
+    assert.deepEqual(state('i1'), { status: 'fixed', resolution: `Fixed by AI in revision ${r.revId}` });
+    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls[1].selection.model, ctx.settings().routes.checker.primary.model);
+    assert.match(fake.calls[1].prompt, /\[B0\][\s\S]*Prima frase\.[\s\S]*Prima frase corretta\./);
+    assert.equal(r.checked, true);
+    assert.equal(issues(`id = 'lint-old'`).length, 0, 'the section lints were run again');
+    assert.deepEqual(events('content.saved').at(-1), { nodeId: 's1', revId: r.revId, origin: 'repair', status: 'current' });
+    assert.ok(events('issue.updated').some((e) => e.issueIds.includes('i1')));
+  });
+
+  test('the head changed while the model ran: the fix stays a proposal and the issue is proposed', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo.');
+    issue('i1');
+    fake.next(() => {
+      ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1'`);
+      seedRevision('s1', 'Testo dell\'autrice.');
+      return { structured: { changes: [{ block: 0, text: 'Testo AI.' }] } as never, text: '{}', usage: usageOf(1, 1) };
+    }, answer(checkGood([0])));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'proposal');
+    assert.equal(head().markdown, 'Testo dell\'autrice.');
+    assert.deepEqual(state('i1'), { status: 'proposed', resolution: `Proposal ${r.revId}` });
+  });
+
+  test('an author instruction is a proposal, is not checked, and survives a later applied fix', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo.');
+    issue('i1');
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo con istruzione.' }] }));
+    const p = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'riscrivi' }));
+    assert.equal(p.status, 'proposal');
+    assert.equal(fake.calls.length, 1, 'no check for an instruction');
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo corretto.' }] }), answer(checkGood([0])));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'current');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', p.revId!)!.status, 'proposal');
+  });
+
+  test('deleting a formula block is reverted: the other change is applied, the issue in the formula stays open; with nothing left, nothing is stored', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const base = seedRevision('s1', `Intro.\n\n${FORMULA}\n\nFine.`);
+    issue('i1', { quote: 'Intro.' });
+    issue('i2', { quote: '$$x=1$$' });
+    fake.next(answer({ changes: [{ block: 0, text: 'Introduzione.' }, { block: 1, text: '' }] }), answer(checkGood([0], 2)));
+    const r = await fix(['i1', 'i2']);
+    assert.equal(r.status, 'current');
+    assert.equal(head().markdown, `Introduzione.\n\n${FORMULA}\n\nFine.`);
+    assert.equal(state('i1').status, 'fixed');
+    assert.deepEqual(state('i2'), { status: 'open', resolution: 'The AI fix was not applied: it would delete a heading, a formula or another special block' });
+    assert.equal(r.reverted!.length, 1);
+
+    // Only the deletion is proposed: nothing is committed.
+    const revisions = () => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM content_revisions')!.n;
+    const n = revisions();
+    issue('i3', { quote: '$$x=1$$' });
+    fake.next(answer({ changes: [{ block: 1, text: '' }] }));
+    const none = await fix(['i3']);
+    assert.equal(none.skipped, 'no change survived the checks');
+    assert.equal(revisions(), n);
+    assert.equal(state('i3').status, 'open');
+    assert.match(state('i3').resolution, /^The AI fix was not applied: /);
+    assert.equal(fake.calls.length, 3, 'no check when nothing is left to check');
+    assert.notEqual(base, head().id);
+  });
+
+  test('other guards: a moved formula key, a broken fence and more than 3 deletions', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `A.\n\n${FORMULA}\n\nB.\n\nC.\n\nD.\n\nE.`);
+    issue('i1', { quote: 'A.' });
+    fake.next(answer({ changes: [
+      { block: 1, text: ':::formula{key="altro" label="L"}\n$$x=1$$\n:::' },
+      { block: 0, text: ':::note\nA.' },
+      { block: 2, text: '' }, { block: 3, text: '' }, { block: 4, text: '' }, { block: 5, text: '' },
+    ] }), answer(checkGood([2, 3, 4], 1)));
+    const r = await fix(['i1']);
+    assert.deepEqual(r.reverted!.map((x: string) => x.replace(/"[^"]*"/, '"k"')), ['it drops the formula "k"', 'it leaves a ::: fence open', 'it would delete more than 3 blocks']);
+    assert.equal(head().markdown, `A.\n\n${FORMULA}\n\nE.`);
+  });
+
+  test('a change that breaks KaTeX is reverted and its issue stays open', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Vale $x+1$ qui.\n\nAltro $y$.');
+    issue('i1', { quote: 'Vale $x+1$ qui.' });
+    issue('i2', { quote: 'Altro $y$.' });
+    fake.next(answer({ changes: [{ block: 0, text: 'Vale $\\frac{1}{$ qui.' }, { block: 1, text: 'Altro $z$.' }] }), answer(checkGood([1], 2)));
+    const r = await fix(['i1', 'i2']);
+    assert.equal(head().markdown, 'Vale $x+1$ qui.\n\nAltro $z$.');
+    assert.equal(state('i2').status, 'fixed');
+    assert.deepEqual(state('i1'), { status: 'open', resolution: 'The AI fix was not applied: it introduces a formula or formatting error' });
+    assert.equal(r.reverted!.length, 1);
+  });
+
+  test('a harmful verdict reverts the change and leaves the issue open; an unresolved issue stays open with the reason', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Uno.\n\nDue.\n\nTre.');
+    issue('i1', { quote: 'Uno.' });
+    issue('i2', { quote: 'Due.' });
+    issue('i3', { quote: 'Tre.' });
+    fake.next(answer({ changes: [{ block: 0, text: 'Uno falso.' }, { block: 1, text: 'Due bis.' }, { block: 2, text: 'Tre bis.' }] }), answer({
+      changes: [{ block: 0, verdict: 'harmful', reason: 'afferma il falso' }, { block: 1, verdict: 'good', reason: '' }, { block: 2, verdict: 'good', reason: '' }],
+      issues: [{ index: 1, fixed: true, reason: '' }, { index: 2, fixed: true, reason: '' }, { index: 3, fixed: false, reason: 'il problema resta' }],
+    }));
+    const r = await fix(['i1', 'i2', 'i3']);
+    assert.equal(head().markdown, 'Uno.\n\nDue bis.\n\nTre bis.');
+    assert.deepEqual(state('i1'), { status: 'open', resolution: 'The AI fix was not applied: the check found it harmful (afferma il falso)' });
+    assert.equal(state('i2').status, 'fixed');
+    assert.deepEqual(state('i3'), { status: 'open', resolution: 'The AI fix did not resolve it: il problema resta' });
+    assert.equal(r.reverted!.length, 1);
+
+    // Everything judged harmful: nothing is committed.
+    seedOutline([['c1', ['s1']]]);
+    const cur = head().id;
+    fake.next(answer({ changes: [{ block: 0, text: 'Uno peggio.' }] }), answer({ changes: [{ block: 0, verdict: 'harmful', reason: 'errore' }], issues: [{ index: 1, fixed: false, reason: 'no' }] }));
+    const none = await fix(['i1']);
+    assert.equal(none.skipped, 'no change survived the checks');
+    assert.equal(head().id, cur);
+    assert.match(state('i1').resolution, /harmful/);
+  });
+
+  test('when the check cannot run the guards decide, and the result says so', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo.');
+    issue('i1');
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo corretto.' }] }), () => new TaskError('rete assente', 'temporary'));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'current');
+    assert.equal(r.checked, false);
+    assert.equal(state('i1').status, 'fixed');
+  });
+
+  test('a fix that removes more than a fifth of the text is a proposal, unless the issue is about repetition', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const long = (w: string) => `${w} `.repeat(30).trim();
+    seedRevision('s1', [long('uno'), long('due'), long('tre'), long('quattro'), long('cinque')].join('\n\n'));
+    issue('i1');
+    fake.next(answer({ changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'proposal');
+    assert.equal(head().markdown.includes('due'), true, 'the text is unchanged');
+    assert.deepEqual(state('i1'), { status: 'proposed', resolution: `Proposal ${r.revId}` });
+
+    issue('i2', { category: 'repetition' });
+    fake.next(answer({ changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    const again = await fix(['i2']);
+    assert.equal(again.status, 'current');
+    assert.equal(state('i2').status, 'fixed');
+  });
+});
+
+describe('the review converges', () => {
+  const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'clarity', quote: 'Una frase.', message: 'Poco chiara', suggestion: 'Riscrivi', ...o });
+  const review = () => chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1' }));
+
+  test('the prompt carries decided and fixed issues and marks changed and unchanged sections', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    const r2 = seedRevision('s2', 'Altro testo.');
+    fake.next(answer({ issues: [] }));
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    assert.equal(first.reviewed, [r1, r2].sort().join(','));
+    assert.match(fake.calls[0].prompt, /first review: every section is new/);
+    assert.doesNotMatch(fake.calls[0].prompt, /ALREADY FIXED|DECIDED ARE FINE/);
+
+    const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: now() };
+    ctx.db.insert('review_issues', { ...old, id: 'd1', node_id: 's1', quote: 'Frase scelta', message: 'Preferirei un altro ordine', status: 'dismissed' });
+    ctx.db.insert('review_issues', { ...old, id: 'a1', node_id: 's2', quote: 'Altro', message: 'Ipotesi mancante', status: 'accepted' });
+    ctx.db.insert('review_issues', { ...old, id: 'f1', node_id: 's1', quote: 'x'.repeat(300), message: 'm'.repeat(300), status: 'fixed' });
+    // s1 changes, s2 does not.
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
+    seedRevision('s1', 'Una frase nuova.');
+    fake.next(answer({ issues: [] }));
+    await review();
+    const prompt = fake.calls[1].prompt;
+    assert.match(prompt, /changed sections: \[s1\]\. Unchanged sections: \[s2\]\. In unchanged sections report only blockers/);
+    assert.match(prompt, /DECIDED ARE FINE[\s\S]*"Frase scelta" Preferirei un altro ordine/);
+    assert.match(prompt, /"Altro" Ipotesi mancante/);
+    assert.match(prompt, /ALREADY FIXED[\s\S]*"x{120}" m{200}\n/);
+    assert.doesNotMatch(prompt, /x{121}|m{201}/);
+    assert.match(fake.calls[1].system ?? '', /report each problem once/);
+  });
+
+  test('an issue whose quote matches one the author dismissed or accepted is not stored again; stale proposed issues are cleaned, live ones stay', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    const base = { project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'clarity', quote: '', message: 'm', suggestion: '', created_at: now() };
+    ctx.db.insert('review_issues', { ...base, id: 'd1', quote: 'Una   frase.\nIntera', status: 'dismissed', resolution: '' });
+    const live = seedRevision('s1', 'Proposta', { status: 'proposal' });
+    ctx.db.insert('review_issues', { ...base, id: 'p-live', status: 'proposed', resolution: `Proposal ${live}` });
+    ctx.db.insert('review_issues', { ...base, id: 'p-stale', status: 'proposed', resolution: 'Proposal gone' });
+    fake.next(answer({ issues: [finding({ quote: 'Una frase.' }), finding({ quote: 'Un altro punto.', message: 'Altro' })] }));
+    const r = await review();
+    assert.equal(r.issues, 1);
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.quote), ['Un altro punto.']);
+    assert.deepEqual(issues(`id IN ('p-live', 'p-stale')`).map((i) => i.id), ['p-live']);
+  });
+
+  test('Run review no longer forces: identical text is reused, changed text is read again', async () => {
+    parkQueue();
+    seedOutline([['c1', ['s1']]]);
+    const h = seedRevision('s1', 'Una frase.');
+    const run = startRun(ctx, P, 'review');
+    const tasks = ctx.db.all<{ input: string }>('SELECT input FROM tasks WHERE run_id = ?', run.id);
+    assert.deepEqual(tasks.map((x) => json(x.input, {})), [{ chapterId: 'c1' }]);
+    fake.next(answer({ issues: [] }));
+    await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify({ reviewed: h }));
+    const again = await review();
+    assert.equal(again.reused, true);
+    assert.equal(fake.calls.length, 1);
   });
 });
 

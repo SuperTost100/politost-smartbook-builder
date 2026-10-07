@@ -95,7 +95,7 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
 export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string; taskId?: string }) {
   return ctx.db.tx(() => {
     const { revision, applied } = insertProposal(ctx, p.projectId, p.nodeId, p.markdown, p.baseRevId, p.origin ?? 'ai', p.model, p.citations ?? {}, { kind: p.kind, forceProposal: p.forceProposal, taskId: p.taskId });
-    ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai' }, { projectId: p.projectId, runId: p.runId ?? null });
+    ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai', status: revision.status }, { projectId: p.projectId, runId: p.runId ?? null });
     return { revId: revision.id, status: applied ? 'current' as const : 'proposal' as const };
   });
 }

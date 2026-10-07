@@ -8,3 +8,5 @@ export * from './blocks.ts';
 export * from './ptsb.ts';
 export * from './verify.ts';
 export * from './decompile.ts';
+export * from './sanitize.ts';
+export * from './patch.ts';

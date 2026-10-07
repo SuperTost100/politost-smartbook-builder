@@ -145,8 +145,8 @@ export function carryCitations(oldMd: string, newMd: string, old: Record<string,
 
 /**
  * Stores model output. It becomes the current text only when baseRevId (the head the model started from) is still
- * the head and `forceProposal` is not set; otherwise it waits as a proposal for the author. Older pending proposals
- * of the node become 'superseded'. A proposal's parent is the revision the model started from (baseRevId), not the
+ * the head and `forceProposal` is not set; otherwise it waits as a proposal for the author and older pending proposals
+ * of the node become 'superseded' (their issues reopen). Applied text leaves pending proposals alone. A proposal's parent is the revision the model started from (baseRevId), not the
  * head it arrived after. `taskId` records the producing task so a retried task finds its own result.
  */
 export function insertProposal(
@@ -158,12 +158,13 @@ export function insertProposal(
     const head = currentHead(ctx, projectId, nodeId);
     const kind = opts.kind ?? 'section';
     const fresh = { projectId, nodeId, kind, markdown, origin, model, parentRevId: baseRevId, status: 'current' as const, citations, taskId: opts.taskId ?? null };
+    // Applied text leaves pending proposals alone: the UI warns when a proposal's base is no longer the head.
+    if (!opts.forceProposal && (head?.id ?? null) === baseRevId) return { revision: makeCurrent(ctx, projectId, nodeId, head, fresh), applied: true };
     // Issues waiting on a proposal that is replaced go back to open, so none is stranded on a proposal nobody can accept.
     for (const old of ctx.db.all<Rec>(`SELECT id FROM content_revisions WHERE project_id = ? AND node_id = ? AND status = 'proposal'`, projectId, nodeId)) {
       resolveProposalIssues(ctx, projectId, old.id, { status: 'open', resolution: '' });
     }
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE project_id = ? AND node_id = ? AND status = 'proposal'`, projectId, nodeId);
-    if (!opts.forceProposal && (head?.id ?? null) === baseRevId) return { revision: makeCurrent(ctx, projectId, nodeId, head, fresh), applied: true };
     return { revision: insertRevision(ctx, { ...fresh, status: 'proposal' }), applied: false };
   });
 }

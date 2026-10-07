@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 4;
+export const PROMPT_VERSION = 5;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -403,10 +403,12 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string }) {
   const lang = languageName(p.language);
   return {
-    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Ignore matters of taste. Quote the exact text each issue refers to.`,
+    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
+
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Prefer fewer, solid issues to a long list of doubtful ones.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -414,13 +416,45 @@ ${p.objectives}
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
 
-CHAPTER TEXT (sections are marked with their ids):
+${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
 Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
+  };
+}
+
+// ---------- check of an applied fix ----------
+
+export const fixCheckSchema = z.object({
+  changes: z.array(z.object({
+    block: z.number().int().min(0).describe('the number of the changed block, from the [B..] labels'),
+    verdict: z.enum(['good', 'harmful']),
+    reason: z.string().describe('one short sentence'),
+  })),
+  issues: z.array(z.object({
+    index: z.number().int().min(1).describe('the number of the issue in the list'),
+    fixed: z.boolean(),
+    reason: z.string().describe('one short sentence, why it is not fixed; empty when it is'),
+  })),
+});
+
+/** A cheap second look at an AI fix before it replaces the text. */
+export function fixCheckPrompt(p: { language: string; issues: string; changes: string }) {
+  return {
+    system: `You check edits made to a university textbook written in ${languageName(p.language)}. Each edit was meant to fix a listed problem. Judge every changed block and every issue; be strict about mathematics, lenient about style.`,
+    prompt: `ISSUES THE EDITS SHOULD FIX:
+${p.issues}
+
+CHANGED BLOCKS (old text, new text and the neighbouring blocks for context):
+${p.changes}
+
+For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, or changes the meaning beyond what the issues asked. Otherwise "good".
+For each issue say whether the edits fixed it ("fixed": true) or not; if not, give the reason in one short sentence.
+
+Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reason": "..."}], "issues": [{"index": <number>, "fixed": <boolean>, "reason": "..."}]}.`,
   };
 }
 

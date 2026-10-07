@@ -4,7 +4,7 @@ import type { ChapterView, Outline, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { HttpError } from '../server.ts';
 import {
-  activeIssuesByNode, currentHeads, effectiveOutline, findNode, getProject, latestEvidenceByNode, pendingProposals, listAssets,
+  activeIssuesByNode, currentHead, currentHeads, effectiveOutline, findNode, getProject, latestEvidenceByNode, pendingProposals, listAssets, replaceLintIssues,
 } from '../repo/index.ts';
 import { deps } from './deps.ts';
 
@@ -127,6 +127,18 @@ export function previewChapter(ctx: AppContext, projectId: string, chapterId: st
 }
 
 /** Keys of numbered formulas used anywhere in the project, so lints can tell a missing key from a known one. */
+/** Re-runs the section lints for a node and replaces its open lint issues. A lint failure never blocks saving. */
+export function relint(ctx: AppContext, projectId: string, nodeId: string): void {
+  const head = currentHead(ctx, projectId, nodeId);
+  if (!head) return;
+  try {
+    const findings = deps.lintSection(head.markdown, { sectionId: nodeId, language: getProject(ctx, projectId).language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) });
+    replaceLintIssues(ctx, projectId, nodeId, head.id, findings);
+  } catch {
+    // The lints are advisory; the text is already saved.
+  }
+}
+
 export function knownFormulaKeys(ctx: AppContext, projectId: string): Set<string> {
   const keys = new Set<string>();
   for (const rev of currentHeads(ctx, projectId).values()) {

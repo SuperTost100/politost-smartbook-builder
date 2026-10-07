@@ -45,12 +45,13 @@ export default function ReviewPage() {
     .filter((i) => (!sev || i.severity === sev) && (!src || i.source === src) && (!status || i.status === status))
     .sort((a, b) => SEV_ORDER[a.severity] - SEV_ORDER[b.severity] || b.createdAt.localeCompare(a.createdAt)), [all, sev, src, status]);
   const openCount = all.filter((i) => i.status === 'open').length;
+  const proposedCount = all.filter((i) => i.status === 'proposed').length;
   const fixable = shown.filter((i) => picked.has(i.id) && (i.status === 'open'));
 
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.issues(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); void qc.invalidateQueries({ queryKey: ['section', pid] }); };
   const fixMany = useMutation({
     mutationFn: (ids: string[]) => api('POST /api/projects/:id/issues/fix', { params: { id: pid }, body: { issueIds: ids } }),
-    onSuccess: (_r, ids) => { toast(`Fixing ${plural(ids.length, 'issue')}`, { action: { label: 'Open run', to: `/books/${pid}/run` } }); setPicked(new Set()); refresh(); },
+    onSuccess: (_r, ids) => { toast(`Fixing ${plural(ids.length, 'issue')}. Fixes are applied to the text; earlier versions stay in each section's history.`, { action: { label: 'Open run', to: `/books/${pid}/run` } }); setPicked(new Set()); refresh(); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const review = useMutation({
@@ -85,7 +86,7 @@ export default function ReviewPage() {
       <div className="ui-page__head">
         <div>
           <h1 className="ui-screen-title">Review</h1>
-          <p className="ui-lede">{openCount === 0 ? 'No open issues.' : `${plural(openCount, 'open issue')}. Open one to see it in the text, or let the writer propose fixes.`}</p>
+          <p className="ui-lede">{openCount === 0 ? 'No open issues.' : `${plural(openCount, 'open issue')}. Open one to see it in the text, or let the writer fix it.`}{proposedCount > 0 && ` · ${plural(proposedCount, 'fix', 'fixes')} waiting for your approval in the Manuscript`}</p>
         </div>
         <div className="ui-page__actions">
           <button type="button" className="ui-btn" onClick={() => review.mutate()} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>

@@ -123,7 +123,7 @@ export function IssueGroup({ title, pid, issues, block, onEdit }: { title: strin
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.issues(pid) }); void qc.invalidateQueries({ queryKey: ['section', pid] }); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); };
   const fix = useMutation({
     mutationFn: (id: string) => api('POST /api/projects/:id/issues/fix', { params: { id: pid }, body: { issueIds: [id] } }),
-    onSuccess: () => { toast('Fix requested', { action: { label: 'Open run', to: `/books/${pid}/run` } }); refresh(); },
+    onSuccess: () => { toast('Fix requested. It is applied to the text; earlier versions stay in the history.', { action: { label: 'Open run', to: `/books/${pid}/run` } }); refresh(); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const accept = useMutation({

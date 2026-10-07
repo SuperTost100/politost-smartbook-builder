@@ -29,7 +29,17 @@ With the first-chapter gate on (the default), the run stops after chapter 1. Rea
 
 ## 4. Review
 
-The Review tab lists lint findings, failed checks and reviewer issues, each pointing at the exact text. For each one: edit the text yourself, **Fix selected issues** to get an AI proposal, or **Accept as is**. Proposals never replace your text until you accept them.
+The Review tab lists lint findings, failed checks and reviewer issues, each pointing at the exact text. For each one: edit the text yourself, **Fix selected issues**, or **Accept as is**.
+
+**Fix** applies the fix to the text. Earlier versions stay in the section's history, so you can restore any of them. Before a fix is applied it passes these checks:
+
+- a change that would delete a heading, a formula or another special block, drop a formula key, leave a `:::` fence open, or break a formula is left out, and its issue stays open with the reason;
+- a cheap second model reads each change against the issue and drops any that adds an error or removes more than asked;
+- a fix that would remove more than a fifth of the text is not applied; it waits as a proposal in the Manuscript, and so does a fix for a section you edited while it ran.
+
+An instruction you give in the Manuscript ("regenerate with instruction") always becomes a proposal. Proposals never replace your text until you accept them.
+
+**Run review** re-reads only the chapters whose text changed since their last review. The reviewer is told which sections changed, and in unchanged ones it reports blockers only. It also sees the issues you accepted or dismissed and the ones already fixed, and does not raise them again. Only blockers stop an approved export; majors and minors do not have to reach zero.
 
 ## 5. Export
 

@@ -3,24 +3,12 @@ import { z } from 'zod';
 import type { ContentRevision, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import {
-  acceptProposal, currentHead, findNode, getProject, getRevision, listRevisions, rejectProposal, replaceLintIssues, restoreRevision, saveHuman,
+  acceptProposal, findNode, getRevision, listRevisions, rejectProposal, restoreRevision, saveHuman,
 } from '../repo/index.ts';
 import { HttpError } from '../server.ts';
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
-import { buildManuscript, buildSectionView, knownFormulaKeys, previewChapter, requireOutline } from './views.ts';
-
-/** Re-runs the section lints for a node and replaces its open lint issues. A lint failure never blocks saving. */
-function relint(ctx: AppContext, projectId: string, nodeId: string): void {
-  const head = currentHead(ctx, projectId, nodeId);
-  if (!head) return;
-  try {
-    const findings = deps.lintSection(head.markdown, { sectionId: nodeId, language: getProject(ctx, projectId).language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) });
-    replaceLintIssues(ctx, projectId, nodeId, head.id, findings);
-  } catch {
-    // The lints are advisory; the text is already saved.
-  }
-}
+import { buildManuscript, buildSectionView, previewChapter, relint, requireOutline } from './views.ts';
 
 function nodeOf(ctx: AppContext, projectId: string, nodeId: string) {
   const node = findNode(requireOutline(ctx, projectId), nodeId);

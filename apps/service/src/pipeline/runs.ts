@@ -50,7 +50,7 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
         })
         : (loadOutline(ctx, projectId)?.outline.chapters ?? [])
           .filter((c) => (!scope.chapterIds?.length || scope.chapterIds.includes(c.id)) && c.sections.some((s) => headRevision(ctx, projectId, s.id)))
-          .map((c) => ({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id, force: true }, pool: 'reviewer' }));
+          .map((c) => ({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id }, pool: 'reviewer' }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
       runId = ctx.queue.createRun(projectId, 'review', specs);
       break;

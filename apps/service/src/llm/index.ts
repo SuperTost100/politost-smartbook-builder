@@ -1,6 +1,7 @@
 // Model routing through cli-funnel. Callers name a role; settings map roles to provider/model with a fallback.
 import { mkdirSync } from 'node:fs';
 import type { ConnectionsResponse, ProbeResult, Role, Route } from '@smartbuilder/domain';
+import { sanitizeModelValue } from '@smartbuilder/content';
 import { z } from 'zod';
 import { TaskError } from '../queue/queue.ts';
 import { paths } from '../config.ts';
@@ -46,7 +47,7 @@ export function resetLlmState() {
 
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 
-/** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota/unavailable. */
+/** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable or a timeout. */
 export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<T>): Promise<RunRoleResult<T>> {
   const funnel = getFunnel();
   const needsImages = !!opts.images?.length;
@@ -80,7 +81,8 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
         firstQuota ??= f;
       }
       lastFailure = f;
-      const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable');
+      // A call that hangs until the timeout usually hangs again on the same model, so the fallback gets the next try.
+      const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut);
       if (canFallBack) continue;
       throw toTaskError(f, route, firstQuota, candidates.length > 1);
     }
@@ -135,7 +137,8 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
         }
       }
     }
-    const parsed = opts.schema!.safeParse(raw ? dropOptionalNulls(value, raw) : value);
+    // Control characters (eaten backslashes, ANSI colours) are removed from every string before validation.
+    const parsed = opts.schema!.safeParse(sanitizeModelValue(raw ? dropOptionalNulls(value, raw) : value));
     return parsed.success ? { ok: true, data: parsed.data } : { ok: false, problem: describeIssues(parsed.error) };
   };
 
@@ -196,7 +199,7 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
   } catch (err) {
     if (err instanceof RouteFailure || isAbort(err)) throw err;
     if (opts.signal?.aborted) throw opts.signal.reason ?? abortError();
-    if (timeout.aborted) throw new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.` });
+    if (timeout.aborted) throw new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.`, timedOut: true });
     const f = classifyError(err);
     if (f.kind === 'aborted') throw opts.signal?.reason ?? abortError();
     throw new RouteFailure(f);
@@ -223,7 +226,7 @@ const isAbort = (e: unknown) => e instanceof AbortedByCaller || (e instanceof Er
 
 function cancelled(external: AbortSignal | undefined, timeout: AbortSignal): Error {
   if (external?.aborted) return (external.reason as Error) ?? abortError();
-  if (timeout.aborted) return new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.` });
+  if (timeout.aborted) return new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.`, timedOut: true });
   return new RouteFailure({ kind: 'temporary', message: 'The model run was cancelled.' });
 }
 

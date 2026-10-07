@@ -33,6 +33,15 @@ function useRoutes(role: 'bulk' | 'vision' | 'evidence', primary: { provider: st
   kit.ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, [role]: { primary, fallback } } });
 }
 
+describe('control characters in answers', () => {
+  test('every string of a structured answer is cleaned before validation', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'gpt-6-luna' });
+    fake.next(() => ({ structured: { kind: 'a', note: '$+\u001finfty$ e $x^{-\u001b[0m\\alpha}$' }, text: '{}', usage: usageOf(1, 1) }));
+    const out = await runRole(kit.ctx, { ...base, role: 'bulk', schema });
+    assert.equal(out.data.note, '$+\\infty$ e $x^{-\\alpha}$');
+  });
+});
+
 describe('schema validation and repair', () => {
   test('valid structured answer: one call, schema sent in strict form, access none, scratch cwd', async () => {
     useRoutes('bulk', { provider: 'codex', model: 'gpt-6-luna', effort: 'low' });
@@ -168,6 +177,13 @@ describe('error mapping and fallback', () => {
     fake.next((input) => new Promise((_res, rej) => input.signal!.addEventListener('abort', () => { sawAbort = true; rej(new FunnelError('aborted', 'aborted')); })));
     await assert.rejects(runRole(kit.ctx, { ...base, role: 'bulk' }), (e: unknown) => e instanceof TaskError && e.kind === 'temporary' && /Timed out/.test(e.message));
     assert.ok(sawAbort);
+  });
+
+  test('a timeout falls back to the next route', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'antigravity', model: 'g' });
+    llmTuning.callTimeoutMs = 30;
+    fake.next((input) => new Promise((_res, rej) => input.signal!.addEventListener('abort', () => rej(new FunnelError('aborted', 'aborted')))), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).route.provider, 'antigravity');
   });
 
   test('caller abort cancels the CLI and is not wrapped as a TaskError', async () => {
