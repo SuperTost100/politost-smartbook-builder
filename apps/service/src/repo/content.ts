@@ -147,7 +147,11 @@ export function acceptProposal(ctx: AppContext, projectId: string, nodeId: strin
     const rev = requireProposal(ctx, projectId, nodeId, revId);
     const head = currentHead(ctx, projectId, nodeId);
     if (head) ctx.db.update('content_revisions', head.id, { status: 'superseded' });
-    ctx.db.update('content_revisions', rev.id, { status: 'current', parent_rev_id: head?.id ?? rev.parentRevId });
+    // The parent stays the revision the model started from.
+    ctx.db.update('content_revisions', rev.id, { status: 'current' });
+    // Issues this proposal answered are now fixed.
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE project_id = ? AND status = 'proposed' AND resolution = ?`,
+      `Fixed by accepting proposal ${rev.id}`, projectId, `Proposal ${rev.id}`);
     return getRevision(ctx, projectId, rev.id);
   });
 }
@@ -156,6 +160,7 @@ export function rejectProposal(ctx: AppContext, projectId: string, nodeId: strin
   return ctx.db.tx(() => {
     const rev = requireProposal(ctx, projectId, nodeId, revId);
     ctx.db.update('content_revisions', rev.id, { status: 'rejected' });
+    ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = '' WHERE project_id = ? AND status = 'proposed' AND resolution = ?`, projectId, `Proposal ${rev.id}`);
     return getRevision(ctx, projectId, rev.id);
   });
 }
