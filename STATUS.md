@@ -66,4 +66,19 @@ Authentic exam questions have no hints because the official papers give none. Ge
 
 GPT-6.1-Sol reviewed each milestone through `codex exec`.
 1. Backend after the first implementation: 18 findings, one of them a blocker (Python isolation). All were fixed with regression tests (commit a12a4e2).
-2. Fixes, acceptance-run changes and the web app: see the section below.
+2. The fixes, the acceptance-run changes and the web app. It confirmed 16 of the 18 earlier fixes and found 15 new issues (8 major, 7 minor, no blockers). The worst were these: a manuscript refresh could discard an unsaved block edit, accepting an old proposal could overwrite newer edits, and *Verify again* re-imported questions you had repaired. All 15 are fixed with regression tests, along with the 2 incomplete earlier fixes.
+
+## Tests and CI
+
+`npm test` runs 99 content tests and 168 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+
+## Your running instance
+
+The service runs on the devbox in LAN mode with the default data folder. Open it from your Mac with the token link printed at startup. It is in `/tmp/sb.log`, and the token is stored in `~/.local/share/politost-smart-builder/lan-token`. The Analisi book is there with chapter 6 written, and its approved export is under *Export*.
+
+To restart it yourself:
+
+```bash
+cd ~/.t3/projects/politost-smartbook-builder
+npm start -- --lan
+```
