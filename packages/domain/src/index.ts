@@ -337,7 +337,11 @@ export interface RunSummary {
   createdAt: string;
   finishedAt: string | null;
   counts: Partial<Record<TaskState, number>>;
-  waiting: { taskId: string; reason: string; action: string } | null;
+  /**
+   * author: a gate or login needs the author (Continue/Skip apply).
+   * quota: a provider limit; the task resumes by itself at retryAt.
+   */
+  waiting: { taskId: string; reason: string; action: string; kind: 'author' | 'quota'; retryAt: string | null } | null;
 }
 
 export interface TaskRow {
@@ -396,7 +400,7 @@ export interface ServiceEvent {
   taskId: string | null;
   type:
     | 'task.state' | 'task.progress' | 'run.state' | 'resource.state'
-    | 'content.saved' | 'proposal.created' | 'issue.created' | 'outline.created' | 'export.ready' | 'log';
+    | 'content.saved' | 'proposal.created' | 'proposal.decided' | 'issue.created' | 'issue.updated' | 'question.updated' | 'asset.updated' | 'enrichment.updated' | 'outline.created' | 'export.ready' | 'log';
   data: Record<string, unknown>;
   createdAt: string;
 }

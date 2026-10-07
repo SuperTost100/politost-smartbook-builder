@@ -1,48 +1,35 @@
 import { useMemo, useState } from 'react';
-import { useMutation } from '@tanstack/react-query';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { splitBlocks } from '@smartbuilder/content/blocks';
 import type { SectionView } from '@smartbuilder/domain';
-import { api, errorText } from '../../lib/api';
-import { diffBlocks, diffWords, type BlockRow } from '../../lib/diff';
+import { api, errorText, isConflict } from '../../lib/api';
+import { qk } from '../../lib/queries';
 import { timeAgo } from '../../lib/format';
 import { useToast } from '../../components/Toast';
-
-function Words({ before, after, side }: { before: string; after: string; side: 'before' | 'after' | 'inline' }) {
-  const parts = useMemo(() => diffWords(before, after), [before, after]);
-  return (
-    <>
-      {parts.map((p, i) => {
-        if (p.type === 'eq') return <span key={i}>{p.text}</span>;
-        if (p.type === 'del') return side === 'after' ? null : <del key={i} className="pp-del">{p.text}</del>;
-        return side === 'before' ? null : <ins key={i} className="pp-add">{p.text}</ins>;
-      })}
-    </>
-  );
-}
+import { DiffList, countChanged } from './DiffList';
 
 export function ProposalBanner({ pid, nodeId, section, onResolved }: { pid: string; nodeId: string; section: SectionView; onResolved: (sv: SectionView) => void }) {
   const toast = useToast();
+  const qc = useQueryClient();
   const [mode, setMode] = useState<'inline' | 'side'>('inline');
   const [open, setOpen] = useState(true);
+  const [stale, setStale] = useState<string | null>(null);
   const proposal = section.proposal!;
-  const rows = useMemo(
-    () => diffBlocks(splitBlocks(section.current?.markdown ?? '').map((b) => b.text), splitBlocks(proposal.markdown).map((b) => b.text)),
-    [section.current?.markdown, proposal.markdown],
-  );
-  const changed = rows.filter((r) => r.kind !== 'same').length;
-  const items = useMemo(() => {
-    const out: ({ row: BlockRow } | { skipped: number })[] = [];
-    for (const r of rows) {
-      if (r.kind !== 'same') { out.push({ row: r }); continue; }
-      const last = out[out.length - 1];
-      if (last && 'skipped' in last) last.skipped++; else out.push({ skipped: 1 });
-    }
-    return out;
-  }, [rows]);
+  // The head the diff below is computed against. It is sent with the decision, so the service can refuse
+  // to apply the proposal over text that changed after the author looked at it.
+  const headRevId = section.current?.id ?? null;
+  const before = useMemo(() => splitBlocks(section.current?.markdown ?? '').map((b) => b.text), [section.current?.markdown]);
+  const after = useMemo(() => splitBlocks(proposal.markdown).map((b) => b.text), [proposal.markdown]);
+  const changed = useMemo(() => countChanged(before, after), [before, after]);
 
   const decide = useMutation({
-    mutationFn: (action: 'accept' | 'reject') => api('POST /api/projects/:id/sections/:nodeId/proposal', { params: { id: pid, nodeId }, body: { action, revId: proposal.id } }),
-    onSuccess: (sv, action) => { toast(action === 'accept' ? 'Proposal accepted' : 'Proposal rejected'); onResolved(sv); },
+    mutationFn: (action: 'accept' | 'reject') => api('POST /api/projects/:id/sections/:nodeId/proposal', { params: { id: pid, nodeId }, body: { action, revId: proposal.id, headRevId } }),
+    onSuccess: (sv, action) => { setStale(null); toast(action === 'accept' ? 'Proposal accepted' : 'Proposal rejected'); onResolved(sv); },
+    onError: (e) => { if (isConflict(e)) setStale(errorText(e)); else toast(errorText(e), { tone: 'danger' }); },
+  });
+  const reload = useMutation({
+    mutationFn: () => qc.fetchQuery({ queryKey: qk.section(pid, nodeId), queryFn: () => api('GET /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId } }), staleTime: 0 }),
+    onSuccess: () => { setStale(null); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
@@ -60,30 +47,19 @@ export function ProposalBanner({ pid, nodeId, section, onResolved }: { pid: stri
           </div>
           <button type="button" className="ui-btn ui-btn--sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? 'Hide changes' : 'Show changes'}</button>
           <button type="button" className="ui-btn ui-btn--sm" onClick={() => decide.mutate('reject')} disabled={decide.isPending}>Reject</button>
-          <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => decide.mutate('accept')} disabled={decide.isPending}>Accept</button>
+          <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => decide.mutate('accept')} disabled={decide.isPending || !!stale}>Accept</button>
         </div>
       </div>
-      {open && (
-        <div className={`pp-diff pp-diff--${mode}`}>
-          {mode === 'side' && <div className="pp-cols pp-cols--head"><span className="ui-meta">Current</span><span className="ui-meta">Proposal</span></div>}
-          {items.map((it, i) => {
-            if ('skipped' in it) return <div key={i} className="pp-skip ui-muted">{it.skipped} unchanged {it.skipped === 1 ? 'block' : 'blocks'}</div>;
-            const r = it.row;
-            return mode === 'inline' ? (
-              <div key={i} className={`pp-row pp-row--${r.kind}`}>
-                {r.kind === 'changed' && <Words before={r.before!} after={r.after!} side="inline" />}
-                {r.kind === 'removed' && <del className="pp-del">{r.before}</del>}
-                {r.kind === 'added' && <ins className="pp-add">{r.after}</ins>}
-              </div>
-            ) : (
-              <div key={i} className={`pp-cols pp-row pp-row--${r.kind}`}>
-                <div>{r.kind === 'changed' ? <Words before={r.before!} after={r.after!} side="before" /> : r.kind === 'removed' ? <del className="pp-del">{r.before}</del> : null}</div>
-                <div>{r.kind === 'changed' ? <Words before={r.before!} after={r.after!} side="after" /> : r.kind === 'added' ? <ins className="pp-add">{r.after}</ins> : null}</div>
-              </div>
-            );
-          })}
+      {stale && (
+        <div className="ui-banner ui-banner--warning" role="alert">
+          <div className="ui-banner__body">
+            <span className="ui-banner__title">The text changed after this comparison was shown</span>
+            <span>{stale}</span>
+            <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => reload.mutate()} disabled={reload.isPending}>Reload</button></div>
+          </div>
         </div>
       )}
+      {open && <DiffList before={before} after={after} mode={mode} headLabels={['Current', 'Proposal']} />}
     </section>
   );
 }

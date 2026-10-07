@@ -31,6 +31,9 @@ export interface AssetInput {
   /** Name inside assets/, e.g. "fig-limite.svg". */
   filename: string;
   bytes: Uint8Array;
+  /** Caption and alt text kept with the figure. When set they replace the attributes of the :::image that uses it. */
+  caption?: string;
+  alt?: string;
 }
 
 export interface BookInput {

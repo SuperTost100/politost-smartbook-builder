@@ -1,5 +1,5 @@
 import { useEffect, useRef } from 'react';
-import { EditorState } from '@codemirror/state';
+import { Compartment, EditorState } from '@codemirror/state';
 import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
@@ -24,6 +24,7 @@ interface Props {
 export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFocus, placeholder, minRows = 4 }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
+  const attrs = useRef(new Compartment());
   const cb = useRef({ onChange, onSave, onCancel });
   cb.current = { onChange, onSave, onCancel };
 
@@ -36,7 +37,7 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
         markdown(),
         EditorView.lineWrapping,
         placeholder ? cmPlaceholder(placeholder) : [],
-        EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' }),
+        attrs.current.of(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' })),
         keymap.of([
           { key: 'Mod-Enter', run: () => { cb.current.onSave?.(); return true; } },
           { key: 'Escape', run: () => { if (!cb.current.onCancel) return false; cb.current.onCancel(); return true; } },
@@ -61,6 +62,11 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
     return () => { v.destroy(); view.current = null; };
     // The editor owns its text after mount; props.value only seeds it.
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // The label can change while the editor stays mounted (the block it edits moved).
+  useEffect(() => {
+    view.current?.dispatch({ effects: attrs.current.reconfigure(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' })) });
+  }, [label]);
 
   useEffect(() => {
     const v = view.current;

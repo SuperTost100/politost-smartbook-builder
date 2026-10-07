@@ -198,6 +198,8 @@ function resolveFormula(byKey: boolean, key: string, label: string | null, full:
 
 interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
   assets: Set<string> | null;
+  /** Caption and alt kept on the asset record, by `assets/<filename>`. They win over the attributes written in the text. */
+  assetMeta: Record<string, { caption?: string; alt?: string }> | null;
   language: string;
   /** Figures emitted so far per chapter number. */
   figureCounts: Map<number, number>;
@@ -210,8 +212,23 @@ function emitUnit(unit: Unit, number: number, env: CompileEnv): string {
   const out: string[] = [];
   let formulaCursor = 0;
   const lines = sc.lines;
+  // Inside a fenced code block nothing is Markdown: a "# comment" is code, not a heading, and braces are not references.
+  let codeFence: string | null = null;
   for (let i = 0; i < lines.length; ) {
     const l = lines[i];
+    if (l.kind === 'code-fence') {
+      const marker = l.raw.trim().slice(0, 3);
+      if (codeFence === null) codeFence = marker;
+      else if (marker === codeFence) codeFence = null;
+      out.push(l.raw);
+      i++;
+      continue;
+    }
+    if (codeFence !== null && l.kind !== 'formula-open') {
+      out.push(l.raw);
+      i++;
+      continue;
+    }
     if (l.kind === 'formula-open') {
       const fb = byIndex.get(i);
       const parsed = fb ? parseFormulaBlock(fb) : null;
@@ -240,8 +257,12 @@ function emitUnit(unit: Unit, number: number, env: CompileEnv): string {
       // Figures are numbered per chapter, and captions/alt lose their LaTeX: the reader prints them as plain text.
       const n = (env.figureCounts.get(number) ?? 0) + 1;
       env.figureCounts.set(number, n);
-      const caption = latexToPlain(attrs.caption ?? '').replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
-            out.push('', `:::image{src="${src ?? ''}" alt="${latexToPlain(attrs.alt ?? '')}"${caption ? ` caption="Fig. ${number}.${n} — ${caption}"` : ''}}`);
+      // The asset record is canonical: what the author saves for a figure in Extras reaches the export.
+      const meta = src ? env.assetMeta?.[src] : undefined;
+      const rawCaption = meta?.caption?.trim() ? meta.caption : (attrs.caption ?? '');
+      const rawAlt = meta?.alt?.trim() ? meta.alt : (attrs.alt ?? '');
+      const caption = latexToPlain(rawCaption).replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
+      out.push('', `:::image{src="${src ?? ''}" alt="${latexToPlain(rawAlt)}"${caption ? ` caption="Fig. ${number}.${n} — ${caption}"` : ''}}`);
       i++;
       continue;
     }
@@ -292,7 +313,7 @@ export function numberChapters(
 export function compileChapter(
   chapter: ChapterInput,
   knownSections?: Record<string, { chapter: number; paragraph: number }>,
-  opts: { language?: string; knownFormulas?: Record<string, string>; assets?: Set<string> } = {},
+  opts: { language?: string; knownFormulas?: Record<string, string>; assets?: Set<string>; assetMeta?: Record<string, { caption?: string; alt?: string }> } = {},
 ): {
   markdown: string;
   formulaNumbers: Record<string, string>;
@@ -314,6 +335,7 @@ export function compileChapter(
     hoverSameChapterOnly: true,
     findings,
     assets: opts.assets ?? null,
+    assetMeta: opts.assetMeta ?? null,
     language,
   };
   const markdown = emitChapter(chapter, number, numbering, env);
@@ -323,6 +345,26 @@ export function compileChapter(
 // ---------------------------------------------------------------------------------------------
 // Questions
 // ---------------------------------------------------------------------------------------------
+
+/**
+ * Converts Markdown heading lines to bold lines, leaving fenced code (``` or ~~~) untouched: a "# comment" in a Python
+ * solution is code, not a heading.
+ */
+export function headingsToBold(text: string): string {
+  let fence: { char: string; len: number } | null = null;
+  return text.split('\n').map((line) => {
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence) {
+      if (f && f[1][0] === fence.char && f[1].length >= fence.len && !f[2].trim()) fence = null;
+      return line;
+    }
+    if (f && !(f[1][0] === '`' && f[2].includes('`'))) {
+      fence = { char: f[1][0], len: f[1].length };
+      return line;
+    }
+    return line.replace(/^#{1,6}\s+(.+?)\s*#*\s*$/, '**$1**');
+  }).join('\n');
+}
 
 const natural = new Intl.Collator('en', { numeric: true });
 const cmp = (a: string, b: string) => (a < b ? -1 : a > b ? 1 : 0);
@@ -383,7 +425,7 @@ function compileQuestions(
     const refEnv: RefEnv = { ...env, file, chapterNumber: chapter, hoverSameChapterOnly: false };
     const prep = (text: string, part: string): string => {
       // Headings would break the exercise card's own "## Domanda" structure; keep them as bold lines.
-      const src = text.replace(/\r\n?/g, '\n').trim().replace(/^#{1,6}\s+(.+?)\s*#*\s*$/gm, '**$1**');
+      const src = headingsToBold(text.replace(/\r\n?/g, '\n').trim());
       for (const f of lintQuestionText(src, { file, language, knownFormulaKeys: knownKeys, skipRules: ['formula-ref-unknown'] })) {
         findings.push({ ...f, message: `[${part}] ${f.message}` });
       }
@@ -432,6 +474,7 @@ export function compileBook(input: BookInput): CompiledBook {
 
   // Assets first: sources are checked against them.
   const assetNames = new Set<string>();
+  const assetMeta: Record<string, { caption?: string; alt?: string }> = {};
   for (const a of input.assets) {
     const path = `assets/${a.filename}`;
     if (!isValidAssetPath(path)) {
@@ -440,6 +483,7 @@ export function compileBook(input: BookInput): CompiledBook {
     }
     if (assetNames.has(path)) findings.push(finding('image', 'minor', path, `Asset "${a.filename}" appears twice; the last one wins.`));
     assetNames.add(path);
+    assetMeta[path] = { caption: a.caption, alt: a.alt };
     files[path] = a.bytes;
   }
 
@@ -467,6 +511,7 @@ export function compileBook(input: BookInput): CompiledBook {
     hoverSameChapterOnly: true,
     findings,
     assets: assetNames,
+    assetMeta,
     language,
     omitted: new Set(input.omittedSectionIds ?? []),
   };

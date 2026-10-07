@@ -4,6 +4,7 @@ import { useQuery } from '@tanstack/react-query';
 import { preprocessContent } from '@politost/content-core';
 import { api, errorText } from '../../lib/api';
 import { qk, useManuscript } from '../../lib/queries';
+import { resolveAssetFrom } from '../../lib/assets';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { ContentFlow } from '../../reader/ContentFlow';
@@ -51,7 +52,7 @@ export default function PreviewPage() {
             <section key={para.id} id={para.id} className="paragraph-section">
               <h2 className="paragraph-title"><span className="para-num">{para.id}</span> {para.title}</h2>
               <div className="paragraph-body">
-                <ContentFlow content={preprocessContent(para.content)} formulaIndex={parsed.index} resolveAsset={(src) => assets?.[src]} />
+                <ContentFlow content={preprocessContent(para.content)} formulaIndex={parsed.index} resolveAsset={(src) => resolveAssetFrom(assets, src)} />
               </div>
             </section>
           ))}

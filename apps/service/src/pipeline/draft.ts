@@ -247,6 +247,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     throw err;
   }
   for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
+  if (newAssets.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: newAssets.map((a) => a.id) }, { projectId });
   return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: figureFiles.size, figureProblems: figureNotes, findings: findings.length, model: route.model };
 }
 

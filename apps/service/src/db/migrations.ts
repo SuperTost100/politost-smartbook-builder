@@ -280,4 +280,19 @@ export const MIGRATIONS: string[] = [
   CREATE INDEX content_task ON content_revisions(task_id) WHERE task_id IS NOT NULL;
   ALTER TABLE projects ADD COLUMN topic_fingerprint TEXT;
   `,
+  // 3: question provenance. imported_at: the statement/solution were read from the source pages (set by question import).
+  // edited_at: the author changed statement, hint or solution by hand; such text is never re-imported.
+  `
+  ALTER TABLE questions ADD COLUMN imported_at TEXT;
+  ALTER TABLE questions ADD COLUMN edited_at TEXT;
+  UPDATE questions SET imported_at = updated_at WHERE origin = 'authentic' AND checks LIKE '%"detail":"imported"%';
+  -- Issues left waiting on a proposal that was superseded or is gone: open again.
+  UPDATE review_issues SET status = 'open', resolution = ''
+    WHERE status = 'proposed' AND resolution LIKE 'Proposal %'
+      AND substr(resolution, 10) NOT IN (SELECT id FROM content_revisions WHERE status = 'proposal');
+  `,
+  // 4: a priority the author set by hand survives recomputation.
+  `
+  ALTER TABLE topics ADD COLUMN priority_locked INTEGER NOT NULL DEFAULT 0;
+  `,
 ];

@@ -3,6 +3,7 @@ import type { ContentNodeKind, ContentOrigin, ContentRevision, EvidenceNote, Evi
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { conflict, notFound } from './errors.ts';
+import { resolveProposalIssues } from './issues.ts';
 import type { Rec } from './util.ts';
 
 export function mapRevision(r: Rec): ContentRevision {
@@ -76,39 +77,68 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
   });
 }
 
+/** Past this many cells the middle part is not diffed: only the common beginning and end keep their citations by identity. */
+const MAX_DIFF_CELLS = 4_000_000;
+
 /**
- * Moves block citations from an old text to an edited one. Blocks with identical text keep theirs; the remaining
- * blocks are aligned from the start and from the end, so editing, inserting or deleting one block does not shift
- * the evidence of the others.
+ * Pairs of equal blocks (old index, new index) in increasing order on both sides. The common beginning and end are paired
+ * first; the middle is an ordered alignment (longest common subsequence) that, among equally long ones, keeps blocks
+ * close to their old position, so a duplicated text cannot steal the evidence of the unchanged block next to it.
+ */
+function alignEqualBlocks(a: string[], b: string[]): [number, number][] {
+  let lo = 0;
+  while (lo < a.length && lo < b.length && a[lo] === b[lo]) lo++;
+  let ea = a.length;
+  let eb = b.length;
+  while (ea > lo && eb > lo && a[ea - 1] === b[eb - 1]) { ea--; eb--; }
+  const pairs: [number, number][] = [];
+  for (let i = 0; i < lo; i++) pairs.push([i, i]);
+  const n = ea - lo;
+  const m = eb - lo;
+  if (n > 0 && m > 0 && n * m <= MAX_DIFF_CELLS) {
+    // best[i][j]: best score aligning a[lo+i..] with b[lo+j..]. A match is worth BIG minus its displacement; BIG outweighs any total displacement.
+    const BIG = (n + m + 1) * (n + m + 1);
+    const w = m + 1;
+    const best = new Float64Array((n + 1) * w);
+    for (let i = n - 1; i >= 0; i--) {
+      for (let j = m - 1; j >= 0; j--) {
+        let v = Math.max(best[(i + 1) * w + j], best[i * w + j + 1]);
+        if (a[lo + i] === b[lo + j]) v = Math.max(v, BIG - Math.abs(i - j) + best[(i + 1) * w + j + 1]);
+        best[i * w + j] = v;
+      }
+    }
+    let i = 0;
+    let j = 0;
+    while (i < n && j < m) {
+      if (a[lo + i] === b[lo + j] && best[i * w + j] === BIG - Math.abs(i - j) + best[(i + 1) * w + j + 1]) { pairs.push([lo + i, lo + j]); i++; j++; }
+      else if (best[(i + 1) * w + j] >= best[i * w + j + 1]) i++;
+      else j++;
+    }
+  }
+  for (let k = 0; ea + k < a.length; k++) pairs.push([ea + k, eb + k]);
+  return pairs;
+}
+
+/**
+ * Moves block citations from an old text to an edited one. Unchanged blocks keep theirs (matched by an ordered alignment of
+ * the block texts, not by "first equal text anywhere"); the edited blocks between two matched ones are paired in order, so
+ * editing, inserting or deleting a block does not shift the evidence of the others.
  */
 export function carryCitations(oldMd: string, newMd: string, old: Record<string, string[]>): Record<string, string[]> {
   const a = splitBlocks(oldMd).map((b) => b.text.trim());
   const b = splitBlocks(newMd).map((x) => x.text.trim());
   const out: Record<string, string[]> = {};
-  const used = new Set<number>();
   const take = (i: number, j: number) => {
-    used.add(i);
     if (old[String(i)]?.length) out[String(j)] = old[String(i)];
   };
-  const matched = new Set<number>();
-  b.forEach((text, j) => {
-    const i = a.findIndex((t, k) => !used.has(k) && t === text);
-    if (i >= 0) { take(i, j); matched.add(j); }
-  });
-  // Edited blocks: align the unmatched ones from both ends.
-  let i = 0;
-  for (let j = 0; j < b.length && i < a.length; j++, i++) {
-    if (matched.has(j)) continue;
-    if (a[i] === undefined || used.has(i)) break;
-    take(i, j);
-    matched.add(j);
-  }
-  let k = a.length - 1;
-  for (let j = b.length - 1; j >= 0 && k >= 0; j--, k--) {
-    if (matched.has(j)) continue;
-    if (used.has(k)) break;
-    take(k, j);
-    matched.add(j);
+  const pairs = alignEqualBlocks(a, b);
+  for (const [i, j] of pairs) take(i, j);
+  // Edited blocks: inside each gap between matched blocks, the k-th old block becomes the k-th new one.
+  const anchors: [number, number][] = [[-1, -1], ...pairs, [a.length, b.length]];
+  for (let k = 0; k + 1 < anchors.length; k++) {
+    const [i0, j0] = anchors[k];
+    const [i1, j1] = anchors[k + 1];
+    for (let d = 1; i0 + d < i1 && j0 + d < j1; d++) take(i0 + d, j0 + d);
   }
   return out;
 }
@@ -128,6 +158,10 @@ export function insertProposal(
     const head = currentHead(ctx, projectId, nodeId);
     const kind = opts.kind ?? 'section';
     const fresh = { projectId, nodeId, kind, markdown, origin, model, parentRevId: baseRevId, status: 'current' as const, citations, taskId: opts.taskId ?? null };
+    // Issues waiting on a proposal that is replaced go back to open, so none is stranded on a proposal nobody can accept.
+    for (const old of ctx.db.all<Rec>(`SELECT id FROM content_revisions WHERE project_id = ? AND node_id = ? AND status = 'proposal'`, projectId, nodeId)) {
+      resolveProposalIssues(ctx, projectId, old.id, { status: 'open', resolution: '' });
+    }
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE project_id = ? AND node_id = ? AND status = 'proposal'`, projectId, nodeId);
     if (!opts.forceProposal && (head?.id ?? null) === baseRevId) return { revision: makeCurrent(ctx, projectId, nodeId, head, fresh), applied: true };
     return { revision: insertRevision(ctx, { ...fresh, status: 'proposal' }), applied: false };
@@ -141,17 +175,23 @@ function requireProposal(ctx: AppContext, projectId: string, nodeId: string, rev
   return rev;
 }
 
-/** Makes the proposal the current text. The previous head becomes 'superseded'. */
-export function acceptProposal(ctx: AppContext, projectId: string, nodeId: string, revId: string): ContentRevision {
+const PROPOSAL_STALE = 'The section changed after you opened this proposal.';
+
+/**
+ * Makes the proposal the current text. The previous head becomes 'superseded'. With `expectedHeadRevId` (the head the author
+ * compared the proposal with; null when the section had no text) acceptance is refused with 409 when the head is another one,
+ * so newer work is never replaced without being seen. `undefined` skips the check (internal callers).
+ */
+export function acceptProposal(ctx: AppContext, projectId: string, nodeId: string, revId: string, expectedHeadRevId?: string | null): ContentRevision {
   return ctx.db.tx(() => {
     const rev = requireProposal(ctx, projectId, nodeId, revId);
     const head = currentHead(ctx, projectId, nodeId);
+    if (expectedHeadRevId !== undefined && (head?.id ?? null) !== expectedHeadRevId) throw conflict(PROPOSAL_STALE, 'Reload to compare the proposal with the latest text.', nodeId);
     if (head) ctx.db.update('content_revisions', head.id, { status: 'superseded' });
     // The parent stays the revision the model started from.
     ctx.db.update('content_revisions', rev.id, { status: 'current' });
     // Issues this proposal answered are now fixed.
-    ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE project_id = ? AND status = 'proposed' AND resolution = ?`,
-      `Fixed by accepting proposal ${rev.id}`, projectId, `Proposal ${rev.id}`);
+    resolveProposalIssues(ctx, projectId, rev.id, { status: 'fixed', resolution: `Fixed by accepting proposal ${rev.id}` });
     return getRevision(ctx, projectId, rev.id);
   });
 }
@@ -160,7 +200,7 @@ export function rejectProposal(ctx: AppContext, projectId: string, nodeId: strin
   return ctx.db.tx(() => {
     const rev = requireProposal(ctx, projectId, nodeId, revId);
     ctx.db.update('content_revisions', rev.id, { status: 'rejected' });
-    ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = '' WHERE project_id = ? AND status = 'proposed' AND resolution = ?`, projectId, `Proposal ${rev.id}`);
+    resolveProposalIssues(ctx, projectId, rev.id, { status: 'open', resolution: '' });
     return getRevision(ctx, projectId, rev.id);
   });
 }

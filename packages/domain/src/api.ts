@@ -113,7 +113,8 @@ export interface Api {
   'GET /api/projects/:id/sections/:nodeId/history': { res: ContentRevision[] };
   'POST /api/projects/:id/sections/:nodeId/restore': { body: { revId: string }; res: SectionView };
   'POST /api/projects/:id/sections/:nodeId/regenerate': { body: { instruction?: string; selection?: string }; res: RunSummary };
-  'POST /api/projects/:id/sections/:nodeId/proposal': { body: { action: 'accept' | 'reject'; revId: string }; res: SectionView };
+  /** headRevId: the current revision the author saw the proposal against; accept is refused with 409 if it changed. */
+  'POST /api/projects/:id/sections/:nodeId/proposal': { body: { action: 'accept' | 'reject'; revId: string; headRevId: string | null }; res: SectionView };
   /** Compiled reader Markdown for the chapter (preview). */
   'GET /api/projects/:id/chapters/:chapterId/preview': { res: { markdown: string; number: number; assets: Record<string, string> } };
 

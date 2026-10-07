@@ -11,6 +11,19 @@ import { Icon } from '../../components/Icon';
 
 export interface Cite { n: number; note: EvidenceNote }
 
+/** The open editor of a block. The text belongs to the page, so a refetch can never reset it. */
+export interface BlockEdit {
+  text: string;
+  baseText: string;
+  saving: boolean;
+  /** The section changed under the draft: saving waits until the author chooses how to continue. */
+  blocked: boolean;
+  onChange: (text: string) => void;
+  onSave: () => void;
+  onDelete: () => void;
+  onCancel: () => void;
+}
+
 interface Props {
   block: MappedBlock;
   total: number;
@@ -21,19 +34,16 @@ interface Props {
   issues: number;
   selected: boolean;
   tabbable: boolean;
-  editing: boolean;
-  saving: boolean;
+  edit?: BlockEdit;
   onSelect: (index: number, note?: string) => void;
   onEdit: (index: number) => void;
   onRegenerate: (index: number) => void;
-  onSave: (index: number, text: string) => void;
-  onDelete: (index: number) => void;
-  onCancel: () => void;
   onFocusBlock: (index: number) => void;
 }
 
 export const BlockView = memo(function BlockView(p: Props) {
-  const { block, cites, issues, selected } = p;
+  const { block, cites, issues, selected, edit } = p;
+  const editing = !!edit;
   const exercises = useMemo(() => (block.kind === 'other' ? exercisesIn(block.compiled ?? block.source) : []), [block]);
   const prepared = useMemo(() => prepareSnippet(block.compiled ?? previewSource(block.source), p.chapterNumber), [block.compiled, block.source, p.chapterNumber]);
   const formulas = useMemo(() => formulaMap(prepared.formulas, p.formulaIndex), [prepared.formulas, p.formulaIndex]);
@@ -45,7 +55,7 @@ export const BlockView = memo(function BlockView(p: Props) {
   const label = `Block ${block.index + 1} of ${p.total}, ${BLOCK_LABEL[block.kind]}. ${cites.length ? `Cites ${cites.length} ${cites.length === 1 ? 'note' : 'notes'}${verified ? '' : ', none located'}.` : isHeading ? '' : 'No evidence cited.'} ${issues ? `${issues} open ${issues === 1 ? 'issue' : 'issues'}.` : ''}`.trim();
 
   const onKey = (e: React.KeyboardEvent) => {
-    if (e.target !== e.currentTarget || p.editing) return;
+    if (e.target !== e.currentTarget || editing) return;
     switch (e.key) {
       case 'ArrowDown': e.preventDefault(); p.onFocusBlock(block.index + 1); break;
       case 'ArrowUp': e.preventDefault(); p.onFocusBlock(block.index - 1); break;
@@ -59,20 +69,20 @@ export const BlockView = memo(function BlockView(p: Props) {
   return (
     <div
       role="listitem"
-      className={`ms-block ms-block--${rule}${selected ? ' is-selected' : ''}${p.editing ? ' is-editing' : ''}`}
+      className={`ms-block ms-block--${rule}${selected ? ' is-selected' : ''}${editing ? ' is-editing' : ''}`}
       data-block={block.index}
       tabIndex={p.tabbable ? 0 : -1}
       aria-label={label}
       aria-current={selected ? 'true' : undefined}
       aria-keyshortcuts="Enter Space"
       onKeyDown={onKey}
-      onClick={(e) => { if (p.editing) return; if ((e.target as HTMLElement).closest('a, .formula-hover-trigger')) return; p.onSelect(block.index); }}
+      onClick={(e) => { if (editing) return; if ((e.target as HTMLElement).closest('a, .formula-hover-trigger')) return; p.onSelect(block.index); }}
     >
       <span className="ms-rule" aria-hidden="true" />
       {rule === 'issue' && <span className="ms-tick" aria-hidden="true" />}
 
-      {p.editing ? (
-        <BlockEditor block={block} saving={p.saving} onSave={(t) => p.onSave(block.index, t)} onCancel={p.onCancel} onDelete={() => p.onDelete(block.index)} />
+      {edit ? (
+        <BlockEditor block={block} edit={edit} />
       ) : (
         <>
           <div className="ms-content">
@@ -99,29 +109,31 @@ export const BlockView = memo(function BlockView(p: Props) {
   );
 });
 
-function BlockEditor({ block, saving, onSave, onCancel, onDelete }: { block: MappedBlock; saving: boolean; onSave: (t: string) => void; onCancel: () => void; onDelete: () => void }) {
-  const [text, setText] = useState(block.source);
+function BlockEditor({ block, edit }: { block: MappedBlock; edit: BlockEdit }) {
+  const { text, saving, blocked } = edit;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const empty = !text.trim();
-  const unchanged = text === block.source;
+  const unchanged = text === edit.baseText;
+  const whyId = `ms-edit-why-${block.index}`;
   return (
     <div className="ms-edit" onClick={(e) => e.stopPropagation()}>
       <div className="ui-meta">Editing block {block.index + 1} · {BLOCK_LABEL[block.kind]} · source</div>
-      <SourceEditor value={text} onChange={setText} onSave={() => { if (!empty) onSave(text); }} onCancel={onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
+      <SourceEditor value={text} onChange={edit.onChange} onSave={() => { if (!empty) edit.onSave(); }} onCancel={edit.onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
       <LivePreview source={text} />
       <div className="ms-edit__actions">
-        <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => onSave(text)} disabled={saving || empty || unchanged}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
-        <button type="button" className="ui-btn ui-btn--sm" onClick={onCancel}>Cancel</button>
+        <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || unchanged || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
+        <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Cancel</button>
         <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves, <kbd className="ui-kbd">Esc</kbd> cancels</span>
         <span className="ui-grow" />
         {confirmDelete ? (
           <>
             <span className="ui-muted">Remove this block?</span>
-            <button type="button" className="ui-btn ui-btn--danger-solid ui-btn--sm" onClick={onDelete} disabled={saving}>Remove block</button>
+            <button type="button" className="ui-btn ui-btn--danger-solid ui-btn--sm" onClick={edit.onDelete} disabled={saving || blocked}>Remove block</button>
             <button type="button" className="ui-btn ui-btn--sm" onClick={() => setConfirmDelete(false)}>Keep</button>
           </>
-        ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setConfirmDelete(true)}><Icon name="trash" />Delete block</button>}
+        ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setConfirmDelete(true)} disabled={blocked}><Icon name="trash" />Delete block</button>}
       </div>
+      {blocked && <p id={whyId} className="ui-muted">Saving is paused: the section changed while you were editing. Choose how to continue in the notice above the text.</p>}
     </div>
   );
 }

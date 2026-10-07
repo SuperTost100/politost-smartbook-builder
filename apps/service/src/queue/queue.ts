@@ -200,12 +200,16 @@ export class Queue {
     if (!r) return null;
     const counts: Partial<Record<TaskState, number>> = {};
     for (const c of this.db.all<{ state: TaskState; n: number }>('SELECT state, COUNT(*) AS n FROM tasks WHERE run_id = ? GROUP BY state', runId)) counts[c.state] = c.n;
-    const w = this.db.get<{ id: string; wait_reason: string; error: string | null }>(
-      `SELECT id, wait_reason, error FROM tasks WHERE run_id = ? AND state IN ('waiting_for_user', 'retry_wait') AND wait_reason IS NOT NULL ORDER BY state DESC LIMIT 1`, runId);
+    // An author wait (gate, login) comes first; otherwise a provider limit that lifts by itself at retry_at.
+    const w = this.db.get<{ id: string; state: TaskState; wait_reason: string; error: string | null; retry_at: number | null }>(
+      `SELECT id, state, wait_reason, error, retry_at FROM tasks WHERE run_id = ? AND state IN ('waiting_for_user', 'retry_wait') AND wait_reason IS NOT NULL ORDER BY state DESC LIMIT 1`, runId);
     return {
       id: runId, projectId: r.project_id as string, kind: r.kind as RunSummary['kind'], status: r.status as RunStatus,
       createdAt: r.created_at as string, finishedAt: (r.finished_at as string) ?? null, counts,
-      waiting: w ? { taskId: w.id, reason: w.wait_reason, action: json<{ action?: string }>(w.error, {}).action ?? '' } : null,
+      waiting: w ? {
+        taskId: w.id, reason: w.wait_reason, action: json<{ action?: string }>(w.error, {}).action ?? '',
+        kind: w.state === 'waiting_for_user' ? 'author' : 'quota', retryAt: w.state === 'retry_wait' && w.retry_at ? new Date(w.retry_at).toISOString() : null,
+      } : null,
     };
   }
 

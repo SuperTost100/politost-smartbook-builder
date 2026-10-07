@@ -96,7 +96,9 @@ function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind
       category: kind, quote: String(payload.title ?? ''), message: `The ${kind === 'ide' ? 'Python example' : 'graph'} failed its check: ${checks.map((c) => c.detail).join('; ')}`,
       suggestion: 'Edit it in Extras or delete it.', status: 'open', resolution: '', created_at: now(),
     });
+    ctx.events.emit('issue.created', { nodeId, severity: 'major' }, { projectId });
   }
+  ctx.events.emit('enrichment.updated', { nodeId, kind }, { projectId });
 }
 
 export { runPython };

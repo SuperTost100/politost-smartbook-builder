@@ -1,6 +1,7 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
 import { compileChapter, lintSection, splitBlocks } from '@smartbuilder/content';
 import { currentHeads } from '../repo/content.ts';
+import { issuesChanged } from '../repo/issues.ts';
 import { bookContext, chapterInput } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -56,7 +57,9 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   }
 
   ctx.db.tx(() => {
-    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${chapter.sections.map(() => '?').join(',')})`, projectId, ...chapter.sections.map((s) => s.id));
+    // Findings that match no section are stored under the chapter id, so it is part of the cleanup. Resolved history stays.
+    const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
+    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${reviewNodes.map(() => '?').join(',')})`, projectId, ...reviewNodes);
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND (category = 'compile' OR category LIKE 'compile:%') AND node_id IN (${[chapterId, ...chapter.sections.map((s) => s.id)].map(() => '?').join(',')})`, projectId, chapterId, ...chapter.sections.map((s) => s.id));
     for (const i of data.issues) {
       const nodeId = valid.has(i.sectionId) ? i.sectionId : null;
@@ -108,7 +111,10 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext) {
   const { markdown, citations } = extractCitations(data.markdown, splitBlocks);
   const isIntro = !findSection(outline?.outline ?? { chapters: [], exclusions: [], notation: '' }, nodeId);
   const committed = commitAiRevision(ctx, { projectId, nodeId, kind: isIntro ? 'chapter-intro' : 'section', markdown, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: true, runId: t.task.runId, taskId: t.task.id });
-  if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'proposed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Proposal ${committed.revId}`, ...issues.map((i) => i.id));
+  if (issues.length) {
+    ctx.db.run(`UPDATE review_issues SET status = 'proposed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Proposal ${committed.revId}`, ...issues.map((i) => i.id));
+    issuesChanged(ctx, projectId, issues.map((i) => i.id));
+  }
   const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });
   return { revId: committed.revId, status: committed.status, findings: findings.length };
 }

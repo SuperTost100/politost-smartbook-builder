@@ -77,15 +77,21 @@ export function registerManuscriptRoutes(app: FastifyInstance, ctx: AppContext) 
   app.post('/api/projects/:id/sections/:nodeId/proposal', async (req) => {
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');
-    const body = parse(z.object({ action: z.enum(['accept', 'reject']), revId: z.string().min(1) }), req.body);
+    // headRevId: the head the author compared the proposal with. Required to accept; a reject does not look at it.
+    const body = parse(z.object({ action: z.enum(['accept', 'reject']), revId: z.string().min(1), headRevId: z.string().nullable().optional() }), req.body);
+    if (body.action === 'accept' && body.headRevId === undefined) {
+      throw new HttpError(400, 'invalid', '"headRevId": the text this proposal was compared with is required.', 'Reload the page and try again.', 'headRevId');
+    }
     nodeOf(ctx, projectId, nodeId);
     getRevision(ctx, projectId, body.revId);
     if (body.action === 'accept') {
-      const rev = acceptProposal(ctx, projectId, nodeId, body.revId);
+      const rev = acceptProposal(ctx, projectId, nodeId, body.revId, body.headRevId ?? null);
       relint(ctx, projectId, nodeId);
       changed(ctx, projectId, nodeId, rev);
+      ctx.events.emit('proposal.decided', { nodeId, revId: rev.id, action: 'accept' }, { projectId });
     } else {
-      rejectProposal(ctx, projectId, nodeId, body.revId);
+      const rev = rejectProposal(ctx, projectId, nodeId, body.revId);
+      ctx.events.emit('proposal.decided', { nodeId, revId: rev.id, action: 'reject' }, { projectId });
     }
     return buildSectionView(ctx, projectId, nodeId);
   });

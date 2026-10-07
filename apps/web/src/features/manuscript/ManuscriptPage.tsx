@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { parseChapterMarkdown, type FormulaRef } from '@politost/content-core';
 import type { SectionView } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
+import { resolveAssetFrom } from '../../lib/assets';
 import { qk, useIssues, useManuscript, useProject, useResources, useRun } from '../../lib/queries';
 import { OPEN_ISSUE, blockOfIssue, mapSection } from '../../lib/blocks';
 import { timeAgo } from '../../lib/format';
@@ -11,7 +12,9 @@ import { useBookId, useDocumentTitle, useMediaQuery } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { Dialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
-import { BlockView, type Cite } from './BlockView';
+import { splitBlocks } from '@smartbuilder/content/blocks';
+import { BlockView, type BlockEdit, type Cite } from './BlockView';
+import { DiffList } from './DiffList';
 import { EvidenceDrawer, IssueGroup } from './EvidenceDrawer';
 import { HistoryDialog } from './HistoryDialog';
 import { ProposalBanner } from './ProposalBanner';
@@ -84,7 +87,7 @@ export default function ManuscriptPage() {
     return m;
   }, [previewQ.data]);
   const assets = previewQ.data?.assets;
-  const resolveAsset = useCallback((src: string) => assets?.[src], [assets]);
+  const resolveAsset = useCallback((src: string) => resolveAssetFrom(assets, src), [assets]);
 
   // Evidence notes and open issues per block.
   const notesById = useMemo(() => new Map((section?.evidence?.notes ?? []).map((n, i) => [n.id, { n: i + 1, note: n }])), [section?.evidence]);
@@ -125,7 +128,7 @@ export default function ManuscriptPage() {
     if (was !== null) requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${was}"]`)?.focus());
   }, [sel]);
 
-  const { startEdit: beginEdit, cancelEdit, saveBlock: onSaveBlock, removeBlock: onDeleteBlock, editing: editingIdx } = editor;
+  const { startEdit: beginEdit, cancelEdit, editing: editingIdx, draft, changeText, saveDraft, removeDraftBlock, saving } = editor;
   const startEdit = useCallback((i: number) => { setFocusIdx(i); beginEdit(i); }, [beginEdit]);
   const endEdit = useCallback(() => {
     const was = editingIdx;
@@ -133,6 +136,12 @@ export default function ManuscriptPage() {
     if (was !== null) requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${was}"]`)?.focus());
   }, [cancelEdit, editingIdx]);
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
+  const [compareOpen, setCompareOpen] = useState(false);
+  const blockedEdit = editor.changedElsewhere;
+  const editProps = useMemo<BlockEdit | undefined>(() => (draft ? {
+    text: draft.text, baseText: draft.baseText, saving, blocked: blockedEdit,
+    onChange: changeText, onSave: saveDraft, onDelete: removeDraftBlock, onCancel: endEdit,
+  } : undefined), [draft, saving, blockedEdit, changeText, saveDraft, removeDraftBlock, endEdit]);
 
   // Return focus to the block after a save closes the editor.
   const wasEditing = useRef<number | null>(null);
@@ -148,9 +157,10 @@ export default function ManuscriptPage() {
     qc.setQueryData(qk.section(pid, nodeId!), sv);
     void qc.invalidateQueries({ queryKey: qk.manuscript(pid) });
     void qc.invalidateQueries({ queryKey: qk.preview(pid, sv.chapterId) });
+    void qc.invalidateQueries({ queryKey: qk.issues(pid) });
   };
 
-  const draft = useMutation({
+  const draftSection = useMutation({
     mutationFn: () => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'generate', scope: { nodeIds: [nodeId!] } } }),
     onSuccess: () => { toast('Drafting started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
@@ -224,21 +234,22 @@ export default function ManuscriptPage() {
 
             {section.proposal && <ProposalBanner key={section.proposal.id} pid={pid} nodeId={nodeId!} section={section} onResolved={setSectionData} />}
 
-            {editor.conflict && (
+            {draft && editor.changedElsewhere && (
               <div className="ui-banner ui-banner--warning ms-banner" role="alert">
                 <div className="ui-banner__body">
-                  <span className="ui-banner__title">This section changed since you opened it</span>
-                  <span>{editor.conflict} Your text is still in the editor and nothing was overwritten.</span>
-                  <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => void editor.loadLatest()}>Load latest</button></div>
-                </div>
-              </div>
-            )}
-            {editor.changedElsewhere && !editor.conflict && (
-              <div className="ui-banner ui-banner--warning ms-banner" role="status">
-                <div className="ui-banner__body">
                   <span className="ui-banner__title">The section changed while you were editing</span>
-                  <span>Load the latest text before saving, so your edit applies on top of it.</span>
-                  <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => void editor.loadLatest()}>Load latest</button></div>
+                  <span>
+                    Your unsaved text is still in the editor and nothing was overwritten.{' '}
+                    {editor.located?.found === false
+                      ? 'The block you were editing was changed as well, so keeping your version replaces the block now at that position.'
+                      : 'Keeping your version saves your block into the latest text and keeps the other changes.'}
+                    {editor.conflict ? ` ${editor.conflict}` : ''}
+                  </span>
+                  <div className="ui-banner__actions">
+                    <button type="button" className="ui-btn ui-btn--sm" onClick={() => setCompareOpen(true)}>Compare</button>
+                    <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => void editor.keepMine()} disabled={editor.saving}>Keep my version (save over latest)</button>
+                    <button type="button" className="ui-btn ui-btn--sm" onClick={editor.discard} disabled={editor.saving}>Discard my draft</button>
+                  </div>
                 </div>
               </div>
             )}
@@ -255,7 +266,7 @@ export default function ManuscriptPage() {
             {!section.current && (
               <div className="ui-empty ms-nodraft">
                 <p className="ui-empty__text">This section has no text yet. Drafting writes it from your sources and cites the pages it used.</p>
-                <button type="button" className="ui-btn ui-btn--primary" onClick={() => draft.mutate()} disabled={draft.isPending}>Draft this section</button>
+                <button type="button" className="ui-btn ui-btn--primary" onClick={() => draftSection.mutate()} disabled={draftSection.isPending}>Draft this section</button>
               </div>
             )}
 
@@ -265,7 +276,9 @@ export default function ManuscriptPage() {
                 <div className="ms-blocks" role="list" aria-label="Section blocks" ref={blocksRef}>
                   {blocks.map((b) => (
                     <BlockView
-                      key={`${section.current?.id}-${b.index}`}
+                      // The edited block keeps its identity (the draft id) when blocks shift around it, and no key
+                      // contains the revision id, so a newer revision never remounts the editor.
+                      key={editingIdx === b.index && draft ? `edit-${draft.id}` : `block-${b.index}`}
                       block={b}
                       total={blocks.length}
                       chapterNumber={loc?.chapter.number ?? 0}
@@ -275,14 +288,10 @@ export default function ManuscriptPage() {
                       issues={byBlock.get(b.index)?.length ?? 0}
                       selected={sel === b.index}
                       tabbable={focusIdx === b.index}
-                      editing={editor.editing === b.index}
-                      saving={editor.saving}
+                      edit={editingIdx === b.index ? editProps : undefined}
                       onSelect={select}
                       onEdit={startEdit}
                       onRegenerate={onRegenerate}
-                      onSave={onSaveBlock}
-                      onDelete={onDeleteBlock}
-                      onCancel={endEdit}
                       onFocusBlock={focusBlock}
                     />
                   ))}
@@ -313,6 +322,14 @@ export default function ManuscriptPage() {
         <Dialog open={railDrawer} onClose={() => setRailDrawer(false)} title="Outline" variant="drawer-left" className="ms-rail-dialog">
           {rail}
           <RailLegend />
+        </Dialog>
+      )}
+      {draft && section && (
+        <Dialog open={compareOpen} onClose={() => setCompareOpen(false)} title="Compare your draft with the latest text" variant="wide" footer={<button type="button" className="ui-btn" onClick={() => setCompareOpen(false)}>Close</button>}>
+          <h3 className="ui-meta">Changed since you started editing</h3>
+          <DiffList before={splitBlocks(draft.baseMarkdown).map((b) => b.text)} after={blocks.map((b) => b.source)} mode="inline" />
+          <h3 className="ui-meta">What keeping your version would change in the latest text</h3>
+          <DiffList before={blocks.map((b) => b.source)} after={splitBlocks(editor.merged ?? '').map((b) => b.text)} mode="inline" />
         </Dialog>
       )}
       {nodeId && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} pid={pid} nodeId={nodeId} currentId={section?.current?.id ?? null} onRestored={setSectionData} />}

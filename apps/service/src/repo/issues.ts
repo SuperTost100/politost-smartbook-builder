@@ -50,10 +50,29 @@ export function insertIssue(ctx: AppContext, i: NewIssue): ReviewIssue {
   return getIssue(ctx, id);
 }
 
+/** Tells clients that issues changed status (the Review list, the manuscript badges and the export gate depend on it). */
+export function issuesChanged(ctx: AppContext, projectId: string, issueIds: string[]): void {
+  if (issueIds.length) ctx.events.emit('issue.updated', { issueIds }, { projectId });
+}
+
 export function updateIssue(ctx: AppContext, id: string, patch: { status: ReviewIssue['status']; resolution?: string }): ReviewIssue {
-  getIssue(ctx, id);
+  const cur = getIssue(ctx, id);
   ctx.db.update('review_issues', id, { status: patch.status, ...(patch.resolution !== undefined ? { resolution: patch.resolution } : {}) });
+  if (patch.status !== cur.status) issuesChanged(ctx, cur.projectId, [id]);
   return getIssue(ctx, id);
+}
+
+/**
+ * Moves the issues that point at a proposal ('proposed' with resolution "Proposal <revId>") to a new status.
+ * Returns the ids it changed and announces them.
+ */
+export function resolveProposalIssues(ctx: AppContext, projectId: string, revId: string, to: { status: ReviewIssue['status']; resolution: string }): string[] {
+  const ids = ctx.db.all<Rec>(`SELECT id FROM review_issues WHERE project_id = ? AND status = 'proposed' AND resolution = ?`, projectId, `Proposal ${revId}`).map((r) => r.id as string);
+  if (ids.length) {
+    ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE project_id = ? AND status = 'proposed' AND resolution = ?`, to.status, to.resolution, projectId, `Proposal ${revId}`);
+    issuesChanged(ctx, projectId, ids);
+  }
+  return ids;
 }
 
 /** Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. */

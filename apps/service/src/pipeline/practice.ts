@@ -9,7 +9,9 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
-import { loadOutline, loadProject, loadTopics, truncate } from './util.ts';
+import { issuesChanged } from '../repo/issues.ts';
+import { questionsChanged } from '../repo/questions.ts';
+import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
 
 /** Authentic exam questions included per chapter, most recent sessions first. */
 const AUTHENTIC_PER_CHAPTER = 8;
@@ -36,23 +38,31 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   const project = loadProject(ctx, projectId);
   const topicIds = new Set(chapter.sections.flatMap((s) => s.topicIds));
   const all = ctx.db.all(`SELECT * FROM questions WHERE project_id = ?`, projectId).map(rowToQuestion);
+  // Candidates come only from sources that are still included and can hold questions.
+  const counted = new Set(ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND ${COUNTED_QUESTION_SQL}`, projectId).map((r) => r.id));
 
   // Authentic exam questions whose main topic belongs to this chapter.
   let authentic = all.filter((q) => q.kind === 'exam' && q.origin === 'authentic' && q.chapterId === chapterId);
   if (!authentic.length) {
     const candidates = all
+      .filter((q) => counted.has(q.id))
       .filter((q) => q.kind === 'exam' && q.origin === 'authentic' && !q.chapterId && q.topicIds[0] && topicIds.has(q.topicIds[0]))
       .sort((a, b) => (b.examDate ?? '').localeCompare(a.examDate ?? ''));
     authentic = candidates.slice(0, AUTHENTIC_PER_CHAPTER);
     ctx.db.tx(() => { for (const q of authentic) ctx.db.run('UPDATE questions SET chapter_id = ?, updated_at = ? WHERE id = ?', chapterId, now(), q.id); });
+    questionsChanged(ctx, projectId, authentic.map((q) => q.id));
   }
 
   const specs: TaskSpec[] = [];
+  // Text the author typed or corrected is verified as it is: it is never read from the source pages again.
+  const editedIds = new Set(ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND edited_at IS NOT NULL`, projectId).map((r) => r.id));
+  const imported = authentic.filter((q) => !editedIds.has(q.id));
   for (const q of authentic) {
-    specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
-    specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, deps: [`import:${q.id}`], pool: 'reviewer' });
+    const label = `${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim();
+    if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
+    specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${label}`, input: { questionId: q.id }, deps: editedIds.has(q.id) ? [] : [`import:${q.id}`], pool: 'reviewer' });
   }
-  const imports = authentic.map((q) => `import:${q.id}`);
+  const imports = imported.map((q) => `import:${q.id}`);
   specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exercise`, label: `Write exercises for "${chapter.title}"`, input: { chapterId, kind: 'exercise' }, pool: 'writer', deps: imports });
   // Without observed exams for this chapter, add labeled exam-style practice.
   if (authentic.length === 0) specs.push({ kind: 'practice.generate', key: `generate:${chapterId}:exam`, label: `Write exam-style practice for "${chapter.title}"`, input: { chapterId, kind: 'exam' }, pool: 'writer', deps: imports });
@@ -66,7 +76,10 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   const q = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!q) return { skipped: true };
   const question = rowToQuestion(q);
-  if (question.checks.some((c) => c.method === 'lint' && c.detail === 'imported') && question.solution.trim()) return { reused: true };
+  // The author's own text is never replaced by a re-read of the source pages.
+  if (q.edited_at) return { skipped: 'edited by the author' };
+  // Already read from the pages (the marker survives later edits and check changes).
+  if (q.imported_at && question.solution.trim()) return { reused: true };
   if (question.resourceId === null || question.pageFrom === null) return { skipped: 'no page range' };
   // Every update below applies only if the author has not edited the question since this read.
   const rev = question.rev;
@@ -86,6 +99,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     // Out of the book until the author types it in: its raw text-layer statement is garbled.
     const changed = ctx.db.run(`UPDATE questions SET status = 'issue', chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;
     if (!changed) return { stale: true };
+    questionsChanged(ctx, question.projectId, [question.id]);
     addIssue(ctx, question, 'major', 'unreadable', 'This exam question could not be read from its pages, so it was left out of the book.', 'Open the source pages, type the statement and solution in Practice, and assign it to a chapter.');
     return { readable: false };
   }
@@ -103,11 +117,13 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     solution = solved.data.markdown;
     checks.push({ method: 'lint', ok: true, detail: `No official solution; written by ${solved.route.model}` });
   }
-  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, solution, JSON.stringify(checks), now(), question.id, rev).changes;
+  const at = now();
+  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', data.statement, solution, JSON.stringify(checks), at, at, question.id, rev).changes;
   if (!changed) {
     keepStaleOutput(ctx, question, data.statement, data.solution);
     return { stale: true };
   }
+  questionsChanged(ctx, question.projectId, [question.id]);
   return { readable: true };
 }
 
@@ -176,6 +192,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
       }));
     }
   }
+  questionsChanged(ctx, projectId, ids.slice(reused));
   // Always: enqueue is idempotent by key, so questions that lost their verification task get it back.
   t.enqueue(ids.map((id) => ({ kind: 'question.verify', key: `verify:${id}`, label: `Check generated ${kind === 'exam' ? 'exam question' : 'exercise'} (chapter ${chapterNumber})`, input: { questionId: id }, pool: 'reviewer' })));
   return { generated: ids.length - reused, reused };
@@ -216,7 +233,10 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
     const changed = ctx.db.run('UPDATE questions SET status = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id, q.rev).changes;
     if (!changed) return { stale: true };
+    questionsChanged(ctx, q.projectId, [q.id]);
+    const stale = ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id).map((r) => r.id);
     ctx.db.run(`DELETE FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id);
+    issuesChanged(ctx, q.projectId, stale);
     for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
@@ -257,6 +277,8 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       return { stale: true };
     }
     if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Rewritten by ${route.model}`, ...issues.map((i) => i.id));
+    questionsChanged(ctx, q.projectId, [q.id]);
+    issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
     return { revised: true };
   });
 }

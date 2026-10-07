@@ -9,7 +9,7 @@ import {
 import { deps } from './deps.ts';
 
 type Known = Record<string, { chapter: number; paragraph: number }>;
-type CompileOpts = { language?: string; knownFormulas?: Record<string, string>; assets?: Set<string> };
+type CompileOpts = { language?: string; knownFormulas?: Record<string, string>; assets?: Set<string>; assetMeta?: Record<string, { caption?: string; alt?: string }> };
 
 export function outlineOf(ctx: AppContext, projectId: string): Outline | null {
   return effectiveOutline(ctx, projectId)?.revision.outline ?? null;
@@ -64,7 +64,10 @@ export function compileSections(chapter: ChapterInput, known: Known, opts: Compi
 export function bookContext(ctx: AppContext, projectId: string, outline: Outline, heads: Map<string, { markdown: string }>): { known: Known; opts: CompileOpts } {
   const language = getProject(ctx, projectId).language;
   const numbering = bookNumbering(outline, heads, language);
-  return { known: numbering.sectionNumbers, opts: { language, knownFormulas: numbering.formulaNumbers, assets: new Set(listAssets(ctx, projectId).map((a) => `assets/${a.filename}`)) } };
+  const assets = listAssets(ctx, projectId);
+  // The asset record is canonical for captions and alt text, so the preview shows what the export will contain.
+  const assetMeta = Object.fromEntries(assets.map((a) => [`assets/${a.filename}`, { caption: a.caption, alt: a.alt }]));
+  return { known: numbering.sectionNumbers, opts: { language, knownFormulas: numbering.formulaNumbers, assets: new Set(assets.map((a) => `assets/${a.filename}`)), assetMeta } };
 }
 
 function viewsFor(ctx: AppContext, projectId: string, outline: Outline, only?: { chapterIndex: number; sectionIndex: number | null }) {
@@ -115,7 +118,11 @@ export function previewChapter(ctx: AppContext, projectId: string, chapterId: st
   const { known, opts } = bookContext(ctx, projectId, outline, heads);
   const markdown = safeCompile(chapterInput(outline, index, heads), known, opts) ?? '';
   const assets: Record<string, string> = {};
-  for (const a of listAssets(ctx, projectId)) assets[a.filename] = `/api/assets/${a.id}/file`;
+  // The compiled Markdown refers to figures as assets/<file>; the bare file name stays for older clients.
+  for (const a of listAssets(ctx, projectId)) {
+    assets[`assets/${a.filename}`] = `/api/assets/${a.id}/file`;
+    assets[a.filename] = `/api/assets/${a.id}/file`;
+  }
   return { markdown, number: index + 1, assets };
 }
 

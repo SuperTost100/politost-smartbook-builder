@@ -21,22 +21,27 @@ export function getEnrichment(ctx: AppContext, id: string): Enrichment {
 export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'createdAt' | 'status' | 'checks'> & Partial<Pick<Enrichment, 'status' | 'checks'>>): Enrichment {
   const id = newId();
   ctx.db.insert('enrichments', { id, project_id: e.projectId, node_id: e.nodeId, kind: e.kind, payload: e.payload, status: e.status ?? 'draft', checks: e.checks ?? [], created_at: now() });
+  ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: e.nodeId }, { projectId: e.projectId });
   return getEnrichment(ctx, id);
 }
 
 /** An edited payload has not been checked yet, so it goes back to 'draft'. */
 export function updateEnrichmentPayload(ctx: AppContext, id: string, payload: Record<string, unknown>): Enrichment {
-  getEnrichment(ctx, id);
+  const cur = getEnrichment(ctx, id);
   ctx.db.update('enrichments', id, { payload, status: 'draft', checks: [] });
+  ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: cur.nodeId }, { projectId: cur.projectId });
   return getEnrichment(ctx, id);
 }
 
 export function setEnrichmentChecks(ctx: AppContext, id: string, status: Enrichment['status'], checks: Enrichment['checks']): Enrichment {
   ctx.db.update('enrichments', id, { status, checks });
-  return getEnrichment(ctx, id);
+  const e = getEnrichment(ctx, id);
+  ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: e.nodeId }, { projectId: e.projectId });
+  return e;
 }
 
 export function deleteEnrichment(ctx: AppContext, id: string): void {
-  getEnrichment(ctx, id);
+  const cur = getEnrichment(ctx, id);
   ctx.db.run('DELETE FROM enrichments WHERE id = ?', id);
+  ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: cur.nodeId, deleted: true }, { projectId: cur.projectId });
 }

@@ -84,14 +84,14 @@ export default function ExportPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
-  const blockerIssues = (issuesQ.data ?? []).filter((i) => i.status === 'open' && i.severity === 'blocker').length;
+  const blockerIssues = (issuesQ.data ?? []).filter((i) => (i.status === 'open' || i.status === 'proposed') && i.severity === 'blocker').length;
   const drafted = project.data?.counts.drafted ?? 0;
   const draftReason = drafted === 0 ? 'Nothing is drafted yet.' : null;
   const approveReason = useMemo(() => {
     if (draftReason) return draftReason;
     if (!report) return 'Run Validate first.';
     if (!report.ok) return `${plural(report.errors.length, 'validation error')} to fix.`;
-    if (blockerIssues > 0) return `${plural(blockerIssues, 'blocker issue')} still open in Review.`;
+    if (blockerIssues > 0) return `${plural(blockerIssues, 'blocker issue')} still unresolved in Review (open, or fixed only by a proposal you have not accepted).`;
     return null;
   }, [report, blockerIssues, draftReason]);
 

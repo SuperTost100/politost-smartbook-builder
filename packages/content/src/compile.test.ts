@@ -327,3 +327,43 @@ test('links into chapters left out of an export become plain text with a minor f
   const ch = Object.entries(book.files).find(([k]) => k.startsWith('chapters/'))![1] as string;
   assert.ok(ch.includes('Vedi la definizione prima.'), ch);
 });
+
+test('caption and alt kept on the asset reach the compiled book (and the chapter preview), numbered and as plain text', () => {
+  const input = fixtureBook();
+  input.assets = [{ filename: 'fig-vel.svg', bytes: input.assets[0].bytes, caption: 'Spazio $s(t)$ corretto', alt: 'Retta per $v$ costante' }];
+  const md = text(compileBook(input), 'chapters/01-cinematica.md');
+  assert.match(md, /alt="Retta per v costante"/);
+  assert.match(md, /caption="Fig\. 1\.1 — Spazio s\(t\) corretto"/);
+  assert.ok(!md.includes('Moto uniforme"'));
+
+  // Empty asset metadata falls back to the attributes written in the text.
+  const plain = text(compileBook(fixtureBook()), 'chapters/01-cinematica.md');
+  assert.match(plain, /caption="Fig\. 1\.1 — Moto uniforme"/);
+  const empty = fixtureBook();
+  empty.assets = [{ ...empty.assets[0], caption: '', alt: '  ' }];
+  assert.match(text(compileBook(empty), 'chapters/01-cinematica.md'), /alt="Spazio in funzione del tempo"/);
+
+  const ch = fixtureBook().chapters[0];
+  const preview = compileChapter(ch, undefined, { assets: new Set(['assets/fig-vel.svg']), assetMeta: { 'assets/fig-vel.svg': { caption: 'Dal catalogo', alt: 'Alt catalogo' } } });
+  assert.match(preview.markdown, /alt="Alt catalogo"/);
+  assert.match(preview.markdown, /caption="Fig\. 1\.1 — Dal catalogo"/);
+});
+
+test('exercise headings become bold lines but "# comment" inside a fenced code block stays code', () => {
+  const solution = '# Passo 1\n\nCodice:\n\n```python\n# Compute the answer\nx = 2\n## not a heading either\nprint(x)\n```\n\n~~~\n# tilde fence\n~~~\n\n## Passo 2';
+  const book = compileBook(fixtureBook({ questions: [question({ id: 'q', kind: 'exercise', chapterId: 'ch-cin', statement: 'Calcola.', solution })] }));
+  const raw = text(book, 'esercizi.md');
+  assert.ok(raw.includes('```python\n# Compute the answer\nx = 2\n## not a heading either\nprint(x)\n```'), raw);
+  assert.ok(raw.includes('~~~\n# tilde fence\n~~~'));
+  assert.ok(raw.includes('**Passo 1**'));
+  assert.ok(raw.includes('**Passo 2**'));
+  assert.ok(!raw.includes('**Compute the answer**'));
+});
+
+test('a "# comment" inside a fenced code block of a section stays code (not turned into a ### heading)', () => {
+  const input = fixtureBook();
+  input.chapters[0].sections[0].markdown += '\n\n```python\n# commento\nx = 1\n```\n\nFine.';
+  const md = text(compileBook(input), 'chapters/01-cinematica.md');
+  assert.ok(md.includes('```python\n# commento\nx = 1\n```'), md);
+  assert.ok(!md.includes('### commento'));
+});

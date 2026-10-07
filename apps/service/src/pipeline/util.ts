@@ -94,3 +94,10 @@ export function chunk<T>(items: T[], size: number): T[][] {
 }
 
 export const slugify = (s: string) => s.toLowerCase().normalize('NFKD').replace(/[̀-ͯ]/g, '').replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '').slice(0, 60) || 'x';
+
+/**
+ * SQL condition on `questions` (unaliased): the question belongs to a source that is still part of the book and can hold
+ * questions. Generated questions have no source and always pass. Excluded or re-labelled sources stop counting for
+ * classification, exam frequency and practice selection.
+ */
+export const COUNTED_QUESTION_SQL = `(resource_id IS NULL OR resource_id IN (SELECT id FROM resources WHERE included = 1 AND role IN ('exams', 'exercises', 'mixed')))`;

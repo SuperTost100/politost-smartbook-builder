@@ -18,6 +18,7 @@ export interface NextAction { label: string; to: string; kind?: 'download'; /** 
 export function nextAction(p: ProjectSummary): NextAction {
   const base = `/books/${p.id}`;
   const run = p.activeRun;
+  if (run && run.waiting?.kind === 'quota') return { label: 'Open run', to: `${base}/run`, note: 'Waiting for a provider limit to reset.' };
   if (run && run.status === 'waiting') return { label: 'Resolve waiting step', to: `${base}/run`, note: run.waiting?.reason };
   switch (p.stage) {
     case 'sources':

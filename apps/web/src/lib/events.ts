@@ -4,18 +4,26 @@ import type { ServiceEvent } from '@smartbuilder/domain';
 import { apiUrl } from './api';
 
 const EVENT_TYPES: ServiceEvent['type'][] = [
-  'task.state', 'task.progress', 'run.state', 'resource.state', 'content.saved', 'proposal.created',
-  'issue.created', 'outline.created', 'export.ready', 'log',
+  'task.state', 'task.progress', 'run.state', 'resource.state', 'content.saved', 'proposal.created', 'proposal.decided',
+  'issue.created', 'issue.updated', 'question.updated', 'asset.updated', 'enrichment.updated', 'outline.created', 'export.ready', 'log',
 ];
+
+/** Tasks that finish write questions, assets, enrichments and issues without every one of them having its own event. */
+const TASK_SUCCEEDED_KEYS = ['questions', 'assets', 'enrichments', 'issues'];
 
 /** Query keys touched by each event type. A key is the first element of the query key. */
 const INVALIDATE: Record<string, string[]> = {
   'task.state': ['runs', 'run', 'project', 'projects'],
   'task.progress': ['run'],
   'run.state': ['runs', 'run', 'project', 'projects'],
-  'content.saved': ['manuscript', 'section', 'history', 'preview', 'project', 'projects'],
-  'proposal.created': ['manuscript', 'section', 'history'],
+  'content.saved': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],
+  'proposal.created': ['manuscript', 'section', 'history', 'issues'],
+  'proposal.decided': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],
   'issue.created': ['issues', 'section', 'project', 'projects'],
+  'issue.updated': ['issues', 'section', 'project', 'projects'],
+  'question.updated': ['questions', 'topics'],
+  'asset.updated': ['assets', 'preview'],
+  'enrichment.updated': ['enrichments'],
   'resource.state': ['resources', 'pages', 'page', 'source-index', 'project', 'projects'],
   'outline.created': ['outline', 'topics', 'project', 'projects'],
   'export.ready': ['exports', 'project', 'projects'],
@@ -23,6 +31,15 @@ const INVALIDATE: Record<string, string[]> = {
 
 function invalidateKeys(qc: QueryClient, keys: Iterable<string>) {
   for (const k of keys) void qc.invalidateQueries({ queryKey: [k] });
+}
+
+function taskSucceeded(raw: string): boolean {
+  try {
+    const ev = JSON.parse(raw) as Partial<ServiceEvent>;
+    return ev.data?.state === 'succeeded';
+  } catch {
+    return false;
+  }
 }
 
 export type StreamState = 'connecting' | 'live' | 'reconnecting';
@@ -77,6 +94,8 @@ export function useServiceEvents(projectId: string | undefined): StreamState {
       }
       type = type && type in INVALIDATE ? type : (e.type !== 'message' ? e.type : undefined);
       if (type && INVALIDATE[type]) schedule(INVALIDATE[type]);
+      // Safety net: whatever a finished task wrote, the screens showing it refresh even if its own event is missing.
+      if (type === 'task.state' && taskSucceeded(e.data)) schedule(TASK_SUCCEEDED_KEYS);
     };
     es.onmessage = onMessage;
     for (const t of EVENT_TYPES) es.addEventListener(t, onMessage as EventListener);

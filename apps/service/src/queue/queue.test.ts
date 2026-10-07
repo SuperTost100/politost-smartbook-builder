@@ -216,3 +216,23 @@ test("'later' retries without consuming attempts and shows no wait reason", asyn
   await queue.stop();
   assert.equal(calls, 3);
 });
+
+test('runSummary tells an author wait from a quota wait and gives the retry time', async () => {
+  const { queue, projectId, db } = setup();
+  const runId = queue.createRun(projectId, 'generate', [{ kind: 'x', key: 'quota', label: 'q' }, { kind: 'x', key: 'gate', label: 'g' }]);
+  const at = Date.parse('2030-01-01T10:00:00.000Z');
+  // Park the tasks so the queue (not started) and the summary see a stable state.
+  db.run(`UPDATE tasks SET state = 'retry_wait', retry_at = ?, wait_reason = 'Usage limit reached' WHERE key = 'quota'`, at);
+  assert.deepEqual(queue.runSummary(runId)!.waiting, { taskId: queue.tasks(runId).find((t) => t.state === 'retry_wait')!.id, reason: 'Usage limit reached', action: '', kind: 'quota', retryAt: '2030-01-01T10:00:00.000Z' });
+
+  db.run(`UPDATE tasks SET state = 'waiting_for_user', wait_reason = 'Your review', error = ? WHERE key = 'gate'`, JSON.stringify({ message: 'Your review', action: 'Press Continue' }));
+  const w = queue.runSummary(runId)!.waiting!;
+  assert.equal(w.kind, 'author', 'an author wait is shown first');
+  assert.equal(w.retryAt, null);
+  assert.equal(w.action, 'Press Continue');
+
+  // A retry_wait without a reason (plain backoff) is not reported.
+  db.run(`UPDATE tasks SET state = 'succeeded' WHERE key = 'gate'`);
+  db.run(`UPDATE tasks SET wait_reason = NULL WHERE key = 'quota'`);
+  assert.equal(queue.runSummary(runId)!.waiting, null);
+});

@@ -23,6 +23,14 @@ const STATUS_TONE: Record<RunSummary['status'], string> = {
   running: 'primary', pausing: 'warning', paused: 'warning', cancelling: 'warning', cancelled: '', completed: 'success', failed: 'danger', waiting: 'warning',
 };
 
+/** "Waiting for <provider> quota — resumes at <local time>" */
+function quotaTitle(waiting: NonNullable<RunSummary['waiting']>, tasks: TaskRow[] | undefined): string {
+  const provider = tasks?.find((t) => t.id === waiting.taskId)?.provider ?? 'provider';
+  const at = waiting.retryAt ? new Date(waiting.retryAt) : null;
+  const when = at && !Number.isNaN(at.getTime()) ? at.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' }) : null;
+  return when ? `Waiting for ${provider} quota — resumes at ${when}` : `Waiting for ${provider} quota — resumes when the limit resets`;
+}
+
 export function RunView({ projectId }: { projectId: string }) {
   const toast = useToast();
   const qc = useQueryClient();
@@ -118,7 +126,7 @@ export function RunView({ projectId }: { projectId: string }) {
             <div className="ui-meta">{run.id.slice(0, 8)} · started {timeAgo(run.createdAt)}</div>
             <h2 className="ui-panel-title">{RUN_KIND_LABEL[run.kind]}</h2>
           </div>
-          <span className={`ui-badge ui-badge--${STATUS_TONE[run.status] || 'neutral'}`}>{STATUS_LABEL[run.status]}</span>
+          <span className={`ui-badge ui-badge--${STATUS_TONE[run.status] || 'neutral'}`}>{run.status === 'waiting' && run.waiting?.kind === 'quota' ? 'Waiting for quota' : STATUS_LABEL[run.status]}</span>
         </div>
         <div className="rn-bar" role="progressbar" aria-valuemin={0} aria-valuemax={c.total} aria-valuenow={c.done} aria-label="Tasks finished">
           <span style={{ width: `${pct}%` }} />
@@ -139,7 +147,7 @@ export function RunView({ projectId }: { projectId: string }) {
         {run.status === 'running' && <p className="rn-note">Pause lets running tasks finish and starts nothing new. Cancel drops queued tasks and keeps finished work.</p>}
       </section>
 
-      {waiting && (
+      {waiting && waiting.kind === 'author' && (
         <section className="rn-waiting" aria-label="Waiting for you">
           <div className="ui-meta">Waiting for you</div>
           <h3 className="ui-panel-title">{waiting.action}</h3>
@@ -149,6 +157,14 @@ export function RunView({ projectId }: { projectId: string }) {
             <button type="button" className="ui-btn" disabled={resolve.isPending} onClick={() => resolve.mutate({ taskId: waiting.taskId, decision: 'skip' })}>Skip</button>
           </div>
           <p className="rn-note">Continue lets the run go on. Skip leaves this step out and goes on without it.</p>
+        </section>
+      )}
+      {waiting && waiting.kind === 'quota' && (
+        <section className="rn-waiting" aria-label="Waiting for provider quota">
+          <div className="ui-meta">Waiting for quota</div>
+          <h3 className="ui-panel-title">{quotaTitle(waiting, detail.data?.tasks)}</h3>
+          <p>{waiting.reason}</p>
+          <p className="rn-note">Nothing to do: the run goes on by itself when the limit resets. It does not use up retries.</p>
         </section>
       )}
 

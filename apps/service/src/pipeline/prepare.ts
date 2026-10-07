@@ -7,7 +7,8 @@ import { extractResource, segmentQuestions } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { classifyPrompt, classifySchema, inferIndexPrompt, inferredIndexSchema, topicsPrompt, topicsSchema } from './prompts.ts';
-import { chunk, loadProject, truncate } from './util.ts';
+import { COUNTED_QUESTION_SQL, chunk, loadProject, truncate } from './util.ts';
+import { questionsChanged } from '../repo/questions.ts';
 
 export async function resourceExtract(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
@@ -66,6 +67,7 @@ export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
   const rows = segmentQuestions(ctx, resourceId);
   let inserted = 0;
   let duplicates = 0;
+  const insertedIds: string[] = [];
   ctx.db.tx(() => {
     ctx.db.run(`DELETE FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
     for (const q of rows) {
@@ -74,8 +76,10 @@ export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
         ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND resource_id != ?`, res.project_id, q.examGroup, q.number, resourceId)
         : undefined;
       if (dup) { duplicates++; continue; }
+      const id = newId();
+      insertedIds.push(id);
       ctx.db.insert('questions', {
-        id: newId(), project_id: res.project_id, kind: q.kind, origin: 'authentic', resource_id: resourceId,
+        id, project_id: res.project_id, kind: q.kind, origin: 'authentic', resource_id: resourceId,
         page_from: q.pageFrom, page_to: q.pageTo, exam_group: q.examGroup, exam_date: q.examDate, number: q.number,
         statement: q.statement, hint: q.hint ?? '', solution: q.solution ?? '', difficulty: q.difficulty ?? 'medio',
         topic_ids: [], chapter_id: null, status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
@@ -83,6 +87,7 @@ export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
       inserted++;
     }
   });
+  questionsChanged(ctx, res.project_id, insertedIds);
   return { questions: inserted, duplicates };
 }
 
@@ -160,24 +165,32 @@ async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
   const topics = ctx.db.all<{ id: string; name: string }>('SELECT id, name FROM topics WHERE project_id = ?', projectId);
   const keyOf = (id: string) => id.slice(9);
   const topicList = topics.map((tp) => `${keyOf(tp.id)}: ${tp.name}`).join('\n');
-  const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null }>(`SELECT id, statement, exam_group FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind = 'exam'`, projectId);
+  // Only sources that are still in the book count; each question is read with its rev so an edit made while the model works wins.
+  const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null; rev: number }>(
+    `SELECT id, statement, exam_group, rev FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind = 'exam' AND ${COUNTED_QUESTION_SQL}`, projectId);
   let classified = 0;
   for (const group of chunk(pending, 20)) {
     if (t.signal.aborted) break;
+    const revOf = new Map(group.map((q) => [q.id, Number(q.rev)]));
     const questions = group.map((q) => `[${q.id}] ${truncate(q.statement.replace(/\s+/g, ' '), 1500)}`).join('\n\n');
     const { data } = await runRole(ctx, {
       role: 'bulk', ...classifyPrompt({ topics: topicList, questions }), schema: classifySchema,
       projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     const valid = new Set(topics.map((tp) => keyOf(tp.id)));
+    const done: string[] = [];
     ctx.db.tx(() => {
       for (const item of data.items) {
+        // Only ids of this batch, and only if the question is still at the revision the model saw.
+        const rev = revOf.get(item.id);
+        if (rev === undefined) continue;
         const ids = item.topics.filter((k) => valid.has(k)).map((k) => `${projectId.slice(0, 8)}-${k}`.slice(0, 80));
         // Committed per batch, so a retry only classifies what is left.
-        ctx.db.run('UPDATE questions SET topic_ids = ?, difficulty = ?, updated_at = ? WHERE id = ? AND project_id = ?', JSON.stringify(ids.length ? ids : ['unmapped']), item.difficulty, now(), item.id, projectId);
-        classified++;
+        const changed = ctx.db.run('UPDATE questions SET topic_ids = ?, difficulty = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND project_id = ? AND rev = ?', JSON.stringify(ids.length ? ids : ['unmapped']), item.difficulty, now(), item.id, projectId, rev).changes;
+        if (changed) { classified++; done.push(item.id); }
       }
     });
+    questionsChanged(ctx, projectId, done);
     t.progress(`Classified ${classified} of ${pending.length} questions`);
   }
   computePriorities(ctx, projectId);
@@ -199,7 +212,7 @@ export function sourceIndexesText(ctx: AppContext, resources: { id: string; file
  * high: at least half the sessions of the most tested topic; low: never tested and not a prerequisite of a tested topic.
  */
 export function computePriorities(ctx: AppContext, projectId: string) {
-  const qs = ctx.db.all<{ topic_ids: string; exam_group: string | null }>(`SELECT topic_ids, exam_group FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group IS NOT NULL`, projectId);
+  const qs = ctx.db.all<{ topic_ids: string; exam_group: string | null }>(`SELECT topic_ids, exam_group FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group IS NOT NULL AND ${COUNTED_QUESTION_SQL}`, projectId);
   const sessions = new Map<string, Set<string>>();
   for (const q of qs) for (const id of json<string[]>(q.topic_ids, [])) {
     if (!sessions.has(id)) sessions.set(id, new Set());
@@ -213,7 +226,8 @@ export function computePriorities(ctx: AppContext, projectId: string) {
     for (const tp of topics) {
       const n = sessions.get(tp.id)?.size ?? 0;
       const priority = max > 0 && n >= Math.max(2, max / 2) ? 'high' : n === 0 && !prereqOfTested.has(tp.id) && max > 0 ? 'low' : 'normal';
-      ctx.db.run('UPDATE topics SET exam_sessions = ?, priority = ? WHERE id = ?', n, priority, tp.id);
+      // Exam counts always refresh; the priority only when the author has not set it by hand.
+      ctx.db.run('UPDATE topics SET exam_sessions = ?, priority = CASE WHEN priority_locked = 1 THEN priority ELSE ? END WHERE id = ?', n, priority, tp.id);
     }
   });
 }

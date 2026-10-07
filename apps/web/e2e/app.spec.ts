@@ -131,8 +131,11 @@ test('a stale save shows the server message and never overwrites', async ({ page
   const other = await request.put(`/api/projects/${bookId}/sections/s1`, { headers: H, data: { markdown: head.current.markdown + '\n\nParagrafo aggiunto altrove.', baseRevId: head.current.id } });
   expect(other.ok()).toBeTruthy();
   await page.keyboard.press('Control+Enter');
-  await expect(page.getByRole('button', { name: 'Load latest' })).toBeVisible();
+  await expect(page.getByRole('alert').filter({ hasText: 'The section changed while you were editing' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Compare' })).toBeVisible();
   await expect(page.getByRole('status').filter({ hasText: /Couldn't save/ })).toBeVisible();
+  // The typed text is still in the editor and the service has not been overwritten.
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('(bozza)');
   const after = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
   expect(after.current.markdown).toContain('Paragrafo aggiunto altrove');
   expect(after.current.markdown).not.toContain('(bozza)');
@@ -234,4 +237,142 @@ test('new sources appear without reloading', async ({ page, request }) => {
   const up = await request.post(`/api/projects/${bookId}/resources`, { headers: H, multipart: { role: 'exams', file: { name: 'live-update.md', mimeType: 'text/markdown', buffer: Buffer.from('# Prova\n\nTesto.') } } });
   expect(up.ok(), await up.text()).toBeTruthy();
   await expect(page.getByRole('link', { name: 'live-update.md' })).toBeVisible({ timeout: 10_000 });
+});
+
+async function openBlockEditor(page: Page, n: number) {
+  await page.locator('.ms-block').nth(n - 1).focus();
+  await page.keyboard.press('Enter');
+  const editor = page.getByRole('textbox', { name: new RegExp(`Source of block ${n}$`) });
+  await expect(editor).toBeVisible();
+  await editor.click();
+  await page.keyboard.press('Control+End');
+}
+
+test('an update to another block keeps the unsaved draft, and nothing is saved until the author chooses', async ({ page, request }) => {
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' DRAFT-KEEP');
+  await page.evaluate(() => document.querySelector('.ms-edit .cm-content')?.setAttribute('data-mark', 'same-editor'));
+
+  // Another writer inserts a block above and changes the last one.
+  const head = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  const lastBefore = head.current.markdown.split('\n\n').at(-1) as string;
+  const changed = ('Paragrafo inserito sopra.\n\n' + head.current.markdown).replace(lastBefore, `${lastBefore} (aggiornato altrove)`);
+  const put = await request.put(`/api/projects/${bookId}/sections/s1`, { headers: H, data: { markdown: changed, baseRevId: head.current.id } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+
+  const banner = page.getByRole('alert').filter({ hasText: 'The section changed while you were editing' });
+  await expect(banner).toBeVisible();
+  // The draft follows its block (now block 2) in the same editor instance.
+  const cm = page.locator('.ms-edit .cm-content');
+  await expect(cm).toContainText('DRAFT-KEEP');
+  await expect(cm).toHaveAttribute('data-mark', 'same-editor');
+  await expect(page.getByRole('textbox', { name: /Source of block 2$/ })).toBeVisible();
+  await expect(page.locator('.ms-block').first()).toContainText('Paragrafo inserito sopra');
+  // Saving is off until the author chooses.
+  await expect(page.getByRole('button', { name: 'Save block' })).toBeDisabled();
+  await page.keyboard.press('Control+Enter');
+  const unchanged = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  expect(unchanged.current.markdown).not.toContain('DRAFT-KEEP');
+
+  await banner.getByRole('button', { name: 'Compare' }).click();
+  const dialog = page.getByRole('dialog', { name: /Compare your draft/ });
+  await expect(dialog).toContainText('DRAFT-KEEP');
+  await page.keyboard.press('Escape');
+
+  await banner.getByRole('button', { name: 'Keep my version (save over latest)' }).click();
+  await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible();
+  const saved = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  expect(saved.current.markdown).toContain('DRAFT-KEEP');
+  expect(saved.current.markdown).toContain('Paragrafo inserito sopra');
+  expect(saved.current.markdown).toContain('(aggiornato altrove)');
+  await expect(banner).toBeHidden();
+});
+
+test('discarding the draft leaves the latest text untouched', async ({ page, request }) => {
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' DISCARD-ME');
+  const head = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  const put = await request.put(`/api/projects/${bookId}/sections/s1`, { headers: H, data: { markdown: head.current.markdown + '\n\nUltimo paragrafo.', baseRevId: head.current.id } });
+  expect(put.ok()).toBeTruthy();
+  const banner = page.getByRole('alert').filter({ hasText: 'The section changed while you were editing' });
+  await expect(banner).toBeVisible();
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('DISCARD-ME');
+  await banner.getByRole('button', { name: 'Discard my draft' }).click();
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+  await expect(page.locator('.ms-block').last()).toContainText('Ultimo paragrafo');
+  const after = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  expect(after.current.markdown).not.toContain('DISCARD-ME');
+});
+
+test('Practice shows a question status change without reloading', async ({ page, request }) => {
+  const created = await request.post(`/api/projects/${bookId}/questions`, { headers: H, data: { kind: 'exercise', origin: 'adapted', statement: 'Calcola il limite di sin(x)/x per x che tende a 0.', hint: '', solution: 'Vale 1.', difficulty: 'medio', topicIds: [] } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  const q = await created.json();
+  await page.goto(`/books/${bookId}/practice`);
+  const item = page.locator('.pr-item').filter({ hasText: 'Calcola il limite di sin(x)/x' });
+  await expect(item.locator('.ui-badge').first()).toHaveText('draft');
+  // Verification finishing elsewhere (here: through the API) must show up on the open screen.
+  const patched = await request.patch(`/api/questions/${q.id}`, { headers: H, data: { rev: q.rev, status: 'verified' } });
+  expect(patched.ok(), await patched.text()).toBeTruthy();
+  await expect(item.locator('.ui-badge').first()).toHaveText('verified', { timeout: 10_000 });
+});
+
+test('a proposal is accepted against the head that was shown; a 409 shows the message and Reload', async ({ page, request }) => {
+  const head = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  const proposal = { ...head.current, id: 'prop-e2e', origin: 'ai', status: 'proposal', markdown: head.current.markdown.replace('Il limite', 'Il limite (proposto)'), parentId: head.current.id };
+  await page.route(`**/api/projects/${bookId}/sections/s1`, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), proposal } });
+  });
+  let sent: Record<string, unknown> | null = null;
+  await page.route(`**/api/projects/${bookId}/sections/s1/proposal`, async (route) => {
+    sent = route.request().postDataJSON() as Record<string, unknown>;
+    await route.fulfill({ status: 409, contentType: 'application/json', json: { error: { code: 'stale_head', message: 'The text changed after you opened this proposal.', action: 'Reload to compare again.' } } });
+  });
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  const banner = page.getByRole('region', { name: 'AI proposal' });
+  await expect(banner).toBeVisible();
+  await banner.getByRole('button', { name: 'Accept' }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'The text changed after you opened this proposal.' })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Reload' })).toBeVisible();
+  expect(sent).toMatchObject({ action: 'accept', revId: 'prop-e2e', headRevId: head.current.id });
+  await expect(banner.getByRole('button', { name: 'Accept' })).toBeDisabled();
+});
+
+test('a quota wait shows when it resumes and offers no Continue or Skip', async ({ page }) => {
+  const at = new Date(Date.now() + 3 * 3600_000).toISOString();
+  const waiting = { taskId: 't-q', reason: 'The provider limit was reached.', action: '', kind: 'quota', retryAt: at };
+  const run = { id: 'r-quota', projectId: bookId, kind: 'generate', status: 'running', createdAt: new Date().toISOString(), finishedAt: null, counts: { retry_wait: 1, succeeded: 2 }, waiting };
+  const task = { id: 't-q', runId: 'r-quota', kind: 'draft', label: 'Draft 1.1', state: 'retry_wait', attempts: 1, provider: 'claude', error: null, waitReason: waiting.reason, startedAt: null, finishedAt: null };
+  await page.route(`**/api/projects/${bookId}/runs`, (route) => route.request().method() === 'GET' ? route.fulfill({ json: [run] }) : route.fallback());
+  await page.route('**/api/runs/r-quota', (route) => route.fulfill({ json: { ...run, tasks: [task], usage: [] } }));
+  await page.goto(`/books/${bookId}/run`);
+  const section = page.getByRole('region', { name: 'Waiting for provider quota' });
+  await expect(section).toContainText('Waiting for claude quota — resumes at');
+  await expect(page.getByRole('button', { name: 'Continue' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: 'Skip' })).toHaveCount(0);
+});
+
+test('Approve and export counts blockers that are only proposed', async ({ page }) => {
+  const issue = (id: string, status: string, severity: string) => ({ id, projectId: bookId, nodeId: 's1', questionId: null, revId: null, source: 'review', severity, category: 'math', quote: '', message: 'm', suggestion: '', status, resolution: '', createdAt: new Date().toISOString() });
+  await page.route(`**/api/projects/${bookId}/issues`, (route) => route.fulfill({ json: [issue('i1', 'proposed', 'blocker'), issue('i2', 'open', 'minor')] }));
+  await page.route(`**/api/projects/${bookId}/validate`, (route) => route.fulfill({ json: { ok: true, errors: [], warnings: [], lint: [] } }));
+  await page.goto(`/books/${bookId}/export`);
+  await page.getByRole('button', { name: 'Validate' }).click();
+  await expect(page.getByText('No errors. The package is valid.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Approve and export' })).toBeDisabled();
+  await expect(page.getByText(/1 blocker issue still unresolved/)).toBeVisible();
+});
+
+test('manuscript figures resolve whether the map is keyed by assets/<file> or the bare name', async ({ page }) => {
+  const svg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
+  for (const key of ['assets/fig.svg', 'fig.svg']) {
+    await page.route(`**/api/projects/${bookId}/chapters/c1/preview`, (route) => route.fulfill({ json: { markdown: '## p1 | Definizione\n\n:::image{src="assets/fig.svg" alt="Figura" caption="Una figura"}\n:::\n', number: 1, assets: { [key]: svg } } }));
+    await page.goto(`/books/${bookId}/preview/c1`);
+    await expect(page.locator('.reader-preview img[alt="Figura"]')).toBeVisible();
+    await page.unroute(`**/api/projects/${bookId}/chapters/c1/preview`);
+  }
 });

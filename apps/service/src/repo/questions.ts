@@ -13,6 +13,11 @@ export function mapQuestion(r: Rec): Question {
   };
 }
 
+/** Tells clients that question rows changed (import, checks, edits, classification, generation). */
+export function questionsChanged(ctx: AppContext, projectId: string, questionIds: string[]): void {
+  if (questionIds.length) ctx.events.emit('question.updated', { questionIds }, { projectId });
+}
+
 export function listQuestions(ctx: AppContext, projectId: string, filter: { kind?: Question['kind'] } = {}): Question[] {
   const rows = filter.kind
     ? ctx.db.all<Rec>('SELECT * FROM questions WHERE project_id = ? AND kind = ? ORDER BY rowid', projectId, filter.kind)
@@ -46,12 +51,15 @@ export function createQuestion(ctx: AppContext, projectId: string, fields: Quest
   ctx.db.insert('questions', {
     kind: 'exercise', origin: 'adapted', ...toColumns(fields), id, project_id: projectId, rev: 1, created_at: t, updated_at: t,
   });
+  questionsChanged(ctx, projectId, [id]);
   return getQuestion(ctx, id);
 }
 
 /**
  * Rev-checked update: 409 when `rev` is not the stored one. Bumps rev. Editing the text of a question that was
- * verified puts it back to 'draft' (its checks no longer apply) unless the patch sets the status itself.
+ * verified puts it back to 'draft' (its checks no longer apply) unless the patch sets the status itself. Any change of
+ * statement, hint or solution marks the question as author-edited (`edited_at`): it is verified as written and never
+ * re-imported from its source pages. The import marker (`imported_at`) is not touched.
  */
 export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: QuestionFields): Question {
   return ctx.db.tx(() => {
@@ -63,14 +71,18 @@ export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: 
       values.status = 'draft';
       values.checks = [];
     }
+    const t = now();
+    if (textChanged) values.edited_at = t;
     ctx.db.run(
       `UPDATE questions SET ${[...Object.keys(values), 'rev', 'updated_at'].map((k) => (k === 'rev' ? 'rev = rev + 1' : `${k} = ?`)).join(', ')} WHERE id = ? AND rev = ?`,
-      ...Object.values(values).map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : (v as string | number | null))), now(), id, rev);
+      ...Object.values(values).map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : (v as string | number | null))), t, id, rev);
+    questionsChanged(ctx, cur.projectId, [id]);
     return getQuestion(ctx, id);
   });
 }
 
 export function deleteQuestion(ctx: AppContext, id: string): void {
-  getQuestion(ctx, id);
+  const q = getQuestion(ctx, id);
   ctx.db.run('DELETE FROM questions WHERE id = ?', id);
+  questionsChanged(ctx, q.projectId, [id]);
 }

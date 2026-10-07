@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync } from 'node:fs';
 import { assertSafeSvg, insertProposal, saveHuman, usageForRun } from '../repo/index.ts';
 import { newId, now } from '../db/db.ts';
+import { json } from '../db/db.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import { installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
@@ -201,13 +202,24 @@ describe('sections', () => {
     assert.equal(view.current.id, human.id);
     assert.equal(view.proposal.markdown, 'Bozza AI');
 
-    const accepted = await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id });
+    // The author compared the proposal with `human`; newer work saved since must not be replaced silently.
+    const newer = (await t.req('PUT', url, { markdown: 'Testo umano, ancora', baseRevId: human.id })).body.current;
+    const refused = await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id, headRevId: human.id });
+    assert.equal(refused.status, 409);
+    assert.equal(refused.body.error.message, 'The section changed after you opened this proposal.');
+    assert.equal(refused.body.error.action, 'Reload to compare the proposal with the latest text.');
+    assert.equal((await t.req('GET', url)).body.current.id, newer.id, 'the newer text is still current');
+    assert.equal((await t.req('GET', url)).body.proposal.id, late.revision.id, 'the proposal is still waiting');
+    assert.equal((await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id })).status, 400, 'headRevId is required to accept');
+
+    const accepted = await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id, headRevId: newer.id });
     assert.equal(accepted.status, 200);
+    assert.deepEqual(t.ctx.events.since(0, projectId).filter((e) => e.type === 'proposal.decided').map((e) => e.data), [{ nodeId: 's1', revId: late.revision.id, action: 'accept' }]);
     assert.equal(accepted.body.current.markdown, 'Bozza AI');
     assert.equal(accepted.body.proposal, null);
     assert.equal(accepted.body.current.id, late.revision.id);
 
-    const again = await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id });
+    const again = await t.req('POST', `${url}/proposal`, { action: 'accept', revId: late.revision.id, headRevId: late.revision.id });
     assert.equal(again.status, 409);
 
     // Output based on the current head applies directly.
@@ -218,8 +230,10 @@ describe('sections', () => {
     // A stale one is stored as proposal and can be rejected.
     const stale = insertProposal(t.ctx, projectId, 's1', 'Terza bozza', late.revision.id, 'ai', 'm1');
     assert.equal(stale.applied, false);
-    const rejected = await t.req('POST', `${url}/proposal`, { action: 'reject', revId: stale.revision.id });
+    // Rejecting does not look at headRevId.
+    const rejected = await t.req('POST', `${url}/proposal`, { action: 'reject', revId: stale.revision.id, headRevId: 'anything' });
     assert.equal(rejected.body.proposal, null);
+    assert.deepEqual(t.ctx.events.since(0, projectId).filter((e) => e.type === 'proposal.decided').map((e) => e.data.action), ['accept', 'reject']);
     assert.equal(rejected.body.current.markdown, 'Seconda bozza');
     view = (await t.req('GET', `${url}/history`)).body;
     assert.ok(view.some((r: { status: string }) => r.status === 'rejected'));
@@ -402,6 +416,8 @@ describe('runs', () => {
     assert.equal(detail.tasks.length, 2);
     assert.equal(detail.usage.length, 2);
     assert.equal(detail.waiting.reason, 'Approve');
+    assert.equal(detail.waiting.kind, 'author');
+    assert.equal(detail.waiting.retryAt, null);
     assert.equal(detail.counts.waiting_for_user, 2);
     assert.equal((await t.req('GET', `/api/projects/${p.id}/runs`)).body.length, 1);
 
@@ -444,5 +460,97 @@ describe('settings and system', () => {
       r.restore();
       fakes = installFakes();
     }
+  });
+});
+
+describe('review fixes (server)', () => {
+  const eventTypes = (projectId: string, type: string) => t.ctx.events.since(0, projectId).filter((e) => e.type === type);
+  const qrow = (id: string) => t.ctx.db.get<Record<string, any>>('SELECT * FROM questions WHERE id = ?', id)!;
+
+  it('3. editing a question marks it author-edited and keeps the import marker; every question change is announced', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('q-edited'));
+    const q = (await t.req('POST', `/api/projects/${p.id}/questions`, { statement: 'Grezzo', kind: 'exam', origin: 'authentic' })).body;
+    assert.equal(qrow(q.id).edited_at, null);
+    t.ctx.db.run(`UPDATE questions SET imported_at = '2026-01-01', status = 'verified', checks = ? WHERE id = ?`, JSON.stringify([{ method: 'lint', ok: true, detail: 'imported' }]), q.id);
+
+    const meta = await t.req('PATCH', `/api/questions/${q.id}`, { rev: 1, difficulty: 'facile' });
+    assert.equal(meta.status, 200);
+    assert.equal(qrow(q.id).edited_at, null, 'changing the difficulty is not a text edit');
+
+    const edit = await t.req('PATCH', `/api/questions/${q.id}`, { rev: 2, solution: 'Riparata a mano' });
+    assert.equal(edit.status, 200);
+    const row = qrow(q.id);
+    assert.ok(row.edited_at);
+    assert.equal(row.imported_at, '2026-01-01', 'the import marker survives an edit');
+    assert.equal(row.status, 'draft');
+    assert.deepEqual(json(row.checks, []), [], 'checks are cleared, the marker is not one of them');
+
+    await t.req('DELETE', `/api/questions/${q.id}`);
+    // create, two patches, delete
+    assert.equal(eventTypes(p.id, 'question.updated').length, 4);
+    assert.ok(eventTypes(p.id, 'question.updated').every((e) => Array.isArray(e.data.questionIds)));
+  });
+
+  it('6. issue status changes are announced', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('issue-events'));
+    const id = newId();
+    t.ctx.db.insert('review_issues', { id, project_id: p.id, node_id: 's1', source: 'review', severity: 'major', category: 'math', message: 'Errore', created_at: now() });
+    await t.req('PATCH', `/api/issues/${id}`, { status: 'dismissed' });
+    assert.deepEqual(eventTypes(p.id, 'issue.updated').map((e) => e.data), [{ issueIds: [id] }]);
+  });
+
+  it('6. figures and extras announce their changes', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('asset-events'));
+    const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
+    const up = multipart({}, [{ name: 'file', filename: 'c.svg', type: 'image/svg+xml', data: svg }]);
+    const asset = (await t.req('POST', `/api/projects/${p.id}/assets`, up.payload, up.headers)).body;
+    await t.req('PATCH', `/api/assets/${asset.id}`, { caption: 'Cerchio' });
+    assert.equal(eventTypes(p.id, 'asset.updated').length, 2);
+    const eid = newId();
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'ide', payload: { id: 'x', title: 'x', language: 'python', code: 'print(1)' }, status: 'draft', checks: [], created_at: now() });
+    await t.req('PATCH', `/api/enrichments/${eid}`, { payload: { id: 'x', title: 'y', language: 'python', code: 'print(2)' } });
+    await t.req('DELETE', `/api/enrichments/${eid}`);
+    assert.equal(eventTypes(p.id, 'enrichment.updated').length, 2);
+  });
+
+  it('7. the generate route forwards scope.nodeIds', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('node-scope'));
+    await t.req('POST', `/api/projects/${p.id}/runs`, { kind: 'generate', scope: { nodeIds: ['s3'] } });
+    assert.deepEqual(fakes.calls.startRun.at(-1), { projectId: p.id, kind: 'generate', scope: { nodeIds: ['s3'] } });
+  });
+
+  it('8. changing a source role or inclusion recomputes exam frequency without a model call', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('priorities'));
+    const res = (id: string) => t.ctx.db.insert('resources', { id, project_id: p.id, kind: 'pdf', role: 'exams', filename: `${id}.pdf`, sha256: id.padEnd(64, 'a'), size: 1, path: `x/${id}.pdf`, included: 1, status: 'ready', created_at: now() });
+    res('rA'); res('rB');
+    const pre = p.id.slice(0, 8);
+    for (const k of ['t1', 't2']) t.ctx.db.insert('topics', { id: `${pre}-${k}`, project_id: p.id, name: k, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'normal' });
+    const exam = (resource: string, group: string, topic: string) => t.ctx.db.insert('questions', {
+      id: newId(), project_id: p.id, kind: 'exam', origin: 'authentic', resource_id: resource, exam_group: group, number: '1', statement: 'x', topic_ids: [`${pre}-${topic}`],
+      status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
+    });
+    exam('rA', 'S1', 't1'); exam('rA', 'S2', 't1'); exam('rB', 'S3', 't2');
+    const topic = (k: string) => t.ctx.db.get<Record<string, any>>('SELECT * FROM topics WHERE id = ?', `${pre}-${k}`)!;
+
+    assert.equal((await t.req('PATCH', '/api/resources/rB', { included: true })).status, 200);
+    assert.equal(topic('t1').priority, 'normal', 'no change, no recompute');
+    await t.req('PATCH', '/api/resources/rB', { included: false });
+    assert.deepEqual([topic('t1').exam_sessions, topic('t1').priority, topic('t2').exam_sessions, topic('t2').priority], [2, 'high', 0, 'low']);
+    await t.req('PATCH', '/api/resources/rA', { role: 'theory' });
+    assert.equal(topic('t1').exam_sessions, 0, 'a theory source holds no exam sessions');
+    await t.req('PATCH', '/api/resources/rA', { role: 'exams' });
+    await t.req('PATCH', '/api/resources/rB', { included: true });
+    assert.deepEqual([topic('t1').exam_sessions, topic('t1').priority, topic('t2').exam_sessions], [2, 'high', 1]);
+  });
+
+  it('15. the approval gate counts a blocker whose fix is only proposed as unresolved', async () => {
+    const { projectId } = await projectWithOutline(t, 'proposed-blocker');
+    const id = newId();
+    t.ctx.db.insert('review_issues', { id, project_id: projectId, node_id: 's1', source: 'review', severity: 'blocker', category: 'math', message: 'Errore', status: 'proposed', resolution: 'Proposal p1', created_at: now() });
+    const refused = await t.req('POST', `/api/projects/${projectId}/exports`, { approved: true });
+    assert.equal(refused.status, 409);
+    assert.match(refused.body.error.message, /1 review problem is still open/);
+    await t.req('PATCH', `/api/issues/${id}`, { status: 'fixed' });
+    assert.equal((await t.req('POST', `/api/projects/${projectId}/exports`, { approved: true })).status, 200);
   });
 });

@@ -7,6 +7,7 @@ import { HttpError } from '../server.ts';
 import {
   deleteResource, getPage, getResource, getSourceIndex, listPages, listResources, updateResource,
 } from '../repo/index.ts';
+import { computePriorities } from '../pipeline/prepare.ts';
 import { deps } from './deps.ts';
 import { idParam, intParam, parse, projectOf } from './util.ts';
 
@@ -61,7 +62,10 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.patch('/api/resources/:rid', async (req) => {
     const patch = parse(z.object({ role: roleSchema.optional(), included: z.boolean().optional() }), req.body);
-    const r = updateResource(ctx, idParam(req, 'rid'), patch);
+    const before = getResource(ctx, idParam(req, 'rid'));
+    const r = updateResource(ctx, before.id, patch);
+    // Exam frequency counts only included sources with a role that holds questions: recompute (local SQL only, no model call).
+    if (r.included !== before.included || r.role !== before.role) computePriorities(ctx, r.projectId);
     ctx.events.emit('resource.state', { resourceId: r.id, included: r.included, role: r.role }, { projectId: r.projectId });
     return r;
   });
@@ -69,6 +73,7 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
   app.delete('/api/resources/:rid', async (req) => {
     const r = getResource(ctx, idParam(req, 'rid'));
     deleteResource(ctx, r.id);
+    computePriorities(ctx, r.projectId);
     ctx.events.emit('resource.state', { resourceId: r.id, deleted: true }, { projectId: r.projectId });
     return { ok: true as const };
   });

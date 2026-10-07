@@ -116,16 +116,18 @@ export function storeAsset(ctx: AppContext, projectId: string, input: NewAsset):
     rmSync(path, { force: true });
     throw err;
   }
+  ctx.events.emit('asset.updated', { assetId: id, nodeId: input.nodeId ?? null }, { projectId });
   return getAsset(ctx, id);
 }
 
 export function updateAsset(ctx: AppContext, id: string, patch: Partial<Pick<Asset, 'caption' | 'alt' | 'nodeId'>>): Asset {
-  getAsset(ctx, id);
+  const cur = getAsset(ctx, id);
   const values: Record<string, unknown> = {};
   if (patch.caption !== undefined) values.caption = patch.caption;
   if (patch.alt !== undefined) values.alt = patch.alt;
   if (patch.nodeId !== undefined) values.node_id = patch.nodeId;
   ctx.db.update('assets', id, values);
+  ctx.events.emit('asset.updated', { assetId: id, nodeId: patch.nodeId !== undefined ? patch.nodeId : cur.nodeId }, { projectId: cur.projectId });
   return getAsset(ctx, id);
 }
 
@@ -134,13 +136,14 @@ export function deleteAsset(ctx: AppContext, id: string): void {
   if (!r) return;
   ctx.db.run('DELETE FROM assets WHERE id = ?', id);
   rmSync(assetPath(ctx, r as { path: string; project_id: string }), { force: true });
+  ctx.events.emit('asset.updated', { assetId: id, nodeId: r.node_id ?? null, deleted: true }, { projectId: r.project_id });
 }
 
-export function readAssetBytes(ctx: AppContext, projectId: string): { filename: string; bytes: Uint8Array }[] {
-  const out: { filename: string; bytes: Uint8Array }[] = [];
+export function readAssetBytes(ctx: AppContext, projectId: string): { filename: string; bytes: Uint8Array; caption: string; alt: string }[] {
+  const out: { filename: string; bytes: Uint8Array; caption: string; alt: string }[] = [];
   for (const r of ctx.db.all<Rec>('SELECT * FROM assets WHERE project_id = ? ORDER BY rowid', projectId)) {
     const p = assetPath(ctx, r as { path: string; project_id: string });
-    if (existsSync(p)) out.push({ filename: r.filename, bytes: readFileSync(p) });
+    if (existsSync(p)) out.push({ filename: r.filename, bytes: readFileSync(p), caption: r.caption ?? '', alt: r.alt ?? '' });
   }
   return out;
 }

@@ -124,6 +124,7 @@ export function updateTopic(ctx: AppContext, id: string, patch: Partial<Pick<Top
   getTopic(ctx, id);
   const values: Record<string, unknown> = {};
   for (const k of ['name', 'priority', 'description'] as const) if (patch[k] !== undefined) values[k] = patch[k];
+  if (patch.priority !== undefined) values.priority_locked = 1;
   ctx.db.update('topics', id, values);
   return getTopic(ctx, id);
 }
