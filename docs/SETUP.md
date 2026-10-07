@@ -45,7 +45,24 @@ NLM_BROWSER_PATH="/Applications/Helium.app/Contents/MacOS/Helium" \
 scp -r ~/.notebooklm-mcp-cli/profiles ~/.notebooklm-mcp-cli/config.toml server:.notebooklm-mcp-cli/
 ```
 
-The session refreshes its short-lived tokens by itself. When Google expires the login (usually after weeks), the Connections screen says so and evidence switches to the local reader until you sign in again.
+A session copied this way lasts only hours: refreshing it needs a signed-in Chrome profile on the machine that runs `nlm`. To give a headless server its own profile, sign in once through Chrome's remote debugging view:
+
+```bash
+# on the server
+Xvfb :42 -screen 0 1280x900x24 &
+DISPLAY=:42 google-chrome --user-data-dir=$HOME/.notebooklm-mcp-cli/chrome-profiles/default \
+  --remote-debugging-port=9222 --no-first-run https://notebooklm.google.com &
+# from your laptop: ssh -L 9222:localhost:9222 server, then open
+#   http://localhost:9222/devtools/inspector.html?ws=localhost:9222/devtools/page/<id from /json>
+# and sign in through the live screencast. Then, on the server:
+nlm login --provider openclaw --cdp-url http://127.0.0.1:9222 --storage file --force
+# close Chrome and Xvfb, and check that a headless refresh works:
+nlm auth refresh
+```
+
+A cron entry such as `17 */6 * * * nlm auth refresh` keeps the session fresh when nothing else uses it.
+
+Once the server has its own profile, the session refreshes its short-lived tokens by itself. When Google expires the login (usually after weeks), the Connections screen says so and evidence switches to the local reader until you sign in again.
 
 Without NotebookLM, set **Evidence** to *Local* under Connections: the builder searches the extracted pages and a reader model quotes them. Quotes are verified against the page text either way.
 

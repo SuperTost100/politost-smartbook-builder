@@ -60,7 +60,7 @@ Authentic exam questions have no hints because the official papers give none. Ge
 - **Quiz items** (720 multiple-choice questions) are stored but not classified or imported into practice.
 - **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
 - **Autosave** is explicit (Save block, or Ctrl/Cmd+Enter) rather than debounced, so each save is one revision.
-- **The NotebookLM login** was copied from your Mac. When Google expires it, the Connections screen shows the sign-in command again, and evidence falls back to the local reader meanwhile.
+- **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
 
 ## Independent reviews
 
