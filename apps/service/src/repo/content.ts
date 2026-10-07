@@ -77,6 +77,23 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
   });
 }
 
+/**
+ * Replaces the current text with a mechanical rewrite of it (`fix`, no model): a new current revision with origin 'repair',
+ * the old head as parent and the block citations carried over. Null when there is no text or nothing changes. The head is read
+ * inside the transaction, so a save that lands meanwhile is never overwritten.
+ */
+export function repairHead(ctx: AppContext, projectId: string, nodeId: string, fix: (markdown: string) => string): ContentRevision | null {
+  return ctx.db.tx(() => {
+    const head = currentHead(ctx, projectId, nodeId);
+    if (!head) return null;
+    const markdown = fix(head.markdown);
+    if (markdown === head.markdown) return null;
+    return makeCurrent(ctx, projectId, nodeId, head, {
+      projectId, nodeId, kind: head.kind, markdown, origin: 'repair', model: null, parentRevId: head.id, status: 'current', citations: carryCitations(head.markdown, markdown, head.citations),
+    });
+  });
+}
+
 /** Past this many cells the middle part is not diffed: only the common beginning and end keep their citations by identity. */
 const MAX_DIFF_CELLS = 4_000_000;
 

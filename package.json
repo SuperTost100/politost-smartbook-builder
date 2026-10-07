@@ -20,7 +20,8 @@
     "test": "npm test -w @smartbuilder/content -w @smartbuilder/service",
     "test:e2e": "npm run test:e2e -w @smartbuilder/web",
     "backup": "node --import tsx apps/service/src/bin/backup.ts backup",
-    "restore": "node --import tsx apps/service/src/bin/backup.ts restore"
+    "restore": "node --import tsx apps/service/src/bin/backup.ts restore",
+    "normalize-text": "node --import tsx apps/service/src/bin/normalize-text.ts"
   },
   "devDependencies": {
     "@types/node": "^24.19.1",

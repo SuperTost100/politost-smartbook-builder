@@ -16,7 +16,7 @@ import { labelResources, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, rejectProposal, insertProposal, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, rejectProposal, insertProposal, saveHuman, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -386,6 +386,18 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
     assert.equal(rev.parent_rev_id, a);
     assert.notEqual(rev.parent_rev_id, b);
     assert.equal(rev.task_id, 'task-x');
+  });
+});
+
+describe('AI text keeps display math apart from inline math', () => {
+  test('commitAiRevision separates it and moves the block citations along; a human save is left alone', () => {
+    seedOutline([['c1', ['s1']]]);
+    const out = commitAiRevision(ctx, { projectId: P, nodeId: 's1', kind: 'section', markdown: 'Intro.\n\nCon $a$ e $$b$$ qui', baseRevId: null, model: 'm', citations: { '0': ['n1'], '1': ['n2'] } });
+    const rev = ctx.db.get<Record<string, any>>('SELECT * FROM content_revisions WHERE id = ?', out.revId)!;
+    assert.equal(rev.markdown, 'Intro.\n\nCon $a$ e\n\n$$\nb\n$$\n\nqui');
+    assert.deepEqual(json(rev.citations, {}), { '0': ['n1'], '1': ['n2'] });
+    const human = saveHuman(ctx, P, 's2', 'Con $a$ e $$b$$ qui', null);
+    assert.equal(human.markdown, 'Con $a$ e $$b$$ qui');
   });
 });
 

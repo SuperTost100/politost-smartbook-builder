@@ -10,3 +10,4 @@ export * from './verify.ts';
 export * from './decompile.ts';
 export * from './sanitize.ts';
 export * from './patch.ts';
+export * from './displayMath.ts';

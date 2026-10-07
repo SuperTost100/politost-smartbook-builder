@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildFormulaIndex, parseChapterMarkdown, parseExercises, validateExercises } from '@politost/content-core';
-import { compileBook, compileChapter, numberChapters } from './compile.ts';
+import { compileBook, compileChapter, numberChapters, numberStatements } from './compile.ts';
 import { enrichment, fixtureBook, question } from './fixtures.ts';
 import type { BookInput, CompiledBook } from './types.ts';
 
@@ -382,4 +382,72 @@ test('brackets in math cannot be captured by a later link', async () => {
   const ch = Object.entries(book.files).find(([k]) => k.startsWith('chapters/'))![1] as string;
   assert.ok(ch.includes('[la sezione B](ref:chapter/1#p2)'), ch);
   assert.ok(!/\$[^$]*\[[^$]*\$/.test(ch.split('\n').find((l) => l.startsWith('Ad esempio'))!), ch);
+});
+
+// ---- statement numbering -------------------------------------------------------------------------
+
+const chapterOf = (number: number, ...sections: string[]) => ({
+  id: `c${number}`, slug: `c${number}`, number, title: 'Capitolo', intro: '',
+  sections: sections.map((markdown, i) => ({ id: `s${i + 1}`, title: `Sezione ${i + 1}`, markdown })),
+});
+const body = (number: number, ...sections: string[]) => compileChapter(chapterOf(number, ...sections)).markdown;
+
+test('statement labels are numbered per kind and chapter, keeping names and punctuation', () => {
+  const md = body(4,
+    '**Teorema 6.1 (limite delle successioni monotone).** Testo.\n\n**Definizione 3.9.1.** Una cosa.\n\n**Teorema 8.1** (limitatezza locale). Altro.\n\n**Esempio.** Uno.',
+    '*Teorema (derivabilità implica continuità).* Testo.\n\n- **Definizione** (di limite). Voce\n\n**Errore tipico.** Si sbaglia.\n\n**Esempio svolto 2.** Due.\n\n**Esempio 7.3** (con nome). Tre.\n\n**Esercizio** Quattro.',
+  );
+  for (const want of [
+    '**Teorema 4.1 (limite delle successioni monotone).** Testo.', '**Definizione 4.1.** Una cosa.', '**Teorema 4.2** (limitatezza locale). Altro.', '**Esempio 4.1.** Uno.',
+    '*Teorema 4.3 (derivabilità implica continuità).* Testo.', '- **Definizione 4.2** (di limite). Voce', '**Errore tipico 4.1.** Si sbaglia.',
+    '**Esempio svolto 4.2.** Due.', '**Esempio 4.3** (con nome). Tre.', '**Esercizio 4.1** Quattro.',
+  ]) assert.ok(md.includes(want), `${want}\n${md}`);
+});
+
+test('the introduction is numbered first, and Dimostrazione, code and ::: blocks are left alone', () => {
+  const ch = chapterOf(2, '**Proposizione 5.5.** Tesi.\n\n**Dimostrazione.** Ovvia.\n\n```\n**Teorema 9.9** in codice\n```\n\n:::hint\n**Teorema 9.8** nel suggerimento\n:::\n\nuna riga\n**Teorema 7.7** non inizia il paragrafo');
+  ch.intro = '**Teorema 1.1.** Dall\'introduzione.';
+  const md = compileChapter(ch).markdown;
+  assert.match(md, /\*\*Teorema 2\.1\.\*\* Dall'introduzione\./);
+  assert.match(md, /\*\*Proposizione 2\.1\.\*\* Tesi\./);
+  assert.match(md, /\*\*Dimostrazione\.\*\* Ovvia\./);
+  assert.match(md, /```\n\*\*Teorema 9\.9\*\* in codice\n```/);
+  assert.match(md, /\*\*Teorema 9\.8\*\* nel suggerimento/);
+  assert.match(md, /una riga\n\*\*Teorema 7\.7\*\* non inizia/);
+});
+
+test('references follow their label: the same section wins, then the nearest earlier one', () => {
+  const [a, b, c, d] = numberStatements([
+    '**Teorema 8.1.** Primo.\n\nVedi il teorema 8.1 e (Definizione 3.9.1).',
+    '**Definizione 3.9.1.** Una.\n\n**Teorema 8.1.** Secondo, che usa il Teorema 8.1.',
+    'Qui si usa il Teorema 8.1, il teorema 8.2 e $Teorema 8.1$.',
+    '**Lemma 1.1.** Fine.\n\nPer il Teorema 8.1 e il Lemma 1.1.',
+  ], 4, 'it');
+  assert.equal(a, '**Teorema 4.1.** Primo.\n\nVedi il teorema 4.1 e (Definizione 4.1).'); // no such label here: the first later section has it
+  assert.equal(b, '**Definizione 4.1.** Una.\n\n**Teorema 4.2.** Secondo, che usa il Teorema 4.2.');
+  assert.equal(c, 'Qui si usa il Teorema 4.2, il teorema 8.2 e $Teorema 8.1$.'); // nearest earlier section; 8.2 has no label; math untouched
+  assert.equal(d, '**Lemma 4.1.** Fine.\n\nPer il Teorema 4.2 e il Lemma 4.1.');
+});
+
+test('a reference to a number that no label carries stays, even when another kind has it', () => {
+  const [t] = numberStatements(['**Teorema 6.1.** A.\n\nVedi la Definizione 6.1 e il Teorema 6.1.'], 3, 'it');
+  assert.equal(t, '**Teorema 3.1.** A.\n\nVedi la Definizione 6.1 e il Teorema 3.1.');
+});
+
+test('an English book uses English kinds, and Italian kinds are not numbered there', () => {
+  const md = compileChapter(chapterOf(3, '**Theorem 5.1** (Weierstrass). Text.\n\n**Worked example.** One.\n\n**Example 2.** Two, see Theorem 5.1 and Worked example 2.\n\n**Proof.** Skip.\n\n**Teorema 1.** Italiano.'), undefined, { language: 'en' }).markdown;
+  assert.match(md, /\*\*Theorem 3\.1\*\* \(Weierstrass\)\. Text\./);
+  assert.match(md, /\*\*Worked example 3\.1\.\*\* One\./);
+  assert.match(md, /\*\*Example 3\.2\.\*\* Two, see Theorem 3\.1 and Worked example 2\./);
+  assert.match(md, /\*\*Proof\.\*\* Skip\./);
+  assert.match(md, /\*\*Teorema 1\.\*\* Italiano\./);
+});
+
+test('numbering is part of the book compile and leaves questions alone', () => {
+  const input = fixtureBook();
+  input.chapters[0].sections[0].markdown += '\n\n**Teorema 9.9.** Nuovo.';
+  input.questions = [question({ id: 'q1', kind: 'exercise', chapterId: input.chapters[0].id, statement: '**Teorema 9.9** nel testo di una domanda.' })];
+  const book = compileBook(input);
+  assert.match(text(book, 'chapters/01-cinematica.md'), /\*\*Teorema 1\.1\.\*\* Nuovo\./);
+  assert.match(text(book, 'esercizi.md'), /\*\*Teorema 9\.9\*\* nel testo di una domanda\./);
 });

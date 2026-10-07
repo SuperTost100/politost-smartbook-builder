@@ -82,3 +82,34 @@ function classify(lines: string[]): Block['kind'] {
   if (/^([-*+]|\d+[.)])\s/.test(first)) return 'list';
   return 'paragraph';
 }
+
+/**
+ * One flag per line: true for plain Markdown, false for code fences and ::: directive blocks (their fence lines included).
+ * Text that must stay byte-identical (code, formulas, hints, figures) is the false lines.
+ */
+export function proseLines(lines: string[]): boolean[] {
+  const out: boolean[] = [];
+  let code: string | null = null;
+  let depth = 0;
+  for (let i = 0; i < lines.length; i++) {
+    const t = lines[i].trim();
+    const fence = /^(```|~~~)(.*)$/.exec(t);
+    if (code !== null) {
+      if (fence && fence[1] === code) code = null;
+      out.push(false);
+    } else if (fence && !fence[2].includes('`')) {
+      code = fence[1];
+      out.push(false);
+    } else if (/^:::[A-Za-z]/.test(t)) {
+      out.push(false);
+      // A figure is :::image{...} plus its closing ::: on the next line (see scan.ts).
+      if (/^:::image\b/.test(t)) {
+        if (lines[i + 1]?.trim() === ':::') { out.push(false); i++; }
+      } else depth++;
+    } else if (depth > 0 || /^:::\s*$/.test(t)) {
+      if (/^:::\s*$/.test(t) && depth > 0) depth--;
+      out.push(false);
+    } else out.push(true);
+  }
+  return out;
+}

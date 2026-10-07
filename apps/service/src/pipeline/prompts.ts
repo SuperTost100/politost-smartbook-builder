@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 5;
+export const PROMPT_VERSION = 6;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -10,6 +10,7 @@ export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
 /** The writing rules every content-producing prompt shares. Each rule prevents a defect seen in earlier books. */
 export function formatRules(language: string) {
   const lang = languageName(language);
+  const label = language === 'it' ? '**Teorema** (di Weierstrass)' : '**Theorem** (Weierstrass)';
   return `OUTPUT FORMAT: PoliTost source Markdown. Follow every rule; the text is parsed by a strict parser.
 - Write all reader-facing text in ${lang}. Keep the syntax below exactly as shown (attribute names stay in English).
 - Paragraphs are separated by one blank line. Subsection headings use "### Title" only. Never use #, ## or ####.
@@ -21,6 +22,7 @@ $$\\lim_{x\\to 0}\\frac{\\sin x}{x} = 1$$
 :::
 - Refer to a numbered formula with {{formula:@its-key}}, with a space before and after. Only reference keys that exist in this text or in the list of known keys you are given.
 - Link to another section with [testo](ref:section/<sectionId>) using the section ids you are given. No external links.
+- Write statement labels (${language === 'it' ? 'Definizione, Teorema, Esempio, Errore tipico, ...' : 'Definition, Theorem, Example, Common mistake, ...'}) without numbers, e.g. ${label}. The builder numbers them per chapter, so never cite a statement by its number; name it instead.
 - Bold with **word**, with a space or punctuation outside the asterisks. Never leave an unmatched **.
 - Lists with "- " or "1. ". No tables (the reader cannot show them): turn tabular data into a list or prose. No code fences, no HTML, no images except the figure blocks described below.
 - Never end a paragraph with ":" unless a formula, a display math block or a list follows immediately.
@@ -407,6 +409,8 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   const lang = languageName(p.language);
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
+
+Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Prefer fewer, solid issues to a long list of doubtful ones.`,
     prompt: `Chapter: ${p.chapterTitle}

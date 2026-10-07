@@ -3,7 +3,8 @@ import { isValidAssetPath, validateBundle, withChapterFrontmatter } from '@polit
 import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
 import { lintCompiled, lintQuestionText, lintSection, langOf } from './lint.ts';
-import { parseAttrs, scan, type FormulaBlock } from './scan.ts';
+import { proseLines } from './blocks.ts';
+import { maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Labels
@@ -121,6 +122,81 @@ function numberChapter(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Statement numbering
+// ---------------------------------------------------------------------------------------------
+
+const STATEMENT_KINDS = {
+  it: ['Esempio svolto', 'Errore tipico', 'Definizione', 'Teorema', 'Proposizione', 'Lemma', 'Corollario', 'Osservazione', 'Esempio', 'Esercizio'],
+  en: ['Worked example', 'Common mistake', 'Definition', 'Theorem', 'Proposition', 'Lemma', 'Corollary', 'Remark', 'Example', 'Exercise'],
+};
+/** Kinds that count together with another one. */
+const SHARED_COUNTER: Record<string, string> = { 'esempio svolto': 'esempio', 'worked example': 'example' };
+const counterOf = (kind: string) => { const k = kind.toLowerCase().replace(/\s+/g, ' '); return SHARED_COUNTER[k] ?? k; };
+
+function statementPatterns(language: string) {
+  const lang = langOf(language);
+  const kinds = (lang ? STATEMENT_KINDS[lang] : [...STATEMENT_KINDS.it, ...STATEMENT_KINDS.en]).map((k) => k.replace(/ /g, '[ \\t]+')).sort((a, b) => b.length - a.length).join('|');
+  return {
+    // 1 = what precedes (indent, list marker, quote), 2 = ** or *, 3 = kind, 4 = old number. Then "." and the closing mark, or " (name)".
+    label: new RegExp(`^(\\s*(?:(?:[-*+]|\\d+[.)])\\s+)?(?:>\\s*)?)(\\*\\*|\\*)(${kinds})(?:[ \\t]+(\\d+(?:\\.\\d+){0,2}))?(?=\\.?(?:\\2|\\s*\\())`, 'i'),
+    // 1 = kind, 2 = number.
+    ref: new RegExp(`(?<![\\p{L}\\p{N}])(${kinds})\\s+(\\d+\\.\\d+(?:\\.\\d+)?)(?!\\d|\\.\\d)`, 'giu'),
+  };
+}
+
+/**
+ * Numbers the statement labels of a chapter's texts (introduction first, then sections) per kind: "**Teorema 8.1** (name)." becomes
+ * "**Teorema 4.2** (name)." in chapter 4. References to an old number ("Teorema 8.1", "teorema 8.1") follow their label: the label of
+ * the same text wins, else the nearest earlier text, else the first later one; an old number that no label carries stays as written.
+ * Code, ::: blocks and math are left alone.
+ */
+export function numberStatements(texts: string[], chapter: number, language: string): string[] {
+  const { label, ref } = statementPatterns(language);
+  const lines = texts.map((t) => t.split('\n'));
+  const masked: string[][] = [];
+  const labelEnd = new Map<string, number>();
+  const edits: { line: number; start: number; end: number; text: string }[][] = texts.map(() => []);
+  const renamed = new Map<string, { unit: number; to: string }[]>();
+  const counters = new Map<string, number>();
+  lines.forEach((ls, u) => {
+    const prose = proseLines(ls);
+    let display = false;
+    masked.push(ls.map((raw, i) => {
+      if (!prose[i]) { display = false; return ''; }
+      const r = maskMath(raw, display);
+      display = r.inDisplay;
+      const item = /^\s*([-*+]|\d+[.)])\s/.test(raw);
+      const m = !r.startedInDisplay && (item || i === 0 || !prose[i - 1] || !ls[i - 1].trim() || /^#{1,6}\s/.test(ls[i - 1])) ? label.exec(raw) : null;
+      if (m) {
+        const key = counterOf(m[3]);
+        const n = (counters.get(key) ?? 0) + 1;
+        counters.set(key, n);
+        const to = `${chapter}.${n}`;
+        const start = m[1].length + m[2].length;
+        edits[u].push({ line: i, start, end: m[0].length, text: `${m[3]} ${to}` });
+        labelEnd.set(`${u}:${i}`, m[0].length);
+        if (m[4]?.includes('.')) renamed.set(`${key}|${m[4]}`, [...(renamed.get(`${key}|${m[4]}`) ?? []), { unit: u, to }]);
+      }
+      return r.masked;
+    }));
+  });
+  masked.forEach((ms, u) => ms.forEach((line, i) => {
+    for (const m of line.matchAll(ref)) {
+      if (m.index < (labelEnd.get(`${u}:${i}`) ?? 0)) continue;
+      const cands = renamed.get(`${counterOf(m[1])}|${m[2]}`);
+      const to = cands && (cands.find((c) => c.unit === u) ?? [...cands].reverse().find((c) => c.unit < u) ?? cands[0]).to;
+      if (to && to !== m[2]) edits[u].push({ line: i, start: m.index + m[0].length - m[2].length, end: m.index + m[0].length, text: to });
+    }
+  }));
+  return texts.map((t, u) => {
+    if (!edits[u].length) return t;
+    const ls = lines[u].slice();
+    for (const e of edits[u].sort((a, b) => b.start - a.start)) ls[e.line] = ls[e.line].slice(0, e.start) + e.text + ls[e.line].slice(e.end);
+    return ls.join('\n');
+  });
+}
+
+// ---------------------------------------------------------------------------------------------
 // Reference resolution
 // ---------------------------------------------------------------------------------------------
 
@@ -219,8 +295,9 @@ interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
   figureCounts: Map<number, number>;
 }
 
-function emitUnit(unit: Unit, number: number, env: CompileEnv): string {
-  const sc = scan(unit.markdown);
+/** `markdown` is the unit's text after statement numbering. */
+function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string): string {
+  const sc = scan(markdown);
   const byIndex = new Map(sc.formulas.map((f) => [f.index, f]));
   const refEnv: RefEnv = { ...env, file: unit.id, chapterNumber: number };
   const out: string[] = [];
@@ -301,8 +378,9 @@ function chapterFileName(chapter: ChapterInput, number: number): string {
 
 function emitChapter(chapter: ChapterInput, number: number, numbering: Numbering, env: CompileEnv): string {
   const parts: string[] = [];
-  for (const unit of numbering.units) {
-    const body = emitUnit(unit, number, env);
+  const texts = numberStatements(numbering.units.map((u) => u.markdown), number, env.language);
+  for (const [i, unit] of numbering.units.entries()) {
+    const body = emitUnit(unit, number, env, texts[i]);
     parts.push(`## p${unit.paragraph} | ${unit.title}\n\n${body}`.trimEnd());
   }
   const title = chapter.title.replace(/\s+/g, ' ').trim();
