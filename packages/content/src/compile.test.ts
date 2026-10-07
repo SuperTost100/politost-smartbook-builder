@@ -313,3 +313,17 @@ test('figure captions lose LaTeX and get chapter numbers', async () => {
   assert.equal(latexToPlain('La funzione $f(x) = \\frac{\\sin x}{x}$ per $x\\to 0$ vale $1$'), 'La funzione f(x) = (sin x)/x per x→0 vale 1');
   assert.equal(latexToPlain('$x^{10} = o(x^2)$'), 'x¹⁰ = o(x²)');
 });
+
+test('links into chapters left out of an export become plain text with a minor finding', async () => {
+  const { compileBook } = await import('./compile.ts');
+  const book = compileBook({
+    meta: { slug: 'b', title: 'B', subject: 'S', authors: [], language: 'it', version: '1.0.0' },
+    chapters: [{ id: 'c6', slug: 'limiti', number: 6, title: 'Limiti', intro: '', sections: [{ id: 's1', title: 'Uno', markdown: 'Vedi la [definizione](ref:section/gone) prima.' }] }],
+    questions: [], enrichments: [], assets: [], sections: { esercizi: false, esami: false, ide: false, grafici: false },
+    omittedSectionIds: ['gone'],
+  });
+  assert.ok(!book.findings.some((f) => f.severity === 'blocker'), JSON.stringify(book.findings));
+  assert.ok(book.findings.some((f) => f.rule === 'section-ref-omitted'));
+  const ch = Object.entries(book.files).find(([k]) => k.startsWith('chapters/'))![1] as string;
+  assert.ok(ch.includes('Vedi la definizione prima.'), ch);
+});

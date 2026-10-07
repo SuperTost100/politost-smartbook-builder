@@ -20,11 +20,16 @@ export function loadBookInput(ctx: AppContext, projectId: string, opts: { approv
   if (opts.approvedOnly && !found.approved) throw new HttpError(409, 'outline_not_approved', 'The outline has not been approved.', 'Approve the outline, or export a draft instead.');
 
   const heads = currentHeads(ctx, projectId);
-  const chapters: ChapterInput[] = found.revision.outline.chapters.map((c, i) => ({
+  const all: ChapterInput[] = found.revision.outline.chapters.map((c, i) => ({
     id: c.id, slug: c.slug, number: i + 1, title: c.title,
     intro: heads.get(c.id)?.markdown ?? '',
     sections: c.sections.map((s) => ({ id: s.id, title: s.title, markdown: heads.get(s.id)?.markdown ?? '' })),
   }));
+  // Chapters with no text yet stay out of the package; the others keep their outline numbers, so formula
+  // numbers do not change when more chapters are written later.
+  const hasText = (c: ChapterInput) => !!c.intro.trim() || c.sections.some((s) => s.markdown.trim());
+  const chapters = all.filter(hasText);
+  const omittedSectionIds = all.filter((c) => !hasText(c)).flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]);
   // Only questions placed in a chapter belong to the book; unassigned authentic exam questions stay in the project.
   const chapterIds = new Set(chapters.map((c) => c.id));
   const questions = listQuestions(ctx, projectId).filter((q) => q.chapterId && chapterIds.has(q.chapterId) && q.statement.trim());
@@ -32,6 +37,7 @@ export function loadBookInput(ctx: AppContext, projectId: string, opts: { approv
   return {
     meta: { slug: project.slug, title: project.title, subject: project.subject, authors: project.authors, language: project.language, version: '1.0.0' },
     chapters,
+    omittedSectionIds,
     questions,
     enrichments,
     assets: readAssetBytes(ctx, projectId),

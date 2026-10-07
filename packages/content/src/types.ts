@@ -40,6 +40,8 @@ export interface BookInput {
   enrichments: Enrichment[];
   assets: AssetInput[];
   sections: { esercizi: boolean; esami: boolean; ide: boolean; grafici: boolean };
+  /** Section and intro ids of outline chapters left out of this export (links to them become plain text). */
+  omittedSectionIds?: string[];
 }
 
 export interface LintFinding {

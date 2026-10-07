@@ -133,6 +133,8 @@ interface RefEnv {
   hoverSameChapterOnly: boolean;
   file: string;
   findings: LintFinding[];
+  /** Sections of chapters left out of this export: links to them become plain text. */
+  omitted?: Set<string>;
 }
 
 const REF_TOKEN =
@@ -149,7 +151,10 @@ function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
       out = resolveFormula(target!.startsWith('@'), target!.replace(/^@/, ''), label ?? '', full, lineNo, env);
     } else if (kind === 'section') {
       const sec = env.sectionNumbers[target!];
-      if (!sec) {
+      if (!sec && env.omitted?.has(target!)) {
+        env.findings.push(finding('section-ref-omitted', 'minor', env.file, `ref:section/${target} points to a chapter that is not in this export; the link became plain text.`, lineNo, full));
+        out = label || '';
+      } else if (!sec) {
         env.findings.push(finding('section-ref-unknown', 'blocker', env.file, `ref:section/${target} points to a section that is not in the book.`, lineNo, full));
         out = label || '';
       } else out = `[${label}](ref:chapter/${sec.chapter}#p${sec.paragraph})`;
@@ -462,6 +467,7 @@ export function compileBook(input: BookInput): CompiledBook {
     findings,
     assets: assetNames,
     language,
+    omitted: new Set(input.omittedSectionIds ?? []),
   };
   const chapterMeta: { id: string; number: number; title: string; file: string; printable: boolean }[] = [];
   chapters.forEach((ch, idx) => {
