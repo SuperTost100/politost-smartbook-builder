@@ -41,6 +41,18 @@ About 80% of the Luna bulk tokens went to classifying exam questions once for th
 - **Blockers mean a different result.** A solution is a blocker only when the independent result differs. Gaps in the reasoning keep the severity the reviewer gives them.
 - **I approved in your place.** You asked for no human in the loop, so I approved the outline and accepted the AI proposals. I read the proposals before accepting them.
 
+## Fix and review loop (changed 7 October, evening)
+
+Writing the remaining 10 chapters worked, but fixing them did not converge. *Fix selected issues* left every fix as a proposal, and none was accepted. 288 proposals were written, a later fix replaced 243 of them, and the reviews kept re-reading the unchanged first draft. Each pass found 8 to 9 issues per chapter, more than half of them the same passages as before. The loop used about 10M input tokens.
+
+What changed:
+- A fix is applied to the text directly, after rule guards (no lost headings, formulas or `:::` fences, at most 3 deleted paragraphs, no new lint errors) and a cheap Luna check of each change. Changes that fail are dropped and their issue stays open with the reason. A fix that would remove more than a fifth of a section stays a proposal.
+- *Run review* skips chapters that did not change, tells the reviewer which sections changed, and gives it the issues already fixed, dismissed or accepted.
+- Model output is cleaned of control characters that had eaten LaTeX backslashes (`$+\x1finfty$`).
+- A call that times out moves to the role's fallback model. Fisica 1's Prepare had hung three times on Luna.
+
+On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
+
 ## Open issues on the Analisi book
 
 Four issues were accepted as exceptions and are visible in the Review tab:
@@ -53,7 +65,6 @@ Authentic exam questions have no hints because the official papers give none. Ge
 
 ## Not done or only partly done
 
-- **Only one chapter is written.** The other 10 are approved in the outline. Start them with *Generate book* from the Manuscript or Run panel. Turn off the first-chapter gate in book settings if you don't want the pause after chapter 1.
 - **Outside research** (the per-book "verified outside material" option) is stored but no research step uses it yet.
 - **Licensed photographs and raster image generation** are not implemented. Figures are function plots or files you import.
 - **MATLAB examples** are not generated. Python examples are, and they run in a permission-restricted Node child process with Pyodide. Node 24 cannot restrict network access, which the comment in `pipeline/python.ts` documents.
@@ -70,11 +81,11 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 
 ## Tests and CI
 
-`npm test` runs 99 content tests and 168 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 110 content tests and 183 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
 
 ## Your running instance
 
-The service runs on the devbox in LAN mode with the default data folder. Open it from your Mac with the token link printed at startup. It is in `/tmp/sb.log`, and the token is stored in `~/.local/share/politost-smart-builder/lan-token`. The Analisi book is there with chapter 6 written, and its approved export is under *Export*.
+The service runs on the devbox in LAN mode with the default data folder. Open it from your Mac with the token link printed at startup. It is in `/tmp/sb.log`, and the token is stored in `~/.local/share/politost-smart-builder/lan-token`. The Analisi book is there with all 11 chapters written. Its approved export of chapter 6 is under *Export*; the full book is being reviewed and fixed.
 
 To restart it yourself:
 
