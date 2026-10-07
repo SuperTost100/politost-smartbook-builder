@@ -18,6 +18,8 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   const chapter = outline?.outline.chapters.find((c) => c.id === chapterId);
   if (!chapter) return { skipped: true };
   const sections = chapter.sections.map((s) => ({ s, head: headRevision(ctx, projectId, s.id) })).filter((x) => x.head);
+  // Nothing written yet: a review would only report that every objective is missing.
+  if (!sections.length) return { skipped: 'no drafted sections' };
   const reviewed = sections.map((x) => x.head!.id).sort().join(',');
   // Re-reviewing identical text wastes quota.
   const prior = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? ORDER BY finished_at DESC LIMIT 1`, projectId, chapterId);

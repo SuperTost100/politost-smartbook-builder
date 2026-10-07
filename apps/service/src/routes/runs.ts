@@ -12,7 +12,7 @@ const ids = z.array(z.string().min(1)).max(2000);
 export function registerRunRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/projects/:id/runs', async (req) => {
     const projectId = projectOf(ctx, req);
-    const body = parse(z.object({ kind: kindSchema, scope: z.object({ chapterIds: ids.optional(), nodeIds: ids.optional() }).optional() }), req.body);
+    const body = parse(z.object({ kind: kindSchema, scope: z.object({ chapterIds: ids.optional(), nodeIds: ids.optional(), questionIds: ids.optional() }).optional() }), req.body);
     return deps.startRun(ctx, projectId, body.kind, body.scope);
   });
 
