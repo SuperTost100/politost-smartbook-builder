@@ -62,7 +62,7 @@ export default function PracticePage() {
           <p className="ui-lede">Exercises that belong to the chapters, and exam practice kept apart so past exams stay recognisable.</p>
         </div>
         <div className="ui-page__actions">
-          <button type="button" className="ui-btn ui-btn--primary" onClick={() => create.mutate()} disabled={create.isPending}><Icon name="plus" />{tab === 'exam' ? 'Add exam question' : 'Add exercise'}</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => create.mutate()} disabled={create.isPending}><Icon name="plus" />{tab === 'exam' ? 'Add exam question' : 'Add exercise'}</button>
         </div>
       </div>
 
@@ -145,7 +145,7 @@ function Coverage({ questions, topics, tab, target, onPick, active }: { question
           return (
             <li key={t.id}>
               <button type="button" className={`pr-cov__item${short ? ' is-short' : ''}`} aria-pressed={active === t.id} onClick={() => onPick(t.id)} title={`Filter by ${t.name}`}>
-                <span className="pr-cov__name ui-wrap">{t.name}{t.priority === 'high' && <span className="ui-badge ui-badge--primary">high</span>}</span>
+                <span className="pr-cov__name ui-wrap">{t.name}{t.priority === 'high' && <span className="ui-badge ui-badge--accent">high</span>}</span>
                 <span className="pr-cov__bar" aria-hidden="true"><span style={{ width: `${pct}%` }} /></span>
                 <span className="pr-cov__n ui-mono">{goal ? `${actual}/${goal}` : actual}<span className="ui-sr"> of {goal || 'no target'}</span></span>
               </button>
@@ -249,7 +249,7 @@ function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pi
       </section>
 
       <div className="ui-row pr-actions">
-        <button type="button" className="ui-btn ui-btn--primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save question</button>
+        <button type="button" className="ui-btn ui-btn--accent" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save question</button>
         <button type="button" className="ui-btn" disabled={verify.isPending || dirty} title={dirty ? 'Save first' : undefined} onClick={() => verify.mutate()}><Icon name="refresh" />Verify again</button>
         <span className="ui-grow" />
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger" onClick={() => setConfirmDelete(true)}><Icon name="trash" />Delete</button>

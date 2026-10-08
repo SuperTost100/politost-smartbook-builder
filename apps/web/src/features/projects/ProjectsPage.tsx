@@ -27,7 +27,7 @@ export function ProjectsPage() {
       <div className="ui-page__head">
         <h1 className="ui-screen-title">Books</h1>
         <div className="ui-page__actions">
-          <button type="button" className="ui-btn ui-btn--primary" onClick={() => navigate('/new')}><Icon name="plus" />New book</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => navigate('/new')}><Icon name="plus" />New book</button>
         </div>
       </div>
 
@@ -45,7 +45,7 @@ export function ProjectsPage() {
       {!isLoading && !error && live.length === 0 && (
         <div className="ui-empty">
           <p className="ui-empty__text">A book starts from your course notes and past exams; add your first one to begin.</p>
-          <button type="button" className="ui-btn ui-btn--primary" onClick={() => navigate('/new')}><Icon name="plus" />New book</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => navigate('/new')}><Icon name="plus" />New book</button>
         </div>
       )}
 

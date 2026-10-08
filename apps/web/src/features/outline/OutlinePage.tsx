@@ -113,7 +113,7 @@ export default function OutlinePage() {
           </button>
           <button type="button" className="ui-btn" onClick={() => save.mutate({ base: baseId })} disabled={!dirty || save.isPending}>Save</button>
           {approved ? <span className="ui-badge ui-badge--success"><Icon name="check" size={12} />Approved</span> : (
-            <button type="button" className="ui-btn ui-btn--primary" onClick={() => approve.mutate()} disabled={!draft || draft.chapters.length === 0 || approve.isPending}>Approve outline</button>
+            <button type="button" className="ui-btn ui-btn--accent" onClick={() => approve.mutate()} disabled={!draft || draft.chapters.length === 0 || approve.isPending}>Approve outline</button>
           )}
         </div>
       </div>
@@ -154,7 +154,7 @@ export default function OutlinePage() {
             <div className="ui-empty">
               <p className="ui-empty__text">{hasSources ? 'No outline yet. Generate one from your sources, or start an empty one and write it yourself.' : 'An outline needs sources first. Add a source, then generate the outline.'}</p>
               <div className="ui-row">
-                {hasSources ? <button type="button" className="ui-btn ui-btn--primary" onClick={() => plan.mutate()} disabled={plan.isPending}>Generate outline</button> : <Link className="ui-btn ui-btn--primary" to={`/books/${pid}/sources`}>Add sources</Link>}
+                {hasSources ? <button type="button" className="ui-btn ui-btn--accent" onClick={() => plan.mutate()} disabled={plan.isPending}>Generate outline</button> : <Link className="ui-btn ui-btn--accent" to={`/books/${pid}/sources`}>Add sources</Link>}
                 <button type="button" className="ui-btn" onClick={() => { initial.current = null; setDraft({ ...emptyOutline(), chapters: [newChapter(1)] }); }}>Start an empty outline</button>
               </div>
             </div>

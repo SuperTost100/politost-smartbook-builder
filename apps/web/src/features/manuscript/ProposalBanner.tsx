@@ -47,7 +47,7 @@ export function ProposalBanner({ pid, nodeId, section, onResolved }: { pid: stri
           </div>
           <button type="button" className="ui-btn ui-btn--sm" onClick={() => setOpen((o) => !o)} aria-expanded={open}>{open ? 'Hide changes' : 'Show changes'}</button>
           <button type="button" className="ui-btn ui-btn--sm" onClick={() => decide.mutate('reject')} disabled={decide.isPending}>Reject</button>
-          <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => decide.mutate('accept')} disabled={decide.isPending || !!stale}>Accept</button>
+          <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={() => decide.mutate('accept')} disabled={decide.isPending || !!stale}>Accept</button>
         </div>
       </div>
       {stale && (

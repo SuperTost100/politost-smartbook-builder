@@ -18,7 +18,7 @@ export function RegenerateDialog({ open, onClose, pid, nodeId, selection, label 
       open={open}
       onClose={onClose}
       title={label}
-      footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="rg-form" className="ui-btn ui-btn--primary" disabled={go.isPending}>{go.isPending ? 'Starting…' : label}</button></>}
+      footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="rg-form" className="ui-btn ui-btn--accent" disabled={go.isPending}>{go.isPending ? 'Starting…' : label}</button></>}
     >
       <form id="rg-form" className="ui-stack" onSubmit={(e) => { e.preventDefault(); go.mutate(); }}>
         {selection && <blockquote className="rg-sel ui-serif">{selection.length > 320 ? `${selection.slice(0, 320)}…` : selection}</blockquote>}

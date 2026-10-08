@@ -19,5 +19,5 @@
 .ex2-item__main { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
 .ex2-item__meta { display: flex; gap: 4px 16px; flex-wrap: wrap; font-size: 13px; }
 .ex2-hash { font-size: 12.5px; text-decoration: none; color: var(--ink-muted); }
-.ex2-hash:hover { color: var(--primary-text); text-decoration: underline; }
+.ex2-hash:hover { color: var(--accent-text); text-decoration: underline; }
 .ex2-details > summary { cursor: pointer; font-size: 13.5px; color: var(--ink-muted); }

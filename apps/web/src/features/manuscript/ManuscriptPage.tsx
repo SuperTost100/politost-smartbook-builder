@@ -184,7 +184,7 @@ export default function ManuscriptPage() {
       <div className="ms-empty">
         <div className="ui-empty">
           <p className="ui-empty__text">The manuscript fills in once an outline exists. Approve the outline, then drafting writes each section here.</p>
-          <Link className="ui-btn ui-btn--primary" to={`/books/${pid}/outline`}>Open outline</Link>
+          <Link className="ui-btn ui-btn--accent" to={`/books/${pid}/outline`}>Open outline</Link>
         </div>
       </div>
     );
@@ -247,7 +247,7 @@ export default function ManuscriptPage() {
                   </span>
                   <div className="ui-banner__actions">
                     <button type="button" className="ui-btn ui-btn--sm" onClick={() => setCompareOpen(true)}>Compare</button>
-                    <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={() => void editor.keepMine()} disabled={editor.saving}>Keep my version (save over latest)</button>
+                    <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={() => void editor.keepMine()} disabled={editor.saving}>Keep my version (save over latest)</button>
                     <button type="button" className="ui-btn ui-btn--sm" onClick={editor.discard} disabled={editor.saving}>Discard my draft</button>
                   </div>
                 </div>
@@ -266,7 +266,7 @@ export default function ManuscriptPage() {
             {!section.current && (
               <div className="ui-empty ms-nodraft">
                 <p className="ui-empty__text">This section has no text yet. Drafting writes it from your sources and cites the pages it used.</p>
-                <button type="button" className="ui-btn ui-btn--primary" onClick={() => draftSection.mutate()} disabled={draftSection.isPending}>Draft this section</button>
+                <button type="button" className="ui-btn ui-btn--accent" onClick={() => draftSection.mutate()} disabled={draftSection.isPending}>Draft this section</button>
               </div>
             )}
 

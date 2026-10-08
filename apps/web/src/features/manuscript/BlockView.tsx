@@ -121,7 +121,7 @@ function BlockEditor({ block, edit }: { block: MappedBlock; edit: BlockEdit }) {
       <SourceEditor value={text} onChange={edit.onChange} onSave={() => { if (!empty) edit.onSave(); }} onCancel={edit.onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
       <LivePreview source={text} />
       <div className="ms-edit__actions">
-        <button type="button" className="ui-btn ui-btn--primary ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || unchanged || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
+        <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || unchanged || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
         <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Cancel</button>
         <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves, <kbd className="ui-kbd">Esc</kbd> cancels</span>
         <span className="ui-grow" />

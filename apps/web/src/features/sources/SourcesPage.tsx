@@ -93,7 +93,7 @@ export default function SourcesPage() {
         </div>
         <div className="ui-page__actions">
           {readyCount > 0 && <button type="button" className="ui-btn" onClick={() => prepare.mutate()} disabled={prepare.isPending} title="Finds the topics in your sources so the outline can cover them">{topicCount ? 'Map topics again' : 'Map topics'}</button>}
-          <Link className={`ui-btn${readyCount ? ' ui-btn--primary' : ''}`} to={`/books/${pid}/outline`}>Go to outline</Link>
+          <Link className={`ui-btn${readyCount ? ' ui-btn--accent' : ''}`} to={`/books/${pid}/outline`}>Go to outline</Link>
         </div>
       </div>
 
@@ -118,7 +118,7 @@ export default function SourcesPage() {
                 </select>
               </div>
               <input ref={fileInput} type="file" multiple accept={ACCEPT} className="ui-sr" tabIndex={-1} aria-label="Choose source files" data-testid="source-file-input" onChange={(e) => { addFiles(e.target.files); e.target.value = ''; }} />
-              <button type="button" className="ui-btn ui-btn--primary" onClick={() => fileInput.current?.click()} disabled={upload.isPending}>{upload.isPending ? <><span className="ui-spinner" />Uploading…</> : 'Choose files'}</button>
+              <button type="button" className="ui-btn ui-btn--accent" onClick={() => fileInput.current?.click()} disabled={upload.isPending}>{upload.isPending ? <><span className="ui-spinner" />Uploading…</> : 'Choose files'}</button>
               <button type="button" className="ui-btn" onClick={() => setLinkOpen(true)}><Icon name="link" />Add link</button>
             </div>
           </div>
@@ -197,7 +197,7 @@ function AddLink({ open, onClose, projectId, defaultRole, onAdded }: { open: boo
       open={open}
       onClose={onClose}
       title="Add link"
-      footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="so-link-form" className="ui-btn ui-btn--primary" disabled={!valid || add.isPending}>Add link</button></>}
+      footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="so-link-form" className="ui-btn ui-btn--accent" disabled={!valid || add.isPending}>Add link</button></>}
     >
       <form id="so-link-form" className="ui-stack" onSubmit={(e) => { e.preventDefault(); if (valid) add.mutate(); }}>
         <div className="ui-field">

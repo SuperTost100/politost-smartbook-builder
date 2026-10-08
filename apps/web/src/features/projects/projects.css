@@ -8,17 +8,17 @@
 .pj-head { display: flex; flex-direction: column; gap: 4px; }
 .pj-title { font-family: var(--font-sans); font-size: 22px; line-height: 1.3; font-weight: 600; overflow-wrap: anywhere; }
 .pj-title a { color: var(--ink); text-decoration: none; }
-.pj-title a:hover { color: var(--primary-text); }
+.pj-title a:hover { color: var(--accent-text); }
 .pj-card--lead .pj-title { font-size: 28px; line-height: 34px; letter-spacing: -0.01em; }
 .pj-meta { display: flex; flex-wrap: wrap; gap: 4px 8px; color: var(--ink-muted); font-size: 14px; }
 
 .pj-track { list-style: none; margin: 0; padding: 0; display: flex; gap: 0; align-items: center; flex-wrap: wrap; row-gap: 8px; }
 .pj-step { display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--ink-muted); }
 .pj-step + .pj-step::before { content: ''; width: 24px; height: 2px; background: var(--border); margin: 0 8px; border-radius: 1px; }
-.pj-step.is-done + .pj-step::before, .pj-step.is-current::before { background: var(--primary); }
-.pj-step__mark { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--on-primary); flex-shrink: 0; }
-.pj-step.is-done .pj-step__mark { background: var(--primary); border-color: var(--primary); }
-.pj-step.is-current .pj-step__mark { border-color: var(--primary); box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 8px var(--primary); }
+.pj-step.is-done + .pj-step::before, .pj-step.is-current::before { background: var(--accent); }
+.pj-step__mark { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center; color: var(--on-accent); flex-shrink: 0; }
+.pj-step.is-done .pj-step__mark { background: var(--accent); border-color: var(--accent); }
+.pj-step.is-current .pj-step__mark { border-color: var(--accent); box-shadow: inset 0 0 0 3px var(--surface), inset 0 0 0 8px var(--accent); }
 .pj-step.is-current .pj-step__label { color: var(--ink); font-weight: 600; }
 .pj-step.is-done .pj-step__label { color: var(--ink); }
 

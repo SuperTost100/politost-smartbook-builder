@@ -110,7 +110,7 @@ export default function ExportPage() {
         <div className="ui-row">
           <button type="button" className="ui-btn" onClick={() => validate.mutate()} disabled={validate.isPending}>{validate.isPending ? <><span className="ui-spinner" />Validating…</> : 'Validate'}</button>
           <button type="button" className="ui-btn" onClick={() => exportBook.mutate(false)} disabled={!!draftReason || exportBook.isPending}>Export draft</button>
-          <button type="button" className="ui-btn ui-btn--primary" onClick={() => exportBook.mutate(true)} disabled={!!approveReason || exportBook.isPending} aria-describedby={approveReason ? 'ex2-why' : undefined}>Approve and export</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => exportBook.mutate(true)} disabled={!!approveReason || exportBook.isPending} aria-describedby={approveReason ? 'ex2-why' : undefined}>Approve and export</button>
         </div>
         {approveReason && <p id="ex2-why" className="ex2-why ui-muted">Approve and export is off: {approveReason}{blockerIssues > 0 && <> <Link to={`/books/${pid}/review`}>Open review</Link></>}</p>}
         {draftReason && <p className="ex2-why ui-muted">Export draft is off: {draftReason}</p>}
@@ -150,7 +150,7 @@ function ExportItem({ row }: { row: ExportRow }) {
         </div>
         <details className="ex2-details"><summary>Report</summary><ReportView report={row.report} /></details>
       </div>
-      <a className="ui-btn ui-btn--primary" href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: row.id } })} download><Icon name="download" />Download .ptsb</a>
+      <a className="ui-btn ui-btn--accent" href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: row.id } })} download><Icon name="download" />Download .ptsb</a>
     </li>
   );
 }

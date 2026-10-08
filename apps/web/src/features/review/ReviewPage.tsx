@@ -99,12 +99,12 @@ export default function ReviewPage() {
         <label><span className="ui-sr">Status</span><select className="ui-select ui-select--sm" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Any status</option>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
         <span className="ui-grow" />
         <label className="ui-check"><input type="checkbox" checked={allPicked} onChange={(e) => setPicked(e.target.checked ? new Set(shown.map((i) => i.id)) : new Set())} disabled={shown.length === 0} />Select all shown</label>
-        <button type="button" className="ui-btn ui-btn--primary" disabled={fixable.length === 0 || fixMany.isPending} onClick={() => fixMany.mutate(fixable.map((i) => i.id))}><Icon name="sparkle" />Fix selected issues{fixable.length ? ` (${fixable.length})` : ''}</button>
+        <button type="button" className="ui-btn ui-btn--accent" disabled={fixable.length === 0 || fixMany.isPending} onClick={() => fixMany.mutate(fixable.map((i) => i.id))}><Icon name="sparkle" />Fix selected issues{fixable.length ? ` (${fixable.length})` : ''}</button>
       </div>
 
       {issuesQ.isLoading && <div className="ui-skeleton" style={{ height: 160 }} />}
       {issuesQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(issuesQ.error)}</div>}
-      {!issuesQ.isLoading && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--primary" onClick={() => review.mutate()} disabled={review.isPending}>Run review</button></div>}
+      {!issuesQ.isLoading && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate()} disabled={review.isPending}>Run review</button></div>}
       {all.length > 0 && shown.length === 0 && <p className="ui-muted">No issues match these filters.</p>}
 
       <ul className="rv-list">

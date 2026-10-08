@@ -4,7 +4,7 @@
   display: flex; align-items: flex-start; gap: 6px; width: 100%; padding: 7px 8px; border: 0; background: none; border-radius: var(--radius-sm); cursor: pointer; text-align: left;
   font-size: 14px; font-weight: 650; color: var(--ink); margin-top: 6px;
 }
-.rl-chapter__head:hover { background: var(--primary-soft); }
+.rl-chapter__head:hover { background: var(--accent-soft); }
 .rl-chapter__head svg { margin-top: 3px; color: var(--ink-muted); flex-shrink: 0; }
 .rl-chapter__num { color: var(--ink-muted); font-size: 12px; margin-top: 2px; }
 .rl-chapter__title { font: 600 14px/20px var(--font-sans); }
@@ -12,12 +12,12 @@
 .rl-section {
   display: flex; align-items: flex-start; gap: 8px; padding: 6px 8px; border-radius: var(--radius-sm); text-decoration: none; color: var(--ink); font-size: 14px; line-height: 1.35;
 }
-.rl-section:hover { background: var(--primary-soft); color: var(--ink); }
-.rl-section[aria-current="page"] { background: var(--primary-soft); color: var(--primary-text); font-weight: 600; }
+.rl-section:hover { background: var(--accent-soft); color: var(--ink); }
+.rl-section[aria-current="page"] { background: var(--accent-soft); color: var(--accent-text); font-weight: 600; }
 .rl-section .rl-glyph { margin-top: 3px; flex-shrink: 0; }
 .rl-section__num { color: var(--ink-muted); font-size: 12px; }
 .rl-glyph--none { color: var(--ink-muted); }
-.rl-glyph--drafting { color: var(--primary-text); animation: ui-spin 1.1s linear infinite; }
+.rl-glyph--drafting { color: var(--accent-text); animation: ui-spin 1.1s linear infinite; }
 .rl-glyph--done { color: var(--success); }
 .rl-glyph--issue { color: var(--danger); }
 .rl-glyph--proposal { color: var(--info); }

@@ -40,7 +40,7 @@ export function App() {
             <Route path="export" element={<ExportPage />} />
             <Route path="run" element={<RunPage />} />
           </Route>
-          <Route path="*" element={<div className="ui-page"><h1 className="ui-screen-title">Page not found</h1><p className="ui-lede">This address does not match a screen. Go back to your books.</p><a className="ui-btn ui-btn--primary" style={{ alignSelf: 'flex-start' }} href="/">Open books</a></div>} />
+          <Route path="*" element={<div className="ui-page"><h1 className="ui-screen-title">Page not found</h1><p className="ui-lede">This address does not match a screen. Go back to your books.</p><a className="ui-btn ui-btn--accent" style={{ alignSelf: 'flex-start' }} href="/">Open books</a></div>} />
         </Route>
       </Routes>
     </Suspense>

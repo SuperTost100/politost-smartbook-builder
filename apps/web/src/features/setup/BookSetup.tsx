@@ -168,7 +168,7 @@ export default function BookSetup() {
       {error && <div className="ui-banner ui-banner--danger" role="alert"><div className="ui-banner__body"><span className="ui-banner__title">The book was not saved</span><span>{error}</span></div></div>}
 
       <div className="ui-row su-actions">
-        <button type="submit" className="ui-btn ui-btn--primary" disabled={!valid || save.isPending}>{editing ? 'Save setup' : 'Create book'}</button>
+        <button type="submit" className="ui-btn ui-btn--accent" disabled={!valid || save.isPending}>{editing ? 'Save setup' : 'Create book'}</button>
         <button type="button" className="ui-btn" onClick={() => navigate(editing ? `/books/${id}/sources` : '/')}>Cancel</button>
         {!valid && <span className="ui-muted su-why">{!title.trim() ? 'Add a title.' : !subject.trim() ? 'Add a subject.' : !slugValid ? 'Fix the slug.' : 'Add a language.'}</span>}
       </div>

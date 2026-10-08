@@ -63,7 +63,7 @@ export function ConfirmDialog(props: {
       footer={
         <>
           <button type="button" className="ui-btn" onClick={props.onClose}>Cancel</button>
-          <button type="button" className={`ui-btn ${props.danger ? 'ui-btn--danger-solid' : 'ui-btn--primary'}`} disabled={props.busy} onClick={props.onConfirm}>{props.confirmLabel}</button>
+          <button type="button" className={`ui-btn ${props.danger ? 'ui-btn--danger-solid' : 'ui-btn--accent'}`} disabled={props.busy} onClick={props.onConfirm}>{props.confirmLabel}</button>
         </>
       }
     >

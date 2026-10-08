@@ -104,7 +104,7 @@ export function RunView({ projectId }: { projectId: string }) {
         <div className="ui-empty">
           <p className="ui-empty__text">No runs yet. A run reads your sources, plans the outline or drafts the book, and keeps going while this window is closed.</p>
           <div className="ui-row">
-            <button type="button" className="ui-btn ui-btn--primary" disabled={start.isPending} onClick={() => start.mutate('prepare')}>Prepare sources</button>
+            <button type="button" className="ui-btn ui-btn--accent" disabled={start.isPending} onClick={() => start.mutate('prepare')}>Prepare sources</button>
             {canGenerate && <button type="button" className="ui-btn" onClick={() => start.mutate('generate')}>Generate book</button>}
           </div>
         </div>
@@ -136,11 +136,11 @@ export function RunView({ projectId }: { projectId: string }) {
         <div className="ui-row">
           {run.status === 'running' && <button type="button" className="ui-btn" onClick={() => control.mutate('pause')} disabled={control.isPending}><Icon name="pause" />Pause</button>}
           {run.status === 'pausing' && <button type="button" className="ui-btn" disabled><span className="ui-spinner" />Pausing…</button>}
-          {run.status === 'paused' && <button type="button" className="ui-btn ui-btn--primary" onClick={() => control.mutate('resume')} disabled={control.isPending}><Icon name="play" />Resume</button>}
+          {run.status === 'paused' && <button type="button" className="ui-btn ui-btn--accent" onClick={() => control.mutate('resume')} disabled={control.isPending}><Icon name="play" />Resume</button>}
           {run.status === 'cancelling' && <button type="button" className="ui-btn" disabled><span className="ui-spinner" />Cancelling…</button>}
           {live && run.status !== 'cancelling' && <button type="button" className="ui-btn ui-btn--danger" onClick={() => setConfirmCancel(true)}>Cancel</button>}
           {failedTasks > 0 && <button type="button" className="ui-btn" onClick={() => control.mutate('retry')} disabled={control.isPending}><Icon name="refresh" />Retry failed</button>}
-          {!live && canGenerate && <button type="button" className="ui-btn ui-btn--primary" onClick={() => start.mutate('generate')}>Generate book</button>}
+          {!live && canGenerate && <button type="button" className="ui-btn ui-btn--accent" onClick={() => start.mutate('generate')}>Generate book</button>}
         </div>
         {run.status === 'pausing' && <p className="rn-note" aria-live="polite">Pausing: {runningNow} running {runningNow === 1 ? 'task is' : 'tasks are'} finishing. Nothing new starts, and the run shows Paused when they are done.</p>}
         {run.status === 'paused' && <p className="rn-note">Paused. Resume continues with the queued tasks; finished work is kept.</p>}
@@ -153,7 +153,7 @@ export function RunView({ projectId }: { projectId: string }) {
           <h3 className="ui-panel-title">{waiting.action}</h3>
           <p>{waiting.reason}</p>
           <div className="ui-row">
-            <button type="button" className="ui-btn ui-btn--primary" disabled={resolve.isPending} onClick={() => resolve.mutate({ taskId: waiting.taskId, decision: 'continue' })}>Continue</button>
+            <button type="button" className="ui-btn ui-btn--accent" disabled={resolve.isPending} onClick={() => resolve.mutate({ taskId: waiting.taskId, decision: 'continue' })}>Continue</button>
             <button type="button" className="ui-btn" disabled={resolve.isPending} onClick={() => resolve.mutate({ taskId: waiting.taskId, decision: 'skip' })}>Skip</button>
           </div>
           <p className="rn-note">Continue lets the run go on. Skip leaves this step out and goes on without it.</p>

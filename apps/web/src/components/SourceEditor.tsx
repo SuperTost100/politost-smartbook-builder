@@ -47,10 +47,10 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
         EditorView.updateListener.of((u) => { if (u.docChanged) cb.current.onChange(u.state.doc.toString()); }),
         EditorView.theme({
           '&': { color: 'var(--ink)', backgroundColor: 'var(--surface)', fontSize: '14px', border: '1px solid var(--border)', borderRadius: '8px' },
-          '&.cm-focused': { outline: '2px solid var(--primary)', outlineOffset: '1px' },
+          '&.cm-focused': { outline: '2px solid var(--accent)', outlineOffset: '1px' },
           '.cm-scroller': { fontFamily: 'var(--font-mono)', lineHeight: '1.6', minHeight: `${minRows * 22}px`, maxHeight: '420px' },
-          '.cm-content': { padding: '10px 12px', caretColor: 'var(--primary)' },
-          '.cm-cursor': { borderLeftColor: 'var(--primary)' },
+          '.cm-content': { padding: '10px 12px', caretColor: 'var(--accent)' },
+          '.cm-cursor': { borderLeftColor: 'var(--accent)' },
           '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': { backgroundColor: 'var(--marker) !important' },
           '.cm-placeholder': { color: 'var(--ink-muted)' },
         }),

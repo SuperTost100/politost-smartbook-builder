@@ -102,7 +102,7 @@ function FigureCard({ a, sections }: { a: Asset; sections: { id: string; label: 
         <div className="ui-field"><label className="ui-field__label" htmlFor={`sec-${a.id}`}>Section</label>
           <select id={`sec-${a.id}`} className="ui-select ui-select--sm" value={nodeId} onChange={(e) => setNodeId(e.target.value)}><option value="">Not placed</option>{sections.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></div>
         <Checks checks={a.checks} />
-        <div><button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save figure</button></div>
+        <div><button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save figure</button></div>
       </div>
     </article>
   );
@@ -163,7 +163,7 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
         </div>
       </div>
       <div className="ui-row">
-        <button type="button" className="ui-btn ui-btn--sm ui-btn--primary" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate()}>Save</button>
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate()}>Save</button>
         <button type="button" className="ui-btn ui-btn--sm" disabled={!dirty} onClick={() => setText(JSON.stringify(e.payload, null, 2))}>Revert</button>
         <span className="ui-grow" />
         <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost ui-btn--danger" onClick={() => setConfirm(true)}><Icon name="trash" />Delete</button>

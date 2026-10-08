@@ -26,7 +26,7 @@
 .cn-probe.is-bad { color: var(--danger); }
 .cn-fieldset { border: 0; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .cn-radio { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; font-size: 14px; }
-.cn-radio input { margin-top: 4px; accent-color: var(--primary); }
+.cn-radio input { margin-top: 4px; accent-color: var(--accent); }
 .cn-conc { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
 .cn-dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 0; align-items: center; }
 .cn-dl dt { color: var(--ink-muted); font-size: 14px; }
