@@ -1,17 +1,17 @@
 .cn-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 16px; align-items: start; }
 .cn-card { padding: 16px 18px; display: flex; flex-direction: column; gap: 10px; min-width: 0; }
 .cn-card__head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-.cn-advice { font-size: 14px; padding: 8px 12px; border-radius: var(--radius-sm); border: 1px solid var(--border); background: var(--surface-2); }
-.cn-advice--success { background: var(--success-soft); border-color: color-mix(in srgb, var(--success) 30%, var(--border)); }
-.cn-advice--warning { background: var(--warning-soft); border-color: color-mix(in srgb, var(--warning) 40%, var(--border)); }
-.cn-advice--danger { background: var(--danger-soft); border-color: color-mix(in srgb, var(--danger) 35%, var(--border)); }
+.cn-advice { font-size: 14px; padding: 8px 12px; border-radius: var(--radius-md); border: 0; background: var(--surface-raised); }
+.cn-advice--success { background: var(--success-soft); }
+.cn-advice--warning { background: var(--warning-soft); }
+.cn-advice--danger { background: var(--danger-soft); }
 .cn-cmd { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cn-cmd .ui-code { flex: 1; min-width: 0; padding: 6px 10px; }
 .cn-models { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 2px; font-size: 13.5px; }
 .cn-caps .ui-badge { font-weight: 500; }
 .cn-section { display: flex; flex-direction: column; gap: 14px; }
 .cn-section__head { display: flex; justify-content: space-between; gap: 12px; align-items: flex-start; flex-wrap: wrap; }
-.cn-state { font-size: 13px; color: var(--muted); min-height: 20px; }
+.cn-state { font-size: 13px; color: var(--ink-muted); min-height: 20px; }
 .cn-state.is-error { color: var(--danger); }
 .cn-roles { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
 .cn-role { display: grid; grid-template-columns: minmax(220px, 1.2fr) minmax(0, 1fr) minmax(0, 1fr); gap: 20px; padding: 14px 0; border-top: 1px solid var(--border); align-items: start; }
@@ -29,7 +29,7 @@
 .cn-radio input { margin-top: 4px; accent-color: var(--primary); }
 .cn-conc { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
 .cn-dl { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px 12px; margin: 0; align-items: center; }
-.cn-dl dt { color: var(--muted); font-size: 14px; }
+.cn-dl dt { color: var(--ink-muted); font-size: 14px; }
 .cn-dl dd { margin: 0; min-width: 0; }
 .cn-note { font-size: 13px; margin-top: 6px; }
 @media (max-width: 900px) { .cn-role { grid-template-columns: minmax(0, 1fr); gap: 10px; } }

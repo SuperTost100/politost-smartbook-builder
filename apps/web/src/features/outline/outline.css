@@ -4,21 +4,21 @@
 .ol-hint { font-size: 13px; }
 .ol-chapters { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 12px; }
 .ol-chapter { overflow: hidden; }
-.ol-chapter__head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.ol-chapter__head { display: flex; align-items: center; gap: 8px; padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--surface-raised); }
 .ol-chapter__body { padding: 14px; display: flex; flex-direction: column; gap: 14px; }
 .ol-chapter__body > .ui-btn { align-self: flex-start; }
-.ol-num { color: var(--muted); font-size: 12px; min-width: 28px; }
+.ol-num { color: var(--ink-muted); font-size: 12px; min-width: 28px; }
 .ol-title { flex: 1; min-width: 0; }
-.ol-title--chapter { font-family: var(--font-serif); font-size: 17px; font-weight: 700; }
+.ol-title--chapter { font-family: var(--font-sans); font-size: 17px; font-weight: 600; }
 .ol-ctl { display: flex; gap: 2px; flex-shrink: 0; }
 .ol-two { display: grid; grid-template-columns: minmax(0, 1fr) 200px; gap: 14px; }
-.ol-small-label { font-size: 13px; color: var(--muted); font-weight: 500; }
+.ol-small-label { font-size: 13px; color: var(--ink-muted); font-weight: 500; }
 .ol-sections { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 6px; }
 .ol-section { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .ol-section__head { display: flex; align-items: center; gap: 8px; padding: 6px 8px; flex-wrap: wrap; }
 .ol-section__head .ol-title { min-width: 180px; }
 .ol-depth { width: 108px; }
-.ol-section__body { padding: 10px 12px 12px 44px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 12px; background: var(--surface-2); }
+.ol-section__body { padding: 10px 12px 12px 44px; border-top: 1px dashed var(--border); display: flex; flex-direction: column; gap: 12px; background: var(--surface-raised); }
 .ol-subs { display: flex; flex-direction: column; gap: 6px; }
 .ol-sub { display: flex; gap: 4px; align-items: center; }
 .ol-topic-list { max-height: 160px; overflow: auto; border: 1px solid var(--border); border-radius: var(--radius-sm); padding: 6px 10px; display: flex; flex-direction: column; background: var(--surface); }
@@ -33,13 +33,13 @@
 .ol-cov-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .ol-cov { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .ol-topic { padding: 10px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); display: flex; flex-direction: column; gap: 4px; }
-.ol-topic.is-gap { border-color: color-mix(in srgb, var(--warning) 50%, var(--border)); background: var(--warning-soft); }
+.ol-topic.is-gap { border-color: transparent; background: var(--warning-soft); }
 .ol-topic__top { display: flex; justify-content: space-between; gap: 8px; align-items: flex-start; }
 .ol-topic__name { font-weight: 600; font-size: 14px; }
 .ol-topic__sessions { font-size: 13px; }
 .ol-topic__row { display: flex; gap: 6px; align-items: center; }
 .ol-topic__prio { flex: 1; }
-.ol-topic__where { font-size: 12.5px; color: var(--muted); overflow-wrap: anywhere; }
+.ol-topic__where { font-size: 12.5px; color: var(--ink-muted); overflow-wrap: anywhere; }
 .ol-exclude { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
 .ol-exclude .ui-input { flex: 1; min-width: 120px; }
 

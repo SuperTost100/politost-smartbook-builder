@@ -1,6 +1,7 @@
 // Adapted from politost-smartbook (AGPL-3.0)
 import { Fragment, useMemo } from 'react';
-import { parseContentBlocks, renderNumberedFormulaHtml, type FormulaRef, type InlineSegment } from '@politost/content-core';
+import { parseContentBlocks, type FormulaRef, type InlineSegment } from '@politost/content-core';
+import { Formula } from './Formula';
 import { FormulaTooltip } from './FormulaTooltip';
 import { SmartbookFigure } from './SmartbookFigure';
 
@@ -25,7 +26,7 @@ function InlineFlow({ segments, formulaIndex }: { segments: InlineSegment[]; for
         }
         if (seg.type === 'link') {
           const link = (
-            <button type="button" className="smartbook-ref" data-ref={seg.ref}>
+            <button type="button" className="smartbook-ref sb-link" data-ref={seg.ref}>
               {seg.label}
             </button>
           );
@@ -42,7 +43,7 @@ export function ContentFlow({ content, formulaIndex, resolveAsset, onRefClick }:
   const blocks = useMemo(() => parseContentBlocks(content), [content]);
 
   return (
-    <div className="content-flow" onClick={onRefClick}>
+    <div className="content-flow sb-prose" onClick={onRefClick}>
       {blocks.map((block, i) => {
         if (block.type === 'h3') {
           return (
@@ -72,14 +73,7 @@ export function ContentFlow({ content, formulaIndex, resolveAsset, onRefClick }:
         if (block.type === 'formula') {
           const f = formulaIndex?.get(block.formulaId);
           if (f) {
-            return (
-              <div
-                key={i}
-                className="numbered-formula"
-                data-formula-id={f.id}
-                dangerouslySetInnerHTML={{ __html: renderNumberedFormulaHtml(f, 'screen') }}
-              />
-            );
+            return <Formula key={i} formula={f} />;
           }
           return (
             <p key={i} className="formula-missing" data-formula-id={block.formulaId}>

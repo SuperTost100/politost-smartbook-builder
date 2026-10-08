@@ -178,7 +178,7 @@ function renderSource(ctx: AppContext, row: ResourceRow): string {
   throw new ExtractError('This source has no page images.', 404, 'not_found');
 }
 
-/** PNG bytes of a page, cached on disk by scale. If highlight is given, the matching passage is marked in translucent orange. */
+/** PNG bytes of a page, cached on disk by scale. If highlight is given, the matching passage is marked in translucent gold. */
 export async function renderPageImage(ctx: AppContext, resourceId: string, idx: number, opts: { scale?: number; highlight?: string } = {}): Promise<Buffer> {
   const row = loadResource(ctx, resourceId);
   const src = renderSource(ctx, row);

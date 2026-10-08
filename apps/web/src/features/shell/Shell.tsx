@@ -74,7 +74,7 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
             <>
               {(projects.data ?? []).filter((p) => !p.archivedAt).map((p) => (
                 <button key={p.id} type="button" role="menuitem" className="ui-menu__item" aria-current={p.id === bookId} onClick={() => { close(); navigate(`/books/${p.id}/sources`); }}>
-                  <span className="ui-serif ui-wrap">{p.title}</span>
+                  <span className="ui-wrap">{p.title}</span>
                 </button>
               ))}
               <div className="ui-menu__sep" />
@@ -87,14 +87,16 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
       )}
 
       {bookId && (
-        <nav className="sh-tabs" aria-label="Book sections">
-          {TABS.map((t) => (
-            <NavLink key={t.to} to={`/books/${bookId}/${t.to}`} className="sh-tab">
-              {t.label}
-              {t.to === 'review' && openIssues > 0 && <span className="sh-tab__count" aria-label={`${openIssues} open issues`}>{openIssues}</span>}
-            </NavLink>
-          ))}
-        </nav>
+        <div className="sh-tabs-row">
+          <nav className="sh-tabs" aria-label="Book sections">
+            {TABS.map((t) => (
+              <NavLink key={t.to} to={`/books/${bookId}/${t.to}`} className="sh-tab">
+                {t.label}
+                {t.to === 'review' && openIssues > 0 && <span className="sh-tab__count" aria-label={`${openIssues} open issues`}>{openIssues}</span>}
+              </NavLink>
+            ))}
+          </nav>
+        </div>
       )}
 
       <div className="sh-right">

@@ -1,6 +1,6 @@
 .se-host { min-width: 0; }
 .se-host .cm-editor { max-width: 100%; }
-.se-preview { border: 1px dashed var(--border); border-radius: var(--radius-sm); padding: 12px 14px; background: var(--surface); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.se-preview { border: 1px solid var(--border); border-radius: var(--radius-md); padding: 12px 14px; background: var(--page); display: flex; flex-direction: column; gap: 8px; min-width: 0; }
 .se-preview .content-flow { font-size: 17px; }
 .se-errors { margin: 0; padding: 0 0 0 18px; color: var(--danger); font-size: 13px; }
 .se-errors code { background: var(--danger-soft); padding: 0 4px; border-radius: 4px; }

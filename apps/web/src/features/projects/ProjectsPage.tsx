@@ -122,9 +122,9 @@ function ProjectCard({ p, lead }: { p: ProjectSummary; lead: boolean }) {
 
       <div className="pj-side">
         {action.kind === 'download' && latest ? (
-          <a className="ui-btn ui-btn--primary" href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: latest.id } })} download><Icon name="download" />Download .ptsb</a>
+          <a className="ui-btn" href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: latest.id } })} download><Icon name="download" />Download .ptsb</a>
         ) : (
-          <Link className="ui-btn ui-btn--primary" to={action.kind === 'download' ? action.to : action.to}>{action.kind === 'download' ? 'Export book' : action.label}</Link>
+          <Link className="ui-btn" to={action.kind === 'download' ? action.to : action.to}>{action.kind === 'download' ? 'Export book' : action.label}</Link>
         )}
         <div className="ui-row pj-secondary">
           <Link className="ui-btn ui-btn--ghost ui-btn--sm" to={`/books/${p.id}/settings`}>Setup</Link>
@@ -136,7 +136,7 @@ function ProjectCard({ p, lead }: { p: ProjectSummary; lead: boolean }) {
       <ConfirmDialog
         open={confirmDelete}
         title="Delete this book"
-        message={<>This removes <strong className="ui-serif">{p.title}</strong>, its sources, drafts and exports from this computer. It cannot be undone.</>}
+        message={<>This removes <strong>{p.title}</strong>, its sources, drafts and exports from this computer. It cannot be undone.</>}
         confirmLabel="Delete book"
         danger
         busy={remove.isPending}

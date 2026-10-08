@@ -96,9 +96,9 @@ function render(file: string, idx: number, scale: number, highlight: string | un
   if (rects.length) {
     const path = new mupdf.Path();
     for (const r of rects) path.rect(r[0], r[1], r[2], r[3]);
-    // Multiply keeps dark text dark; orange 232,93,38 at 35 % tints the paper.
+    // Multiply keeps dark text dark; the reader's bookmark gold 244,185,66 at 45 % tints the paper.
     dev.beginGroup(bounds, mupdf.ColorSpace.DeviceRGB, true, false, 'Multiply', 1);
-    dev.fillPath(path, false, mupdf.Matrix.identity, mupdf.ColorSpace.DeviceRGB, [232 / 255, 93 / 255, 38 / 255], 0.35);
+    dev.fillPath(path, false, mupdf.Matrix.identity, mupdf.ColorSpace.DeviceRGB, [244 / 255, 185 / 255, 66 / 255], 0.45);
     dev.endGroup();
   }
   dev.close();

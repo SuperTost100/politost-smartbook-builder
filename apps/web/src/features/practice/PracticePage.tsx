@@ -7,6 +7,7 @@ import { qk, useManuscript, useProject, useQuestions, useTopics } from '../../li
 import { plural } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
+import { DifficultyTag } from '../../reader/DifficultyTag';
 import { ConfirmDialog } from '../../components/Dialog';
 import { LivePreview, SourceEditor } from '../../components/SourceEditor';
 import { useToast } from '../../components/Toast';
@@ -113,7 +114,7 @@ export default function PracticePage() {
                       <span className="ui-mono pr-item__id">{q.number ? `#${q.number}` : q.id.slice(0, 6)}</span>
                       <span className={`ui-badge ui-badge--${STATUS_TONE[q.status] || 'neutral'}`}>{q.status}</span>
                       <span className="ui-badge">{q.origin}</span>
-                      <span className={`difficulty difficulty-${q.difficulty}`}>{q.difficulty}</span>
+                      <DifficultyTag level={q.difficulty} />
                     </span>
                     {groups && <span className="ui-muted pr-item__group">{q.examGroup}</span>}
                     <span className="pr-item__text ui-serif">{excerpt(q.statement) || <em className="ui-muted">Empty statement</em>}</span>

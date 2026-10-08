@@ -1,0 +1,130 @@
+/* PoliTost Smartbook — design tokens. Generated from tokens.json; change values there first. */
+@font-face { font-family: 'Source Serif 4'; src: url('./fonts/SourceSerif4-Variable.woff2') format('woff2-variations'); font-weight: 200 900; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Source Serif 4'; src: url('./fonts/SourceSerif4-Variable-Italic.woff2') format('woff2-variations'); font-weight: 200 900; font-style: italic; font-display: swap; }
+@font-face { font-family: 'Figtree'; src: url('./fonts/Figtree-Variable.woff2') format('woff2-variations'); font-weight: 300 900; font-style: normal; font-display: swap; }
+@font-face { font-family: 'Figtree'; src: url('./fonts/Figtree-Variable-Italic.woff2') format('woff2-variations'); font-weight: 300 900; font-style: italic; font-display: swap; }
+@font-face { font-family: 'JetBrains Mono'; src: url('./fonts/JetBrainsMono-Variable.woff2') format('woff2-variations'); font-weight: 100 800; font-style: normal; font-display: swap; }
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --bg: #f6f5f1;
+  --page: #fdfcf8;
+  --surface: #ffffff;
+  --surface-raised: #efede7;
+  --surface-overlay: #ffffff;
+  --border: #e4e2db;
+  --border-control: #7e8492;
+  --ink: #15181e;
+  --ink-muted: #50576a;
+  --ink-subtle: #5f6675;
+  --on-ink: #ffffff;
+  --primary: #0f6e66;
+  --primary-hover: #0c5f58;
+  --primary-active: #0a514b;
+  --on-primary: #ffffff;
+  --primary-text: #0b665f;
+  --primary-soft: #e1f0ec;
+  --star: #b7790c;
+  --star-text: #8a5a00;
+  --star-soft: #fbf0d6;
+  --info: #2451c7;
+  --info-soft: #e5ecfc;
+  --success: #0f7a55;
+  --success-soft: #dcf3e9;
+  --danger: #c0343c;
+  --danger-soft: #fbe3e3;
+  --focus-ring: #0b665f;
+  --code-bg: #f3f1eb;
+  --scrim: rgba(21, 24, 30, 0.40);
+  --link: var(--primary-text);
+  --hint: var(--star-text);
+  --solution: var(--info);
+  --chart-1: var(--primary-text);
+  --chart-2: var(--info);
+  --chart-3: var(--star);
+  --chart-grid: var(--border);
+  --shadow-card: 0 1px 2px rgba(21, 24, 30, 0.06);
+  --shadow-overlay: 0 12px 32px rgba(21, 24, 30, 0.14);
+  --shadow-header: 0 1px 0 rgba(21, 24, 30, 0.06);
+}
+[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #0d1015;
+  --page: #12151b;
+  --surface: #171b22;
+  --surface-raised: #1e232c;
+  --surface-overlay: #232935;
+  --border: #292f3a;
+  --border-control: #6b7385;
+  --ink: #e8eaef;
+  --ink-muted: #a4abb8;
+  --ink-subtle: #8a91a0;
+  --on-ink: #0d1015;
+  --primary: #0f6e66;
+  --primary-hover: #14807a;
+  --primary-active: #0c5f58;
+  --on-primary: #ffffff;
+  --primary-text: #5fcfbf;
+  --primary-soft: #0f2d2a;
+  --star: #f4b942;
+  --star-text: #f4b942;
+  --star-soft: #2d2412;
+  --info: #7ea2ff;
+  --info-soft: #1b2744;
+  --success: #4fd1a1;
+  --success-soft: #12291f;
+  --danger: #f26d6d;
+  --danger-soft: #2e1618;
+  --focus-ring: #f4b942;
+  --code-bg: #0f1217;
+  --scrim: rgba(5, 7, 10, 0.72);
+  --link: var(--primary-text);
+  --hint: var(--star-text);
+  --solution: var(--info);
+  --chart-1: var(--primary-text);
+  --chart-2: var(--info);
+  --chart-3: var(--star);
+  --chart-grid: var(--border);
+  --shadow-card: none;
+  --shadow-overlay: 0 16px 40px rgba(0, 0, 0, 0.55);
+  --shadow-header: none;
+}
+:root {
+  --font-serif: "Source Serif 4", "Iowan Old Style", Georgia, serif;
+  --font-sans: Figtree, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+  --space-12: 48px;
+  --space-16: 64px;
+  --radius-sm: 8px;
+  --radius-md: 12px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+  --radius-pill: 999px;
+  --control-sm: 32px;
+  --control-md: 40px;
+  --control-lg: 48px;
+  --header-height: 64px;
+  --sider-width: 280px;
+  --rail-width: 208px;
+  --reading-width: 720px;
+  --wide-width: 1040px;
+}
+.t-display { font-family: var(--font-sans); font-size: 40px; line-height: 44px; font-weight: 600; letter-spacing: -0.015em; }
+.t-title-1 { font-family: var(--font-sans); font-size: 32px; line-height: 38px; font-weight: 600; letter-spacing: -0.01em; }
+.t-title-2 { font-family: var(--font-sans); font-size: 22px; line-height: 30px; font-weight: 600; }
+.t-title-3 { font-family: var(--font-sans); font-size: 17px; line-height: 24px; font-weight: 600; }
+.t-reading { font-family: var(--font-serif); font-size: 18px; line-height: 30px; font-weight: 400; font-variation-settings: 'opsz' 18; }
+.t-reading-small { font-family: var(--font-serif); font-size: 16px; line-height: 26px; font-weight: 400; font-variation-settings: 'opsz' 16; }
+.t-caption { font-family: var(--font-serif); font-size: 14px; line-height: 20px; font-weight: 400; font-style: italic; font-variation-settings: 'opsz' 14; }
+.t-body { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 400; }
+.t-body-strong { font-family: var(--font-sans); font-size: 15px; line-height: 22px; font-weight: 600; }
+.t-small { font-family: var(--font-sans); font-size: 13px; line-height: 18px; font-weight: 400; }
+.t-label { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+.t-meta { font-family: var(--font-mono); font-size: 12px; line-height: 16px; font-weight: 400; }
+.t-code { font-family: var(--font-mono); font-size: 14px; line-height: 22px; font-weight: 400; }
