@@ -1,6 +1,7 @@
 import katex from 'katex';
 import { isValidAssetPath, parseChapterMarkdown } from '@politost/content-core';
 import type { LintFinding } from './types.ts';
+import { GENERATOR_MARKUP } from './sanitize.ts';
 import { extractMath, isTableSeparator, parseAttrs, scan, type LineKind, type Scan, type ScannedLine } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -276,6 +277,8 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
 
     // meta leak (HTML comments everywhere, patterns on prose)
     if (/<!--/.test(t)) add(mk('meta-leak', file, 'HTML comment in content.', l.n, t));
+    const tag = GENERATOR_MARKUP.exec(t)?.[0];
+    if (tag) add(mk('meta-leak', file, `Generator markup "${tag}" left in the content.`, l.n, t));
     if (prose(l.kind) || l.kind === 'fence-open') {
       let hit: string | null = null;
       for (const p of META_PATTERNS) {

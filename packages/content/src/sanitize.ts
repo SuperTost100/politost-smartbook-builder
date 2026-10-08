@@ -1,4 +1,4 @@
-// Cleans control characters that some model outputs carry into text. Pure.
+// Cleans control characters and tool-call markup that some model outputs carry into text. Pure.
 
 // "\t" and "\n" are legitimate whitespace, so they are restored only before the rest of a LaTeX command name.
 const TAB_COMMANDS = /^(?:heta|ext(?:bf|it|rm)?|au|imes|anh?|o(?![a-z])|op|riangle(?:left|right)?|ilde|frac|ag)/;
@@ -6,13 +6,25 @@ const TAB_COMMANDS = /^(?:heta|ext(?:bf|it|rm)?|au|imes|anh?|o(?![a-z])|op|riang
 const UNKNOWN_OPERATORS = /\\(cotan|arcsen|arccotg|arcsinh|arccosh|arctanh|settsinh|settcosh|setttgh|settth|sen|sgn|sign|Log|Arg|dom|rank|Ker|grad|rot|diag)(?![A-Za-z])/g;
 const NEWLINE_COMMANDS = /^(?:abla|eq(?![a-z])|ot(?![a-z])|exists|i(?![a-z])|u(?![a-z])|leq|geq|mid|parallel|subseteq|supseteq)/;
 
+/** Tool-call wrapper tags that models leave in text (</markdown>, </invoke>). Same pattern content-core 0.3.0 rejects. */
+export const GENERATOR_MARKUP = /<\/?(?:markdown|invoke|parameter|function_calls|antml:[\w-]+|tool_use|tool_result)\b[^>]*>/i;
+const TAG_LINE = `[ \\t]*(?:${GENERATOR_MARKUP.source}[ \\t]*)+`;
+const MARKUP_LINE = new RegExp(`\\r?\\n${TAG_LINE}(?=\\r?\\n|$)|^${TAG_LINE}(?:\\r?\\n|$)`, 'gi');
+const MARKUP_ANY = new RegExp(GENERATOR_MARKUP.source, 'gi');
+
+/** Removes generator markup: a line holding only tags goes away with its newline, a tag inside a line is cut out. */
+export function stripGeneratorMarkup(s: string): string {
+  return s.replace(MARKUP_LINE, '').replace(MARKUP_ANY, '');
+}
+
 /**
  * A control character in LaTeX text is almost always a backslash that was eaten by an escape: "\f" in "\frac", "\b" in
  * "\beta", or a stray byte in front of the command name. ANSI colour sequences come from the CLI that ran the model.
  * Function names KaTeX lacks, such as \cotan or \sen, become \operatorname{...}; \Q and \C become \mathbb{Q} and \mathbb{C}.
+ * Tool-call markup the model wrapped its answer in is removed.
  */
 export function sanitizeModelText(s: string): string {
-  return s
+  return stripGeneratorMarkup(s)
     .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
     .replace(/\t(?=[a-z])/g, (c, at: number, all: string) => (TAB_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\t' : c))
     .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\n' : c))
