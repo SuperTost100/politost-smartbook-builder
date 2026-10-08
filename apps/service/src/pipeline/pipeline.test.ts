@@ -140,6 +140,17 @@ describe('1. question updates do not overwrite author edits', () => {
     assert.equal(row(id).statement, 'Calcola.');
     assert.equal(row(id).rev, 2);
   });
+
+  test('import: text that would not render gets one formatting repair', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
+    fake.next(answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.', readable: true }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: 'inventato', solution: 'Vale $1$.' }));
+    await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x)$.');
+    assert.equal(row(id).hint, '');
+    assert.equal(fake.calls.length, 2);
+  });
 });
 
 describe('15. disagreement is a blocker', () => {
@@ -174,7 +185,7 @@ describe('4. practice generation stages', () => {
     ctx.db.insert('topics', { id, project_id: P, name: key, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
     return id;
   };
-  const gen = (n: number, kind: string) => ({ questions: Array.from({ length: n }, (_, i) => ({ topics: ['limiti'], difficulty: 'medio', statement: `${kind} ${i}`, hint: '', solution: 's', finalAnswer: '1' })) });
+  const gen = (n: number, kind: string) => ({ questions: Array.from({ length: n }, (_, i) => ({ topics: ['limiti'], difficulty: 'medio', statement: `${kind} ${i}`, hint: 'h', solution: 's', finalAnswer: '1' })) });
 
   test('chapterPractice enqueues a separate exam stage only when there are no authentic questions', async () => {
     const t = topic('limiti');
@@ -208,7 +219,7 @@ describe('4. practice generation stages', () => {
     fake.next(answer(gen(1, 'esame')));
     const r = await practiceGenerate(ctx, exam);
     assert.deepEqual(r, { generated: 1, reused: 0 });
-    assert.equal(ctx.db.all(`SELECT 1 FROM questions WHERE kind = 'exam' AND origin = 'generated'`).length, 1);
+    assert.deepEqual(ctx.db.all<{ hint: string }>(`SELECT hint FROM questions WHERE kind = 'exam' AND origin = 'generated'`).map((x) => x.hint), [''], 'exams have no hints');
     assert.equal(taskKeys(runId).filter((k) => k.startsWith('verify:')).length, 3);
   });
 });
@@ -398,6 +409,17 @@ describe('AI text keeps display math apart from inline math', () => {
     assert.deepEqual(json(rev.citations, {}), { '0': ['n1'], '1': ['n2'] });
     const human = saveHuman(ctx, P, 's2', 'Con $a$ e $$b$$ qui', null);
     assert.equal(human.markdown, 'Con $a$ e $$b$$ qui');
+  });
+});
+
+describe('AI text never defines a formula key another section owns', () => {
+  test('the repeated formula block keeps its math and loses its key', () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', ':::formula{key="teorema-weierstrass" label="Teorema di Weierstrass"}\n$$f(x)\\le M$$\n:::');
+    const md = 'Richiamo.\n\n:::formula{key="teorema-weierstrass" label="Teorema di Weierstrass"}\n$$f(x)\\le M$$\n:::\n\n:::formula{key="nuova" label="Nuova"}\n$$y$$\n:::';
+    const out = commitAiRevision(ctx, { projectId: P, nodeId: 's2', kind: 'section', markdown: md, baseRevId: null, model: 'm' });
+    const rev = ctx.db.get<Record<string, any>>('SELECT * FROM content_revisions WHERE id = ?', out.revId)!;
+    assert.equal(rev.markdown, 'Richiamo.\n\n$$f(x)\\le M$$\n\n:::formula{key="nuova" label="Nuova"}\n$$y$$\n:::');
   });
 });
 

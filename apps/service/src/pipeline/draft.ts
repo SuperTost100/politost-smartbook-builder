@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { lintSection, renderPlotSvg, separateDisplayMath, splitBlocks, validatePlotSpec, type LintFinding } from '@smartbuilder/content';
+import { lintSection, renderPlotSvg, separateDisplayMath, splitBlocks, unwrapFormulaKeys, validatePlotSpec, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -93,10 +93,12 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
  * `taskId` is stored so a retried task returns its own committed revision instead of calling the model again.
  */
 export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string; taskId?: string }) {
-  // Display math sharing a block with inline math is separated for good (human saves are never touched); block citations follow.
-  const markdown = separateDisplayMath(p.markdown);
-  const citations = markdown === p.markdown ? p.citations ?? {} : carryCitations(p.markdown, markdown, p.citations ?? {});
   return ctx.db.tx(() => {
+    // A formula key another section already defines is unwrapped; display math sharing a block with inline math is
+    // separated for good (human saves are never touched). Block citations follow.
+    const taken = new Set(bookFormulaKeys(ctx, p.projectId, p.nodeId).map((k) => k.key));
+    const markdown = separateDisplayMath(unwrapFormulaKeys(p.markdown, taken));
+    const citations = markdown === p.markdown ? p.citations ?? {} : carryCitations(p.markdown, markdown, p.citations ?? {});
     const { revision, applied } = insertProposal(ctx, p.projectId, p.nodeId, markdown, p.baseRevId, p.origin ?? 'ai', p.model, citations, { kind: p.kind, forceProposal: p.forceProposal, taskId: p.taskId });
     ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai', status: revision.status }, { projectId: p.projectId, runId: p.runId ?? null });
     return { revId: revision.id, status: applied ? 'current' as const : 'proposal' as const };

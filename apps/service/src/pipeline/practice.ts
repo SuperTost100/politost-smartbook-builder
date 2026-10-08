@@ -1,6 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
-import { separateDisplayMath as layout } from '@smartbuilder/content';
+import { lintQuestionText, separateDisplayMath as layout } from '@smartbuilder/content';
 import type { Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -17,6 +17,34 @@ import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } 
 /** Authentic exam questions included per chapter, most recent sessions first. */
 const AUTHENTIC_PER_CHAPTER = 8;
 const MAX_PAGES_PER_QUESTION = 4;
+
+type QuestionText = { statement: string; hint: string; solution: string };
+
+/**
+ * One formatting repair for question text that would not render or reads broken (unbalanced $, LaTeX KaTeX rejects,
+ * a colon leading nowhere): the editor fixes only the listed problems, and its text is kept when it has fewer of them.
+ */
+async function repairQuestionFormat(ctx: AppContext, t: TaskContext, projectId: string, language: string, text: QuestionText): Promise<QuestionText> {
+  const problems = (x: QuestionText) => (['statement', 'hint', 'solution'] as const).flatMap((part) =>
+    lintQuestionText(layout(x[part]), { file: part, language, skipRules: ['formula-ref-unknown'] })
+      .filter((f) => f.severity !== 'minor')
+      .map((f) => `[${part}] ${f.rule}: ${f.message}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`));
+  const found = problems(text);
+  if (!found.length) return text;
+  t.progress(`Fixing ${found.length} formatting problem${found.length > 1 ? 's' : ''} in a question`);
+  try {
+    const { data } = await runRole(ctx, {
+      role: 'editor',
+      system: `You fix formatting problems in a university exercise written in ${language === 'it' ? 'Italian' : language} without changing its wording, numbers or results.\n\n${formatRules(language)}`,
+      prompt: `PROBLEMS:\n${found.join('\n')}\n\nSTATEMENT:\n${text.statement}\n\nHINT:\n${text.hint}\n\nSOLUTION:\n${text.solution}\n\nReturn JSON with the statement, hint and solution; change only what the problems require and keep an empty hint empty.`,
+      schema: questionReviseSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    if (problems(data).length < found.length) return { ...data, hint: text.hint ? data.hint : '' };
+  } catch (err) {
+    if (err instanceof TaskError && err.kind !== 'input') throw err;
+  }
+  return text;
+}
 
 export function rowToQuestion(r: Record<string, unknown>): Question {
   return {
@@ -118,8 +146,9 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     solution = solved.data.markdown;
     checks.push({ method: 'lint', ok: true, detail: `No official solution; written by ${solved.route.model}` });
   }
+  const fixed = await repairQuestionFormat(ctx, t, question.projectId, project.language, { statement: data.statement, hint: '', solution });
   const at = now();
-  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', layout(data.statement), layout(solution), JSON.stringify(checks), at, at, question.id, rev).changes;
+  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', layout(fixed.statement), layout(fixed.solution), JSON.stringify(checks), at, at, question.id, rev).changes;
   if (!changed) {
     keepStaleOutput(ctx, question, data.statement, data.solution);
     return { stale: true };
@@ -181,7 +210,9 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
         schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
       });
       const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));
-      ids = ctx.db.tx(() => data.questions.map((g) => {
+      const written: typeof data.questions = [];
+      for (const g of data.questions) written.push({ ...g, ...await repairQuestionFormat(ctx, t, projectId, project.language, { statement: g.statement, hint: kind === 'exam' ? '' : g.hint, solution: g.solution }) });
+      ids = ctx.db.tx(() => written.map((g) => {
         const id = newId();
         ctx.db.insert('questions', {
           id, project_id: projectId, kind, origin: 'generated', resource_id: null, page_from: null, page_to: null, exam_group: null, exam_date: null,

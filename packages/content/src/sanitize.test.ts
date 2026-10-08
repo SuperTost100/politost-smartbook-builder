@@ -34,3 +34,10 @@ test('an eaten \\t or \\n in math is restored; real tabs and newlines in prose s
   assert.equal(sanitizeModelText('$x$\nesiste'), '$x$\nesiste');
   assert.equal(sanitizeModelText('\nabla $x$'), '\nabla $x$');
 });
+
+test('function names KaTeX lacks become operators; \\Q and \\C become blackboard letters', () => {
+  assert.equal(sanitizeModelText('$e^x\\cotan x + \\sen x$'), '$e^x\\operatorname{cotan} x + \\operatorname{sen} x$');
+  assert.equal(sanitizeModelText('$\\sgn(x)$, $x\\in\\Q$, $z\\in\\C$'), '$\\operatorname{sgn}(x)$, $x\\in\\mathbb{Q}$, $z\\in\\mathbb{C}$');
+  // Commands KaTeX knows are left alone.
+  assert.equal(sanitizeModelText('$\\cot x + \\sin x + \\Cap + \\senso$'), '$\\cot x + \\sin x + \\Cap + \\senso$');
+});

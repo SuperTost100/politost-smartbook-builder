@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, quoteInBlock, sameQuote } from './patch.ts';
+import { applyGuardedChanges, quoteInBlock, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -46,4 +46,10 @@ test('quotes match on their first 60 normalised characters, in either direction'
   assert.equal(sameQuote('', 'x'), false);
   assert.equal(quoteInBlock('frase $x$ [[n1]]', 'Una frase $x$ [[n1]] qui.'), true);
   assert.equal(quoteInBlock('altro', 'Una frase.'), false);
+});
+
+test('a formula key defined elsewhere loses its wrapper and keeps its math', () => {
+  const md = `Testo.\n\n${F}\n\n:::formula{key="k2" label="M"}\n$$y=2$$\n:::\n\nFine.`;
+  assert.equal(unwrapFormulaKeys(md, new Set(['k1'])), 'Testo.\n\n$$x=1$$\n\n:::formula{key="k2" label="M"}\n$$y=2$$\n:::\n\nFine.');
+  assert.equal(unwrapFormulaKeys(md, new Set()), md);
 });

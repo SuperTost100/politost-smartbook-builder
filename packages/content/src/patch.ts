@@ -86,3 +86,20 @@ export function quoteInBlock(quote: string, block: string): boolean {
   const b = flat(block);
   return !!k && !!b && (b.includes(k) || k.includes(b));
 }
+
+/**
+ * Formula blocks whose key is already defined in another section lose their wrapper and keep their math, so the book
+ * has one formula per key. References to the key keep pointing at the first definition.
+ */
+export function unwrapFormulaKeys(markdown: string, taken: Set<string>): string {
+  if (!taken.size) return markdown;
+  const out: string[] = [];
+  let open = false;
+  for (const line of markdown.split('\n')) {
+    const key = /^\s*:::formula\{[^}]*key="([^"]+)"[^}]*\}\s*$/.exec(line)?.[1];
+    if (key && taken.has(key)) { open = true; continue; }
+    if (open && line.trim() === ':::') { open = false; continue; }
+    out.push(line);
+  }
+  return out.join('\n');
+}

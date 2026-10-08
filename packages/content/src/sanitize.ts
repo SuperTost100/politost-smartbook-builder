@@ -2,11 +2,14 @@
 
 // "\t" and "\n" are legitimate whitespace, so they are restored only before the rest of a LaTeX command name.
 const TAB_COMMANDS = /^(?:heta|ext(?:bf|it|rm)?|au|imes|anh?|o(?![a-z])|op|riangle(?:left|right)?|ilde|frac|ag)/;
+// Function names KaTeX does not define (Italian conventions among them), written as if they were commands.
+const UNKNOWN_OPERATORS = /\\(cotan|arcsen|arccotg|arcsinh|arccosh|arctanh|settsinh|settcosh|setttgh|settth|sen|sgn|sign|Log|Arg|dom|rank|Ker|grad|rot|diag)(?![A-Za-z])/g;
 const NEWLINE_COMMANDS = /^(?:abla|eq(?![a-z])|ot(?![a-z])|exists|i(?![a-z])|u(?![a-z])|leq|geq|mid|parallel|subseteq|supseteq)/;
 
 /**
  * A control character in LaTeX text is almost always a backslash that was eaten by an escape: "\f" in "\frac", "\b" in
  * "\beta", or a stray byte in front of the command name. ANSI colour sequences come from the CLI that ran the model.
+ * Function names KaTeX lacks, such as \cotan or \sen, become \operatorname{...}; \Q and \C become \mathbb{Q} and \mathbb{C}.
  */
 export function sanitizeModelText(s: string): string {
   return s
@@ -19,7 +22,9 @@ export function sanitizeModelText(s: string): string {
       if (c === '\r' && /[A-Za-z]/.test(all[at + 1] ?? '')) return '\\r';
       if (/[A-Za-z]/.test(all[at + 1] ?? '')) return '\\';
       return '';
-    });
+    })
+    .replace(UNKNOWN_OPERATORS, '\\operatorname{$1}')
+    .replace(/\\([QC])(?![A-Za-z])/g, '\\mathbb{$1}');
 }
 
 /** The position is inside $...$ on its line, or inside a $$ display block: an odd number of unescaped dollars before it. */

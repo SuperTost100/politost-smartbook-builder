@@ -2,7 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 
-export const PROMPT_VERSION = 6;
+export const PROMPT_VERSION = 7;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -205,7 +205,7 @@ ${p.notation || '(standard notation of the field)'}
 Already written earlier in the book (do not repeat, refer back with links when useful):
 ${p.earlier || '(nothing yet)'}
 
-Known formula keys from earlier sections (you may reference them with {{formula:@key}}):
+Known formula keys from other sections (reference them with {{formula:@key}}; never define a formula block with one of these keys again):
 ${p.knownFormulas || '(none)'}
 
 Section ids you may link to:
@@ -288,7 +288,7 @@ ${p.examples ? `Real questions from past exams on these topics, for level and st
 Known formula keys you may cite in hints and solutions with {{formula:@key}}:
 ${p.knownFormulas || '(none)'}
 
-Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (one or two sentences that point the way without solving) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
+Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (${p.kind === 'exam' ? 'always empty: exams have no hints' : 'one or two sentences that point the way without solving'}) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
   };
 }
 

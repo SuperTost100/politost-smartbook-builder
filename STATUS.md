@@ -53,7 +53,7 @@ What changed:
 
 On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
 
-On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors. The only warnings left are 80 exam questions without hints. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors and 0 warnings. The last 80 warnings were for exam questions without hints, and exams now have no hints by design. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
 
 ## Open issues on the Analisi book
 
@@ -63,7 +63,17 @@ Four issues were accepted as exceptions and are visible in the Review tab:
 - the reviewer read ℝ\* as "nonzero reals". The book's notation defines it as the extended line, and the reviewer now receives that notation;
 - one June 2024 question could not be read from its scan, so it is not in the book.
 
-Authentic exam questions have no hints because the official papers give none. Generating hints is not implemented yet.
+Exam questions have no hints, as in the real exam; content-core v0.2.1 no longer warns about them.
+
+## Prevented at generation since this run
+
+Each problem from the Analisi run is now handled when text is written, not only later in review:
+- `\cotan`, `\sen`, `\sgn` and other function names KaTeX lacks are rewritten to `\operatorname{...}` in every model output.
+- A formula key already defined in another section is unwrapped, so the book never ships the same key twice. The writer is also told not to reuse known keys.
+- Exam questions read from scans, and generated questions, get a lint pass and one formatting repair (unbalanced `$`, KaTeX errors, a colon leading nowhere), like sections already did.
+- Display math in sentences, statement numbering, eaten backslashes, lost blocks in fixes and timeouts were handled earlier the same day (see above).
+
+What a fresh book will still produce: on the first review, some real content errors per chapter, such as a missing hypothesis or a wrong order of infinitesimals. Finding those is the review's job. With fixes applied automatically and the reviewer's memory, they should close in one or two rounds. Exam pages that can't be read still need you to type them in.
 
 ## Not done or only partly done
 
@@ -83,7 +93,7 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 
 ## Tests and CI
 
-`npm test` runs 124 content tests and 187 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 126 content tests and 189 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
 
 ## Your running instance
 

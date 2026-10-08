@@ -209,7 +209,7 @@ function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pi
       )}
 
       <div className="ui-tabs" role="tablist" aria-label="Question part">
-        {(['statement', 'hint', 'solution'] as Field[]).map((f) => <button key={f} type="button" role="tab" className="ui-tab" aria-selected={field === f} onClick={() => setField(f)}>{f[0].toUpperCase() + f.slice(1)}{draft[f] ? '' : ' (empty)'}</button>)}
+        {(q.kind === 'exam' ? ['statement', 'solution'] as Field[] : ['statement', 'hint', 'solution'] as Field[]).map((f) => <button key={f} type="button" role="tab" className="ui-tab" aria-selected={field === f} onClick={() => setField(f)}>{f[0].toUpperCase() + f.slice(1)}{draft[f] ? '' : ' (empty)'}</button>)}
       </div>
       <SourceEditor key={field} value={draft[field]} onChange={(v) => setDraft((d) => ({ ...d, [field]: v }))} label={`${field} source`} minRows={5} />
       <LivePreview source={draft[field]} label={`Preview of the ${field}`} />

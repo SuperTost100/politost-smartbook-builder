@@ -6,7 +6,7 @@
     "@codemirror/view": "^6.38.0",
     "@codemirror/commands": "^6.8.0",
     "@fontsource-variable/inter": "^5.2.0",
-    "@politost/content-core": "https://codeload.github.com/SuperTost100/politost-content-core/tar.gz/refs/tags/v0.2.0",
+    "@politost/content-core": "https://codeload.github.com/SuperTost100/politost-content-core/tar.gz/refs/tags/v0.2.1",
     "@smartbuilder/content": "*",
     "@smartbuilder/domain": "*",
     "@tanstack/react-query": "^5.90.0",

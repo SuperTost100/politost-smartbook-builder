@@ -541,7 +541,7 @@ function compileQuestions(
     if (chapter !== null) attrs.push(`chapter="${chapter}"`);
     attrs.push(`difficulty="${q.difficulty}"`);
     const parts = [`:::exercise{${attrs.join(' ')}}`, '## Domanda', statement];
-    if (hint) parts.push('', ':::hint', hint, ':::');
+    if (hint && kind !== 'exam') parts.push('', ':::hint', hint, ':::'); // exams are practised as on the day: no hints
     if (solution) parts.push('', ':::solution', solution, ':::');
     parts.push(':::');
     return parts.join('\n');

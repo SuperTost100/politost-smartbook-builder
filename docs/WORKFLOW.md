@@ -22,8 +22,8 @@ Add notes, textbooks, exercise collections and past exams, and mark each as Theo
 
 1. *Evidence*: NotebookLM (or the local reader) answers a question about the section by quoting the sources. Each quote is located on its page; unlocated quotes are dropped. The most cited garbled pages are transcribed by a vision model so the writer sees clean formulas.
 2. *Writing*: the writer gets the section's objectives, the chapter plan, summaries of earlier sections, known formula keys, the notation and the evidence, and returns the section with citation markers and optional plot specs. Plots are drawn by the builder, not by the model, so curves match their formulas.
-3. *Lint and repair*: formatting problems that break the reader trigger one repair request; what remains becomes an issue.
-4. *Introduction*, *practice* (authentic exam questions re-read from page images, generated exercises up to the topic targets, labeled exam-style practice when a chapter has no real exam questions), *extras* (graphs and Python examples where they help, all checked) and an *independent review*.
+3. *Clean-up, lint and repair*: some fixes need no model. Function names KaTeX lacks, such as `\cotan` or `\sen`, become `\operatorname{...}`. A formula block reusing a key another section already defines keeps its math and loses the key. Display math is moved out of sentences, and statements are numbered per chapter at compile. Formatting problems that break the reader then trigger one repair request; what remains becomes an issue.
+4. *Introduction*, *practice* (authentic exam questions re-read from page images, generated exercises up to the topic targets, labeled exam-style practice when a chapter has no real exam questions; question text that would not render gets the same single repair, and exam questions have no hints, as on the day), *extras* (graphs and Python examples where they help, all checked) and an *independent review*.
 
 With the first-chapter gate on (the default), the run stops after chapter 1. Read it, fix what you need, then press **Continue** in the Run panel; the remaining chapters use the same prompts you have now seen working.
 
