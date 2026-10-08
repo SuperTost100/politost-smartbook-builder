@@ -6,6 +6,7 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { detectKind, storeResource, extractResource, renderPageImage, findPassage, searchPages, segmentQuestions, ExtractError, isBlockedAddress, safeFetch, htmlToMarkdown, LIBREOFFICE_MISSING } from './index.ts';
+import { segmentExams } from './segment.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import { makeCtx, makePdf, makeZip, makeDocx } from './testkit.ts';
 
@@ -357,6 +358,46 @@ test('real notes: page counts, outline and garbled distribution', { skip: !haveS
   assert.equal(de.good + de.garbled + de.empty, 19);
   assert.ok(de.garbled >= 12, JSON.stringify(de));
   console.log('garbled distribution riassunto', d, 'ponzy', dp, 'exam 2022-23', de);
+});
+
+test('exam papers without an Analisi heading: Prova scritta, fila variants, file-named templates, SOLUZIONI markers', () => {
+  const paper = (head: string[], solutions: string[][]) => [
+    { idx: 0, text: ['1', ...head, 'Cognome', 'Nome', 'Esercizio 1 (8 punti)', 'Un corpo di massa m scende.', 'Esercizio 2 (8 punti)', 'Una molla di costante k.'].join('\n') },
+    ...solutions.map((lines, i) => ({ idx: i + 1, text: [String(i + 2), ...lines].join('\n') })),
+  ];
+  const a = segmentExams('r1', paper(['Prova scritta 25.6.26- Corso 13 - Prof. M. Rossi', 'Compito FILA A'], [
+    ['Soluzione Esercizio 1', 'a) Dalla conservazione dell’energia.'],
+    ['Soluzione Esercizio 2', 'b) Il periodo vale T.'],
+  ]), { label: 'giugno_filaA_sol', untitled: true });
+  assert.deepEqual(a.map((x) => `${x.examGroup} #${x.number} ${x.examDate} p${x.pageFrom}-${x.pageTo}`), [
+    'Prova scritta del 25 giugno 2026 #1A 2026-06-25 p0-1', 'Prova scritta del 25 giugno 2026 #2A 2026-06-25 p0-2',
+  ]);
+  assert.match(a[0].statement, /Un corpo di massa/);
+  assert.doesNotMatch(a[0].statement, /Cognome/);
+  assert.match(a[1].solution, /^Soluzione Esercizio 2\nb\) Il periodo/);
+
+  // Year from the file name; "Esercizio N _ SOLUZIONE" after a SOLUZIONI line; a header repeated on the next page continues the solution.
+  const b = segmentExams('r2', paper(['Prova scritta 11/07- Compito A1 (Corso n)'], [
+    ['SOLUZIONI', 'Esercizio 1 _ SOLUZIONE', 'Si conserva la quantità di moto.', 'Esercizio 2 _ SOLUZIONE', 'Primo passo.'],
+    ['Esercizio 2 _ SOLUZIONE', 'Secondo passo.'],
+  ]), { label: '2022 - TEMA_2', untitled: true });
+  assert.deepEqual(b.map((x) => `${x.examGroup} #${x.number} ${x.examDate} p${x.pageFrom}-${x.pageTo}`), [
+    'Prova scritta del 11 luglio 2022 #1A1 2022-07-11 p0-1', 'Prova scritta del 11 luglio 2022 #2A1 2022-07-11 p0-2',
+  ]);
+  assert.match(b[1].solution, /Primo passo\.\nSecondo passo\./);
+
+  // A blank template has no date: the session is named after the file.
+  const c = segmentExams('r3', paper(['Prova scritta xx-xx-xxxx - Corso x - Prof. xxx'], [['SOLUZIONE', 'Esercizio 1 (8 punti)', 'Uno.', 'Esercizio 2 (8 punti)', 'Due.']]), { label: 'TEMA ESAME 2025 - 1', untitled: true });
+  assert.deepEqual(c.map((x) => `${x.examGroup} #${x.number} ${x.examDate}`), ['Prova scritta - TEMA ESAME 2025 - 1 #1 null', 'Prova scritta - TEMA ESAME 2025 - 1 #2 null']);
+  assert.deepEqual(c.map((x) => x.solution), ['Esercizio 1 (8 punti)\nUno.', 'Esercizio 2 (8 punti)\nDue.']);
+});
+
+test('exercise sheets with plain "Esercizio N" and no heading become one group per file, only when asked', () => {
+  const pages = [{ idx: 0, text: 'Tutorato Settimana 3\nApril 2020\nEsercizio 1\nUn blocco scivola.\n1. v0 = 5 m/s\nEsercizio 2\nUna molla.' }];
+  const q = segmentExams('r4', pages, { label: 'tutorato_settimana_3', kind: 'exercise', untitled: true });
+  assert.deepEqual(q.map((x) => `${x.kind} ${x.examGroup} #${x.number}`), ['exercise tutorato_settimana_3 #1', 'exercise tutorato_settimana_3 #2']);
+  assert.match(q[0].statement, /Un blocco scivola\.\n1\. v0/);
+  assert.equal(segmentExams('r4', pages).length, 0);
 });
 
 test('real exams: segmentation of 2022-23 and 2014-15, solutions matched by exercise number', { skip: !haveSources, timeout: 120_000 }, async () => {
