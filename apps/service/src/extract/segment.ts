@@ -36,10 +36,10 @@ function pageLines(pages: PageText[]): Line[] {
   return out;
 }
 
-interface Heading { key: string; date: string | null; numbered: boolean }
+interface Heading { key: string; date: string | null; numbered: boolean; variant?: string | null }
 
-/** Parse a session heading line. `next` is the following non-empty line (to spot table-of-contents entries). */
-function parseHeading(l: string, following: string[], page: number): Heading | null {
+/** Parse a session heading line. `next` is the following non-empty line (to spot table-of-contents entries). `label` names the file. */
+function parseHeading(l: string, following: string[], page: number, label: string): Heading | null {
   const next = following[0];
   // Cover of a paper without the dated header line: "Esame di ANALISI MATEMATICA I" then "11 aprile 2024, ore 17:30".
   if (/^Esame\s+di\s+ANALISI\s+MATEMATICA\s+I\s*$/i.test(l)) {
@@ -72,11 +72,30 @@ function parseHeading(l: string, following: string[], page: number): Heading | n
     const turn = nw[4].replace(/^[\s\-–—:,]+/, '').replace(/\s+/g, ' ').trim();
     return { key: `Esame del ${d} ${MONTH_NAMES[m - 1]} ${y}${turn ? ` - ${turn}` : ''}`, date: iso(y, m, d), numbered: false };
   }
-  return null;
+  return parsePaper(l, following, label);
+}
+
+/**
+ * One paper per file (Fisica 1): "Prova scritta 23/06/2022 - Corso … - Prof. …", then "Compito FILA A".
+ * The date may be d.m.yy or lack the year (taken from the file name); blank templates are named after the file.
+ * The compito (fila) becomes the exercise variant, so fila A and fila B of one day count as a single session.
+ */
+function parsePaper(l: string, following: string[], label: string): Heading | null {
+  const m = /^Prova\s+scritta\b(.*)$/i.exec(l);
+  if (!m) return null;
+  const fila = /\bCompito\s+(?:fila\s+)?([A-Z]\d?)\b/i.exec([m[1], ...following.slice(0, 2)].join('\n'));
+  const variant = fila ? fila[1].toUpperCase() : null;
+  const dm = /(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{4}|\d{2})(?!\d))?/.exec(m[1]);
+  const year = dm?.[3] ? Number(dm[3].length === 2 ? `20${dm[3]}` : dm[3]) : Number(/\b(?:19|20)\d{2}\b/.exec(label)?.[0] ?? NaN);
+  const [d, mo] = dm ? [Number(dm[1]), Number(dm[2])] : [0, 0];
+  if (d >= 1 && d <= 31 && mo >= 1 && mo <= 12 && year) {
+    return { key: `Prova scritta del ${d} ${MONTH_NAMES[mo - 1]} ${year}`, date: iso(year, mo, d), numbered: false, variant };
+  }
+  return { key: label ? `Prova scritta - ${label}` : 'Prova scritta', date: null, numbered: false, variant };
 }
 
 interface Ex { num: number; variant: string | null; startPage: number; endPage: number; lines: string[] }
-interface Group { key: string; date: string | null; statements: Ex[]; solutions: Ex[] }
+interface Group { key: string; date: string | null; variant: string | null; statements: Ex[]; solutions: Ex[] }
 
 function variantOf(rest: string): string | null {
   const v = /\bversione\s+([A-Z])\b/i.exec(rest);
@@ -91,15 +110,26 @@ function joinLines(lines: string[]): string {
   return lines.join('\n').replace(/\n{3,}/g, '\n\n').trim();
 }
 
-export function segmentExams(resourceId: string, pages: PageText[]): QuestionRow[] {
+export interface SegmentOptions {
+  /** File name without extension: names undated papers and supplies a missing year. */
+  label?: string;
+  kind?: 'exam' | 'exercise';
+  /** With no session heading anywhere in the file, the whole file is one group named after `label`. */
+  untitled?: boolean;
+}
+
+export function segmentExams(resourceId: string, pages: PageText[], opts: SegmentOptions = {}): QuestionRow[] {
+  const { label = '', kind = 'exam' } = opts;
   const lines = pageLines(pages);
+  const heads = lines.map((x, i) => parseHeading(x.text, lines.slice(i + 1, i + 9).map((y) => y.text), x.page, label));
+  const untitled = !!opts.untitled && !!label && !heads.some(Boolean);
   const groups: Group[] = [];
-  let group: Group | null = null;
-  let mode: 'statement' | 'solution' = 'statement';
-  let cur: Ex | null = null;
+  let group = null as Group | null;
+  let mode = 'statement' as 'statement' | 'solution';
+  let cur = null as Ex | null;
 
   const startGroup = (h: Heading) => {
-    group = { key: h.key, date: h.date, statements: [], solutions: [] };
+    group = { key: h.key, date: h.date, variant: h.variant ?? null, statements: [], solutions: [] };
     groups.push(group);
     mode = 'statement';
     cur = null;
@@ -107,26 +137,36 @@ export function segmentExams(resourceId: string, pages: PageText[]): QuestionRow
 
   for (let i = 0; i < lines.length; i++) {
     const { page, text } = lines[i];
-    const h = parseHeading(text, lines.slice(i + 1, i + 9).map((x) => x.text), page);
+    const h = heads[i];
     if (h) {
-      const g = group as Group | null;
-      const hasContent = !!g && (g.statements.length > 0 || g.solutions.length > 0);
-      if (!g || g.key !== h.key) startGroup(h);
+      const hasContent = !!group && (group.statements.length > 0 || group.solutions.length > 0);
+      if (!group || group.key !== h.key) startGroup(h);
       // Same heading again after exercises: another copy of the paper (running headers carry a section number and are ignored).
       else if (hasContent && !h.numbered) startGroup(h);
       else if (!hasContent && mode === 'solution') mode = 'statement';
       continue;
     }
-    if (!group) continue;
-    if (/^svolgimento\s*[.:]?$/i.test(text)) { mode = 'solution'; cur = null; continue; }
-    const ex = /^Esercizio\s+(\d{1,2})\b(.*)$/i.exec(text);
+    const ex = /^(Soluzione\s+(?:dell['’]\s*)?)?Esercizio\s+(\d{1,2})\b(.*)$/i.exec(text);
+    if (!group) {
+      if (!untitled || !ex) continue;
+      startGroup({ key: label, date: null, numbered: false });
+    }
+    const g = group!;
+    // A bare "soluzione" can be a wrapped line of prose; the section marker is in capitals.
+    if (/^svolgimento\s*[.:]?$/i.test(text) || /^SOLUZION[EI]\s*[.:]?$/.test(text)) { mode = 'solution'; cur = null; continue; }
     if (ex) {
-      const e: Ex = { num: Number(ex[1]), variant: variantOf(ex[2]), startPage: page, endPage: page, lines: [text] };
-      (group as Group)[mode === 'statement' ? 'statements' : 'solutions'].push(e);
+      // "Soluzione Esercizio 1" and "Esercizio 1 _soluzione" open a solution even without a SOLUZIONI line.
+      if (ex[1] || /^\s*[_\-–:.]?\s*soluzion[ei]\b/i.test(ex[3])) mode = 'solution';
+      const e: Ex = { num: Number(ex[2]), variant: variantOf(ex[3]) ?? g.variant, startPage: page, endPage: page, lines: [text] };
+      const list = g[mode === 'statement' ? 'statements' : 'solutions'];
+      const last = list[list.length - 1];
+      // The same header repeated at the top of the next page continues the exercise.
+      if (last && last === cur && last.num === e.num && last.variant === e.variant && page > last.endPage) { last.endPage = page; continue; }
+      list.push(e);
       cur = e;
       continue;
     }
-    if (cur) { (cur as Ex).lines.push(text); (cur as Ex).endPage = page; }
+    if (cur) { cur.lines.push(text); cur.endPage = page; }
   }
 
   // Name duplicated papers (same heading, several versions) apart.
@@ -152,7 +192,7 @@ export function segmentExams(resourceId: string, pages: PageText[]): QuestionRow
       }
       if (sol) usedSolutions.add(sol);
       rows.push({
-        kind: 'exam',
+        kind,
         origin: 'authentic',
         resourceId,
         pageFrom: st.startPage,
@@ -294,11 +334,14 @@ export function segmentQuiz(resourceId: string, pages: PageText[]): QuestionRow[
 
 /** Split an exam/exercise resource into authentic questions with page ranges and exam sessions. Text-layer heuristics; statements may be garbled until transcribed. */
 export function segmentQuestions(ctx: AppContext, resourceId: string): QuestionRow[] {
-  const res = ctx.db.get<{ role: string }>('SELECT role FROM resources WHERE id = ?', resourceId);
+  const res = ctx.db.get<{ role: string; filename: string }>('SELECT role, filename FROM resources WHERE id = ?', resourceId);
   if (!res) throw new ExtractError('That source was not found. It may have been deleted.', 404, 'not_found');
   const pages = ctx.db.all<PageText>('SELECT idx, text FROM pages WHERE resource_id = ? ORDER BY idx', resourceId);
-  if (res.role === 'exams') return segmentExams(resourceId, pages);
-  if (res.role === 'exercises') return segmentQuiz(resourceId, pages);
-  if (res.role === 'mixed') return [...segmentExams(resourceId, pages), ...segmentQuiz(resourceId, pages)];
-  return [];
+  const label = res.filename.replace(/\.[^.]+$/, '').trim();
+  if (res.role === 'exams') return segmentExams(resourceId, pages, { label, untitled: true });
+  if (!['exercises', 'mixed'].includes(res.role)) return [];
+  const quiz = segmentQuiz(resourceId, pages);
+  // Exercise sheets that are not quiz simulations ("Esercizio 1", "Esercizio 2", …) become one group per file.
+  if (res.role === 'exercises') return quiz.length ? quiz : segmentExams(resourceId, pages, { label, kind: 'exercise', untitled: true });
+  return [...segmentExams(resourceId, pages, { label, untitled: !quiz.length }), ...quiz];
 }
