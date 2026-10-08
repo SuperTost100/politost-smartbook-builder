@@ -15,7 +15,7 @@
     "@politost/content-core": "https://codeload.github.com/SuperTost100/politost-content/tar.gz/refs/tags/v0.2.1",
     "@smartbuilder/domain": "*",
     "fflate": "^0.8.3",
-    "katex": "^0.17.0",
+    "katex": "^0.18.2",
     "mathjs": "^15.0.0"
   }
 }
