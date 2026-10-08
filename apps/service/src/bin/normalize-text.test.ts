@@ -48,6 +48,12 @@ test('question text is repaired without losing its verified status', () => {
   assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 0, questions: 0 });
 });
 
+test('generator markup left in an introduction is removed', () => {
+  saveHuman(ctx, 'p1', 'c1', 'Le successioni monotone limitate.</markdown>\n</invoke>', null);
+  assert.deepEqual(normalizeText(ctx, 'p1'), { sections: 1, questions: 0 });
+  assert.equal(currentHead(ctx, 'p1', 'c1')!.markdown, 'Le successioni monotone limitate.');
+});
+
 test('an unknown project is an error', () => {
   assert.throws(() => normalizeText(ctx, 'nope'));
 });

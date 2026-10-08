@@ -41,3 +41,13 @@ test('function names KaTeX lacks become operators; \\Q and \\C become blackboard
   // Commands KaTeX knows are left alone.
   assert.equal(sanitizeModelText('$\\cot x + \\sin x + \\Cap + \\senso$'), '$\\cot x + \\sin x + \\Cap + \\senso$');
 });
+
+test('tool-call markup is removed: lines of tags with their newline, inline tags cut out', () => {
+  assert.equal(
+    sanitizeModelText('…delle successioni monotone limitate.</markdown>\n</invoke>'),
+    '…delle successioni monotone limitate.',
+  );
+  assert.equal(sanitizeModelText('Prima riga\n  </invoke> <parameter name="x">\nseconda riga'), 'Prima riga\nseconda riga');
+  assert.equal(sanitizeModelText('<markdown>Testo $a<b$ e <i>.</markdown>'), 'Testo $a<b$ e <i>.');
+  assert.equal(sanitizeModelText('$x<parameters$ e <marked>'), '$x<parameters$ e <marked>');
+});

@@ -85,6 +85,15 @@ test('meta-leak: model commentary is flagged as blocker', () => {
   }
 });
 
+test('meta-leak: generator markup is a blocker on any line', () => {
+  const f = find('Le successioni monotone limitate.</markdown>\n</invoke>', 'meta-leak');
+  assert.equal(f?.severity, 'blocker');
+  assert.equal(f?.line, 1);
+  assert.match(f!.message, /"<\/markdown>"/);
+  assert.equal(lint('Riga.\n\n</invoke>').filter((x) => x.rule === 'meta-leak')[0]?.line, 3);
+  assert.equal(has('Per $a<b$ vale <i>sempre</i>.', 'meta-leak'), false);
+});
+
 test('meta-leak: legitimate prose from physics books is not flagged', () => {
   const ok = [
     'Il lavoro svolto dal gas è definito come:',

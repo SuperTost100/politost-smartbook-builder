@@ -1,26 +1,29 @@
 // Mechanical text repair: npm run normalize-text -- --project <id> [--data-dir <dir>]
 // Display math that shares a block with inline math is moved to blocks of its own (or made inline in lists), without a model.
+// Tool-call markup a model left in the text (</markdown>, </invoke>) is removed.
 // Safe while the service runs: the database is in WAL mode and each section is one short transaction.
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { separateDisplayMath } from '@smartbuilder/content';
+import { separateDisplayMath, stripGeneratorMarkup } from '@smartbuilder/content';
 import { parseArgs, paths } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import { currentHeads, getProject, repairHead, repairQuestionText } from '../repo/index.ts';
 import { relint } from '../routes/views.ts';
+
+const repair = (md: string) => separateDisplayMath(stripGeneratorMarkup(md));
 
 /** Rewrites the sections (and chapter introductions) and the questions of a project that the fix changes. */
 export function normalizeText(ctx: AppContext, projectId: string): { sections: number; questions: number } {
   getProject(ctx, projectId);
   let sections = 0;
   for (const nodeId of currentHeads(ctx, projectId).keys()) {
-    if (!repairHead(ctx, projectId, nodeId, separateDisplayMath)) continue;
+    if (!repairHead(ctx, projectId, nodeId, repair)) continue;
     relint(ctx, projectId, nodeId);
     sections++;
   }
   let questions = 0;
-  for (const { id } of ctx.db.all<{ id: string }>('SELECT id FROM questions WHERE project_id = ?', projectId)) if (repairQuestionText(ctx, id, separateDisplayMath)) questions++;
+  for (const { id } of ctx.db.all<{ id: string }>('SELECT id FROM questions WHERE project_id = ?', projectId)) if (repairQuestionText(ctx, id, repair)) questions++;
   return { sections, questions };
 }
 

@@ -71,6 +71,7 @@ Each problem from the Analisi run is now handled when text is written, not only 
 - `\cotan`, `\sen`, `\sgn` and other function names KaTeX lacks are rewritten to `\operatorname{...}` in every model output.
 - A formula key already defined in another section is unwrapped, so the book never ships the same key twice. The writer is also told not to reuse known keys.
 - Exam questions read from scans, and generated questions, get a lint pass and one formatting repair (unbalanced `$`, KaTeX errors, a colon leading nowhere), like sections already did.
+- Tool-call markup a model leaves in its answer (`</markdown>`, `</invoke>`) is stripped from every model output and is a `meta-leak` blocker in lint, so it can't reach an export. On 8 October it had leaked into 7 Analisi chapter introductions; `npm run normalize-text` removed it and the re-exported book passes content-core 0.3.0's import check (issue #1).
 - Display math in sentences, statement numbering, eaten backslashes, lost blocks in fixes and timeouts were handled earlier the same day (see above).
 
 What a fresh book will still produce: on the first review, some real content errors per chapter, such as a missing hypothesis or a wrong order of infinitesimals. Finding those is the review's job. With fixes applied automatically and the reviewer's memory, they should close in one or two rounds. Exam pages that can't be read still need you to type them in.
@@ -83,6 +84,7 @@ What a fresh book will still produce: on the first review, some real content err
 - **Quiz items** (720 multiple-choice questions) are stored but not classified or imported into practice.
 - **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
 - **Autosave** is explicit (Save block, or Ctrl/Cmd+Enter) rather than debounced, so each save is one revision.
+- **content-core 0.3.0** exists only in the reader's open PR (SuperTost100/politost-smartbook#5) and is not published yet, so the builder still pins v0.2.1. 0.3.0 has breaking `ContentBlock` and `InlineSegment` types, so upgrading means adapting the preview. That branch also lacks v0.2.1's exam-hint change and warns "hint mancante" on every exam question.
 - **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
 
 ## Independent reviews
