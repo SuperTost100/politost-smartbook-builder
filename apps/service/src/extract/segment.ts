@@ -332,6 +332,69 @@ export function segmentQuiz(resourceId: string, pages: PageText[]): QuestionRow[
   return rows;
 }
 
+// ---------- Multiple-choice quizzes numbered "N)" with options "a)" … ("DBQuiz") ----------
+
+interface QuizItem { num: number; startPage: number; endPage: number; stem: string[]; options: { letter: string; lines: string[] }[] }
+
+const QUIZ_NUM = /^(\d{1,3})\)\s*(.*)$/;
+const QUIZ_OPTION = /^([a-e])\)\s*(.*)$/;
+
+/**
+ * Collections where every question is "N) statement" followed by options "a)" … "e)" and no answer key in the text
+ * (the right option is only highlighted in the PDF, so there is no solution). Numbering that restarts at 1 after a
+ * complete question starts a new block, named after the file. Question numbers may skip or repeat a little.
+ */
+export function segmentNumberedQuiz(resourceId: string, pages: PageText[], label = ''): QuestionRow[] {
+  const blocks: QuizItem[][] = [];
+  let block = null as QuizItem[] | null;
+  let cur = null as QuizItem | null;
+  for (const { page, text } of pageLines(pages)) {
+    const q = QUIZ_NUM.exec(text);
+    if (q) {
+      const n = Number(q[1]);
+      const prev = cur?.num ?? 0;
+      // A question with a single option is a broken one; the next number still starts a new question.
+      const done = !!cur && (cur.options.length >= 2 || (cur.options.length === 1 && n === prev + 1));
+      // An option that continues with "1) …" is not a new question: a restart needs a full question before and a sentence after.
+      const restart = n === 1 && !!cur && cur.options.length >= 4 && /^\p{L}.{9}/u.test(q[2]);
+      if ((!cur && n <= 3) || (done && n !== prev && n >= prev - 3 && n <= prev + 4) || restart) {
+        cur = { num: n, startPage: page, endPage: page, stem: q[2] ? [q[2]] : [], options: [] };
+        if (!block || restart) blocks.push(block = []);
+        block.push(cur);
+        continue;
+      }
+    }
+    if (!cur) continue;
+    cur.endPage = page;
+    const o = QUIZ_OPTION.exec(text);
+    // Options come in order; a "b) …" inside a statement or an option is text.
+    if (o && o[1] === String.fromCharCode(97 + cur.options.length)) cur.options.push({ letter: o[1], lines: o[2] ? [o[2]] : [] });
+    else if (cur.options.length) cur.options[cur.options.length - 1].lines.push(text);
+    else cur.stem.push(text);
+  }
+  const blocksWithItems = blocks.map((b) => b.filter((x) => x.options.length >= 2)).filter((b) => b.length);
+  // A handful of "1) … a) …" lines in an ordinary sheet is not a quiz collection.
+  if (blocksWithItems.reduce((n, b) => n + b.length, 0) < 3) return [];
+  return blocksWithItems.flatMap((b, i) => b.map((x): QuestionRow => ({
+    kind: 'exercise',
+    origin: 'authentic',
+    resourceId,
+    pageFrom: x.startPage,
+    pageTo: x.endPage,
+    examGroup: blocksWithItems.length > 1 ? `${label} - blocco ${i + 1}` : label,
+    examDate: null,
+    number: String(x.num),
+    statement: `${joinLines(x.stem)}\n\n${x.options.map((o) => `- ${o.letter}) ${o.lines.join(' ')}`.trimEnd()).join('\n')}`,
+    hint: '',
+    solution: '',
+    difficulty: 'medio',
+    topicIds: [],
+    chapterId: null,
+    status: 'draft',
+    checks: [],
+  })));
+}
+
 /** Split an exam/exercise resource into authentic questions with page ranges and exam sessions. Text-layer heuristics; statements may be garbled until transcribed. */
 export function segmentQuestions(ctx: AppContext, resourceId: string): QuestionRow[] {
   const res = ctx.db.get<{ role: string; filename: string }>('SELECT role, filename FROM resources WHERE id = ?', resourceId);
@@ -341,7 +404,11 @@ export function segmentQuestions(ctx: AppContext, resourceId: string): QuestionR
   if (res.role === 'exams') return segmentExams(resourceId, pages, { label, untitled: true });
   if (!['exercises', 'mixed'].includes(res.role)) return [];
   const quiz = segmentQuiz(resourceId, pages);
-  // Exercise sheets that are not quiz simulations ("Esercizio 1", "Esercizio 2", …) become one group per file.
-  if (res.role === 'exercises') return quiz.length ? quiz : segmentExams(resourceId, pages, { label, kind: 'exercise', untitled: true });
+  // Other quiz layout ("13) …" with options a) to e)), then exercise sheets ("Esercizio 1", "Esercizio 2", …) as one group per file.
+  if (res.role === 'exercises') {
+    if (quiz.length) return quiz;
+    const numbered = segmentNumberedQuiz(resourceId, pages, label);
+    return numbered.length ? numbered : segmentExams(resourceId, pages, { label, kind: 'exercise', untitled: true });
+  }
   return [...segmentExams(resourceId, pages, { label, untitled: !quiz.length }), ...quiz];
 }

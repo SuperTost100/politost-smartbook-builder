@@ -12,7 +12,7 @@ import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
-import { labelResources, topicsMap } from './prepare.ts';
+import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { computePriorities } from './prepare.ts';
@@ -221,6 +221,43 @@ describe('4. practice generation stages', () => {
     assert.deepEqual(r, { generated: 1, reused: 0 });
     assert.deepEqual(ctx.db.all<{ hint: string }>(`SELECT hint FROM questions WHERE kind = 'exam' AND origin = 'generated'`).map((x) => x.hint), [''], 'exams have no hints');
     assert.equal(taskKeys(runId).filter((k) => k.startsWith('verify:')).length, 3);
+  });
+
+  test('the exercise writer sees up to 6 classified collection items on the chapter topics, known answers first; the exam stage and the book do not', async () => {
+    const t = topic('limiti');
+    const other = topic('serie');
+    seedOutline([['c1', ['s1']]], { topicIds: [t] });
+    seedResource(ctx, { projectId: P, id: 'coll', role: 'exercises' });
+    seedResource(ctx, { projectId: P, id: 'off', role: 'exercises', included: 0 });
+    const item = (statement: string, o: Record<string, unknown> = {}) => q({ kind: 'exercise', origin: 'authentic', resource_id: 'coll', exam_group: 'Quiz A', statement, solution: '', topic_ids: [t], ...o });
+    for (let i = 0; i < 5; i++) item(`SENZA RISPOSTA ${i}`);
+    const answered = [item('CON RISPOSTA 1', { solution: 'Risposta corretta: b' }), item('CON RISPOSTA 2', { solution: 'Risposta corretta: c' })];
+    item('ALTRO ARGOMENTO', { topic_ids: [other] });
+    item('NON CLASSIFICATO', { topic_ids: [] });
+    item('FUORI DAL LIBRO', { resource_id: 'off' });
+    item('SCRITTO DA NOI', { origin: 'generated', resource_id: null });
+
+    fake.next(answer(gen(1, 'esercizio')));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
+    const prompt = fake.calls[0].prompt;
+    assert.match(prompt, /match their level and style, do not copy them/);
+    assert.equal(prompt.match(/RISPOSTA \d/g)!.length, 6, 'both answered items and four of the others');
+    assert.ok(answered.every((id) => prompt.includes(row(id).statement)) && prompt.includes('Risposta corretta: b'));
+    assert.ok(!/ALTRO ARGOMENTO|NON CLASSIFICATO|FUORI DAL LIBRO|SCRITTO DA NOI/.test(prompt));
+
+    fake.next(answer(gen(1, 'esame')));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exam' }));
+    assert.ok(!fake.calls[1].prompt.includes('RISPOSTA'));
+    // The generated exercises are the only ones in the chapter.
+    assert.deepEqual(ctx.db.all(`SELECT 1 FROM questions WHERE chapter_id = 'c1' AND origin = 'authentic'`), []);
+  });
+
+  test('without collection items the prompt has no such section', async () => {
+    const t = topic('limiti');
+    seedOutline([['c1', ['s1']]], { topicIds: [t] });
+    fake.next(answer(gen(1, 'esercizio')));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
+    assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
   });
 });
 
@@ -477,7 +514,7 @@ describe('17. chapter review persists compile findings with the book context', (
   });
 });
 
-describe('12, 13. topic map: labels, fingerprint, mutex, exam classification only', () => {
+describe('12, 13. topic map: labels, fingerprint, mutex, classification; priorities from exams only', () => {
   const insertIndex = (rid: string) => ctx.db.run('INSERT INTO source_indexes (resource_id, origin, entries) VALUES (?, ?, ?)', rid, 'extracted', JSON.stringify([{ title: `Argomenti di ${rid}`, level: 1, page: 0 }]));
   const topics = (sources: { resource: string }[] = [{ resource: 'R1' }]) => ({
     topics: [{ key: 'limiti', name: 'Limiti', aliases: [], description: '', prerequisites: [], sources: sources.map((s) => ({ ...s, pageFrom: 1, pageTo: 3 })) }],
@@ -497,16 +534,21 @@ describe('12, 13. topic map: labels, fingerprint, mutex, exam classification onl
     assert.deepEqual([...labelResources([{ id: 'a' }, { id: 'b' }]).byLabel], [['R1', 'a'], ['R2', 'b']]);
   });
 
-  test('a new theory source rebuilds the map and re-classifies exam questions only; unchanged sources do nothing', async () => {
+  test('a new theory source rebuilds the map and re-classifies exam questions and collection items; unchanged sources do nothing', async () => {
     seedResource(ctx, { projectId: P, id: 'theory1', role: 'theory' });
     insertIndex('theory1');
     const exam = q({ kind: 'exam', origin: 'authentic', exam_group: 'G1', statement: 'Limite?' });
-    const quiz = q({ kind: 'exercise', origin: 'authentic', statement: 'Quiz?' });
-    fake.next(answer(topics()), answer({ items: [{ id: exam, topics: ['limiti'], difficulty: 'medio' }] }));
+    const quiz = q({ kind: 'exercise', origin: 'authentic', exam_group: 'Quiz A', statement: 'Quiz?' });
+    const written = q({ kind: 'exercise', origin: 'generated', statement: 'Scritto da noi' });
+    fake.next(answer(topics()), answer({ items: [{ id: exam, topics: ['limiti'], difficulty: 'medio' }, { id: quiz, topics: ['limiti'], difficulty: 'facile' }] }));
     await topicsMap(ctx, startTask('topics.map', {}));
     assert.deepEqual(json(row(exam).topic_ids, []), [`${P.slice(0, 8)}-limiti`]);
-    assert.equal(row(quiz).topic_ids, '[]', 'exercise collections are not classified');
-    assert.ok(!fake.calls[1].prompt.includes(quiz));
+    assert.deepEqual(json(row(quiz).topic_ids, []), [`${P.slice(0, 8)}-limiti`], 'exercise-collection items are classified too');
+    assert.equal(row(written).topic_ids, '[]', 'questions the book wrote itself are not');
+    // Exams come first in the batch, and only the exam session counts toward frequency.
+    assert.ok(fake.calls[1].prompt.indexOf(exam) < fake.calls[1].prompt.indexOf(quiz));
+    assert.ok(!fake.calls[1].prompt.includes(written));
+    assert.equal(ctx.db.get<{ n: number }>(`SELECT exam_sessions AS n FROM topics WHERE id = ?`, `${P.slice(0, 8)}-limiti`)!.n, 1);
     const stored = ctx.db.get<{ topic_fingerprint: string }>('SELECT topic_fingerprint FROM projects')!.topic_fingerprint;
     assert.ok(stored);
 
@@ -517,11 +559,13 @@ describe('12, 13. topic map: labels, fingerprint, mutex, exam classification onl
     // A second theory source: topics are rebuilt (two sources in the prompt) and the exam is classified again.
     seedResource(ctx, { projectId: P, id: 'theory2', role: 'theory', filename: 'altro.pdf' });
     insertIndex('theory2');
-    fake.next(answer({ topics: [...topics().topics, { key: 'serie', name: 'Serie', aliases: [], description: '', prerequisites: [], sources: [{ resource: 'R2', pageFrom: 1, pageTo: 2 }] }] }), answer({ items: [{ id: exam, topics: ['serie'], difficulty: 'facile' }] }));
+    fake.next(answer({ topics: [...topics().topics, { key: 'serie', name: 'Serie', aliases: [], description: '', prerequisites: [], sources: [{ resource: 'R2', pageFrom: 1, pageTo: 2 }] }] }), answer({ items: [{ id: exam, topics: ['serie'], difficulty: 'facile' }, { id: quiz, topics: ['serie'], difficulty: 'facile' }] }));
     const r = await topicsMap(ctx, startTask('topics.map', {}));
     assert.match(fake.calls[2].prompt, /R2 altro\.pdf/);
     assert.equal(r.topics, 2);
     assert.deepEqual(json(row(exam).topic_ids, []), [`${P.slice(0, 8)}-serie`]);
+    assert.deepEqual(json(row(quiz).topic_ids, []), [`${P.slice(0, 8)}-serie`]);
+    assert.equal(ctx.db.get<{ n: number }>(`SELECT exam_sessions AS n FROM topics WHERE id = ?`, `${P.slice(0, 8)}-serie`)!.n, 1, 'the quiz group is not a session');
     assert.notEqual(ctx.db.get<{ topic_fingerprint: string }>('SELECT topic_fingerprint FROM projects')!.topic_fingerprint, stored);
   });
 
@@ -1142,5 +1186,19 @@ describe('cheap check first', () => {
     assert.equal(fake.calls.length, before + 2);
     assert.equal(fake.calls.at(-1)!.selection.model, ctx.settings().routes.reviewer.primary.model);
     assert.deepEqual(issues(`question_id = '${b}'`), []);
+  });
+});
+
+describe('a ready exercises source that gave no questions is split again by Prepare', () => {
+  test('0 questions: split on the next run; some questions: kept unless forced', async () => {
+    seedResource(ctx, { projectId: P, id: 'quiz1', role: 'exercises', filename: 'DBQuiz_Fisica1.pdf' });
+    seedPage(ctx, 'quiz1', 0, 'Quiz fisica 1\nSolo una nota.');
+    assert.deepEqual(await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'quiz1' })), { questions: 0, duplicates: 0 });
+    // The same source with pages the splitter now reads (stands in for a newer splitter): Prepare splits it, no force needed.
+    ctx.db.run('UPDATE pages SET text = ? WHERE resource_id = ?', '1) Primo?\na) uno\nb) due\n2) Secondo?\na) tre\nb) quattro\n3) Terzo?\na) cinque\nb) sei', 'quiz1');
+    const r = await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'quiz1' }));
+    assert.deepEqual(r, { questions: 3, duplicates: 0 });
+    assert.deepEqual(ctx.db.all<{ kind: string; origin: string; chapter_id: string | null; topic_ids: string }>('SELECT kind, origin, chapter_id, topic_ids FROM questions').map((x) => [x.kind, x.origin, x.chapter_id, x.topic_ids].join()), Array(3).fill('exercise,authentic,,[]'));
+    assert.deepEqual(await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'quiz1' })), { questions: 3, reused: true });
   });
 });

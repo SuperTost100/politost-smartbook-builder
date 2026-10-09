@@ -6,7 +6,8 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
 import { detectKind, storeResource, extractResource, renderPageImage, findPassage, searchPages, segmentQuestions, ExtractError, isBlockedAddress, safeFetch, htmlToMarkdown, LIBREOFFICE_MISSING } from './index.ts';
-import { segmentExams } from './segment.ts';
+import { segmentExams, segmentNumberedQuiz } from './segment.ts';
+import { seedPage, seedResource } from '../llm/testkit.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import { makeCtx, makePdf, makeZip, makeDocx } from './testkit.ts';
 
@@ -398,6 +399,48 @@ test('exercise sheets with plain "Esercizio N" and no heading become one group p
   assert.deepEqual(q.map((x) => `${x.kind} ${x.examGroup} #${x.number}`), ['exercise tutorato_settimana_3 #1', 'exercise tutorato_settimana_3 #2']);
   assert.match(q[0].statement, /Un blocco scivola\.\n1\. v0/);
   assert.equal(segmentExams('r4', pages).length, 0);
+});
+
+// The layout of a "DBQuiz" file: "N) statement", options "a)" to "d)" (one may be split from its text), no answer key in the text.
+const QUIZ_PAGES = [
+  { idx: 0, text: 'Quiz fisica 1\nMEMO: VERIFICATA DUBBIO\n\n1) Sistema aperto, per avere lavoro massimo:\na) Nessuna\nb) Adiabatico\nc) Irreversibile\nd) Reversibile\n\n2) Gas a trasformazione reversibile da A a B. T=kS. Valore di Qab\nscambiato?\n\na) Qab= k*(Sb\n\n^2-Sa\n\n^2)\nb) Qab= TbSb - TaSa\nc)\nQab= k/2* (Sb\n\n^2-Sa\n\n^2)\nd) Qab= 0\n\n3) Un grave di massa m, in moto in un fluido, è soggetto a una forza F=-kv. Che dimensioni ha m/k?\n\na) [T]^-1\nb) [L][T]^-1\nc) [L]' },
+  { idx: 1, text: 'd) [T]\n\n4) Quale affermazione è vera nel caso di fluido ideale:\na) E’ un fluido con coefficiente di viscosità nullo\nb) La portata dipende dalla densità\nc) Nessuna delle altre\nd) E’ sempre comprimibile\n\n6) Si misura sei volte la lunghezza di un’asta. Determinare 1) la sensibilità, 2) l’errore assoluto\n\na) 1) 0,01; 2) 0,02 m\nb) 1) 0,1; 2) 0,02 m\nc)\n1) 0,01; 2) 0,04 m\nd) 1) 0,02; 2) 0,04 m' },
+  { idx: 2, text: '1) Seconda raccolta, primo quesito: quanto vale la somma 2+2?\na) 3\nb) 4\nc) 5\nd) 6\n\n2) Quanto vale la radice di 9?\na) 3\nb) 9\nc) 1\nd) 0' },
+];
+
+test('numbered quizzes ("N)" with options a) to d)): statement keeps the options as a list, restarts make blocks, no solution', () => {
+  const q = segmentNumberedQuiz('r5', QUIZ_PAGES, 'DBQuiz_Fisica1');
+  assert.deepEqual(q.map((x) => `${x.examGroup} #${x.number} p${x.pageFrom}-${x.pageTo}`), [
+    'DBQuiz_Fisica1 - blocco 1 #1 p0-0', 'DBQuiz_Fisica1 - blocco 1 #2 p0-0', 'DBQuiz_Fisica1 - blocco 1 #3 p0-1',
+    'DBQuiz_Fisica1 - blocco 1 #4 p1-1', 'DBQuiz_Fisica1 - blocco 1 #6 p1-1',
+    'DBQuiz_Fisica1 - blocco 2 #1 p2-2', 'DBQuiz_Fisica1 - blocco 2 #2 p2-2',
+  ]);
+  assert.ok(q.every((x) => x.kind === 'exercise' && x.origin === 'authentic' && x.chapterId === null && x.solution === '' && x.examDate === null));
+  assert.equal(q[0].statement, 'Sistema aperto, per avere lavoro massimo:\n\n- a) Nessuna\n- b) Adiabatico\n- c) Irreversibile\n- d) Reversibile');
+  // Wrapped options are joined and an option letter alone on its line takes the next line.
+  assert.match(q[1].statement, /^Gas a trasformazione reversibile da A a B\. T=kS\. Valore di Qab\nscambiato\?\n\n- a\) Qab= k\*\(Sb \^2-Sa \^2\)\n- b\) /);
+  assert.match(q[1].statement, /- c\) Qab= k\/2\* \(Sb \^2-Sa \^2\)\n- d\) Qab= 0$/);
+  // An option on the next page stays with its question; "[T]" is the time dimension, not an answer mark.
+  assert.match(q[2].statement, /- c\) \[L\]\n- d\) \[T\]$/);
+  // "1) …" inside an option is not a new question, and a skipped number is fine.
+  assert.match(q[4].statement, /- c\) 1\) 0,01; 2\) 0,04 m\n- d\) /);
+});
+
+test('numbered quizzes: one block is named after the file, and a sheet with a few lettered lines is not a quiz', () => {
+  assert.deepEqual([...new Set(segmentNumberedQuiz('r6', QUIZ_PAGES.slice(0, 2), 'DBQuiz_Fisica1').map((x) => x.examGroup))], ['DBQuiz_Fisica1']);
+  assert.deepEqual(segmentNumberedQuiz('r7', [{ idx: 0, text: 'Esercizio 1\n1) Calcola il limite.\na) per x che tende a 0\nb) per x che tende a 1\n2) Studia la funzione.\nEsercizio 2\nSvolgi.' }], 'foglio'), []);
+});
+
+test('segmentQuestions: an "exercises" source falls back to the numbered layout when it has no simulazioni; an exam source does not', () => {
+  const { ctx, projectId } = makeCtx();
+  seedResource(ctx, { id: 'quiz1', projectId, role: 'exercises', filename: 'DBQuiz_Fisica1.pdf' });
+  for (const p of QUIZ_PAGES) seedPage(ctx, 'quiz1', p.idx, p.text);
+  const rows = segmentQuestions(ctx, 'quiz1');
+  assert.equal(rows.length, 7);
+  assert.ok(rows.every((x) => x.kind === 'exercise' && x.examGroup!.startsWith('DBQuiz_Fisica1 - blocco')));
+  seedResource(ctx, { id: 'ex1', projectId, role: 'exams', filename: 'Fisica.pdf' });
+  for (const p of QUIZ_PAGES) seedPage(ctx, 'ex1', p.idx, p.text);
+  assert.equal(segmentQuestions(ctx, 'ex1').length, 0);
 });
 
 test('real exams: segmentation of 2022-23 and 2014-15, solutions matched by exercise number', { skip: !haveSources, timeout: 120_000 }, async () => {
