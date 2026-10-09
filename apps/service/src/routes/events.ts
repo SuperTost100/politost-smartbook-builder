@@ -10,7 +10,8 @@ const HEARTBEAT_MS = 15_000;
  */
 export function registerEventRoutes(app: FastifyInstance, ctx: AppContext) {
   const open = new Set<() => void>();
-  app.addHook('onClose', async () => { for (const close of [...open]) close(); });
+  // preClose, not onClose: the server only finishes closing once these streams end, and onClose runs after that.
+  app.addHook('preClose', async () => { for (const close of [...open]) close(); });
 
   app.get('/api/events', async (req, reply) => {
     const q = req.query as { projectId?: string; since?: string };

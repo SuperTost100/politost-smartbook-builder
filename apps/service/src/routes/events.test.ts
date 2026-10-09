@@ -70,3 +70,17 @@ describe('GET /api/events', () => {
     assert.deepEqual(ids(text), [live]);
   });
 });
+
+describe('shutdown', () => {
+  it('closes while a browser keeps the event stream open', async () => {
+    const own = await startApp();
+    await own.app.listen({ host: '127.0.0.1', port: 0 });
+    const url = `http://127.0.0.1:${(own.app.server.address() as { port: number }).port}/api/events`;
+    const res = await fetch(url);
+    const reader = res.body!.getReader();
+    await reader.read();
+    const closed = await Promise.race([own.close().then(() => true), new Promise((r) => setTimeout(() => r(false), 3000))]);
+    assert.equal(closed, true, 'app.close() waited for the open stream');
+    assert.equal((await reader.read()).done, true);
+  });
+});
