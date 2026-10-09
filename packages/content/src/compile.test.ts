@@ -38,12 +38,12 @@ test('chapter intro survives as the first paragraph and shifts numbering', () =>
   assert.deepEqual(parseChapterMarkdown(text(book, 'chapters/02-dinamica.md'), 2).paragraphs.map((p) => p.id), ['p1']);
 });
 
-test('content-core drops prose before the first paragraph heading (why the intro becomes p1)', () => {
+test('content-core merges prose before the first paragraph heading into p1 (why the intro becomes its own p1)', () => {
   const ch = parseChapterMarkdown('Prosa iniziale.\n\n## p1 | Primo\n\nCorpo uno.\n\n## p2 | Secondo\n\nCorpo due.\n', 1);
   assert.equal(ch.paragraphs.length, 2);
   // The intro is glued to the first paragraph instead of staying separate.
-  assert.match(ch.paragraphs[0].content, /Prosa iniziale/);
-  assert.doesNotMatch(ch.paragraphs[0].content, /Corpo uno/);
+  assert.match(ch.paragraphs[0].content, /Prosa iniziale[\s\S]*Corpo uno/);
+  assert.match(ch.paragraphs[1].content, /Corpo due/);
 });
 
 test('intro title follows the book language', () => {

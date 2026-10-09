@@ -12,10 +12,10 @@
     "test": "tsx --test src/**/*.test.ts"
   },
   "dependencies": {
-    "@politost/content-core": "https://codeload.github.com/SuperTost100/politost-content/tar.gz/refs/tags/v0.2.1",
+    "@politost/content-core": "https://github.com/SuperTost100/politost-content/releases/download/content-core-v0.4.0/politost-content-core-0.4.0.tgz",
     "@smartbuilder/domain": "*",
     "fflate": "^0.8.3",
-    "katex": "^0.17.0",
+    "katex": "^0.19.0",
     "mathjs": "^15.0.0"
   }
 }

@@ -47,7 +47,7 @@ export function resetLlmState() {
 
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 
-/** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable or a timeout. */
+/** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable, a timeout or a truncated answer. */
 export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<T>): Promise<RunRoleResult<T>> {
   const funnel = getFunnel();
   const needsImages = !!opts.images?.length;
@@ -81,8 +81,8 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
         firstQuota ??= f;
       }
       lastFailure = f;
-      // A call that hangs until the timeout usually hangs again on the same model, so the fallback gets the next try.
-      const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut);
+      // A call that hangs until the timeout, or an answer cut off at the output limit, usually repeats on the same model, so the fallback gets the next try.
+      const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut || !!f.truncated);
       if (canFallBack) continue;
       throw toTaskError(f, route, firstQuota, candidates.length > 1);
     }
@@ -193,6 +193,8 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
     });
     if (result.usage && result.usage.totalTokens > 0) usage = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens };
     if (result.finishReason === 'cancelled') throw cancelled(opts.signal, timeout);
+    // Retrying the same model would cut the answer off at the same place, so a truncated answer goes to the fallback.
+    if (result.finishReason === 'length') throw new RouteFailure({ kind: 'temporary', message: 'The answer hit the model\'s output limit and was cut off.', truncated: true });
     if (result.finishReason !== 'stop') throw new RouteFailure({ kind: 'temporary', message: `The model stopped early (${result.finishReason}).` });
     ok = true;
     return { text: result.text, structured: result.structured, usage };
