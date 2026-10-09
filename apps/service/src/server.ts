@@ -15,6 +15,7 @@ export class HttpError extends Error {
 }
 
 const LOOPBACK_HOSTS = new Set(['localhost', '127.0.0.1', '[::1]', '::1']);
+const LOOPBACK_ADDRS = new Set(['127.0.0.1', '::1', '::ffff:127.0.0.1']);
 const COOKIE = 'smartbuilder_token';
 
 export function lanToken(ctx: AppContext): string {
@@ -38,12 +39,15 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   await app.register(multipart, { limits: { fileSize: 300 * 1024 * 1024, files: 20 } });
   const token = ctx.config.lan ? lanToken(ctx) : null;
 
-  // Access control. Loopback mode: only loopback Host headers (blocks DNS rebinding).
+  // Access control. Loopback mode: only loopback connections with loopback Host headers (blocks DNS rebinding,
+  // and other devices when --host binds a public interface without --lan).
   // LAN mode: every request needs the token cookie, set once by visiting /?token=...
   app.addHook('onRequest', async (req, reply) => {
     const host = (req.headers.host ?? '').replace(/:\d+$/, '');
     if (!token) {
-      if (!LOOPBACK_HOSTS.has(host)) return deny(reply, 403, 'host_not_allowed', `Requests for host "${host}" are refused. Start with --lan to allow other devices.`);
+      if (!LOOPBACK_HOSTS.has(host) || !LOOPBACK_ADDRS.has(req.socket.remoteAddress ?? '')) {
+        return deny(reply, 403, 'host_not_allowed', `Requests for host "${host}" are refused. Start with --lan to allow other devices.`);
+      }
     } else {
       const q = (req.query as Record<string, string> | undefined)?.token;
       if (q && sameToken(q, token)) {
@@ -58,7 +62,7 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     if (req.url.startsWith('/api/') && !['GET', 'HEAD', 'OPTIONS'].includes(req.method)) {
       if (req.headers['x-smartbuilder'] !== '1') return deny(reply, 403, 'csrf', 'Missing x-smartbuilder header.');
       const origin = req.headers.origin;
-      if (origin && new URL(origin).host !== req.headers.host) return deny(reply, 403, 'origin', 'Cross-origin request refused.');
+      if (origin && originHost(origin) !== req.headers.host) return deny(reply, 403, 'origin', 'Cross-origin request refused.');
     }
   });
 
@@ -83,6 +87,15 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
     });
   }
   return app;
+}
+
+/** Host of an Origin header; null for "null" (sandboxed frames, file pages) and anything else that is not a URL. */
+function originHost(origin: string): string | null {
+  try {
+    return new URL(origin).host;
+  } catch {
+    return null;
+  }
 }
 
 function deny(reply: FastifyReply, status: number, code: string, message: string) {

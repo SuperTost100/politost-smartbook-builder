@@ -20,6 +20,16 @@ describe('security hooks', () => {
     assert.equal(res.statusCode, 403);
     assert.equal(JSON.parse(res.body).error.code, 'csrf');
   });
+  it('refuses an Origin of "null" instead of failing with a server error', async () => {
+    const res = await t.app.inject({ method: 'POST', url: '/api/projects', payload: projectBody('null-origin'), headers: { 'content-type': 'application/json', 'x-smartbuilder': '1', origin: 'null' } });
+    assert.equal(res.statusCode, 403);
+    assert.equal(JSON.parse(res.body).error.code, 'origin');
+  });
+  it('refuses a connection from another device even when it sends a loopback Host header', async () => {
+    const res = await t.app.inject({ method: 'GET', url: '/api/health', remoteAddress: '192.168.1.20', headers: { host: 'localhost:5300' } });
+    assert.equal(res.statusCode, 403);
+    assert.equal(JSON.parse(res.body).error.code, 'host_not_allowed');
+  });
   it('allows reads without it', async () => {
     assert.equal((await t.app.inject({ method: 'GET', url: '/api/health' })).statusCode, 200);
   });
