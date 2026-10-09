@@ -32,6 +32,8 @@ export interface RunRoleOptions<T> {
   signal?: AbortSignal;
   /** Override the configured route (e.g. escalation). */
   route?: Route;
+  /** Let the model search and read the web. Every other tool stays refused. Only providers that pass approvals through can do this. */
+  web?: boolean;
 }
 
 export interface RunRoleResult<T> { text: string; data: T; route: Route; usage: { inputTokens: number | null; outputTokens: number | null } }
@@ -52,6 +54,7 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   const funnel = getFunnel();
   const needsImages = !!opts.images?.length;
   const canImages = (r: Route) => !!funnel.providers[r.provider]?.capabilities.images;
+  const canWeb = (r: Route) => !!funnel.providers[r.provider]?.capabilities.access?.includes('supervised');
 
   const configured = ctx.settings().routes[opts.role];
   const primary = opts.route ?? configured.primary;
@@ -62,6 +65,11 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   else if (canImages(primary)) candidates = [primary, ...(fallback && canImages(fallback) ? [fallback] : [])];
   else if (fallback && canImages(fallback)) candidates = [fallback];
   else throw new TaskError(`The "${opts.role}" route (${primary.provider}/${primary.model}) cannot read images and there is no fallback that can.`, 'input', 'In Settings, pick a vision-capable model (Claude or Codex) for this role.');
+
+  if (opts.web) {
+    candidates = candidates.filter(canWeb);
+    if (!candidates.length) throw new TaskError(`The "${opts.role}" route cannot search the web.`, 'input', 'In Settings, pick Claude or Codex for this role.');
+  }
 
   // Skip a provider that recently hit its quota when another candidate is available.
   const ready = candidates.filter((c) => (cooldown.get(c.provider) ?? 0) <= Date.now());
@@ -183,8 +191,9 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
         model: route.model,
         ...(route.effort ? { effort: route.effort } : {}),
         cwd: scratch,
-        access: 'none',
+        access: opts.web ? 'supervised' : 'none',
       },
+      ...(opts.web ? { onApproval: webOnly } : {}),
       system: opts.system,
       prompt,
       ...(opts.images?.length ? { attachments: opts.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
@@ -221,6 +230,10 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
     });
   }
 }
+
+/** Approval policy for web runs: searching and reading pages, nothing that touches this machine. */
+const WEB_TOOLS = /^(WebSearch|WebFetch|web_search|web_fetch)$/;
+export const webOnly = (req: { tool: string }) => (WEB_TOOLS.test(req.tool) ? 'allow' as const : 'deny' as const);
 
 class AbortedByCaller extends Error {}
 const abortError = () => Object.assign(new AbortedByCaller('Aborted'), { name: 'AbortError' });

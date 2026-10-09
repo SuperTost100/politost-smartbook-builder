@@ -38,6 +38,17 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       break;
     }
     case 'regenerate': runId = ctx.queue.createRun(projectId, 'regenerate', regenerateSpecs(ctx, projectId, scope)); break;
+    case 'research': {
+      if (!project.options.outsideMaterial) throw new HttpError(409, 'outside_off', 'Outside material is off for this book.', 'Turn on "Use verified outside material" in Setup, then try again.');
+      // The given sections, or every drafted section of the given chapters (all chapters when none are given).
+      const nodeIds = scope.nodeIds?.length ? scope.nodeIds : (loadOutline(ctx, projectId)?.outline.chapters ?? [])
+        .filter((c) => !scope.chapterIds?.length || scope.chapterIds.includes(c.id))
+        .flatMap((c) => c.sections.map((s) => s.id)).filter((id) => headRevision(ctx, projectId, id));
+      if (!nodeIds.length) throw new HttpError(409, 'nothing_to_research', 'No drafted section to research.', 'Draft the section first.');
+      const stamp = Date.now().toString(36);
+      runId = ctx.queue.createRun(projectId, 'research', nodeIds.map((nodeId) => ({ kind: 'section.research', key: `research:${nodeId}:${stamp}`, label: 'Look for outside material', input: { nodeId }, pool: 'research', maxAttempts: 2 })));
+      break;
+    }
     case 'review': {
       const specs: TaskSpec[] = scope.questionIds?.length
         ? scope.questionIds.flatMap((id) => {

@@ -6,7 +6,7 @@ import { getRunSummary, getTask, listRuns, usageForRun } from '../repo/index.ts'
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
 
-const kindSchema = z.enum(['prepare', 'plan', 'generate', 'review', 'export', 'regenerate']);
+const kindSchema = z.enum(['prepare', 'plan', 'generate', 'review', 'export', 'regenerate', 'research']);
 const ids = z.array(z.string().min(1)).max(2000);
 
 export function registerRunRoutes(app: FastifyInstance, ctx: AppContext) {

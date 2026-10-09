@@ -74,7 +74,7 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
   if (!packet) return { notes: '', pages: '', summary: '' };
   const files = new Map(ctx.db.all<{ id: string; filename: string }>('SELECT id, filename FROM resources WHERE project_id = ?', packet.projectId).map((r) => [r.id, r.filename]));
   const notes = packet.notes.filter((n) => n.verified).map((n) => {
-    const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : 'source';
+    const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
     return `[${n.id}] (${where}) "${truncate(n.quote.replace(/\s+/g, ' '), 700)}"${n.claim ? `\n    supports: ${truncate(n.claim, 300)}` : ''}`;
   }).join('\n');
   const pageTexts = topCitedPages(packet).slice(0, MAX_TRANSCRIBED_PAGES).map((p) => {

@@ -6,7 +6,7 @@ export * from './api.ts';
 
 // ---------- Model routing ----------
 
-export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'editor', 'exercises', 'checker', 'reviewer'] as const;
+export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'editor', 'exercises', 'checker', 'reviewer', 'research'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
@@ -19,6 +19,7 @@ export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
   exercises: { label: 'Write exercises', help: 'Generated exercises and missing official solutions. Every one is checked afterwards.' },
   checker: { label: 'Check solutions', help: 'First, cheap check of every exercise solution. Disagreements go to the reviewer for a second opinion.' },
   reviewer: { label: 'Review', help: 'Independent check of drafts and solutions. Prefer a different vendor from the writer.' },
+  research: { label: 'Outside research', help: 'Searches the web for material your sources lack. The only role allowed to use web search; Claude or Codex.' },
 };
 
 export const routeSchema = z.object({
@@ -42,6 +43,7 @@ export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
   exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
   checker: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
+  research: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
 };
 
 // ---------- Settings ----------
@@ -286,13 +288,16 @@ export interface EvidenceNote {
   verified: boolean;
   /** Short claim this note supports, written by the evidence reader. */
   claim: string;
+  /** Web page the quote was found on (outside research); resourceId and page are null then. */
+  url?: string;
+  title?: string;
 }
 
 export interface EvidencePacket {
   id: string;
   projectId: string;
   nodeId: string;
-  provider: 'notebooklm' | 'local' | 'manual';
+  provider: 'notebooklm' | 'local' | 'manual' | 'web';
   query: string;
   answer: string;
   notes: EvidenceNote[];
@@ -338,7 +343,7 @@ export type TaskState = 'queued' | 'running' | 'succeeded' | 'retry_wait' | 'wai
 export interface RunSummary {
   id: string;
   projectId: string;
-  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate';
+  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research';
   status: RunStatus;
   createdAt: string;
   finishedAt: string | null;
