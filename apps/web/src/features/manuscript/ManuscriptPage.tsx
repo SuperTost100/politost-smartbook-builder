@@ -130,16 +130,13 @@ export default function ManuscriptPage() {
 
   const { startEdit: beginEdit, cancelEdit, editing: editingIdx, draft, changeText, saveDraft, removeDraftBlock, saving } = editor;
   const startEdit = useCallback((i: number) => { setFocusIdx(i); beginEdit(i); }, [beginEdit]);
-  const endEdit = useCallback(() => {
-    const was = editingIdx;
-    cancelEdit();
-    if (was !== null) requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${was}"]`)?.focus());
-  }, [cancelEdit, editingIdx]);
+  // Focus returns to the block once the editor has closed (effect below), which can be after a save.
+  const endEdit = cancelEdit;
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
   const [compareOpen, setCompareOpen] = useState(false);
   const blockedEdit = editor.changedElsewhere;
   const editProps = useMemo<BlockEdit | undefined>(() => (draft ? {
-    text: draft.text, baseText: draft.baseText, saving, blocked: blockedEdit,
+    text: draft.text, baseText: draft.baseText, saved: !!draft.saved, saving, blocked: blockedEdit,
     onChange: changeText, onSave: saveDraft, onDelete: removeDraftBlock, onCancel: endEdit,
   } : undefined), [draft, saving, blockedEdit, changeText, saveDraft, removeDraftBlock, endEdit]);
 
@@ -148,7 +145,8 @@ export default function ManuscriptPage() {
   useEffect(() => {
     if (wasEditing.current !== null && editor.editing === null) {
       const i = wasEditing.current;
-      requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${i}"]`)?.focus());
+      // Not when another block's editor has opened meanwhile (leaving one block for another): it holds the focus.
+      requestAnimationFrame(() => { if (!blocksRef.current?.querySelector('.ms-edit')) blocksRef.current?.querySelector<HTMLElement>(`[data-block="${i}"]`)?.focus(); });
     }
     wasEditing.current = editor.editing;
   }, [editor.editing]);
