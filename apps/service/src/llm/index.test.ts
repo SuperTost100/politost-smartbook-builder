@@ -186,6 +186,20 @@ describe('error mapping and fallback', () => {
     assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).route.provider, 'antigravity');
   });
 
+  test('an answer cut off at the output limit falls back to the next route', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'antigravity', model: 'g' });
+    fake.next(() => ({ text: 'half an ans', finishReason: 'length' }), () => ({ text: 'ok' }));
+    const out = await runRole(kit.ctx, { ...base, role: 'bulk' });
+    assert.equal(out.route.provider, 'antigravity');
+    assert.equal(out.text, 'ok');
+  });
+
+  test('an answer cut off at the output limit without a fallback is a temporary error that says so', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' });
+    fake.next(() => ({ text: 'half', finishReason: 'length' }));
+    await assert.rejects(runRole(kit.ctx, { ...base, role: 'bulk' }), (e: unknown) => e instanceof TaskError && e.kind === 'temporary' && /output limit/.test(e.message));
+  });
+
   test('caller abort cancels the CLI and is not wrapped as a TaskError', async () => {
     useRoutes('bulk', { provider: 'codex', model: 'm' });
     const ac = new AbortController();

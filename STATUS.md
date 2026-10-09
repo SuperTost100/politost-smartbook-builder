@@ -63,7 +63,7 @@ Four issues were accepted as exceptions and are visible in the Review tab:
 - the reviewer read ℝ\* as "nonzero reals". The book's notation defines it as the extended line, and the reviewer now receives that notation;
 - one June 2024 question could not be read from its scan, so it is not in the book.
 
-Exam questions have no hints, as in the real exam; content-core v0.2.1 no longer warns about them.
+Exam questions have no hints, as in the real exam; content-core no longer warns about them (since v0.2.1).
 
 ## Prevented at generation since this run
 
@@ -84,7 +84,6 @@ What a fresh book will still produce: on the first review, some real content err
 - **Quiz items** (720 multiple-choice questions) are stored but not classified or imported into practice.
 - **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
 - **Autosave** is explicit (Save block, or Ctrl/Cmd+Enter) rather than debounced, so each save is one revision.
-- **content-core 0.3.0** exists only in the reader's open PR (SuperTost100/politost-smartbook#5) and is not published yet, so the builder still pins v0.2.1. 0.3.0 has breaking `ContentBlock` and `InlineSegment` types, so upgrading means adapting the preview. That branch also lacks v0.2.1's exam-hint change and warns "hint mancante" on every exam question.
 - **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
 
 ## Independent reviews
@@ -93,9 +92,13 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 1. Backend after the first implementation: 18 findings, one of them a blocker (Python isolation). All were fixed with regression tests (commit a12a4e2).
 2. The fixes, the acceptance-run changes and the web app. It confirmed 16 of the 18 earlier fixes and found 15 new issues (8 major, 7 minor, no blockers). The worst were these: a manuscript refresh could discard an unsaved block edit, accepting an old proposal could overwrite newer edits, and *Verify again* re-imported questions you had repaired. All 15 are fixed with regression tests, along with the 2 incomplete earlier fixes.
 
+## Dependencies
+
+The builder validates and previews books with content-core 0.4.0 and KaTeX 0.19, the versions the reader uses, so the preview and the reader's import check agree. Model calls go through cli-funnel 0.4.0. An answer cut off at a model's output limit now moves to the role's fallback model instead of being retried on the same one.
+
 ## Tests and CI
 
-`npm test` runs 126 content tests and 189 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 128 content tests and 194 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
 
 ## Your running instance
 

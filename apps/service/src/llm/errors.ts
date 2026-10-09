@@ -2,7 +2,7 @@
 import { FunnelError } from 'cli-funnel';
 
 export type FailureKind = 'auth' | 'quota' | 'unavailable' | 'input' | 'fatal' | 'temporary' | 'aborted';
-export interface Failure { kind: FailureKind; message: string; retryAfterMs?: number; timedOut?: boolean }
+export interface Failure { kind: FailureKind; message: string; retryAfterMs?: number; timedOut?: boolean; truncated?: boolean }
 
 export const DEFAULT_QUOTA_WAIT_MS = 15 * 60_000;
 const MIN_WAIT_MS = 30_000;
