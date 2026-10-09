@@ -523,7 +523,7 @@ export const researchSchema = z.object({
     sources: z.array(z.object({
       url: z.string(),
       title: z.string(),
-      quote: z.string().describe('verbatim sentence copied from the page that supports the addition'),
+      quote: z.string().describe('verbatim sentence of plain words, without formulas, copied from the page'),
     })),
   })),
 });
@@ -547,7 +547,7 @@ ${p.blocks}
 INSTRUCTIONS
 - Use web search and read the pages you cite. Find at most 3 additions a student preparing the exam would miss: a missing hypothesis or condition, a standard counterexample, an application, a common equivalent form. Skip anything the text already says. Return no additions if the section needs none.
 - Each addition is one block (a paragraph, a list or a display formula with its sentence) in ${lang}, written to fit after the block it follows, in the same style and notation. Do not add [[n]] markers or links to the text.
-- For each addition give 1 or 2 sources: the page URL, its title, and one sentence copied exactly from that page (any language) that supports the addition. The builder opens every URL and drops additions whose quote it cannot find there.
+- For each addition give 1 or 2 sources: the page URL, its title, and one sentence copied exactly from that page (any language) that supports the addition. Pick a sentence of plain words without formulas or symbols: pages store math as markup that differs from what you read. The builder opens every URL and drops additions whose quote it cannot find there.
 - Return JSON: additions.`,
   };
 }

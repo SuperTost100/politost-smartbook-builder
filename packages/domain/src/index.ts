@@ -19,7 +19,7 @@ export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
   exercises: { label: 'Write exercises', help: 'Generated exercises and missing official solutions. Every one is checked afterwards.' },
   checker: { label: 'Check solutions', help: 'First, cheap check of every exercise solution. Disagreements go to the reviewer for a second opinion.' },
   reviewer: { label: 'Review', help: 'Independent check of drafts and solutions. Prefer a different vendor from the writer.' },
-  research: { label: 'Outside research', help: 'Searches the web for material your sources lack. The only role allowed to use web search; Claude or Codex.' },
+  research: { label: 'Outside research', help: 'Searches the web for material your sources lack. The only role allowed to use web search, and only with Claude.' },
 };
 
 export const routeSchema = z.object({
@@ -43,7 +43,8 @@ export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
   exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
   checker: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
-  research: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
+  // Claude only: it is the CLI whose tools the builder can switch off for web runs.
+  research: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' } },
 };
 
 // ---------- Settings ----------

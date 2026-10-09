@@ -1,5 +1,7 @@
 // Outside research: scripted model answers, pages served by a stub, a real temp database.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
@@ -7,7 +9,7 @@ import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts
 import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
-import { researchDeps, sectionResearch } from './research.ts';
+import { pageText, researchDeps, sectionResearch } from './research.ts';
 import { startRun } from './runs.ts';
 
 let fake: FakeFunnel;
@@ -79,6 +81,9 @@ test('a verified addition becomes a proposal after its block, citing a web note;
 
   const call = fake.calls[0];
   assert.equal(call.selection.access, 'supervised');
+  // The folder's Claude settings take every local tool away before the approval callback is even asked.
+  const settings = JSON.parse(readFileSync(join(call.selection.cwd, '.claude', 'settings.json'), 'utf8'));
+  assert.ok(['Bash', 'Read', 'Write', 'mcp__*'].every((tool) => settings.permissions.deny.includes(tool)));
   assert.equal(await call.onApproval!({ id: 'a', tool: 'WebSearch', input: {} }), 'allow');
   assert.equal(await call.onApproval!({ id: 'b', tool: 'Bash', input: {} }), 'deny');
 
@@ -105,6 +110,40 @@ test('research runs only when outside material is on, and only with a route that
   ctx.db.run(`UPDATE projects SET options = '{}' WHERE id = ?`, P);
   assert.throws(() => startRun(ctx, P, 'research', { nodeIds: ['s1'] }), /Outside material is off/);
 
-  ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, research: { primary: { provider: 'antigravity', model: 'g' } } } });
-  await assert.rejects(sectionResearch(ctx, task()), /cannot search the web/);
+  for (const provider of ['antigravity', 'codex']) {
+    ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, research: { primary: { provider, model: 'g' } } } });
+    await assert.rejects(sectionResearch(ctx, task()), /cannot search the web/);
+  }
+});
+
+test('an addition of several blocks cites the pages on each, and the blocks after it keep their citations', async () => {
+  seedSection('Primo.\n\nSecondo.', { 1: ['n1'] });
+  fake.next(additions([{ afterBlock: 1, markdown: 'Vale la disuguaglianza:\n\n$$\\oint \\frac{\\delta Q}{T} \\le 0$$', why: 'w', sources: [{ url: 'https://example.edu/clausius', title: 'C', quote: "l'integrale di dQ/T è minore o uguale a zero" }] }]));
+  await sectionResearch(ctx, task());
+  const p = ctx.db.get<{ markdown: string; citations: string }>(`SELECT markdown, citations FROM content_revisions WHERE status = 'proposal'`)!;
+  assert.equal(p.markdown.split('\n\n').length, 4);
+  assert.deepEqual(json(p.citations, {}), { 1: ['w1'], 2: ['w1'], 3: ['n1'] });
+});
+
+test('note ids are given at commit from the packet as it is then: an earlier w1 is not reused, dropped additions use none', async () => {
+  seedSection('Primo.');
+  const packet = ctx.db.get<{ id: string; notes: string }>(`SELECT id, notes FROM evidence_packets WHERE node_id = 's1'`)!;
+  ctx.db.run('UPDATE evidence_packets SET notes = ? WHERE id = ?', JSON.stringify([...json<unknown[]>(packet.notes, []), { id: 'w1', quote: 'x', resourceId: null, page: null, verified: true, claim: '', url: 'https://old.example' }]), packet.id);
+  fake.next(additions([
+    { afterBlock: 1, markdown: 'Scartata.', why: 'a', sources: [{ url: 'https://example.org/entropia', title: 'E', quote: 'questa frase non è sulla pagina' }] },
+    { afterBlock: 1, markdown: 'Tenuta.', why: 'b', sources: [{ url: 'https://example.edu/clausius', title: 'C', quote: "l'integrale di dQ/T è minore o uguale a zero" }] },
+  ]));
+  await sectionResearch(ctx, task());
+  const ids = json<{ id: string }[]>(ctx.db.get<{ notes: string }>(`SELECT notes FROM evidence_packets WHERE id = ?`, packet.id)!.notes, []).map((n) => n.id);
+  assert.deepEqual(ids, ['n1', 'w1', 'w2']);
+  assert.deepEqual(json(ctx.db.get<{ citations: string }>(`SELECT citations FROM content_revisions WHERE status = 'proposal'`)!.citations, {}), { 1: ['w2'] });
+});
+
+test('page text is read in linear time, even from markup crafted to slow regexes down', () => {
+  const hostile = '<script>'.repeat(375_000) + '<title>T</title><p>Testo &egrave; qui</p>';
+  const started = Date.now();
+  const page = pageText('text/html', hostile);
+  assert.ok(Date.now() - started < 1000, 'a 3 MB page takes under a second');
+  assert.equal(page.title, 'T');
+  assert.match(page.text, /Testo è qui/);
 });
