@@ -1,6 +1,6 @@
 # Status
 
-Last updated 7 October 2026.
+Last updated 9 October 2026.
 
 ## What works
 
@@ -78,12 +78,12 @@ What a fresh book will still produce: on the first review, some real content err
 
 ## Not done or only partly done
 
-- **Outside research** (the per-book "verified outside material" option) is stored but no research step uses it yet.
+- **Outside research** runs per section from "Find outside sources" in the Manuscript, when the book's "Use verified outside material" option is on. Claude searches the web with every local tool switched off; the builder opens each page and keeps an addition only if its quote is there. Additions arrive as a proposal that lists the pages. It is not part of Generate.
 - **Licensed photographs and raster image generation** are not implemented. Figures are function plots or files you import.
 - **MATLAB examples** are not generated. Python examples are, and they run in a permission-restricted Node child process with Pyodide. Node 24 cannot restrict network access, which the comment in `pipeline/python.ts` documents.
-- **Quiz items** (720 multiple-choice questions) are stored but not classified or imported into practice.
+- **Quiz items** are a source, not book content: they are classified by topic and shown to the exercise writer as examples of level and style. The reader has no multiple-choice format, so they are not exported. The Fisica quiz file splits into 573 items but has no answers: its right options are only highlighted in the PDF.
 - **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
-- **Autosave** is explicit (Save block, or Ctrl/Cmd+Enter) rather than debounced, so each save is one revision.
+- **Autosave** saves the open block 3 seconds after you stop typing, and when you leave it. Each save is still a revision; History folds your own edits made within 10 minutes of each other into one row.
 - **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
 
 ## Independent reviews
