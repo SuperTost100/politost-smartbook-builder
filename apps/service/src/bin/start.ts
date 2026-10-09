@@ -1,10 +1,16 @@
 import { networkInterfaces, hostname } from 'node:os';
-import { parseArgs } from '../config.ts';
+import { lockDataDir, parseArgs } from '../config.ts';
 import { createContext } from '../context.ts';
 import { buildServer, lanToken } from '../server.ts';
 import { registerHandlers } from '../pipeline/index.ts';
 
 const config = parseArgs(process.argv.slice(2));
+const lock = lockDataDir(config);
+if ('heldBy' in lock) {
+  console.error(`Another Smart Builder service (process ${lock.heldBy}) is using ${config.dataDir}. Stop it first, or start this one with --data-dir <another folder>.`);
+  process.exit(1);
+}
+process.on('exit', lock.release);
 const ctx = createContext(config);
 registerHandlers(ctx);
 const app = await buildServer(ctx);

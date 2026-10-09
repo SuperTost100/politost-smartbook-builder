@@ -9,7 +9,7 @@
     "./blocks": "./src/blocks.ts"
   },
   "scripts": {
-    "test": "tsx --test src/**/*.test.ts"
+    "test": "tsx --test \"src/**/*.test.ts\""
   },
   "dependencies": {
     "@politost/content-core": "https://github.com/SuperTost100/politost-content/releases/download/content-core-v0.4.0/politost-content-core-0.4.0.tgz",

@@ -306,6 +306,34 @@ test('discarding the draft leaves the latest text untouched', async ({ page, req
   expect(after.current.markdown).not.toContain('DISCARD-ME');
 });
 
+test('text typed while a save is on its way stays in the editor as a new draft', async ({ page, request }) => {
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' PRIMA');
+  let release!: () => void;
+  const held = new Promise<void>((r) => { release = r; });
+  await page.route(`**/api/projects/${bookId}/sections/s1`, async (route) => {
+    if (route.request().method() !== 'PUT') return route.fallback();
+    await held;
+    await route.continue();
+  });
+  await page.keyboard.press('Control+Enter');
+  await expect(page.getByRole('status').filter({ hasText: 'Saving' })).toBeVisible();
+  await page.keyboard.type(' DOPO');
+  release();
+  await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible();
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('PRIMA DOPO');
+  await expect(page.getByRole('button', { name: 'Save block' })).toBeEnabled();
+  const after = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  expect(after.current.markdown).toContain('PRIMA');
+  expect(after.current.markdown).not.toContain('DOPO');
+  await page.unroute(`**/api/projects/${bookId}/sections/s1`);
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+  const saved = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  expect(saved.current.markdown).toContain('PRIMA DOPO');
+});
+
 test('Practice shows a question status change without reloading', async ({ page, request }) => {
   const created = await request.post(`/api/projects/${bookId}/questions`, { headers: H, data: { kind: 'exercise', origin: 'adapted', statement: 'Calcola il limite di sin(x)/x per x che tende a 0.', hint: '', solution: 'Vale 1.', difficulty: 'medio', topicIds: [] } });
   expect(created.ok(), await created.text()).toBeTruthy();

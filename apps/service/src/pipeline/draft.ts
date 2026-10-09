@@ -8,7 +8,7 @@ import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
-import { carryCitations, insertProposal } from '../repo/content.ts';
+import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { draftPrompt, draftSchema, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
@@ -239,9 +239,18 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const replaced: string[] = [];
   try {
     ctx.db.tx(() => {
+      // Text that becomes a proposal must not change the figures of the current text: its figures get names of their own.
+      const applies = (currentHead(ctx, projectId, nodeId)?.id ?? null) === (head?.id ?? null);
       for (const a of newAssets) {
-        const old = ctx.db.all<{ id: string; path: string }>('SELECT id, path FROM assets WHERE project_id = ? AND node_id = ? AND filename = ?', projectId, nodeId, a.row.filename as string);
-        for (const o of old) { ctx.db.run('DELETE FROM assets WHERE id = ?', o.id); replaced.push(o.path); }
+        const name = a.row.filename as string;
+        const old = ctx.db.all<{ id: string; path: string }>('SELECT id, path FROM assets WHERE project_id = ? AND node_id = ? AND filename = ?', projectId, nodeId, name);
+        if (applies) {
+          for (const o of old) { ctx.db.run('DELETE FROM assets WHERE id = ?', o.id); replaced.push(o.path); }
+        } else if (old.length) {
+          const own = name.replace(/\.svg$/, `-${a.id.slice(0, 8)}.svg`);
+          markdown = markdown.split(`src="assets/${name}"`).join(`src="assets/${own}"`);
+          a.row.filename = own;
+        }
         ctx.db.insert('assets', a.row);
       }
       committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head?.id ?? null, model: route.model, citations, runId: t.task.runId, taskId: t.task.id });

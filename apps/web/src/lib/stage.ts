@@ -28,7 +28,7 @@ export function nextAction(p: ProjectSummary): NextAction {
       return { label: 'Generate outline', to: `${base}/outline` };
     case 'outline':
       if (run) return { label: 'Open run', to: `${base}/run` };
-      return p.outlineRevId ? { label: 'Approve outline', to: `${base}/outline` } : { label: 'Generate outline', to: `${base}/outline` };
+      return { label: 'Approve outline', to: `${base}/outline` };
     case 'drafting':
       if (run?.status === 'paused') return { label: 'Resume drafting', to: `${base}/run` };
       if (run) return { label: 'Open manuscript', to: `${base}/manuscript` };

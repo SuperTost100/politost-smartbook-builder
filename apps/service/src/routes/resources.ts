@@ -13,6 +13,8 @@ import { idParam, intParam, parse, projectOf } from './util.ts';
 
 const roleSchema = z.enum(['theory', 'exercises', 'exams', 'mixed']);
 const SUPPORTED = new Set(['.pdf', '.docx', '.pptx', '.md', '.markdown']);
+/** Files of one upload are held in memory until they are stored, so a request carries at most this much. */
+const MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
 
 export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/resources', async (req) => listResources(ctx, projectOf(ctx, req)));
@@ -23,6 +25,7 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
     if (!req.isMultipart()) throw new HttpError(400, 'invalid', 'Send the files as a form upload.', 'Choose files with the upload button.');
     let roleRaw: string | undefined;
     const files: { filename: string; bytes: Buffer }[] = [];
+    let total = 0;
     for await (const part of req.parts()) {
       if (part.type === 'field') {
         if (part.fieldname === 'role') roleRaw = String(part.value);
@@ -30,6 +33,8 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
       }
       const bytes = await part.toBuffer();
       if (part.file.truncated) throw new HttpError(413, 'too_large', `"${part.filename}" is too large.`, 'Split the file or reduce its size and try again.');
+      total += bytes.length;
+      if (total > MAX_UPLOAD_BYTES) throw new HttpError(413, 'too_large', 'These files add up to more than 1 GB.', 'Upload them in smaller groups.');
       if (part.filename) files.push({ filename: basename(part.filename.replace(/\\/g, '/')), bytes });
     }
     const role: ResourceRole = parse(roleSchema, roleRaw ?? 'mixed');
@@ -41,11 +46,15 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
       if (!f.bytes.length) throw new HttpError(400, 'empty_file', `"${f.filename}" is empty.`, 'Check the file and upload it again.', f.filename);
     }
     const stored: Resource[] = [];
-    for (const f of files) {
-      const id = await deps.storeResource(ctx, projectId, { filename: f.filename, bytes: f.bytes, role });
-      stored.push(getResource(ctx, id));
+    try {
+      for (const f of files) {
+        const id = await deps.storeResource(ctx, projectId, { filename: f.filename, bytes: f.bytes, role });
+        stored.push(getResource(ctx, id));
+      }
+    } finally {
+      // Files stored before one was refused are kept, so they are prepared like the others.
+      if (stored.length) deps.startRun(ctx, projectId, 'prepare');
     }
-    deps.startRun(ctx, projectId, 'prepare');
     return stored;
   });
 

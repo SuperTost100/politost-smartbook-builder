@@ -247,7 +247,20 @@ describe('14. practice-done barrier and the first-chapter gate', () => {
     ctx.db.run(`UPDATE tasks SET state = 'succeeded' WHERE id = ?`, gen.task.id);
     await assert.rejects(practiceDone(ctx, barrier), (e: unknown) => e instanceof TaskError && e.kind === 'later');
     ctx.db.run(`UPDATE tasks SET state = 'succeeded' WHERE id = ?`, verify.task.id);
-    assert.deepEqual(await practiceDone(ctx, barrier), { tasks: 2, failed: 0 });
+    assert.deepEqual(await practiceDone(ctx, barrier), { tasks: 2, failed: 0, blocked: 0 });
+  });
+
+  test('a failed import does not keep the barrier waiting on the tasks it blocks', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const runId = newId();
+    const qid = q({ chapter_id: 'c1', origin: 'authentic', kind: 'exam' });
+    const imp = startTask('question.import', { questionId: qid }, { runId, key: `import:${qid}` });
+    const verify = startTask('question.verify', { questionId: qid }, { runId, key: `verify:${qid}` });
+    ctx.db.run(`UPDATE tasks SET state = 'failed' WHERE id = ?`, imp.task.id);
+    ctx.db.run(`UPDATE tasks SET state = 'queued' WHERE id = ?`, verify.task.id);
+    ctx.db.insert('task_deps', { task_id: verify.task.id, dep_id: imp.task.id });
+    const barrier = startTask('practice.done', { chapterId: 'c1' }, { runId, key: 'practice-done:c1' });
+    assert.deepEqual(await practiceDone(ctx, barrier), { tasks: 2, failed: 1, blocked: 1 });
   });
 });
 
@@ -325,6 +338,31 @@ describe('2. figure files are scoped to their section', () => {
     assert.notEqual(after.find((a) => a.node_id === s1)!.id, before.find((a) => a.node_id === s1)!.id);
     assert.equal(existsSync(resolveDataPath(ctx.config, before.find((a) => a.node_id === s1)!.path)), false, 'old file removed');
     assert.ok(existsSync(resolveDataPath(ctx.config, before.find((a) => a.node_id === s2)!.path)));
+  });
+
+  test('a redraft that becomes a proposal leaves the current figure alone and names its own', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer(draft('x^2')));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    const [first] = ctx.db.all<{ id: string; filename: string; path: string }>('SELECT * FROM assets');
+    const drawing = readFileSync(resolveDataPath(ctx.config, first.path), 'utf8');
+    // The author saves the section while the model writes the redraft.
+    const redraft = answer(draft('x^4'));
+    fake.next(() => {
+      ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, s1);
+      seedRevision(s1, `Testo dell'autore.\n\n:::image{src="assets/${first.filename}" alt="Grafico" caption="Fig"}\n:::`);
+      return redraft();
+    });
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1, force: true }));
+    assert.equal(r.status, 'proposal');
+    const assets = ctx.db.all<{ id: string; filename: string; path: string }>('SELECT * FROM assets ORDER BY rowid');
+    assert.equal(assets.length, 2);
+    assert.equal(assets[0].id, first.id);
+    assert.equal(readFileSync(resolveDataPath(ctx.config, first.path), 'utf8'), drawing, 'the current figure is unchanged');
+    assert.notEqual(assets[1].filename, first.filename);
+    const proposal = ctx.db.get<{ markdown: string }>(`SELECT markdown FROM content_revisions WHERE node_id = ? AND status = 'proposal'`, s1)!.markdown;
+    assert.match(proposal, new RegExp(`src="assets/${assets[1].filename}"`));
   });
 
   test('assets and the revision are committed together: a failing commit leaves no asset row and no file', async () => {
@@ -485,6 +523,20 @@ describe('12, 13. topic map: labels, fingerprint, mutex, exam classification onl
     assert.equal(r.topics, 2);
     assert.deepEqual(json(row(exam).topic_ids, []), [`${P.slice(0, 8)}-serie`]);
     assert.notEqual(ctx.db.get<{ topic_fingerprint: string }>('SELECT topic_fingerprint FROM projects')!.topic_fingerprint, stored);
+  });
+
+  test('a rebuilt map keeps the priority the author set by hand on a topic that keeps its key', async () => {
+    seedResource(ctx, { projectId: P, id: 'theory1', role: 'theory' });
+    insertIndex('theory1');
+    fake.next(answer(topics()));
+    await topicsMap(ctx, startTask('topics.map', {}));
+    ctx.db.run(`UPDATE topics SET priority = 'high', priority_locked = 1 WHERE id = ?`, `${P.slice(0, 8)}-limiti`);
+    seedResource(ctx, { projectId: P, id: 'theory2', role: 'theory', filename: 'altro.pdf' });
+    insertIndex('theory2');
+    fake.next(answer({ topics: [...topics().topics, { key: 'serie', name: 'Serie', aliases: [], description: '', prerequisites: [], sources: [{ resource: 'R2', pageFrom: 1, pageTo: 2 }] }] }));
+    await topicsMap(ctx, startTask('topics.map', {}));
+    const rows = ctx.db.all<{ id: string; priority: string; priority_locked: number }>('SELECT id, priority, priority_locked FROM topics ORDER BY id');
+    assert.deepEqual(rows.map((r) => [r.id.slice(9), r.priority, r.priority_locked]), [['limiti', 'high', 1], ['serie', 'normal', 0]]);
   });
 
   test('a map from before fingerprints is adopted, not rebuilt', async () => {
@@ -921,6 +973,21 @@ describe('the review converges', () => {
     assert.equal(r.issues, 1);
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.quote), ['Un altro punto.']);
     assert.deepEqual(issues(`id IN ('p-live', 'p-stale')`).map((i) => i.id), ['p-live']);
+  });
+
+  test('a re-review keeps the open non-blocker issues of sections that did not change', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    seedRevision('s2', 'Altro testo.');
+    fake.next(answer({ issues: [finding({ sectionId: 's2', quote: 'Altro testo.', message: 'Manca un esempio' }), finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro', message: 'Errato' })] }));
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    // Only s1 changes; the reviewer, told to report only blockers in s2, finds none there now.
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
+    seedRevision('s1', 'Una frase nuova.');
+    fake.next(answer({ issues: [] }));
+    await review();
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.node_id, i.severity, i.message]), [['s2', 'major', 'Manca un esempio']]);
   });
 
   test('Run review no longer forces: identical text is reused, changed text is read again', async () => {

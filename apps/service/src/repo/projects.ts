@@ -64,17 +64,25 @@ function countSections(ctx: AppContext, p: Project): number {
 function summarize(ctx: AppContext, p: Project): ProjectSummary {
   const n = (sql: string) => Number(ctx.db.get<Rec>(sql, p.id)?.n ?? 0);
   const run = ctx.db.get<Rec>(`SELECT id FROM runs WHERE project_id = ? AND status IN (${placeholders(ACTIVE_RUN.length)}) ORDER BY rowid DESC LIMIT 1`, p.id, ...ACTIVE_RUN);
-  return {
-    ...p,
-    counts: {
-      resources: n('SELECT COUNT(*) AS n FROM resources WHERE project_id = ?'),
-      sections: countSections(ctx, p),
-      drafted: n(`SELECT COUNT(DISTINCT node_id) AS n FROM content_revisions WHERE project_id = ? AND status = 'current' AND kind = 'section'`),
-      questions: n('SELECT COUNT(*) AS n FROM questions WHERE project_id = ?'),
-      openIssues: n(`SELECT COUNT(*) AS n FROM review_issues WHERE project_id = ? AND status IN ('open', 'proposed')`),
-    },
-    activeRun: run ? ctx.queue.runSummary(run.id) : null,
+  const counts = {
+    resources: n('SELECT COUNT(*) AS n FROM resources WHERE project_id = ?'),
+    sections: countSections(ctx, p),
+    drafted: n(`SELECT COUNT(DISTINCT node_id) AS n FROM content_revisions WHERE project_id = ? AND status = 'current' AND kind = 'section'`),
+    questions: n('SELECT COUNT(*) AS n FROM questions WHERE project_id = ?'),
+    openIssues: n(`SELECT COUNT(*) AS n FROM review_issues WHERE project_id = ? AND status IN ('open', 'proposed')`),
   };
+  const hasOutline = () => n('SELECT COUNT(*) AS n FROM outline_revisions WHERE project_id = ?') > 0;
+  return { ...p, stage: currentStage(p, counts, hasOutline), counts, activeRun: run ? ctx.queue.runSummary(run.id) : null };
+}
+
+/**
+ * Where the book is. Only approving the outline and an approved export are stored; the rest follows from the book:
+ * an outline waiting for approval, or every section drafted (review).
+ */
+function currentStage(p: Project, counts: ProjectSummary['counts'], hasOutline: () => boolean): ProjectStage {
+  if (p.stage === 'export') return 'export';
+  if (!p.outlineRevId) return hasOutline() ? 'outline' : p.stage === 'mapping' ? 'mapping' : 'sources';
+  return counts.sections > 0 && counts.drafted >= counts.sections ? 'review' : 'drafting';
 }
 
 export type ProjectPatch = Partial<Omit<ProjectInput, 'options'>> & { options?: Partial<BookOptions> };

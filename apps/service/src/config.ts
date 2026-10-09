@@ -1,6 +1,6 @@
 import { homedir, platform } from 'node:os';
 import { isAbsolute, join, relative, resolve, sep } from 'node:path';
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 
 export interface Config {
   dataDir: string;
@@ -58,6 +58,8 @@ export const paths = {
   /** Empty folder used as cwd for model CLIs. */
   scratch: (c: Config) => join(c.dataDir, 'scratch'),
   lanToken: (c: Config) => join(c.dataDir, 'lan-token'),
+  /** PID of the service using the data directory. */
+  lock: (c: Pick<Config, 'dataDir'>) => join(c.dataDir, 'service.pid'),
 };
 
 /**
@@ -75,4 +77,42 @@ export function toDataPath(c: Pick<Config, 'dataDir'>, abs: string): string {
 /** Absolute file path of a stored path. Absolute values (rows from before relative paths, or outside the data dir) pass through. */
 export function resolveDataPath(c: Pick<Config, 'dataDir'>, stored: string): string {
   return isAbsolute(stored) || /^[a-zA-Z]:[\\/]/.test(stored) ? stored : resolve(c.dataDir, stored);
+}
+
+/**
+ * Claims the data directory for this process, so a second service on the same folder cannot run the same tasks.
+ * Returns the release function, or the PID of the service that holds the folder. A lock left by a dead process is taken over.
+ */
+export function lockDataDir(c: Pick<Config, 'dataDir'>, pid = process.pid): { release: () => void } | { heldBy: number } {
+  const file = paths.lock(c);
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      writeFileSync(file, String(pid), { flag: 'wx' });
+      return { release: () => { if (readPid(file) === pid) rmSync(file, { force: true }); } };
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EEXIST') throw err;
+      const holder = readPid(file);
+      if (holder && holder !== pid && isAlive(holder)) return { heldBy: holder };
+      rmSync(file, { force: true });
+    }
+  }
+  return { heldBy: readPid(file) ?? 0 };
+}
+
+function readPid(file: string): number | null {
+  try {
+    const n = Number(readFileSync(file, 'utf8').trim());
+    return Number.isInteger(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
+}
+
+function isAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM';
+  }
 }

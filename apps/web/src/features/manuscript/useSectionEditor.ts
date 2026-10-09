@@ -97,16 +97,25 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
     });
   }, [nodeId]);
 
+  // `draftId` and `text` name the draft text being saved; they are not sent.
   const write = useMutation({
-    mutationFn: (v: { markdown: string; baseRevId: string | null }) => api('PUT /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId }, body: v }),
+    mutationFn: ({ markdown, baseRevId }: { markdown: string; baseRevId: string | null; draftId?: number; text?: string }) => api('PUT /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId }, body: { markdown, baseRevId } }),
     onMutate: () => setState({ kind: 'saving' }),
-    onSuccess: (sv) => {
+    onSuccess: (sv, saved) => {
       qc.setQueryData(qk.section(pid, nodeId), sv);
       void qc.invalidateQueries({ queryKey: qk.manuscript(pid) });
       void qc.invalidateQueries({ queryKey: qk.history(pid, nodeId) });
       void qc.invalidateQueries({ queryKey: qk.preview(pid, sv.chapterId) });
       void qc.invalidateQueries({ queryKey: qk.issues(pid) });
-      setDraft(null);
+      // Text typed while the save was on its way stays as a draft on top of the saved revision.
+      setDrafts((all) => {
+        const d = all[nodeId];
+        const copy = { ...all };
+        if (d && saved.text !== undefined && d.id === saved.draftId && d.text !== saved.text) {
+          copy[nodeId] = { ...d, baseText: saved.text, baseRevId: sv.current?.id ?? null, baseMarkdown: sv.current?.markdown ?? '' };
+        } else delete copy[nodeId];
+        return copy;
+      });
       setConflict(null);
       setState({ kind: 'saved' });
     },
@@ -146,7 +155,7 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
     if (!draft || draft.text === draft.baseText) return;
     if (changedElsewhere) { blocked(); return; }
     if (draft.index >= latestBlocks.length) return;
-    write.mutate({ markdown: joinBlocks(applyDraft(latestBlocks, draft.index, draft.text)), baseRevId: draft.baseRevId });
+    write.mutate({ markdown: joinBlocks(applyDraft(latestBlocks, draft.index, draft.text)), baseRevId: draft.baseRevId, draftId: draft.id, text: draft.text });
   }, [draft, changedElsewhere, latestBlocks, write, blocked]);
 
   const removeDraftBlock = useCallback(() => {
@@ -165,7 +174,7 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
       const fresh = await qc.fetchQuery({ queryKey: qk.section(pid, nodeId), queryFn: () => api('GET /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId } }), staleTime: 0 });
       const blocks = splitBlocks(fresh.current?.markdown ?? '');
       const at = locateDraft(draft, blocks);
-      write.mutate({ markdown: joinBlocks(applyDraft(blocks, at.index, draft.text)), baseRevId: fresh.current?.id ?? null });
+      write.mutate({ markdown: joinBlocks(applyDraft(blocks, at.index, draft.text)), baseRevId: fresh.current?.id ?? null, draftId: draft.id, text: draft.text });
     } catch (e) { toast(errorText(e), { tone: 'danger' }); }
   }, [draft, qc, pid, nodeId, write, toast]);
 
