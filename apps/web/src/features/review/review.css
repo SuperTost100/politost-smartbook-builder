@@ -13,3 +13,4 @@
 .rv-quote { margin: 0; padding: 6px 12px; background: var(--marker); border-radius: var(--radius-sm); font-family: var(--font-serif); font-size: 15px; overflow-wrap: anywhere; }
 .rv-msg { font-size: 15px; }
 .rv-sug { font-size: 14px; color: var(--ink-muted); }
+.rv-quote .katex-display, .rv-msg .katex-display, .rv-sug .katex-display { margin: 4px 0; overflow-x: auto; overflow-y: hidden; }

@@ -8,6 +8,7 @@ import { plural, timeAgo } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/Toast';
+import { MathText } from '../../components/MathText';
 import './review.css';
 
 const SEVERITIES: IssueSeverity[] = ['blocker', 'major', 'minor'];
@@ -15,6 +16,7 @@ const SOURCES: IssueSource[] = ['lint', 'review', 'verification'];
 const STATUSES: IssueStatus[] = ['open', 'proposed', 'fixed', 'accepted', 'dismissed'];
 const SEV_TONE: Record<IssueSeverity, string> = { blocker: 'danger', major: 'warning', minor: '' };
 const SEV_ORDER: Record<IssueSeverity, number> = { blocker: 0, major: 1, minor: 2 };
+const label = (s: string) => s[0].toUpperCase() + s.slice(1);
 
 export default function ReviewPage() {
   useDocumentTitle('Review');
@@ -94,9 +96,9 @@ export default function ReviewPage() {
       </div>
 
       <div className="rv-filters ui-row" role="group" aria-label="Filters">
-        <label><span className="ui-sr">Severity</span><select className="ui-select ui-select--sm" value={sev} onChange={(e) => setSev(e.target.value)}><option value="">All severities</option>{SEVERITIES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
-        <label><span className="ui-sr">Source</span><select className="ui-select ui-select--sm" value={src} onChange={(e) => setSrc(e.target.value)}><option value="">All sources</option>{SOURCES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
-        <label><span className="ui-sr">Status</span><select className="ui-select ui-select--sm" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Any status</option>{STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}</select></label>
+        <label><span className="ui-sr">Severity</span><select className="ui-select ui-select--sm" value={sev} onChange={(e) => setSev(e.target.value)}><option value="">All severities</option>{SEVERITIES.map((s) => <option key={s} value={s}>{label(s)}</option>)}</select></label>
+        <label><span className="ui-sr">Source</span><select className="ui-select ui-select--sm" value={src} onChange={(e) => setSrc(e.target.value)}><option value="">All sources</option>{SOURCES.map((s) => <option key={s} value={s}>{label(s)}</option>)}</select></label>
+        <label><span className="ui-sr">Status</span><select className="ui-select ui-select--sm" value={status} onChange={(e) => setStatus(e.target.value)}><option value="">Any status</option>{STATUSES.map((s) => <option key={s} value={s}>{label(s)}</option>)}</select></label>
         <span className="ui-grow" />
         <label className="ui-check"><input type="checkbox" checked={allPicked} onChange={(e) => setPicked(e.target.checked ? new Set(shown.map((i) => i.id)) : new Set())} disabled={shown.length === 0} />Select all shown</label>
         <button type="button" className="ui-btn ui-btn--accent" disabled={fixable.length === 0 || fixMany.isPending} onClick={() => fixMany.mutate(fixable.map((i) => i.id))}><Icon name="sparkle" />Fix selected issues{fixable.length ? ` (${fixable.length})` : ''}</button>
@@ -120,9 +122,9 @@ export default function ReviewPage() {
                 <span className="ui-muted rv-time">{timeAgo(i.createdAt)}</span>
               </div>
               <div className="rv-where"><span className="ui-meta">Where</span> {location(i)}</div>
-              {i.quote && <blockquote className="rv-quote">{i.quote}</blockquote>}
-              <p className="rv-msg">{i.message}</p>
-              {i.suggestion && <p className="rv-sug"><strong>Suggestion:</strong> {i.suggestion}</p>}
+              {i.quote && <blockquote className="rv-quote"><MathText text={i.quote} /></blockquote>}
+              <p className="rv-msg"><MathText text={i.message} /></p>
+              {i.suggestion && <p className="rv-sug"><strong>Suggestion:</strong> <MathText text={i.suggestion} /></p>}
               {i.resolution && <p className="ui-muted rv-sug">Resolution: {i.resolution}</p>}
               <div className="ui-row">
                 {i.status === 'open' || i.status === 'proposed' ? (

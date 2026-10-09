@@ -224,7 +224,7 @@ export default function ManuscriptPage() {
           <article className="ms-sheet" aria-labelledby="ms-title">
             <header className="ms-sheet__head">
               <div className="ms-sheet__titles">
-                <h1 id="ms-title" className="ms-title">{mapped?.heading && <span className="ms-title__id ui-mono">{mapped.heading.id}</span>}{title}</h1>
+                <h1 id="ms-title" className="ms-title">{loc && loc.index >= 0 && <span className="ms-title__id ui-mono">{`${loc.chapter.number}.${loc.index + 1}`}</span>}{title}</h1>
                 <p className="ms-meta ui-muted">
                   {rev ? <>{rev.origin === 'human' ? 'Edited by you' : rev.origin === 'repair' ? 'Repaired' : 'Written by AI'}{rev.model ? ` (${rev.model})` : ''} · {timeAgo(rev.createdAt)}</> : 'Not drafted yet'}
                 </p>

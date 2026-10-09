@@ -204,7 +204,7 @@ function Lines({ id, label, value, onChange, rows = 2 }: { id: string; label: st
   return (
     <div className="ui-field">
       <label className="ui-field__label ol-small-label" htmlFor={id}>{label}</label>
-      <textarea id={id} className="ui-textarea" rows={rows} value={value.join('\n')} onChange={(e) => onChange(e.target.value.split('\n'))} onBlur={(e) => onChange(e.target.value.split('\n').map((l) => l.trim()).filter(Boolean))} />
+      <textarea id={id} className="ui-textarea ol-lines" rows={Math.max(rows, value.length)} value={value.join('\n')} onChange={(e) => onChange(e.target.value.split('\n'))} onBlur={(e) => onChange(e.target.value.split('\n').map((l) => l.trim()).filter(Boolean))} />
       <span className="ui-field__hint">One per line.</span>
     </div>
   );
@@ -343,7 +343,7 @@ function SourceIndexes({ resources }: { resources: Resource[] }) {
         const idx = results[i]?.data;
         return (
           <details key={r.id} className="ol-src" open={resources.length <= 2}>
-            <summary className="ui-wrap">{r.filename}</summary>
+            <summary><span className="ui-wrap">{r.filename}</span></summary>
             {results[i]?.isLoading && <div className="ui-skeleton" style={{ height: 40 }} />}
             {idx === null && <p className="ui-muted ol-hint">No index found in this file.</p>}
             {idx && (
