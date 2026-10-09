@@ -405,3 +405,131 @@ test('manuscript figures resolve whether the map is keyed by assets/<file> or th
     await page.unroute(`**/api/projects/${bookId}/chapters/c1/preview`);
   }
 });
+
+// Autosave runs on its own section (s2) so the tests above keep their text. It saves about 3 s after the last keystroke.
+const AUTO_MD = 'Primo paragrafo.\n\nSecondo paragrafo.\n\nTerzo paragrafo.';
+
+async function s2(request: APIRequestContext) {
+  return (await request.get(`/api/projects/${bookId}/sections/s2`)).json();
+}
+
+async function s2Revisions(request: APIRequestContext): Promise<number> {
+  return (await (await request.get(`/api/projects/${bookId}/sections/s2/history`)).json()).length;
+}
+
+async function seedAutosave(request: APIRequestContext) {
+  const head = await s2(request);
+  const put = await request.put(`/api/projects/${bookId}/sections/s2`, { headers: H, data: { markdown: AUTO_MD, baseRevId: head.current?.id ?? null } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+}
+
+test('autosave stores the text after a pause and keeps the editor open', async ({ page, request }) => {
+  await seedAutosave(request);
+  const before = await s2Revisions(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' AUTO-UNO');
+  // Nothing is saved while the author is still typing.
+  expect((await s2(request)).current.markdown).not.toContain('AUTO-UNO');
+  await expect(page.getByRole('status').filter({ hasText: 'Saved' })).toBeVisible({ timeout: 10_000 });
+  expect((await s2(request)).current.markdown).toContain('Primo paragrafo. AUTO-UNO');
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('AUTO-UNO');
+  await expect(page.getByRole('button', { name: 'Save block' })).toBeEnabled();
+  expect(await s2Revisions(request)).toBe(before + 1);
+
+  // The draft now rests on the saved revision, so the next pause saves on top of it without a conflict.
+  await page.keyboard.type(' AUTO-DUE');
+  await expect.poll(async () => (await s2(request)).current.markdown, { timeout: 10_000 }).toContain('Primo paragrafo. AUTO-UNO AUTO-DUE');
+  await expect(page.getByRole('alert').filter({ hasText: 'The section changed' })).toHaveCount(0);
+  expect(await s2Revisions(request)).toBe(before + 2);
+
+  // Save block still closes the editor, and nothing new is stored because nothing changed.
+  await page.keyboard.press('Control+Enter');
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+  expect(await s2Revisions(request)).toBe(before + 2);
+});
+
+test('leaving a block saves it at once: Escape, then opening another block', async ({ page, request }) => {
+  await seedAutosave(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' ESC-SAVE');
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+  // Well before the 3 s pause would have fired.
+  await expect.poll(async () => (await s2(request)).current.markdown, { timeout: 2_000 }).toContain('Primo paragrafo. ESC-SAVE');
+
+  await openBlockEditor(page, 2);
+  await page.keyboard.type(' MOVE-SAVE');
+  await page.locator('.ms-block').nth(2).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.getByRole('textbox', { name: /Source of block 3$/ })).toBeVisible();
+  await expect(page.locator('.ms-edit')).toHaveCount(1);
+  await expect.poll(async () => (await s2(request)).current.markdown, { timeout: 2_000 }).toContain('Secondo paragrafo. MOVE-SAVE');
+
+  // Closing a block that was not changed stores nothing.
+  const before = await s2Revisions(request);
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+  await page.waitForTimeout(500);
+  expect(await s2Revisions(request)).toBe(before);
+});
+
+test('switching to another section saves the open block', async ({ page, request }) => {
+  await seedAutosave(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 3);
+  await page.keyboard.type(' SWITCH-SAVE');
+  await page.getByRole('link', { name: /Definizione di limite/ }).first().click();
+  await expect(page).toHaveURL(/\/manuscript\/s1/);
+  await expect.poll(async () => (await s2(request)).current.markdown, { timeout: 2_000 }).toContain('Terzo paragrafo. SWITCH-SAVE');
+  // The saved draft does not wait for the author in the old section.
+  await page.getByRole('link', { name: /Limiti notevoli/ }).first().click();
+  await expect(page.locator('.ms-block').last()).toContainText('SWITCH-SAVE');
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+});
+
+test('an emptied block is not autosaved', async ({ page, request }) => {
+  await seedAutosave(request);
+  const before = await s2Revisions(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 2);
+  await page.keyboard.press('Control+a');
+  await page.keyboard.press('Backspace');
+  await page.waitForTimeout(4_500);
+  await expect(page.locator('.ms-edit')).toHaveCount(1);
+  expect(await s2Revisions(request)).toBe(before);
+  expect((await s2(request)).current.markdown).toContain('Secondo paragrafo.');
+});
+
+test('no autosave while the section changed elsewhere', async ({ page, request }) => {
+  await seedAutosave(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 1);
+  await page.keyboard.type(' LOCALE');
+  const head = await s2(request);
+  const put = await request.put(`/api/projects/${bookId}/sections/s2`, { headers: H, data: { markdown: head.current.markdown + '\n\nQuarto paragrafo.', baseRevId: head.current.id } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+  const banner = page.getByRole('alert').filter({ hasText: 'The section changed while you were editing' });
+  await expect(banner).toBeVisible();
+  const before = await s2Revisions(request);
+  await page.waitForTimeout(4_500);
+  expect(await s2Revisions(request)).toBe(before);
+  expect((await s2(request)).current.markdown).not.toContain('LOCALE');
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('LOCALE');
+  await expect(banner).toBeVisible();
+});
+
+test('History folds consecutive edits by the author into one row', async ({ page }) => {
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await page.getByRole('button', { name: 'History' }).click();
+  const dialog = page.getByRole('dialog', { name: 'History' });
+  const toggle = dialog.getByRole('button', { name: /earlier edits by you/ });
+  await expect(toggle).toBeVisible();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  const folded = await dialog.locator('.hi-item').count();
+  expect(folded).toBe(1);
+  await toggle.click();
+  await expect(dialog.getByRole('button', { name: 'Hide earlier edits' })).toHaveAttribute('aria-expanded', 'true');
+  expect(await dialog.locator('.hi-item').count()).toBeGreaterThan(folded);
+});

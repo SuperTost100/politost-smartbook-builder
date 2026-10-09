@@ -15,6 +15,8 @@ export interface Cite { n: number; note: EvidenceNote }
 export interface BlockEdit {
   text: string;
   baseText: string;
+  /** Already saved while the editor stayed open: Save block then only closes it. */
+  saved: boolean;
   saving: boolean;
   /** The section changed under the draft: saving waits until the author chooses how to continue. */
   blocked: boolean;
@@ -121,9 +123,9 @@ function BlockEditor({ block, edit }: { block: MappedBlock; edit: BlockEdit }) {
       <SourceEditor value={text} onChange={edit.onChange} onSave={() => { if (!empty) edit.onSave(); }} onCancel={edit.onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
       <LivePreview source={text} />
       <div className="ms-edit__actions">
-        <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || unchanged || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
-        <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Cancel</button>
-        <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves, <kbd className="ui-kbd">Esc</kbd> cancels</span>
+        <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || (unchanged && !edit.saved) || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
+        <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Close</button>
+        <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves and closes, <kbd className="ui-kbd">Esc</kbd> closes. Edits save when you pause.</span>
         <span className="ui-grow" />
         {confirmDelete ? (
           <>
