@@ -512,3 +512,42 @@ ${p.blocks}
 Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
   };
 }
+
+// ---------- outside research ----------
+
+export const researchSchema = z.object({
+  additions: z.array(z.object({
+    afterBlock: z.number().int().min(0).describe('number of the block the addition follows; 0 puts it first'),
+    markdown: z.string().describe('one new block of book text'),
+    why: z.string().describe('one sentence: what the section lacked'),
+    sources: z.array(z.object({
+      url: z.string(),
+      title: z.string(),
+      quote: z.string().describe('verbatim sentence of plain words, without formulas, copied from the page'),
+    })),
+  })),
+});
+
+export function researchPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; objectives: string[]; notation: string; blocks: string }) {
+  const lang = languageName(p.language);
+  return {
+    system: `You improve one section of a university textbook in ${lang}: "${p.bookTitle}". You search the web for standard material the section lacks and support every addition with reliable pages (university course pages, textbooks, encyclopedias, standards). You never contradict the section and never invent a source or a quote.
+
+${formatRules(p.language)}`,
+    prompt: `CHAPTER: ${p.chapterTitle}
+SECTION: ${p.sectionTitle}
+Objectives:
+${p.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
+Notation to follow:
+${p.notation || '(standard notation of the field)'}
+
+CURRENT TEXT, numbered by block:
+${p.blocks}
+
+INSTRUCTIONS
+- Use web search and read the pages you cite. Find at most 3 additions a student preparing the exam would miss: a missing hypothesis or condition, a standard counterexample, an application, a common equivalent form. Skip anything the text already says. Return no additions if the section needs none.
+- Each addition is one block (a paragraph, a list or a display formula with its sentence) in ${lang}, written to fit after the block it follows, in the same style and notation. Do not add [[n]] markers or links to the text.
+- For each addition give 1 or 2 sources: the page URL, its title, and one sentence copied exactly from that page (any language) that supports the addition. Pick a sentence of plain words without formulas or symbols: pages store math as markup that differs from what you read. The builder opens every URL and drops additions whose quote it cannot find there.
+- Return JSON: additions.`,
+  };
+}

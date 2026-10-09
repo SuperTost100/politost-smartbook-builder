@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowUp, Ban, BookOpen, Check, ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, Download, Eye, File,
+  ArrowDown, ArrowUp, Ban, BookOpen, Check, ChevronDown, ChevronRight, ChevronUp, Columns2, Copy, Download, Eye, File, Globe,
   History, Image, Info, Link, List, Menu, Merge, Moon, PanelLeft, PanelRight, Pause, PencilLine, Play, Plug, Plus, Power,
   RefreshCw, Search, Sparkles, Square, Sun, Trash2, TriangleAlert, Upload, X, type LucideIcon,
 } from 'lucide-react';
@@ -46,6 +46,7 @@ const ICONS = {
   merge: Merge,
   ban: Ban,
   search: Search,
+  globe: Globe,
   split: Columns2,
   image: Image,
 } satisfies Record<string, LucideIcon>;

@@ -32,8 +32,8 @@ export function seedPage(ctx: AppContext, resourceId: string, idx: number, text:
   ctx.db.run('INSERT INTO pages_fts (rowid, text, transcript) VALUES (?, ?, ?)', rowid, text, transcript ?? '');
 }
 
-export const caps = (images: boolean, schema: Capabilities['schema'] = 'native'): Capabilities => ({
-  access: ['none'], effort: true, contextWindow: false, fast: false, resume: false, approvals: false, images, system: 'native', schema,
+export const caps = (images: boolean, schema: Capabilities['schema'] = 'native', access: Capabilities['access'] = ['none']): Capabilities => ({
+  access, effort: true, contextWindow: false, fast: false, resume: false, approvals: false, images, system: 'native', schema,
 });
 
 export type Step = (input: RunInput) => Partial<RunResult> | Error | Promise<Partial<RunResult> | Error>;
@@ -43,8 +43,9 @@ export class FakeFunnel implements FunnelLike {
   calls: RunInput[] = [];
   steps: Step[] = [];
   providers: FunnelLike['providers'] = {
-    claude: { displayName: 'Claude Code', capabilities: caps(true) },
-    codex: { displayName: 'Codex', capabilities: caps(true) },
+    // As in cli-funnel: only Claude and Codex pass approvals through (supervised).
+    claude: { displayName: 'Claude Code', capabilities: caps(true, 'native', ['none', 'supervised', 'accept-edits', 'auto', 'full']) },
+    codex: { displayName: 'Codex', capabilities: caps(true, 'native', ['none', 'supervised', 'accept-edits', 'auto', 'full']) },
     agent: { displayName: 'Cursor Agent', capabilities: caps(false, 'prompt') },
     antigravity: { displayName: 'Antigravity', capabilities: caps(false) },
   };

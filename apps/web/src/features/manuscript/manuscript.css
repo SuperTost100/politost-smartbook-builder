@@ -76,6 +76,10 @@
 .pp-title { font-weight: 650; color: var(--info); }
 .pp-sub { font-size: 13px; }
 .pp-mode { border-bottom: 0; }
+.pp-sources ul { list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 14px; }
+.pp-sources li { display: flex; flex-direction: column; gap: 8px; font-size: 14px; overflow-wrap: anywhere; }
+.pp-sources li > p { margin: 0; font-weight: 550; }
+.pp-source blockquote { margin: 4px 0 0; padding: 6px 10px; background: var(--surface); border-radius: var(--radius-sm); font-family: var(--font-serif); font-size: 15px; }
 .pp-diff { display: flex; flex-direction: column; gap: 8px; font-family: var(--font-serif); font-size: 16px; line-height: 1.6; max-height: 420px; overflow: auto; background: var(--surface); border-radius: var(--radius-sm); padding: 12px; border: 1px solid var(--border); }
 .pp-row { white-space: pre-wrap; overflow-wrap: anywhere; padding: 4px 8px; border-radius: 4px; }
 .pp-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
@@ -115,5 +119,7 @@
 
 @media (max-width: 720px) {
   .ms-tb-label { display: none; }
-  .ms-toolbar .ui-btn { padding: 0 9px; }
+  .ms-toolbar { flex-wrap: nowrap; }
+  .ms-toolbar .ui-btn { padding: 0 9px; flex: none; }
+  .ms-crumb { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }

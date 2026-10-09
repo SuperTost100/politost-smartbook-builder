@@ -1,7 +1,7 @@
 import { useMemo, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { splitBlocks } from '@smartbuilder/content/blocks';
-import type { SectionView } from '@smartbuilder/domain';
+import type { EvidenceNote, SectionView } from '@smartbuilder/domain';
 import { api, errorText, isConflict } from '../../lib/api';
 import { qk } from '../../lib/queries';
 import { timeAgo } from '../../lib/format';
@@ -21,6 +21,15 @@ export function ProposalBanner({ pid, nodeId, section, onResolved }: { pid: stri
   const before = useMemo(() => splitBlocks(section.current?.markdown ?? '').map((b) => b.text), [section.current?.markdown]);
   const after = useMemo(() => splitBlocks(proposal.markdown).map((b) => b.text), [proposal.markdown]);
   const changed = useMemo(() => countChanged(before, after), [before, after]);
+  // Web pages behind what the proposal adds (outside research), so the author can check them before accepting.
+  const sources = useMemo(() => {
+    const cited = new Set(Object.values(proposal.citations).flat());
+    for (const ids of Object.values(section.current?.citations ?? {})) for (const id of ids) cited.delete(id);
+    // One entry per addition (its reason), with the pages that support it.
+    const groups = new Map<string, EvidenceNote[]>();
+    for (const n of section.evidence?.notes ?? []) if (n.url && cited.has(n.id)) groups.set(n.claim, [...(groups.get(n.claim) ?? []), n]);
+    return [...groups];
+  }, [proposal.citations, section.current?.citations, section.evidence?.notes]);
 
   const decide = useMutation({
     mutationFn: (action: 'accept' | 'reject') => api('POST /api/projects/:id/sections/:nodeId/proposal', { params: { id: pid, nodeId }, body: { action, revId: proposal.id, headRevId } }),
@@ -59,7 +68,27 @@ export function ProposalBanner({ pid, nodeId, section, onResolved }: { pid: stri
           </div>
         </div>
       )}
+      {sources.length > 0 && (
+        <section className="pp-sources" aria-label="Sources of the additions">
+          <h3 className="ui-meta">Sources</h3>
+          <ul>
+            {sources.map(([why, notes]) => (
+              <li key={notes[0].id}>
+                {why && <p>{why}</p>}
+                {notes.map((n) => (
+                  <div key={n.id} className="pp-source">
+                    <a href={n.url} target="_blank" rel="noopener noreferrer">{n.title || hostOf(n.url!)}</a> <span className="ui-muted">{hostOf(n.url!)}</span>
+                    <blockquote>{n.quote}</blockquote>
+                  </div>
+                ))}
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
       {open && <DiffList before={before} after={after} mode={mode} headLabels={['Current', 'Proposal']} />}
     </section>
   );
 }
+
+const hostOf = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return url; } };

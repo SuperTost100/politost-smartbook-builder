@@ -90,7 +90,7 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
       <div className="ev-note__head">
         <span className="ev-note__n"><CiteMark n={n} /></span>
         <span className={`ui-badge ${note.verified ? 'ui-badge--success' : 'ui-badge--warning'}`}>
-          <Icon name={note.verified ? 'check' : 'alert'} size={12} />{note.verified ? 'verified' : 'not located'}
+          <Icon name={note.verified ? 'check' : 'alert'} size={12} />{note.verified ? (note.url ? 'found on the page' : 'verified') : 'not located'}
         </span>
       </div>
       {note.claim && <div className="ev-note__claim"><ContentFlow content={texDelimiters(note.claim)} /></div>}
@@ -107,7 +107,9 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
           <button type="button" className="ui-btn ui-btn--sm" onClick={() => { setFailed(false); setLoaded(false); setTries((t) => t + 1); }}>Try again</button>
         </div>
       )}
-      {located ? (
+      {note.url ? (
+        <div className="ev-cap"><a href={note.url} target="_blank" rel="noopener noreferrer">{note.title || note.url}</a> <span className="ui-mono ui-muted">{webHost(note.url)}</span></div>
+      ) : located ? (
         <div className="ev-cap ui-mono">{resource?.filename ?? 'source'} · p. {label}</div>
       ) : (
         <div className="ev-cap ev-cap--warn">No page found for this quote, so it is not shown against a source.</div>
@@ -156,3 +158,5 @@ export function IssueGroup({ title, pid, issues, block, onEdit }: { title: strin
     </div>
   );
 }
+
+const webHost = (url: string) => { try { return new URL(url).hostname.replace(/^www\./, ''); } catch { return ''; } };

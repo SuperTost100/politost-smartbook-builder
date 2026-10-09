@@ -1,5 +1,6 @@
 // Model routing through cli-funnel. Callers name a role; settings map roles to provider/model with a fallback.
-import { mkdirSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
 import type { ConnectionsResponse, ProbeResult, Role, Route } from '@smartbuilder/domain';
 import { sanitizeModelValue } from '@smartbuilder/content';
 import { z } from 'zod';
@@ -32,6 +33,8 @@ export interface RunRoleOptions<T> {
   signal?: AbortSignal;
   /** Override the configured route (e.g. escalation). */
   route?: Route;
+  /** Let the model search and read the web. Every other tool stays refused. Only providers that pass approvals through can do this. */
+  web?: boolean;
 }
 
 export interface RunRoleResult<T> { text: string; data: T; route: Route; usage: { inputTokens: number | null; outputTokens: number | null } }
@@ -52,6 +55,9 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   const funnel = getFunnel();
   const needsImages = !!opts.images?.length;
   const canImages = (r: Route) => !!funnel.providers[r.provider]?.capabilities.images;
+  // Claude only: its tools can be switched off by the settings file in the web folder (see webFolder). Codex runs
+  // commands it considers safe, such as cat, without asking, so a page could get it to read local files.
+  const canWeb = (r: Route) => r.provider === 'claude' && !!funnel.providers[r.provider]?.capabilities.access?.includes('supervised');
 
   const configured = ctx.settings().routes[opts.role];
   const primary = opts.route ?? configured.primary;
@@ -62,6 +68,11 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   else if (canImages(primary)) candidates = [primary, ...(fallback && canImages(fallback) ? [fallback] : [])];
   else if (fallback && canImages(fallback)) candidates = [fallback];
   else throw new TaskError(`The "${opts.role}" route (${primary.provider}/${primary.model}) cannot read images and there is no fallback that can.`, 'input', 'In Settings, pick a vision-capable model (Claude or Codex) for this role.');
+
+  if (opts.web) {
+    candidates = candidates.filter(canWeb);
+    if (!candidates.length) throw new TaskError(`The "${opts.role}" route cannot search the web.`, 'input', 'In Settings, pick a Claude model for this role.');
+  }
 
   // Skip a provider that recently hit its quota when another candidate is available.
   const ready = candidates.filter((c) => (cooldown.get(c.provider) ?? 0) <= Date.now());
@@ -169,7 +180,7 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
 interface CallOutput { text: string; structured: unknown; usage: Usage }
 
 async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, prompt: string, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
-  const scratch = paths.scratch(ctx.config);
+  const scratch = opts.web ? webFolder(ctx) : paths.scratch(ctx.config);
   mkdirSync(scratch, { recursive: true });
   const timeout = AbortSignal.timeout(llmTuning.callTimeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
@@ -183,8 +194,9 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
         model: route.model,
         ...(route.effort ? { effort: route.effort } : {}),
         cwd: scratch,
-        access: 'none',
+        access: opts.web ? 'supervised' : 'none',
       },
+      ...(opts.web ? { onApproval: webOnly } : {}),
       system: opts.system,
       prompt,
       ...(opts.images?.length ? { attachments: opts.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
@@ -221,6 +233,23 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
     });
   }
 }
+
+/**
+ * Working folder for web runs. Its Claude settings remove every tool that reads or changes this machine, so they are not
+ * even offered to the model; the approval callback below is the second line and allows only the web tools.
+ */
+function webFolder(ctx: AppContext) {
+  const dir = join(paths.scratch(ctx.config), 'web');
+  mkdirSync(join(dir, '.claude'), { recursive: true });
+  writeFileSync(join(dir, '.claude', 'settings.json'), JSON.stringify({
+    permissions: { allow: ['WebSearch', 'WebFetch'], deny: ['Bash', 'Read', 'Edit', 'Write', 'MultiEdit', 'NotebookEdit', 'Glob', 'Grep', 'LS', 'Task', 'Agent', 'mcp__*'] },
+  }, null, 2));
+  return dir;
+}
+
+/** Approval policy for web runs: searching and reading pages, nothing that touches this machine. */
+const WEB_TOOLS = /^(WebSearch|WebFetch|web_search|web_fetch)$/;
+export const webOnly = (req: { tool: string }) => (WEB_TOOLS.test(req.tool) ? 'allow' as const : 'deny' as const);
 
 class AbortedByCaller extends Error {}
 const abortError = () => Object.assign(new AbortedByCaller('Aborted'), { name: 'AbortError' });

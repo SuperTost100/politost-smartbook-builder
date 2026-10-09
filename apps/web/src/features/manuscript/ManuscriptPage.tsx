@@ -166,6 +166,12 @@ export default function ManuscriptPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
+  const research = useMutation({
+    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/research', { params: { id: pid, nodeId: nodeId! } }),
+    onSuccess: () => { toast('Looking for outside sources. Additions arrive as a proposal.', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
+    onError: (e) => toast(errorText(e), { tone: 'danger' }),
+  });
+
   // Which sections are being drafted right now: running task labels that name the section.
   const activeRun = project.data?.activeRun;
   const runDetail = useRun(activeRun && (activeRun.kind === 'generate' || activeRun.kind === 'regenerate') ? activeRun.id : undefined);
@@ -210,11 +216,14 @@ export default function ManuscriptPage() {
       <div className="ms-center">
         <div className="ms-toolbar">
           {narrow && <button type="button" className="ui-btn ui-btn--sm" onClick={() => setRailDrawer(true)}><Icon name="list" />Outline</button>}
-          <span className="ms-crumb ui-muted">{loc ? `Chapter ${loc.chapter.number}${loc.index >= 0 ? ` · Section ${loc.chapter.number}.${loc.index + 1}` : ' · Introduction'}` : ''}</span>
+          <span className="ms-crumb ui-muted">{loc ? (narrow
+            ? (loc.index >= 0 ? `${loc.chapter.number}.${loc.index + 1}` : `Ch. ${loc.chapter.number} · Intro`)
+            : `Chapter ${loc.chapter.number}${loc.index >= 0 ? ` · Section ${loc.chapter.number}.${loc.index + 1}` : ' · Introduction'}`) : ''}</span>
           <span className="ui-grow" />
           <Link className="ui-btn ui-btn--sm" aria-label="Reader preview" title="Reader preview" to={`/books/${pid}/preview/${loc?.chapter.chapterId ?? ''}`}><Icon name="eye" /><span className="ms-tb-label">Reader preview</span></Link>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="History" title="History" onClick={() => setHistoryOpen(true)} disabled={!nodeId}><Icon name="history" /><span className="ms-tb-label">History</span></button>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="Regenerate section" title="Regenerate section" onClick={() => setRegen({})} disabled={!section?.current}><Icon name="sparkle" /><span className="ms-tb-label">Regenerate section</span></button>
+          {project.data?.options.outsideMaterial && <button type="button" className="ui-btn ui-btn--sm" aria-label="Find outside sources" title="Find outside sources" onClick={() => research.mutate()} disabled={!section?.current || research.isPending}><Icon name="globe" /><span className="ms-tb-label">Find outside sources</span></button>}
         </div>
 
         {sectionQ.isLoading && <div className="ms-sheet"><div className="ui-skeleton" style={{ height: 36, width: '60%' }} /><div className="ui-skeleton" style={{ height: 220, marginTop: 24 }} /></div>}
