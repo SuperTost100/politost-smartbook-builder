@@ -57,3 +57,26 @@ test('figures: preview keys are the compiled paths, and the asset record is cano
   assert.match(chapter, /alt="Un cerchio" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
   assert.ok(!chapter.includes('Vecchia'));
 });
+
+test('items from exercise collections, which are never placed in a chapter, do not reach the book', async () => {
+  const p = (await t.req('POST', '/api/projects', projectBody('quiz-source'))).body;
+  const outline = { chapters: [{ id: 'c1', slug: 'uno', title: 'Uno', sections: [{ id: 's1', title: 'Prima' }] }] };
+  const rev = (await t.req('PUT', `/api/projects/${p.id}/outline`, { outline, baseRevId: null })).body;
+  await t.req('POST', `/api/projects/${p.id}/outline/approve`, { revId: rev.id });
+  t.ctx.db.insert('content_revisions', { id: newId(), project_id: p.id, node_id: 's1', kind: 'section', markdown: 'Testo della prima sezione.', origin: 'human', status: 'current', citations: {}, created_at: now() });
+  const add = (kind: string, origin: string, statement: string, chapterId: string | null = 'c1') => t.ctx.db.insert('questions', {
+    id: newId(), project_id: p.id, kind, origin, statement, hint: '', solution: 'Soluzione.', difficulty: 'medio', topic_ids: [], chapter_id: chapterId, status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now(),
+  });
+  add('exercise', 'authentic', 'DOMANDA DEL QUIZ', null);
+  add('exercise', 'generated', 'ESERCIZIO SCRITTO');
+  add('exam', 'authentic', 'TEMA D ESAME');
+  const input = loadBookInput(t.ctx, p.id);
+  assert.deepEqual(input.questions.map((x) => x.statement).sort(), ['ESERCIZIO SCRITTO', 'TEMA D ESAME']);
+  const text = Object.values(compileBook(input).files).map((f) => (typeof f === 'string' ? f : '')).join('\n');
+  assert.ok(text.includes('ESERCIZIO SCRITTO') && text.includes('TEMA D ESAME'));
+  assert.ok(!text.includes('DOMANDA DEL QUIZ'));
+
+  // A book whose only questions came from collections has no exercises section.
+  t.ctx.db.run(`DELETE FROM questions WHERE origin = 'generated' OR kind = 'exam'`);
+  assert.equal(loadBookInput(t.ctx, p.id).sections.esercizi, false);
+});

@@ -16,6 +16,8 @@ import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } 
 
 /** Authentic exam questions included per chapter, most recent sessions first. */
 const AUTHENTIC_PER_CHAPTER = 8;
+/** Items from uploaded exercise collections shown to the writer of a chapter's exercises. They are never put in the book. */
+const COLLECTION_EXAMPLES = 6;
 const MAX_PAGES_PER_QUESTION = 4;
 
 type QuestionText = { statement: string; hint: string; solution: string };
@@ -181,6 +183,15 @@ export async function practiceGenerate(ctx: AppContext, t: TaskContext) {
   return { generated, reused };
 }
 
+/** Up to COLLECTION_EXAMPLES classified items of the included exercise collections on these topics, those with a known answer first. */
+function collectionExamples(ctx: AppContext, projectId: string, topicIds: Set<string>): string {
+  const items = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND kind = 'exercise' AND origin = 'authentic' AND resource_id IS NOT NULL AND topic_ids != '[]' AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId)
+    .map(rowToQuestion).filter((q) => q.topicIds.some((id) => topicIds.has(id)));
+  const known = (q: Question) => (q.solution.trim() ? 0 : 1);
+  return items.sort((a, b) => known(a) - known(b)).slice(0, COLLECTION_EXAMPLES)
+    .map((q) => `${truncate(q.statement, 800)}${q.solution.trim() ? `\n${truncate(q.solution, 300)}` : ''}`).join('\n\n');
+}
+
 async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' | 'exam') {
   const { projectId } = t.task;
   const chapterId = t.task.input.chapterId as string;
@@ -199,6 +210,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
     const known = bookFormulaKeys(ctx, projectId).map((k) => `${k.key}: ${k.label}`).join('\n');
     const examples = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND chapter_id = ? AND kind = 'exam' AND origin = 'authentic'`, projectId, chapterId)
       .map(rowToQuestion).slice(0, 3).map((q) => `${q.examGroup}, Esercizio ${q.number}:\n${truncate(q.statement, 1500)}`).join('\n\n');
+    const collection = kind === 'exercise' ? collectionExamples(ctx, projectId, new Set(topics.map((tp) => tp.id))) : '';
     const list = kind === 'exercise'
       ? topics.map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: target(tp.priority) }))
       : topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 }));
@@ -206,7 +218,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
     if (count) {
       const { data } = await runRole(ctx, {
         role: 'exercises',
-        ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, knownFormulas: known }),
+        ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, collection, knownFormulas: known }),
         schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
       });
       const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));

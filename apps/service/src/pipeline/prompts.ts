@@ -273,7 +273,7 @@ export const generatedQuestionsSchema = z.object({
   })),
 });
 
-export function exercisesPrompt(p: { language: string; kind: 'exercise' | 'exam'; chapterTitle: string; topics: string; count: number; examples: string; knownFormulas: string }) {
+export function exercisesPrompt(p: { language: string; kind: 'exercise' | 'exam'; chapterTitle: string; topics: string; count: number; examples: string; collection?: string; knownFormulas: string }) {
   const lang = languageName(p.language);
   const style = p.kind === 'exam'
     ? 'exam-style problems modeled on the real exam questions shown, with the same structure (multi-part a), b), c) where the originals have it) and comparable length'
@@ -285,6 +285,7 @@ Topics to cover (key: name, and how many problems each needs):
 ${p.topics}
 
 ${p.examples ? `Real questions from past exams on these topics, for level and style (do not copy them):\n${p.examples}\n` : ''}
+${p.collection ? `Items from the exercise collections students practise with, on these topics. They show what students practise: match their level and style, do not copy them:\n${p.collection}\n` : ''}
 Known formula keys you may cite in hints and solutions with {{formula:@key}}:
 ${p.knownFormulas || '(none)'}
 
