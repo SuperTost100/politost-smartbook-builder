@@ -236,3 +236,36 @@ test('runSummary tells an author wait from a quota wait and gives the retry time
   db.run(`UPDATE tasks SET wait_reason = NULL WHERE key = 'quota'`);
   assert.equal(queue.runSummary(runId)!.waiting, null);
 });
+
+test('no more than 12 tasks run at once across pools', async () => {
+  const { db, projectId } = setup();
+  const queue = new Queue(db, new Events(db), () => 10);
+  let running = 0;
+  let peak = 0;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
+  queue.register('work', async () => { running++; peak = Math.max(peak, running); await gate; running--; return {}; });
+  const tasks = ['a', 'b', 'c'].flatMap((pool) => Array.from({ length: 8 }, (_, i) => ({ kind: 'work', key: `${pool}${i}`, label: `${pool}${i}`, pool })));
+  const runId = queue.createRun(projectId, 'generate', tasks);
+  queue.start();
+  await until(() => running === 12);
+  await new Promise((r) => setTimeout(r, 100));
+  assert.equal(peak, 12);
+  release();
+  await until(() => queue.runSummary(runId)!.status === 'completed');
+  await queue.stop();
+});
+
+test("retry ignores task ids from another run", async () => {
+  const { queue, projectId } = setup();
+  queue.register('ok', async () => ({}));
+  const a = queue.createRun(projectId, 'generate', [{ kind: 'ok', key: 'x', label: 'x' }]);
+  const b = queue.createRun(projectId, 'generate', [{ kind: 'ok', key: 'y', label: 'y' }]);
+  queue.start();
+  await until(() => queue.runSummary(a)!.status === 'completed' && queue.runSummary(b)!.status === 'completed');
+  const foreign = queue.tasks(b)[0].id;
+  queue.retry(a, [foreign]);
+  await until(() => queue.runSummary(a)!.status === 'completed');
+  await queue.stop();
+  assert.equal(queue.tasks(b)[0].state, 'succeeded');
+});

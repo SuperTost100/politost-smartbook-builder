@@ -81,7 +81,11 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   let stored = 0;
   ctx.db.tx(() => {
     // Findings that match no section are stored under the chapter id, so it is part of the cleanup. Resolved history stays.
-    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
+    // In sections that did not change the reviewer reports only blockers, so only their open blockers are replaced.
+    const unchanged = priorReviewed ? sections.filter((x) => seen.has(x.head!.id)).map((x) => x.s.id) : [];
+    const replaced = reviewNodes.filter((id) => !unchanged.includes(id));
+    if (replaced.length) ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${replaced.map(() => '?').join(',')})`, projectId, ...replaced);
+    if (unchanged.length) ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND severity = 'blocker' AND node_id IN (${unchanged.map(() => '?').join(',')})`, projectId, ...unchanged);
     // Fixes that wait on a proposal that no longer exists are leftovers of earlier passes; a live proposal keeps its issues.
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'proposed' AND node_id IN (${inNodes}) AND resolution NOT IN (SELECT 'Proposal ' || id FROM content_revisions WHERE project_id = ? AND status = 'proposal')`, projectId, ...reviewNodes, projectId);
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND (category = 'compile' OR category LIKE 'compile:%') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);

@@ -236,17 +236,23 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
  */
 export async function practiceDone(ctx: AppContext, t: TaskContext) {
   const chapterId = t.task.input.chapterId as string;
-  const rows = ctx.db.all<{ state: string }>(
-    `SELECT t.state FROM tasks t WHERE t.run_id = ? AND (
+  // A task behind a failed or cancelled dependency, at any depth, never runs: it counts as finished, not as open.
+  const rows = ctx.db.all<{ state: string; blocked: number }>(
+    `WITH RECURSIVE blocked(id) AS (
+       SELECT d.task_id FROM task_deps d JOIN tasks dt ON dt.id = d.dep_id WHERE dt.run_id = ? AND dt.state IN ('failed', 'cancelled')
+       UNION
+       SELECT d.task_id FROM task_deps d JOIN blocked b ON d.dep_id = b.id
+     )
+     SELECT t.state, t.id IN (SELECT id FROM blocked) AS blocked FROM tasks t WHERE t.run_id = ? AND (
        (t.kind = 'practice.generate' AND json_extract(t.input, '$.chapterId') = ?)
        OR (t.kind IN ('question.import', 'question.verify') AND json_extract(t.input, '$.questionId') IN (SELECT id FROM questions WHERE project_id = ? AND chapter_id = ?)))`,
-    t.task.runId, chapterId, t.task.projectId, chapterId);
-  const open = rows.filter((r) => !['succeeded', 'failed', 'cancelled', 'skipped'].includes(r.state)).length;
+    t.task.runId, t.task.runId, chapterId, t.task.projectId, chapterId);
+  const open = rows.filter((r) => !r.blocked && !['succeeded', 'failed', 'cancelled', 'skipped'].includes(r.state)).length;
   if (open) {
     t.progress(`${open} practice task${open > 1 ? 's' : ''} still running`);
     throw new TaskError(`${open} practice tasks are still running.`, 'later');
   }
-  return { tasks: rows.length, failed: rows.filter((r) => r.state === 'failed').length };
+  return { tasks: rows.length, failed: rows.filter((r) => r.state === 'failed').length, blocked: rows.filter((r) => r.blocked).length };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {

@@ -189,7 +189,12 @@ function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pi
   const loadLatest = async () => {
     const list = await qc.fetchQuery({ queryKey: qk.questions(pid), queryFn: () => api('GET /api/projects/:id/questions', { params: { id: pid } }), staleTime: 0 });
     const fresh = list.find((x) => x.id === q.id);
-    if (fresh) { setRev(fresh.rev); setConflict(null); }
+    // The fields take the latest text too: saving the old draft with the new rev would overwrite the other change.
+    if (fresh) {
+      setDraft({ statement: fresh.statement, hint: fresh.hint, solution: fresh.solution, difficulty: fresh.difficulty, origin: fresh.origin, topicIds: fresh.topicIds, chapterId: fresh.chapterId });
+      setRev(fresh.rev);
+      setConflict(null);
+    }
   };
 
   return (

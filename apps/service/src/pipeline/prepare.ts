@@ -145,13 +145,16 @@ async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
       projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     ctx.db.tx(() => {
+      // A priority the author set by hand survives the new map when the topic keeps its key.
+      const locked = new Map(ctx.db.all<{ id: string; priority: string }>('SELECT id, priority FROM topics WHERE project_id = ? AND priority_locked = 1', projectId).map((r) => [r.id, r.priority]));
       ctx.db.run('DELETE FROM topics WHERE project_id = ?', projectId);
       for (const tp of data.topics) {
+        const id = `${projectId.slice(0, 8)}-${tp.key}`.slice(0, 80);
         ctx.db.insert('topics', {
-          id: `${projectId.slice(0, 8)}-${tp.key}`.slice(0, 80), project_id: projectId, name: tp.name, aliases: tp.aliases, description: tp.description,
+          id, project_id: projectId, name: tp.name, aliases: tp.aliases, description: tp.description,
           prerequisites: tp.prerequisites.map((k) => `${projectId.slice(0, 8)}-${k}`.slice(0, 80)),
           sources: tp.sources.filter((s) => byLabel.has(s.resource)).map((s) => ({ resourceId: byLabel.get(s.resource), pageFrom: s.pageFrom - 1, pageTo: s.pageTo - 1 })),
-          exam_sessions: 0, priority: 'normal',
+          exam_sessions: 0, priority: locked.get(id) ?? 'normal', priority_locked: locked.has(id) ? 1 : 0,
         });
       }
       // New topics: every authentic exam question is classified again against them.

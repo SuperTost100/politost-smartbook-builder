@@ -5,6 +5,8 @@ import { assertSafeSvg, insertProposal, saveHuman, usageForRun } from '../repo/i
 import { newId, now } from '../db/db.ts';
 import { json } from '../db/db.ts';
 import { paths, resolveDataPath } from '../config.ts';
+import { deps, overrideDeps } from './deps.ts';
+import { HttpError } from '../server.ts';
 import { installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -95,6 +97,27 @@ describe('resources', () => {
     assert.equal((await t.req('GET', `/api/projects/${p.id}/resources`)).body.length, 1);
   });
 
+  it('prepares the files stored before one in the same upload was refused', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('uploads-partial'));
+    const store = deps.storeResource;
+    const restore = overrideDeps({
+      storeResource: async (ctx, projectId, input) => {
+        if ('filename' in input && input.filename === 'bad.pdf') throw new HttpError(400, 'unsupported_type', 'Not a PDF.');
+        return store(ctx, projectId, input);
+      },
+    });
+    const before = fakes.calls.startRun.length;
+    const up = multipart({}, [
+      { name: 'file', filename: 'good.pdf', type: 'application/pdf', data: 'good' },
+      { name: 'file', filename: 'bad.pdf', type: 'application/pdf', data: 'bad' },
+    ]);
+    const res = await t.req('POST', `/api/projects/${p.id}/resources`, up.payload, up.headers);
+    restore();
+    assert.equal(res.status, 400);
+    assert.equal((await t.req('GET', `/api/projects/${p.id}/resources`)).body.length, 1);
+    assert.equal(fakes.calls.startRun.length, before + 1);
+  });
+
   it('rejects unsupported types with a plain message', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('uploads-bad'));
     const up = multipart({}, [{ name: 'file', filename: 'x.exe', type: 'application/octet-stream', data: 'x' }]);
@@ -119,6 +142,7 @@ describe('outline', () => {
 
     const second = await t.req('PUT', `/api/projects/${p.id}/outline`, { outline, baseRevId: first.body.id });
     assert.equal(second.status, 200);
+    assert.equal((await t.req('GET', `/api/projects/${p.id}`)).body.stage, 'outline', 'an outline waits for approval');
 
     const dupIds = await t.req('PUT', `/api/projects/${p.id}/outline`, {
       outline: { chapters: [{ id: 'c1', slug: 'uno', title: 'Uno', sections: [{ id: 'c1', title: 'A' }] }] }, baseRevId: second.body.id,
@@ -131,6 +155,8 @@ describe('outline', () => {
     assert.equal(project.outlineRevId, second.body.id);
     assert.equal(project.stage, 'drafting');
     assert.equal(project.counts.sections, 1);
+    saveHuman(t.ctx, p.id, outline.chapters[0].sections[0].id, 'Testo.', null);
+    assert.equal((await t.req('GET', `/api/projects/${p.id}`)).body.stage, 'review', 'every section is drafted');
 
     const got = (await t.req('GET', `/api/projects/${p.id}/outline`)).body;
     assert.equal(got.current.id, second.body.id);

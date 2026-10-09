@@ -70,6 +70,8 @@ interface TaskRecord {
 }
 
 const LEASE_MS = 90_000;
+/** Tasks running at once across every pool. */
+const MAX_RUNNING = 12;
 const HEARTBEAT_MS = 20_000;
 const TICK_MS = 400;
 
@@ -166,7 +168,8 @@ export class Queue {
       const rows = taskIds?.length
         ? taskIds.map((id) => ({ id }))
         : this.db.all<{ id: string }>(`SELECT id FROM tasks WHERE run_id = ? AND state IN ('failed', 'cancelled', 'interrupted')`, runId);
-      for (const r of rows) this.db.run(`UPDATE tasks SET state = 'queued', attempts = 0, error = NULL, retry_at = NULL, wait_reason = NULL WHERE id = ? AND state != 'running'`, r.id);
+      // Only this run's tasks: an id from another run must not be requeued under a run that stays finished.
+      for (const r of rows) this.db.run(`UPDATE tasks SET state = 'queued', attempts = 0, error = NULL, retry_at = NULL, wait_reason = NULL WHERE id = ? AND run_id = ? AND state != 'running'`, r.id, runId);
       this.db.run(`UPDATE runs SET status = 'running', finished_at = NULL WHERE id = ?`, runId);
     });
     this.events.emit('run.state', { status: 'running' }, { runId, projectId: this.runProject(runId) });
@@ -278,7 +281,7 @@ export class Queue {
       for (const c of candidates) {
         if (this.running.has(c.id)) continue;
         if (this.poolBusy(c.pool) >= this.poolLimit(c.pool)) continue;
-        if (this.poolBusy('*') >= 12) break;
+        if (this.running.size >= MAX_RUNNING) break;
         this.claim(c);
       }
       this.settleRuns();
