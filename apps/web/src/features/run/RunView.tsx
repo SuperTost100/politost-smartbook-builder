@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RunSummary, TaskRow, TaskState } from '@smartbuilder/domain';
 import { api, describeError } from '../../lib/api';
 import { qk, useProject, useRun, useRuns } from '../../lib/queries';
-import { RUN_KIND_LABEL, TASK_STATE_LABEL, TERMINAL_RUN, dateTime, runCounts, timeAgo, tokenCount } from '../../lib/format';
+import { RUN_KIND_LABEL, TASK_STATE_LABEL, TERMINAL_RUN, dateTime, plural, runCounts, timeAgo, tokenCount } from '../../lib/format';
 import { Icon } from '../../components/Icon';
 import { ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
@@ -97,6 +97,8 @@ export function RunView({ projectId }: { projectId: string }) {
   if (runs.isLoading) return <div className="rn-root"><div className="ui-skeleton" style={{ height: 120 }} /></div>;
 
   const canGenerate = !!project.data?.outlineRevId && !live;
+  // After a finished run, drafting again only makes sense while sections are missing.
+  const undrafted = Math.max(0, (project.data?.counts.sections ?? 0) - (project.data?.counts.drafted ?? 0));
 
   if (!run) {
     return (
@@ -140,7 +142,7 @@ export function RunView({ projectId }: { projectId: string }) {
           {run.status === 'cancelling' && <button type="button" className="ui-btn" disabled><span className="ui-spinner" />Cancelling…</button>}
           {live && run.status !== 'cancelling' && <button type="button" className="ui-btn ui-btn--danger" onClick={() => setConfirmCancel(true)}>Cancel</button>}
           {failedTasks > 0 && <button type="button" className="ui-btn" onClick={() => control.mutate('retry')} disabled={control.isPending}><Icon name="refresh" />Retry failed</button>}
-          {!live && canGenerate && <button type="button" className="ui-btn ui-btn--accent" onClick={() => start.mutate('generate')}>Generate book</button>}
+          {!live && canGenerate && undrafted > 0 && <button type="button" className="ui-btn ui-btn--accent" onClick={() => start.mutate('generate')}>{`Draft ${plural(undrafted, 'remaining section')}`}</button>}
         </div>
         {run.status === 'pausing' && <p className="rn-note" aria-live="polite">Pausing: {runningNow} running {runningNow === 1 ? 'task is' : 'tasks are'} finishing. Nothing new starts, and the run shows Paused when they are done.</p>}
         {run.status === 'paused' && <p className="rn-note">Paused. Resume continues with the queued tasks; finished work is kept.</p>}

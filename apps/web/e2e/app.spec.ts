@@ -389,8 +389,9 @@ test('Approve and export counts blockers that are only proposed', async ({ page 
   await page.route(`**/api/projects/${bookId}/issues`, (route) => route.fulfill({ json: [issue('i1', 'proposed', 'blocker'), issue('i2', 'open', 'minor')] }));
   await page.route(`**/api/projects/${bookId}/validate`, (route) => route.fulfill({ json: { ok: true, errors: [], warnings: [], lint: [] } }));
   await page.goto(`/books/${bookId}/export`);
-  await page.getByRole('button', { name: 'Validate' }).click();
+  // Validation runs by itself when the page opens.
   await expect(page.getByText('No errors. The package is valid.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Validate again' })).toBeEnabled();
   await expect(page.getByRole('button', { name: 'Approve and export' })).toBeDisabled();
   await expect(page.getByText(/1 blocker issue still unresolved/)).toBeVisible();
 });

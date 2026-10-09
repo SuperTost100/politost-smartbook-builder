@@ -27,7 +27,13 @@
 
 .ol-src-list { display: flex; flex-direction: column; gap: 8px; }
 .ol-src { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
-.ol-src > summary { cursor: pointer; padding: 8px 10px; font-size: 14px; font-weight: 550; }
+.ol-src > summary { display: flex; gap: 6px; cursor: pointer; padding: 8px 10px; font-size: 14px; font-weight: 550; list-style: none; }
+.ol-src > summary::-webkit-details-marker { display: none; }
+/* The marker sits beside the name, so a long name without spaces wraps under itself, not under the marker. */
+.ol-src > summary::before { content: '▸'; flex: none; color: var(--ink-subtle); }
+.ol-src[open] > summary::before { content: '▾'; }
+/* Objectives grow with their text where the browser can size fields to content; elsewhere rows follow the line count. */
+.ol-lines { field-sizing: content; min-height: 3lh; }
 .ol-tree { list-style: none; margin: 0; padding: 4px 10px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 3px; max-height: 320px; overflow: auto; }
 
 .ol-cov-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; }

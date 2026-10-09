@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { ExportRow, ValidationReport } from '@smartbuilder/domain';
@@ -69,9 +69,10 @@ export default function ExportPage() {
   const issuesQ = useIssues(pid);
   const [report, setReport] = useState<ValidationReport | null>(null);
 
+  // `quiet`: the check that runs when the page opens shows its report without a toast.
   const validate = useMutation({
-    mutationFn: () => api('POST /api/projects/:id/validate', { params: { id: pid } }),
-    onSuccess: (r) => { setReport(r); toast(r.ok ? 'Validation passed' : 'Validation found errors', { tone: r.ok ? 'default' : 'danger' }); },
+    mutationFn: (_quiet?: boolean) => api('POST /api/projects/:id/validate', { params: { id: pid } }),
+    onSuccess: (r, quiet) => { setReport(r); if (!quiet) toast(r.ok ? 'Validation passed' : 'Validation found errors', { tone: r.ok ? 'default' : 'danger' }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const exportBook = useMutation({
@@ -84,16 +85,25 @@ export default function ExportPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
+  // Validation is local and takes about a second, so it runs once when the page opens instead of waiting for a click.
+  const validatedFor = useRef<string | null>(null);
+  const hasDraft = (project.data?.counts.drafted ?? 0) > 0;
+  useEffect(() => {
+    if (!hasDraft || validatedFor.current === pid) return;
+    validatedFor.current = pid;
+    validate.mutate(true);
+  }, [hasDraft, pid, validate]);
+
   const blockerIssues = (issuesQ.data ?? []).filter((i) => (i.status === 'open' || i.status === 'proposed') && i.severity === 'blocker').length;
   const drafted = project.data?.counts.drafted ?? 0;
   const draftReason = drafted === 0 ? 'Nothing is drafted yet.' : null;
   const approveReason = useMemo(() => {
     if (draftReason) return draftReason;
-    if (!report) return 'Run Validate first.';
+    if (!report) return validate.isPending ? 'Validating…' : 'Run Validate first.';
     if (!report.ok) return `${plural(report.errors.length, 'validation error')} to fix.`;
     if (blockerIssues > 0) return `${plural(blockerIssues, 'blocker issue')} still unresolved in Review (open, or fixed only by a proposal you have not accepted).`;
     return null;
-  }, [report, blockerIssues, draftReason]);
+  }, [report, blockerIssues, draftReason, validate.isPending]);
 
   const rows = [...(exportsQ.data ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
@@ -108,7 +118,7 @@ export default function ExportPage() {
 
       <section className="ui-card ui-card--pad ex2-actions" aria-label="Export actions">
         <div className="ui-row">
-          <button type="button" className="ui-btn" onClick={() => validate.mutate()} disabled={validate.isPending}>{validate.isPending ? <><span className="ui-spinner" />Validating…</> : 'Validate'}</button>
+          <button type="button" className="ui-btn" onClick={() => validate.mutate(false)} disabled={validate.isPending}>{validate.isPending ? <><span className="ui-spinner" />Validating…</> : report ? 'Validate again' : 'Validate'}</button>
           <button type="button" className="ui-btn" onClick={() => exportBook.mutate(false)} disabled={!!draftReason || exportBook.isPending}>Export draft</button>
           <button type="button" className="ui-btn ui-btn--accent" onClick={() => exportBook.mutate(true)} disabled={!!approveReason || exportBook.isPending} aria-describedby={approveReason ? 'ex2-why' : undefined}>Approve and export</button>
         </div>
@@ -128,13 +138,14 @@ export default function ExportPage() {
         {exportsQ.isLoading && <div className="ui-skeleton" style={{ height: 80 }} />}
         {exportsQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(exportsQ.error)}</div>}
         {!exportsQ.isLoading && rows.length === 0 && <div className="ui-empty"><p className="ui-empty__text">No exports yet. Export a draft to open it in the reader.</p></div>}
-        <ul className="ex2-list">{rows.map((r) => <ExportItem key={r.id} row={r} />)}</ul>
+        <ul className="ex2-list">{rows.map((r, i) => <ExportItem key={r.id} row={r} latest={i === 0} />)}</ul>
       </section>
     </div>
   );
 }
 
-function ExportItem({ row }: { row: ExportRow }) {
+/** Only the newest export gets the accent button; older ones stay downloadable without competing with it. */
+function ExportItem({ row, latest }: { row: ExportRow; latest: boolean }) {
   const [copied, setCopied] = useState(false);
   return (
     <li className="ex2-item ui-card">
@@ -150,7 +161,7 @@ function ExportItem({ row }: { row: ExportRow }) {
         </div>
         <details className="ex2-details"><summary>Report</summary><ReportView report={row.report} /></details>
       </div>
-      <a className="ui-btn ui-btn--accent" href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: row.id } })} download><Icon name="download" />Download .ptsb</a>
+      <a className={`ui-btn${latest ? ' ui-btn--accent' : ''}`} href={apiUrl('GET /api/exports/:exportId/download', { params: { exportId: row.id } })} download><Icon name="download" />Download .ptsb</a>
     </li>
   );
 }
