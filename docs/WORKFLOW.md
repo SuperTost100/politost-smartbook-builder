@@ -43,6 +43,12 @@ An instruction you give in the Manuscript ("regenerate with instruction") always
 
 Before this, every review re-read the whole chapter and reported a different handful of old passages each time. On Fisica 1, about 80% of the issues in the second and third reviews were in text the earlier reviews had already read, so running a review never brought the count to zero.
 
+**Every finding gets a second opinion** before it reaches the list: another model (the **Second opinion** role, Claude Sonnet by default) re-reads the passage with the sources. It drops findings that are not real, such as a counterexample the setting excludes, and can lower a severity but never raise it. Dropped findings stay visible under **dismissed**, with the reason, and the reviewer is told not to raise them again. If the second opinion can't run, the findings stay as the reviewer wrote them.
+
+**Full review** reviews every section on its own call instead of the whole chapter at once, so fewer problems are missed. It costs about as much as 3 to 5 normal reviews; use it once, before the final export. It replaces the open review issues with what it finds.
+
+Fixes for review issues make the smallest edit that corrects the sentence. The check that decides whether a fix is applied rejects one that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with.
+
 ## 5. Export
 
 **Validate** runs the reader's own validator plus the builder's lints on the compiled book. Each finding names the section or question it comes from and links to it. **Fix with AI** sends the errors and warnings to the same fix as **Fix selected issues**: sections get a guarded fix, and questions are rewritten and checked again. Findings in generated files, such as a chapter's exam page, go away when the question behind them is fixed. **Approve and export** is available when no blocker is left; **Export draft** always works and is named `-draft`. Every export is reopened and compared with what was compiled before it is offered for download.

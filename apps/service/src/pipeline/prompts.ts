@@ -431,6 +431,42 @@ Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathemati
   };
 }
 
+// ---------- second opinion on review findings ----------
+
+export const secondOpinionSchema = z.object({
+  findings: z.array(z.object({
+    index: z.number().int().min(1).describe('the number of the finding in the list'),
+    verdict: z.enum(['real', 'not-real']),
+    severity: z.enum(['blocker', 'major', 'minor']).describe('the severity it deserves; never higher than the one given'),
+    reason: z.string().describe('one short sentence'),
+  })),
+});
+
+/** A second model checks each finding of the reviewer against the text and the sources before the author sees it. */
+export function secondOpinionPrompt(p: { language: string; notation?: string; findings: string; text: string; evidence: string }) {
+  const lang = languageName(p.language);
+  return {
+    system: `You check the findings another reviewer made on a university textbook written in ${lang}. Reviewers are useful but they also invent problems. For each finding, read the quoted passage in its context and decide whether the problem is real in the text as written.
+
+A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording.
+
+Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim or a misleading explanation; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.`,
+    prompt: `Notation fixed for the whole book:
+${p.notation || '(standard)'}
+
+FINDINGS:
+${p.findings}
+
+TEXT (sections are marked with their ids):
+${p.text}
+
+EVIDENCE the writer had (verbatim source passages):
+${p.evidence || '(none)'}
+
+Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "..."}]} with one entry per finding.`,
+  };
+}
+
 // ---------- check of an applied fix ----------
 
 export const fixCheckSchema = z.object({
@@ -456,7 +492,7 @@ ${p.issues}
 CHANGED BLOCKS (old text, new text and the neighbouring blocks for context):
 ${p.changes}
 
-For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, or changes the meaning beyond what the issues asked. Otherwise "good".
+For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, changes the meaning beyond what the issues asked, or adds more than one new sentence of claims, caveats or explanations the issues did not ask for. Otherwise "good".
 For each issue say whether the edits fixed it ("fixed": true) or not; if not, give the reason in one short sentence.
 
 Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reason": "..."}], "issues": [{"index": <number>, "fixed": <boolean>, "reason": "..."}]}.`,
@@ -494,9 +530,11 @@ export const patchSchema = z.object({
 });
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean }) {
+  // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
+  const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full. Keep [[nX]] citation markers and formula keys of text you keep.\n\n${formatRules(p.language)}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal} Keep [[nX]] citation markers and formula keys of text you keep.\n\n${formatRules(p.language)}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
