@@ -250,7 +250,7 @@ export interface OutlineRevision {
 // ---------- Content ----------
 
 /**
- * Node ids are outline ids. A section's content is Politost Markdown in "source dialect":
+ * Node ids are outline ids. A section's content is PoliTost Markdown in "source dialect":
  *  - numbered formulas use :::formula{key="slug" label="..."} instead of id="N.M"
  *  - formula refs use {{formula:@slug}}, section links use ref:section/<sectionId>
  *  - no "## pN |" heading; the compiler adds it from the outline title

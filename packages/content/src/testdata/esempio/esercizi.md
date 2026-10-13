@@ -5,7 +5,7 @@ printable: true
 
 :::exercise{id="E1.1" chapter="1" difficulty="facile"}
 ## Domanda
-Quante sezioni principali ha uno Smartbook Politost? Elencane almeno quattro.
+Quante sezioni principali ha uno Smartbook PoliTost? Elencane almeno quattro.
 
 :::hint
 Rileggi il capitolo 1, paragrafo sulle sezioni in alto.

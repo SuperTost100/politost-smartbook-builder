@@ -7,7 +7,7 @@ title: Benvenuto
 
 Uno **Smartbook** è un libro di testo digitale che puoi leggere come un libro normale, ma con qualcosa in più: formule che puoi consultare subito, esercizi con aiuto passo passo, grafici che puoi esplorare e un piccolo laboratorio dove provare dei calcoli.
 
-Questo libro che stai leggendo **è proprio un esempio**: serve a farti vedere cosa puoi fare con Politost, senza dover studiare una materia vera.
+Questo libro che stai leggendo **è proprio un esempio**: serve a farti vedere cosa puoi fare con PoliTost, senza dover studiare una materia vera.
 
 ## p2 | Come muoverti
 
