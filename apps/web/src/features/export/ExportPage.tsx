@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { ExportRow, ValidationReport } from '@smartbuilder/domain';
+import type { ExportRow, ReportFile, ValidationReport } from '@smartbuilder/domain';
 import { api, apiUrl, errorText } from '../../lib/api';
 import { qk, useExports, useIssues, useProject } from '../../lib/queries';
 import { bytes, dateTime, plural, shortHash } from '../../lib/format';
@@ -29,24 +29,29 @@ export function ReportView({ report }: { report: ValidationReport }) {
       </p>
       {errors.length > 0 && (
         <section aria-label="Errors"><h3 className="ui-meta ex2-h ex2-h--danger">Errors</h3>
-          {errors.map(([file, list]) => <FileGroup key={file} file={file} rows={list.map((r) => ({ text: r.message }))} tone="danger" />)}</section>
+          {errors.map(([file, list]) => <FileGroup key={file} file={file} info={report.files?.[file]} rows={list.map((r) => ({ text: r.message }))} tone="danger" />)}</section>
       )}
       {warnings.length > 0 && (
         <section aria-label="Warnings"><h3 className="ui-meta ex2-h ex2-h--warning">Warnings</h3>
-          {warnings.map(([file, list]) => <FileGroup key={file} file={file} rows={list.map((r) => ({ text: r.message }))} tone="warning" />)}</section>
+          {warnings.map(([file, list]) => <FileGroup key={file} file={file} info={report.files?.[file]} rows={list.map((r) => ({ text: r.message }))} tone="warning" />)}</section>
       )}
       {lint.length > 0 && (
         <section aria-label="Lint"><h3 className="ui-meta ex2-h">Lint</h3>
-          {lint.map(([file, list]) => <FileGroup key={file} file={file} rows={list.map((r) => ({ text: r.message, rule: r.rule, line: r.line }))} tone="" />)}</section>
+          {lint.map(([file, list]) => <FileGroup key={file} file={file} info={report.files?.[file]} rows={list.map((r) => ({ text: r.message, rule: r.rule, line: r.line }))} tone="" />)}</section>
       )}
     </div>
   );
 }
 
-function FileGroup({ file, rows, tone }: { file: string; rows: { text: string; rule?: string; line?: number }[]; tone: string }) {
+function FileGroup({ file, info, rows, tone }: { file: string; info?: ReportFile; rows: { text: string; rule?: string; line?: number }[]; tone: string }) {
+  const pid = useBookId();
+  const t = info?.target;
+  const to = !t ? null : 'nodeId' in t ? `/books/${pid}/manuscript/${t.nodeId}` : `/books/${pid}/practice?tab=${t.kind}&q=${t.questionId}`;
   return (
     <div className="ex2-file">
-      <div className="ui-mono ex2-file__name ui-wrap">{file}</div>
+      {info
+        ? <div className="ex2-file__name ui-wrap" title={file}>{to ? <Link to={to}>{info.label}</Link> : info.label}</div>
+        : <div className="ui-mono ex2-file__name ui-wrap">{file}</div>}
       <ul className="ex2-rows">
         {rows.map((r, i) => (
           <li key={i} className={`ex2-row ${tone ? `ex2-row--${tone}` : ''}`}>
@@ -73,6 +78,14 @@ export default function ExportPage() {
   const validate = useMutation({
     mutationFn: (_quiet?: boolean) => api('POST /api/projects/:id/validate', { params: { id: pid } }),
     onSuccess: (r, quiet) => { setReport(r); if (!quiet) toast(r.ok ? 'Validation passed' : 'Validation found errors', { tone: r.ok ? 'default' : 'danger' }); },
+    onError: (e) => toast(errorText(e), { tone: 'danger' }),
+  });
+  const fix = useMutation({
+    mutationFn: () => api('POST /api/projects/:id/validate/fix', { params: { id: pid } }),
+    onSuccess: () => {
+      toast('Fixing the validation problems. Validate again when the run is done.', { action: { label: 'Open run', to: `/books/${pid}/run` } });
+      void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.issues(pid) });
+    },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const exportBook = useMutation({
@@ -105,6 +118,10 @@ export default function ExportPage() {
     return null;
   }, [report, blockerIssues, draftReason, validate.isPending]);
 
+  // Findings in files someone wrote (a section, an introduction, a question) can go to the AI fix; generated files cannot.
+  const fixable = report ? [...report.errors, ...report.warnings].filter((f) => report.files?.[f.file]?.target).length : 0;
+  const fixing = !!project.data?.activeRun && project.data.activeRun.kind === 'regenerate' && !['completed', 'failed', 'cancelled'].includes(project.data.activeRun.status);
+
   const rows = [...(exportsQ.data ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 
   return (
@@ -128,7 +145,14 @@ export default function ExportPage() {
 
       {report && (
         <section className="ui-card ui-card--pad" aria-label="Validation report">
-          <h2 className="ui-panel-title">Validation report</h2>
+          <div className="ex2-report-head">
+            <h2 className="ui-panel-title">Validation report</h2>
+            {fixable > 0 && (
+              <button type="button" className="ui-btn ui-btn--accent" onClick={() => fix.mutate()} disabled={fix.isPending || fixing}>
+                {fixing ? <><span className="ui-spinner" />Fixing…</> : <><Icon name="sparkle" />Fix with AI ({fixable})</>}
+              </button>
+            )}
+          </div>
           <ReportView report={report} />
         </section>
       )}

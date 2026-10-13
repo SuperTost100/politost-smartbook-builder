@@ -7,7 +7,7 @@ import { json } from '../db/db.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import { deps, overrideDeps } from './deps.ts';
 import { HttpError } from '../server.ts';
-import { installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
+import { cleanBook, installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
 let fakes: ReturnType<typeof installFakes>;
@@ -407,6 +407,55 @@ describe('exports', () => {
       assert.equal(validate.body.errors.length, 1);
     } finally {
       blocker.restore();
+      fakes = installFakes();
+    }
+  });
+
+  it('names the files in the report and sends their errors and warnings to the AI fix', async () => {
+    const { projectId } = await projectWithOutline(t, 'validate-fix');
+    const qid = newId();
+    t.ctx.db.insert('questions', { id: qid, project_id: projectId, kind: 'exercise', origin: 'generated', number: '3', chapter_id: 'c1', statement: 'x', topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    // The section already has the same lint finding open: it is reused, not duplicated.
+    t.ctx.db.insert('review_issues', { id: 'lint-s1', project_id: projectId, node_id: 's1', source: 'lint', severity: 'major', category: 'colon-dangling', quote: 'Si ottiene:', message: 'm', status: 'open', resolution: '', created_at: now() });
+    const fake = installFakes({
+      compileBook: () => cleanBook([
+        { rule: 'exercise-fence', severity: 'blocker', message: 'Niente blocchi', file: `question:${qid}`, quote: ':::figure' },
+        { rule: 'colon-dangling', severity: 'major', message: 'Due punti', file: 's1', quote: 'Si ottiene:' },
+        { rule: 'content-core', severity: 'blocker', message: 'blocchi ::: non bilanciati', file: 'esami.md' },
+        { rule: 'style', severity: 'minor', message: 'Frase lunga', file: 's2' },
+      ]),
+    });
+    try {
+      const report = (await t.req('POST', `/api/projects/${projectId}/validate`)).body;
+      assert.deepEqual(report.files[`question:${qid}`], { label: 'Exercise 3 · Limiti', target: { questionId: qid, kind: 'exercise' } });
+      assert.deepEqual(report.files.s1, { label: 'Definizione', target: { nodeId: 's1' } });
+      assert.equal(report.files['esami.md'], undefined);
+
+      const run = await t.req('POST', `/api/projects/${projectId}/validate/fix`);
+      assert.equal(run.status, 200);
+      const call = fake.calls.startRun.at(-1)!;
+      assert.equal(call.kind, 'regenerate');
+      const ids = (call.scope as { issueIds: string[] }).issueIds;
+      assert.equal(ids.length, 2, 'the minor finding and the generated file are left out');
+      assert.ok(ids.includes('lint-s1'));
+      const q = t.ctx.db.get<Record<string, any>>(`SELECT * FROM review_issues WHERE question_id = ?`, qid)!;
+      assert.deepEqual([q.id, q.node_id, q.category, q.status], [ids.find((i) => i !== 'lint-s1'), 'c1', 'compile:exercise-fence', 'open']);
+      assert.match(q.suggestion, /Describe what the block showed/);
+    } finally {
+      fake.restore();
+      fakes = installFakes();
+    }
+  });
+
+  it('refuses to start a validation fix when nothing can be fixed', async () => {
+    const { projectId } = await projectWithOutline(t, 'validate-fix-none');
+    const fake = installFakes({ compileBook: () => cleanBook([{ rule: 'content-core', severity: 'blocker', message: 'x', file: 'esami.md' }]) });
+    try {
+      const r = await t.req('POST', `/api/projects/${projectId}/validate/fix`);
+      assert.equal(r.status, 409);
+      assert.equal(r.body.error.code, 'nothing_to_fix');
+    } finally {
+      fake.restore();
       fakes = installFakes();
     }
   });
