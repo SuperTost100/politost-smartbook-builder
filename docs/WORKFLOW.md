@@ -45,4 +45,4 @@ Before this, every review re-read the whole chapter and reported a different han
 
 ## 5. Export
 
-**Validate** runs the reader's own validator plus the builder's lints on the compiled book. **Approve and export** is available when no blocker is left; **Export draft** always works and is named `-draft`. Every export is reopened and compared with what was compiled before it is offered for download.
+**Validate** runs the reader's own validator plus the builder's lints on the compiled book. Each finding names the section or question it comes from and links to it. **Fix with AI** sends the errors and warnings to the same fix as **Fix selected issues**: sections get a guarded fix, and questions are rewritten and checked again. Findings in generated files, such as a chapter's exam page, go away when the question behind them is fixed. **Approve and export** is available when no blocker is left; **Export draft** always works and is named `-draft`. Every export is reopened and compared with what was compiled before it is offered for download.

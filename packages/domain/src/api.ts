@@ -49,11 +49,17 @@ export interface ChapterView {
   sections: SectionView[];
 }
 
+/** Where a validation finding sits in the app: a section (or chapter introduction) or a question. */
+export type ReportTarget = { nodeId: string } | { questionId: string; kind: 'exam' | 'exercise' };
+/** File ids resolved to the names the author knows, for the files the report mentions. */
+export interface ReportFile { label: string; target?: ReportTarget }
+
 export interface ValidationReport {
   ok: boolean;
   errors: { file: string; message: string }[];
   warnings: { file: string; message: string }[];
   lint: { file: string; rule: string; message: string; line?: number }[];
+  files?: Record<string, ReportFile>;
 }
 
 export interface ExportRow { id: string; createdAt: string; approved: boolean; sha256: string; size: number; report: ValidationReport; filename: string }
@@ -140,6 +146,7 @@ export interface Api {
   'POST /api/projects/:id/issues/fix': { body: { issueIds: string[] }; res: RunSummary };
 
   'POST /api/projects/:id/validate': { res: ValidationReport };
+  'POST /api/projects/:id/validate/fix': { res: RunSummary };
   'POST /api/projects/:id/exports': { body: { approved: boolean }; res: ExportRow };
   'GET /api/projects/:id/exports': { res: ExportRow[] };
   'GET /api/exports/:exportId/download': { res: Blob };

@@ -9,6 +9,8 @@
 .ex2-h--warning { color: var(--warning); }
 .ex2-file { border: 1px solid var(--border); border-radius: var(--radius-sm); margin-bottom: 8px; overflow: hidden; background: var(--surface); }
 .ex2-file__name { font-size: 12.5px; padding: 6px 12px; background: var(--surface-raised); border-bottom: 1px solid var(--border); }
+.ex2-report-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.ex2-report-head .ui-panel-title { margin: 0; }
 .ex2-rows { list-style: none; margin: 0; padding: 0; }
 .ex2-row { display: flex; gap: 8px; align-items: flex-start; padding: 7px 12px; border-bottom: 1px solid var(--border); font-size: 14px; }
 .ex2-row:last-child { border-bottom: 0; }

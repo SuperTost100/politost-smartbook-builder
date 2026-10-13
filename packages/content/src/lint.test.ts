@@ -163,6 +163,10 @@ test('colon-dangling: not flagged when a formula, math, list, image or inline ma
   assert.ok(!has('**Esempio:**\n\nUn testo qualunque.', 'colon-dangling'), 'bold label');
   assert.ok(!has('Un rapporto come 3:\n$$x$$', 'colon-dangling'));
   assert.ok(!has('Il rapporto è 1:2 e non 2:1.', 'colon-dangling'));
+  // Exam statements list their parts as "a) ...", "(b) ..." or "1) ...".
+  for (const next of ['a) Calcolare la forza.\n\nb) Calcolare la velocità.', '(a) Calcolare la forza.', '1) Calcolare la forza.']) {
+    assert.ok(!has(`Supponendo che $\\theta = 30^\\circ$:\n\n${next}`, 'colon-dangling'), `next: ${next}`);
+  }
 });
 
 // ---- unicode-math (F-08) -----------------------------------------------------------------

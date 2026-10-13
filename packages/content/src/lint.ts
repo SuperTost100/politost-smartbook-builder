@@ -437,7 +437,7 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     let j = i + 1;
     while (j < lines.length && lines[j].kind === 'blank') j++;
     const nk = lines[j];
-    const ok = nk && (nk.kind === 'formula-open' || nk.kind === 'heading' || nk.kind === 'math' || nk.kind === 'list' || nk.kind === 'image-open' || nk.kind === 'table' || nk.kind === 'code-fence' || /^\s*\$/.test(nk.raw));
+    const ok = nk && (nk.kind === 'formula-open' || nk.kind === 'heading' || nk.kind === 'math' || nk.kind === 'list' || nk.kind === 'image-open' || nk.kind === 'table' || nk.kind === 'code-fence' || /^\s*\$/.test(nk.raw) || /^\s*\(?(?:[a-z]|\d{1,2})\)\s/i.test(nk.raw));
     if (!ok) add(mk('colon-dangling', file, 'Paragraph ends with ":" but no formula, list or figure follows.', l.n, l.raw));
   }
 
