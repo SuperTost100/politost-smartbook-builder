@@ -983,7 +983,7 @@ describe('the review converges', () => {
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     assert.equal(first.reviewed, [r1, r2].sort().join(','));
-    assert.match(fake.calls[0].prompt, /first review: every section is new/);
+    assert.match(fake.calls[0].prompt, /full review: review all of the text/);
     assert.doesNotMatch(fake.calls[0].prompt, /ALREADY FIXED|DECIDED ARE FINE/);
 
     const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: now() };
@@ -996,7 +996,8 @@ describe('the review converges', () => {
     fake.next(answer({ issues: [] }));
     await review();
     const prompt = fake.calls[1].prompt;
-    assert.match(prompt, /changed sections: \[s1\]\. Unchanged sections: \[s2\]\. In unchanged sections report only blockers/);
+    assert.match(prompt, /only the passages below are new or rewritten[\s\S]*--- \[s1\] ---\nUna frase nuova\./);
+    assert.doesNotMatch(prompt, /--- \[s2\] ---/);
     assert.match(prompt, /DECIDED ARE FINE[\s\S]*"Frase scelta" Preferirei un altro ordine/);
     assert.match(prompt, /"Altro" Ipotesi mancante/);
     assert.match(prompt, /ALREADY FIXED[\s\S]*"x{120}" m{200}\n/);
@@ -1019,19 +1020,46 @@ describe('the review converges', () => {
     assert.deepEqual(issues(`id IN ('p-live', 'p-stale')`).map((i) => i.id), ['p-live']);
   });
 
-  test('a re-review keeps the open non-blocker issues of sections that did not change', async () => {
+  test('a re-review only reports and replaces issues in the passages written since the last review', async () => {
     seedOutline([['c1', ['s1', 's2']]]);
-    const r1 = seedRevision('s1', 'Una frase.');
+    const r1 = seedRevision('s1', 'Primo blocco.\n\nSecondo blocco.');
     seedRevision('s2', 'Altro testo.');
-    fake.next(answer({ issues: [finding({ sectionId: 's2', quote: 'Altro testo.', message: 'Manca un esempio' }), finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro', message: 'Errato' })] }));
+    fake.next(answer({ issues: [
+      finding({ sectionId: 's1', quote: 'Primo blocco.', message: 'Resta' }),
+      finding({ sectionId: 's1', quote: 'Secondo blocco.', message: 'Riletto' }),
+      finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro testo.', message: 'Errato' }),
+    ] }));
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
-    // Only s1 changes; the reviewer, told to report only blockers in s2, finds none there now.
+    assert.equal(first.issues, 3);
+    // Only the second block of s1 is rewritten. The reviewer still reports old passages; they are ignored.
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
-    seedRevision('s1', 'Una frase nuova.');
+    seedRevision('s1', 'Primo blocco.\n\nSecondo blocco riscritto.');
+    fake.next(answer({ issues: [
+      finding({ sectionId: 's1', quote: 'Secondo blocco riscritto.', message: 'Nuovo' }),
+      finding({ sectionId: 's1', quote: 'Primo blocco.', message: 'Trovato solo ora' }),
+      finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro testo.', message: 'Altro blocker' }),
+    ] }));
+    const second = await review();
+    assert.match(fake.calls[1].prompt, /--- \[s1\] ---\nSecondo blocco riscritto\.\n/);
+    assert.equal(second.issues, 1);
+    assert.equal(second.outOfScope, 2);
+    // "Riletto" pointed at a passage that no longer exists; the open issues on unchanged passages stay.
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message).sort(), ['Errato', 'Nuovo', 'Resta']);
+  });
+
+  test('a re-review with no new passages does not call the reviewer', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Primo blocco.\n\nSecondo blocco.');
     fake.next(answer({ issues: [] }));
-    await review();
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.node_id, i.severity, i.message]), [['s2', 'major', 'Manca un esempio']]);
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    // A new revision that only drops a block: nothing new to read.
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
+    seedRevision('s1', 'Primo blocco.');
+    const second = await review();
+    assert.equal(fake.calls.length, 1);
+    assert.equal(second.issues, 0);
   });
 
   test('Run review no longer forces: identical text is reused, changed text is read again', async () => {

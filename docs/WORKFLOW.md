@@ -39,7 +39,9 @@ The Review tab lists lint findings, failed checks and reviewer issues, each poin
 
 An instruction you give in the Manuscript ("regenerate with instruction") always becomes a proposal. Proposals never replace your text until you accept them.
 
-**Run review** re-reads only the chapters whose text changed since their last review. The reviewer is told which sections changed, and in unchanged ones it reports blockers only. It also sees the issues you accepted or dismissed and the ones already fixed, and does not raise them again. Only blockers stop an approved export; majors and minors do not have to reach zero.
+**Run review** reads the whole chapter only the first time. After that it reviews only the paragraphs, formulas and boxes written since the last review, such as the text a fix changed; the rest of the chapter is shown to the reviewer for context, and findings outside the new text are dropped. Open issues on text that didn't change stay as they are. A chapter with no new text costs no model call. The reviewer also sees the issues you accepted or dismissed and the ones already fixed, and does not raise them again. Only blockers stop an approved export; majors and minors do not have to reach zero.
+
+Before this, every review re-read the whole chapter and reported a different handful of old passages each time. On Fisica 1, about 80% of the issues in the second and third reviews were in text the earlier reviews had already read, so running a review never brought the count to zero.
 
 ## 5. Export
 

@@ -39,11 +39,24 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   }).filter(Boolean).join('\n\n');
   const objectives = chapter.sections.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
 
-  // What the reviewer already knows: sections that did not change since the last review, and issues the author or an earlier fix settled.
-  const seen = new Set((priorReviewed ?? '').split(',').filter(Boolean));
-  const changes = priorReviewed
-    ? `SINCE THE LAST REVIEW: changed sections: ${sections.filter((x) => !seen.has(x.head!.id)).map((x) => `[${x.s.id}]`).join(', ') || '(none)'}. Unchanged sections: ${sections.filter((x) => seen.has(x.head!.id)).map((x) => `[${x.s.id}]`).join(', ') || '(none)'}. In unchanged sections report only blockers; they were reviewed before.`
-    : 'This is the first review: every section is new, review all of it.';
+  // After the first review only the blocks written since the last one are reviewed. Re-reading text that was already reviewed
+  // made every pass report a different handful of old passages, so the issues never ran out.
+  const full = !priorReviewed || !!t.task.input.full;
+  const before = new Map<string, string>();
+  if (!full) {
+    const ids = priorReviewed!.split(',').filter(Boolean);
+    const rows = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids);
+    for (const r of rows) before.set(r.node_id, r.markdown);
+  }
+  const changedBlocks = new Map(sections.map(({ s, head }) => {
+    const old = new Set(splitBlocks(before.get(s.id) ?? '').map((b) => b.text.trim()));
+    return [s.id, splitBlocks(head!.markdown).map((b) => b.text.trim()).filter((b) => !old.has(b))] as const;
+  }));
+  const inChanged = (nodeId: string, quote: string) => !!quote.trim() && (changedBlocks.get(nodeId) ?? []).some((b) => quoteInBlock(quote, b));
+  const changedText = sections.filter(({ s }) => changedBlocks.get(s.id)!.length).map(({ s }) => `--- [${s.id}] ---\n${changedBlocks.get(s.id)!.join('\n\n')}`).join('\n\n');
+  const changes = full
+    ? 'This is a full review: review all of the text.'
+    : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`;
   const handledRows = ctx.db.all<{ node_id: string; status: string; quote: string; message: string }>(
     `SELECT node_id, status, quote, message FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted', 'fixed') AND node_id IN (${inNodes}) ORDER BY rowid DESC LIMIT 60`, projectId, ...reviewNodes);
   const handledLine = (r: { node_id: string; quote: string; message: string }) => `- [${r.node_id}] ${r.quote ? `"${cut(r.quote, 120)}" ` : ''}${cut(r.message, 200)}`;
@@ -54,10 +67,12 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
     fixed.length ? `ISSUES ALREADY FIXED (newest first). Report one again only if the text above still has the problem:\n${fixed.map(handledLine).join('\n')}` : '',
   ].filter(Boolean).join('\n\n');
 
-  const { data, route } = await runRole(ctx, {
+  // Text that changed only in blocks already reviewed (or not at all) needs no model call.
+  const call = full || changedText ? await runRole(ctx, {
     role: 'reviewer', ...reviewPrompt({ language: project.language, notation: outline!.outline.notation, chapterTitle: chapter.title, chapter: truncate(text, 120_000), evidence: truncate(evidence, 40_000), objectives, changes, handled }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  });
+  }) : undefined;
+  const data = call?.data ?? { issues: [] };
   const valid = new Map(sections.map(({ s, head }) => [s.id, head!.id]));
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
@@ -79,18 +94,25 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   // Issues the author settled are not raised again when the quote matches.
   const settled = ctx.db.all<{ node_id: string; quote: string }>(`SELECT node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
   let stored = 0;
+  let outOfScope = 0;
   ctx.db.tx(() => {
-    // Findings that match no section are stored under the chapter id, so it is part of the cleanup. Resolved history stays.
-    // In sections that did not change the reviewer reports only blockers, so only their open blockers are replaced.
-    const unchanged = priorReviewed ? sections.filter((x) => seen.has(x.head!.id)).map((x) => x.s.id) : [];
-    const replaced = reviewNodes.filter((id) => !unchanged.includes(id));
-    if (replaced.length) ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${replaced.map(() => '?').join(',')})`, projectId, ...replaced);
-    if (unchanged.length) ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND severity = 'blocker' AND node_id IN (${unchanged.map(() => '?').join(',')})`, projectId, ...unchanged);
+    // A full review replaces every open issue; findings that match no section are stored under the chapter id, so it is part
+    // of the cleanup. A later review replaces only the open issues it read again (in changed passages) and those whose passage
+    // is gone. Resolved history stays.
+    if (full) ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
+    else {
+      const open = ctx.db.all<{ id: string; node_id: string; quote: string }>(`SELECT id, node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
+      for (const o of open) {
+        const head = sections.find((x) => x.s.id === o.node_id)?.head;
+        if (head && o.quote.trim() && (inChanged(o.node_id, o.quote) || !quoteInBlock(o.quote, head.markdown))) ctx.db.run('DELETE FROM review_issues WHERE id = ?', o.id);
+      }
+    }
     // Fixes that wait on a proposal that no longer exists are leftovers of earlier passes; a live proposal keeps its issues.
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'proposed' AND node_id IN (${inNodes}) AND resolution NOT IN (SELECT 'Proposal ' || id FROM content_revisions WHERE project_id = ? AND status = 'proposal')`, projectId, ...reviewNodes, projectId);
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND (category = 'compile' OR category LIKE 'compile:%') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
     for (const i of data.issues) {
       const nodeId = valid.has(i.sectionId) ? i.sectionId : null;
+      if (!full && !(nodeId && inChanged(nodeId, i.quote))) { outOfScope++; continue; }
       if (settled.some((x) => x.node_id === (nodeId ?? chapterId) && sameQuote(x.quote, i.quote))) continue;
       stored++;
       ctx.db.insert('review_issues', {
@@ -106,7 +128,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
     }
   });
   ctx.events.emit('issue.created', { chapterId, count: stored }, { projectId, runId: t.task.runId });
-  return { issues: stored, skippedSettled: data.issues.length - stored, compileIssues: compileIssues.length, reviewed, model: route.model };
+  return { issues: stored, skippedSettled: data.issues.length - stored - outOfScope, outOfScope, full, compileIssues: compileIssues.length, reviewed, model: call?.route.model };
 }
 
 /**
