@@ -9,6 +9,7 @@ import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/Toast';
 import { MathText } from '../../components/MathText';
+import { ConfirmDialog } from '../../components/Dialog';
 import './review.css';
 
 const SEVERITIES: IssueSeverity[] = ['blocker', 'major', 'minor'];
@@ -56,9 +57,10 @@ export default function ReviewPage() {
     onSuccess: (_r, ids) => { toast(`Fixing ${plural(ids.length, 'issue')}. Fixes are applied to the text; earlier versions stay in each section's history.`, { action: { label: 'Open run', to: `/books/${pid}/run` } }); setPicked(new Set()); refresh(); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
+  const [confirmFull, setConfirmFull] = useState(false);
   const review = useMutation({
-    mutationFn: () => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'review' } }),
-    onSuccess: () => { toast('Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
+    mutationFn: (mode?: 'full') => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'review', ...(mode ? { scope: { reviewMode: mode } } : {}) } }),
+    onSuccess: (_r, mode) => { toast(mode ? 'Full review started' : 'Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const setIssue = useMutation({
@@ -91,7 +93,8 @@ export default function ReviewPage() {
           <p className="ui-lede">{openCount === 0 ? 'No open issues.' : `${plural(openCount, 'open issue')}. Open one to see it in the text, or let the writer fix it.`}{proposedCount > 0 && ` · ${plural(proposedCount, 'fix', 'fixes')} waiting for your approval in the Manuscript`}</p>
         </div>
         <div className="ui-page__actions">
-          <button type="button" className="ui-btn" onClick={() => review.mutate()} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>
+          <button type="button" className="ui-btn" onClick={() => setConfirmFull(true)} disabled={review.isPending || runActive}>Full review</button>
+          <button type="button" className="ui-btn" onClick={() => review.mutate(undefined)} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>
         </div>
       </div>
 
@@ -106,7 +109,7 @@ export default function ReviewPage() {
 
       {issuesQ.isLoading && <div className="ui-skeleton" style={{ height: 160 }} />}
       {issuesQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(issuesQ.error)}</div>}
-      {!issuesQ.isLoading && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate()} disabled={review.isPending}>Run review</button></div>}
+      {!issuesQ.isLoading && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate(undefined)} disabled={review.isPending}>Run review</button></div>}
       {all.length > 0 && shown.length === 0 && <p className="ui-muted">No issues match these filters.</p>}
 
       <ul className="rv-list">
@@ -141,6 +144,15 @@ export default function ReviewPage() {
           </li>
         ))}
       </ul>
+
+      <ConfirmDialog
+        open={confirmFull}
+        title="Full review"
+        message="Every section is reviewed on its own call instead of the whole chapter at once, and every finding gets a second opinion. It costs about as much as 3 to 5 normal reviews, so use it once, before the final export. Open review issues are replaced by what it finds."
+        confirmLabel="Start full review"
+        onClose={() => setConfirmFull(false)}
+        onConfirm={() => { setConfirmFull(false); review.mutate('full'); }}
+      />
     </div>
   );
 }

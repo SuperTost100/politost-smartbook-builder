@@ -7,7 +7,7 @@ import { HttpError } from '../server.ts';
 import type { TaskSpec } from '../queue/queue.ts';
 import { headRevision, loadOutline, loadProject } from './util.ts';
 
-export interface RunScope { chapterIds?: string[]; nodeIds?: string[]; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string }
+export interface RunScope { chapterIds?: string[]; nodeIds?: string[]; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck' }
 
 const ACTIVE = `('running', 'pausing', 'paused', 'waiting')`;
 
@@ -61,7 +61,11 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
         })
         : (loadOutline(ctx, projectId)?.outline.chapters ?? [])
           .filter((c) => (!scope.chapterIds?.length || scope.chapterIds.includes(c.id)) && c.sections.some((s) => headRevision(ctx, projectId, s.id)))
-          .map((c) => ({ kind: 'chapter.review', key: `review:${c.id}`, label: `Review "${c.title}"`, input: { chapterId: c.id }, pool: 'reviewer' }));
+          .map((c) => ({
+            kind: 'chapter.review', key: `review:${c.id}`, pool: 'reviewer',
+            label: scope.reviewMode === 'full' ? `Full review "${c.title}"` : scope.reviewMode === 'recheck' ? `Second opinion on "${c.title}"` : `Review "${c.title}"`,
+            input: { chapterId: c.id, ...(scope.reviewMode ? { mode: scope.reviewMode } : {}) },
+          }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
       runId = ctx.queue.createRun(projectId, 'review', specs);
       break;

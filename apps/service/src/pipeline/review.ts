@@ -8,14 +8,60 @@ import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
-import { fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, reviewPrompt, reviewSchema, repairSchema } from './prompts.ts';
+import { fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
-export async function chapterReview(ctx: AppContext, t: TaskContext) {
+type Severity = 'blocker' | 'major' | 'minor';
+const RANK: Record<Severity, number> = { minor: 0, major: 1, blocker: 2 };
+interface Finding { sectionId: string; severity: Severity; quote: string; message: string; suggestion: string; category?: string }
+
+/**
+ * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
+ * are not real and may lower (never raise) the severity. When the check cannot run, the findings stay as they are.
+ */
+async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; findings: F[]; text: string; evidence: string }) {
+  const kept: F[] = [];
+  const dropped: { finding: F; reason: string }[] = [];
+  let lowered = 0;
+  if (!p.findings.length) return { kept, dropped, lowered, checked: undefined as boolean | undefined, model: undefined as string | undefined };
+  const list = p.findings.map((f, n) => `${n + 1}. [${f.sectionId}] [${f.severity}] ${f.quote ? `"${f.quote}" ` : ''}${f.message}${f.suggestion ? ` Suggested fix: ${f.suggestion}` : ''}`).join('\n');
+  try {
+    const { data, route } = await runRole(ctx, {
+      role: 'verifier', ...secondOpinionPrompt({ language: p.language, notation: p.notation, findings: list, text: p.text, evidence: p.evidence }),
+      schema: secondOpinionSchema, projectId: p.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    const verdicts = new Map(data.findings.map((v) => [v.index - 1, v]));
+    p.findings.forEach((f, n) => {
+      const v = verdicts.get(n);
+      if (v?.verdict === 'not-real') { dropped.push({ finding: f, reason: v.reason.trim() }); return; }
+      if (v && RANK[v.severity] < RANK[f.severity]) { lowered++; kept.push({ ...f, severity: v.severity }); return; }
+      kept.push(f);
+    });
+    return { kept, dropped, lowered, checked: true as boolean | undefined, model: route.model as string | undefined };
+  } catch (err) {
+    if (!(err instanceof TaskError) || t.signal.aborted) throw err;
+    return { kept: [...p.findings], dropped, lowered, checked: false as boolean | undefined, model: undefined as string | undefined };
+  }
+}
+
+const notRealResolution = (reason: string) => `Second opinion: not a real problem.${reason ? ` ${reason}` : ''}`;
+
+/**
+ * Chapter review. Modes: "changed" (the default) reads the whole chapter the first time and afterwards only the blocks written
+ * since the last review; "full" reviews every section on its own call; "recheck" asks for a second opinion on the issues
+ * already open, without a new review. Every finding gets the second opinion before it is stored.
+ */
+export interface ReviewResult {
+  skipped?: boolean | string; reused?: boolean; reviewed?: string; mode?: string; full?: boolean; model?: string; verifier?: string;
+  issues?: number; dropped?: number; lowered?: number; checked?: boolean; rechecked?: number; skippedSettled?: number; outOfScope?: number; compileIssues?: number;
+}
+
+export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<ReviewResult> {
   const { projectId } = t.task;
   const chapterId = t.task.input.chapterId as string;
+  const mode = (t.task.input.mode as 'changed' | 'full' | 'recheck' | undefined) ?? (t.task.input.full ? 'full' : 'changed');
   const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const chapter = outline?.outline.chapters.find((c) => c.id === chapterId);
@@ -24,24 +70,42 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   // Nothing written yet: a review would only report that every objective is missing.
   if (!sections.length) return { skipped: 'no drafted sections' };
   const reviewed = sections.map((x) => x.head!.id).sort().join(',');
-  // Re-reviewing identical text wastes quota.
-  const prior = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? ORDER BY finished_at DESC LIMIT 1`, projectId, chapterId);
+  const prior = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? AND json_extract(result, '$.reviewed') IS NOT NULL ORDER BY finished_at DESC LIMIT 1`, projectId, chapterId);
   const priorReviewed = prior ? json<{ reviewed?: string }>(prior.result, {}).reviewed : undefined;
-  if (priorReviewed === reviewed && !t.task.input.force) return { reused: true, reviewed };
+  // Re-reviewing identical text wastes quota.
+  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force) return { reused: true, reviewed };
   const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
   const inNodes = reviewNodes.map(() => '?').join(',');
+  const notation = outline!.outline.notation;
 
-  const text = sections.map(({ s, head }) => `=== [${s.id}] ${s.title} ===\n${head!.markdown}`).join('\n\n');
-  const evidence = sections.map(({ s }) => {
-    const p = ctx.db.get('SELECT * FROM evidence_packets WHERE project_id = ? AND node_id = ? ORDER BY created_at DESC LIMIT 1', projectId, s.id);
+  const sectionText = (x: (typeof sections)[number]) => `=== [${x.s.id}] ${x.s.title} ===\n${x.head!.markdown}`;
+  const sectionEvidence = (id: string, max = 6000) => {
+    const p = ctx.db.get('SELECT * FROM evidence_packets WHERE project_id = ? AND node_id = ? ORDER BY created_at DESC LIMIT 1', projectId, id);
     if (!p) return '';
-    return `[${s.id}]\n${evidenceText(ctx, { id: p.id as string, projectId, nodeId: s.id, provider: p.provider as 'local', query: '', answer: '', notes: json(p.notes, []), createdAt: '' }, 6000).notes}`;
-  }).filter(Boolean).join('\n\n');
-  const objectives = chapter.sections.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
+    return `[${id}]\n${evidenceText(ctx, { id: p.id as string, projectId, nodeId: id, provider: p.provider as 'local', query: '', answer: '', notes: json(p.notes, []), createdAt: '' }, max).notes}`;
+  };
+  // The second opinion reads only the sections that have findings.
+  const contextFor = (ids: Set<string>) => {
+    const involved = sections.filter((x) => ids.has(x.s.id) || ids.has(chapterId));
+    return { text: truncate(involved.map(sectionText).join('\n\n'), 100_000), evidence: truncate(involved.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), 30_000) };
+  };
+
+  if (mode === 'recheck') {
+    const open = ctx.db.all<{ id: string; node_id: string; severity: Severity; quote: string; message: string; suggestion: string }>(
+      `SELECT id, node_id, severity, quote, message, suggestion FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
+    const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: open.map((o) => ({ ...o, sectionId: o.node_id })), ...contextFor(new Set(open.map((o) => o.node_id))) });
+    ctx.db.tx(() => {
+      for (const d of opinion.dropped) ctx.db.run(`UPDATE review_issues SET status = 'dismissed', resolution = ? WHERE id = ?`, notRealResolution(d.reason), d.finding.id);
+      for (const k of opinion.kept) ctx.db.run('UPDATE review_issues SET severity = ? WHERE id = ?', k.severity, k.id);
+    });
+    issuesChanged(ctx, projectId, open.map((o) => o.id));
+    // The text was not reviewed again: the next review compares with the same revisions as before.
+    return { rechecked: open.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked, model: opinion.model, ...(priorReviewed ? { reviewed: priorReviewed } : {}) };
+  }
 
   // After the first review only the blocks written since the last one are reviewed. Re-reading text that was already reviewed
   // made every pass report a different handful of old passages, so the issues never ran out.
-  const full = !priorReviewed || !!t.task.input.full;
+  const full = !priorReviewed || mode === 'full';
   const before = new Map<string, string>();
   if (!full) {
     const ids = priorReviewed!.split(',').filter(Boolean);
@@ -54,26 +118,62 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
   }));
   const inChanged = (nodeId: string, quote: string) => !!quote.trim() && (changedBlocks.get(nodeId) ?? []).some((b) => quoteInBlock(quote, b));
   const changedText = sections.filter(({ s }) => changedBlocks.get(s.id)!.length).map(({ s }) => `--- [${s.id}] ---\n${changedBlocks.get(s.id)!.join('\n\n')}`).join('\n\n');
-  const changes = full
-    ? 'This is a full review: review all of the text.'
-    : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`;
   const handledRows = ctx.db.all<{ node_id: string; status: string; quote: string; message: string }>(
     `SELECT node_id, status, quote, message FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted', 'fixed') AND node_id IN (${inNodes}) ORDER BY rowid DESC LIMIT 60`, projectId, ...reviewNodes);
-  const handledLine = (r: { node_id: string; quote: string; message: string }) => `- [${r.node_id}] ${r.quote ? `"${cut(r.quote, 120)}" ` : ''}${cut(r.message, 200)}`;
-  const decided = handledRows.filter((r) => r.status !== 'fixed');
-  const fixed = handledRows.filter((r) => r.status === 'fixed');
-  const handled = [
-    decided.length ? `ISSUES THE AUTHOR DECIDED ARE FINE (newest first). Never report these again, in any wording:\n${decided.map(handledLine).join('\n')}` : '',
-    fixed.length ? `ISSUES ALREADY FIXED (newest first). Report one again only if the text above still has the problem:\n${fixed.map(handledLine).join('\n')}` : '',
-  ].filter(Boolean).join('\n\n');
+  const handledFor = (nodes: Set<string>) => {
+    const rows = handledRows.filter((r) => nodes.has(r.node_id));
+    const line = (r: { node_id: string; quote: string; message: string }) => `- [${r.node_id}] ${r.quote ? `"${cut(r.quote, 120)}" ` : ''}${cut(r.message, 200)}`;
+    const decided = rows.filter((r) => r.status !== 'fixed');
+    const fixed = rows.filter((r) => r.status === 'fixed');
+    return [
+      decided.length ? `ISSUES THE AUTHOR DECIDED ARE FINE (newest first). Never report these again, in any wording:\n${decided.map(line).join('\n')}` : '',
+      fixed.length ? `ISSUES ALREADY FIXED (newest first). Report one again only if the text above still has the problem:\n${fixed.map(line).join('\n')}` : '',
+    ].filter(Boolean).join('\n\n');
+  };
 
-  // Text that changed only in blocks already reviewed (or not at all) needs no model call.
-  const call = full || changedText ? await runRole(ctx, {
-    role: 'reviewer', ...reviewPrompt({ language: project.language, notation: outline!.outline.notation, chapterTitle: chapter.title, chapter: truncate(text, 120_000), evidence: truncate(evidence, 40_000), objectives, changes, handled }),
+  const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }) => runRole(ctx, {
+    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  }) : undefined;
-  const data = call?.data ?? { issues: [] };
+  });
+  const objectivesOf = (list: typeof chapter.sections) => list.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
+  const raw: Finding[] = [];
+  let model: string | undefined;
+  if (mode === 'full') {
+    // One call per section: a whole chapter in one call got a different handful of problems each time.
+    for (const x of sections) {
+      const others = chapter.sections.filter((s) => s.id !== x.s.id).map((s) => `[${s.id}] ${s.title}`).join('; ');
+      const call = await review({
+        text: sectionText(x), evidence: sectionEvidence(x.s.id, 12_000), objectives: objectivesOf([x.s]), handled: handledFor(new Set([x.s.id])),
+        changes: `This is a full review of one section of the chapter: review all of it. The chapter's other sections, not shown, are: ${others || '(none)'}. Report only problems in this section, with sectionId "${x.s.id}".`,
+      });
+      model = call.route.model;
+      for (const i of call.data.issues) raw.push({ ...i, sectionId: x.s.id });
+    }
+  } else if (full || changedText) {
+    // Text that changed only in blocks already reviewed (or not at all) needs no model call.
+    const call = await review({
+      text: sections.map(sectionText).join('\n\n'), evidence: sections.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), objectives: objectivesOf(chapter.sections), handled: handledFor(new Set(reviewNodes)),
+      changes: full
+        ? 'This is a full review: review all of the text.'
+        : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`,
+    });
+    model = call.route.model;
+    raw.push(...call.data.issues);
+  }
   const valid = new Map(sections.map(({ s, head }) => [s.id, head!.id]));
+
+  // Findings outside the text under review, and ones matching an issue the author settled, never reach the second opinion.
+  const settled = ctx.db.all<{ node_id: string; quote: string }>(`SELECT node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
+  let outOfScope = 0;
+  let skippedSettled = 0;
+  const candidates: Finding[] = [];
+  for (const i of raw) {
+    const nodeId = valid.has(i.sectionId) ? i.sectionId : chapterId;
+    if (!full && !(nodeId !== chapterId && inChanged(nodeId, i.quote))) { outOfScope++; continue; }
+    if (settled.some((x) => x.node_id === nodeId && sameQuote(x.quote, i.quote))) { skippedSettled++; continue; }
+    candidates.push({ ...i, sectionId: nodeId });
+  }
+  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId))) });
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
   const compileIssues: { nodeId: string; severity: string; rule: string; quote: string; message: string }[] = [];
@@ -91,10 +191,6 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
     compileIssues.push({ nodeId: chapterId, severity: 'blocker', rule: '', quote: '', message: `The chapter does not compile: ${err instanceof Error ? err.message : err}` });
   }
 
-  // Issues the author settled are not raised again when the quote matches.
-  const settled = ctx.db.all<{ node_id: string; quote: string }>(`SELECT node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
-  let stored = 0;
-  let outOfScope = 0;
   ctx.db.tx(() => {
     // A full review replaces every open issue; findings that match no section are stored under the chapter id, so it is part
     // of the cleanup. A later review replaces only the open issues it read again (in changed passages) and those whose passage
@@ -110,16 +206,13 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
     // Fixes that wait on a proposal that no longer exists are leftovers of earlier passes; a live proposal keeps its issues.
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'proposed' AND node_id IN (${inNodes}) AND resolution NOT IN (SELECT 'Proposal ' || id FROM content_revisions WHERE project_id = ? AND status = 'proposal')`, projectId, ...reviewNodes, projectId);
     ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND (category = 'compile' OR category LIKE 'compile:%') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
-    for (const i of data.issues) {
-      const nodeId = valid.has(i.sectionId) ? i.sectionId : null;
-      if (!full && !(nodeId && inChanged(nodeId, i.quote))) { outOfScope++; continue; }
-      if (settled.some((x) => x.node_id === (nodeId ?? chapterId) && sameQuote(x.quote, i.quote))) continue;
-      stored++;
-      ctx.db.insert('review_issues', {
-        id: newId(), project_id: projectId, node_id: nodeId ?? chapterId, question_id: null, rev_id: nodeId ? valid.get(nodeId) : null, source: 'review',
-        severity: i.severity, category: i.category, quote: i.quote, message: i.message, suggestion: i.suggestion, status: 'open', resolution: '', created_at: now(),
-      });
-    }
+    const store = (i: Finding, status: string, resolution: string) => ctx.db.insert('review_issues', {
+      id: newId(), project_id: projectId, node_id: i.sectionId, question_id: null, rev_id: valid.get(i.sectionId) ?? null, source: 'review',
+      severity: i.severity, category: i.category ?? 'correctness', quote: i.quote, message: i.message, suggestion: i.suggestion, status, resolution, created_at: now(),
+    });
+    for (const i of opinion.kept) store(i, 'open', '');
+    // Dropped findings stay visible under "dismissed", and the reviewer is told not to raise them again.
+    for (const d of opinion.dropped) store(d.finding, 'dismissed', notRealResolution(d.reason));
     for (const c of compileIssues) {
       ctx.db.insert('review_issues', {
         id: newId(), project_id: projectId, node_id: c.nodeId, question_id: null, rev_id: valid.get(c.nodeId) ?? null, source: 'lint', severity: c.severity,
@@ -127,8 +220,11 @@ export async function chapterReview(ctx: AppContext, t: TaskContext) {
       });
     }
   });
-  ctx.events.emit('issue.created', { chapterId, count: stored }, { projectId, runId: t.task.runId });
-  return { issues: stored, skippedSettled: data.issues.length - stored - outOfScope, outOfScope, full, compileIssues: compileIssues.length, reviewed, model: call?.route.model };
+  ctx.events.emit('issue.created', { chapterId, count: opinion.kept.length }, { projectId, runId: t.task.runId });
+  return {
+    issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked,
+    skippedSettled, outOfScope, mode, full, compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model,
+  };
 }
 
 /**
@@ -167,7 +263,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const instructed = !!t.task.input.instruction;
   const role = instructed || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds }),
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0 }),
     schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const isIntro = !findSection(outline?.outline ?? { chapters: [], exclusions: [], notation: '' }, nodeId);
