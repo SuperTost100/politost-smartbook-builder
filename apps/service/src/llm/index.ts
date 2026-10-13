@@ -74,6 +74,10 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
     if (!candidates.length) throw new TaskError(`The "${opts.role}" route cannot search the web.`, 'input', 'In Settings, pick a Claude model for this role.');
   }
 
+  // A task that timed out on its first route in an earlier run (a review of the same chapter, say) tends to time out
+  // there again, so it starts on the next route instead of waiting for the timeout once more.
+  if (opts.taskId && candidates.length > 1 && timedOutBefore(ctx, opts.taskId, candidates[0])) candidates = [...candidates.slice(1), candidates[0]];
+
   // Skip a provider that recently hit its quota when another candidate is available.
   const ready = candidates.filter((c) => (cooldown.get(c.provider) ?? 0) <= Date.now());
   if (ready.length && ready.length < candidates.length) candidates = ready;
@@ -99,6 +103,15 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
     }
   }
   throw new TaskError(lastFailure?.message ?? 'No route available', 'temporary');
+}
+
+/** The same task key, in an earlier run within the last two weeks, hit the call timeout on this route. */
+function timedOutBefore(ctx: AppContext, taskId: string, route: Route): boolean {
+  return !!ctx.db.get(
+    `SELECT 1 FROM usage u JOIN tasks t ON t.id = u.task_id
+     WHERE t.key = (SELECT key FROM tasks WHERE id = ?) AND t.project_id = (SELECT project_id FROM tasks WHERE id = ?) AND t.id <> ?
+       AND u.provider = ? AND u.model = ? AND u.ok = 0 AND u.ms >= ? AND u.created_at > ? LIMIT 1`,
+    taskId, taskId, taskId, route.provider, route.model, llmTuning.callTimeoutMs, new Date(Date.now() - 14 * 86_400_000).toISOString());
 }
 
 class RouteFailure extends Error {

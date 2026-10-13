@@ -186,6 +186,25 @@ describe('error mapping and fallback', () => {
     assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).route.provider, 'antigravity');
   });
 
+  test('a task that timed out on its first route in an earlier run starts on the fallback', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'antigravity', model: 'g' });
+    kit.ctx.db.run('PRAGMA foreign_keys = OFF');
+    const task = (id: string, run: string) => kit.ctx.db.insert('tasks', { id, run_id: run, project_id: 'p', kind: 'chapter.review', label: 'Review', key: 'review:c1', created_at: new Date().toISOString() });
+    const usage = (taskId: string, ms: number) => kit.ctx.db.insert('usage', { project_id: 'p', task_id: taskId, provider: 'codex', model: 'm', role: 'bulk', ms, ok: 0, created_at: new Date().toISOString() });
+    task('old', 'r1'); task('new', 'r2'); task('other', 'r3');
+    kit.ctx.db.run(`UPDATE tasks SET key = 'review:c2' WHERE id = 'other'`);
+    // A failure that was not a timeout, or a timeout of another task key, changes nothing.
+    usage('old', 5_000); usage('other', llmTuning.callTimeoutMs);
+    fake.next(() => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk', taskId: 'new' })).route.provider, 'codex');
+    usage('old', llmTuning.callTimeoutMs);
+    fake.next(() => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk', taskId: 'new' })).route.provider, 'antigravity');
+    // The first route stays as the last resort.
+    fake.next(() => Object.assign(new Error("You've hit your usage limit. Try again in 2 hours."), { code: 'cli-failed' }), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk', taskId: 'new' })).route.provider, 'codex');
+  });
+
   test('an answer cut off at the output limit falls back to the next route', async () => {
     useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'antigravity', model: 'g' });
     fake.next(() => ({ text: 'half an ans', finishReason: 'length' }), () => ({ text: 'ok' }));
