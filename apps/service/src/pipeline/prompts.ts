@@ -413,7 +413,7 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Prefer fewer, solid issues to a long list of doubtful ones.`,
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -427,7 +427,7 @@ ${p.chapter}
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
-Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
+Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
   };
 }
 
