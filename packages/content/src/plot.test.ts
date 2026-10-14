@@ -132,3 +132,41 @@ test('renderPlotSvg: huge values are clipped, not drawn out of the area', () => 
 test('renderPlotSvg refuses invalid specs', () => {
   assert.throws(() => renderPlotSvg({ ...BASIC, functions: [{ expr: 'process.exit()' }] }), /Invalid plot spec/);
 });
+
+/** x, y and estimated width of each text element carrying one of the given labels. */
+function labelBoxes(svg: string, labels: string[]) {
+  return labels.map((label) => {
+    const m = new RegExp(`<text x="([\\d.-]+)" y="([\\d.-]+)"[^>]*>${label}</text>`).exec(svg);
+    assert.ok(m, `label ${label} drawn`);
+    const x = Number(m[1]);
+    const y = Number(m[2]);
+    return { x0: x, x1: x + label.length * 12 * 0.56, y0: y - 11, y1: y + 3 };
+  });
+}
+
+test('renderPlotSvg: point labels stay inside the plot and apart from each other', () => {
+  // A heating curve: two close points at the melting plateau, one at the right edge.
+  const svg = renderPlotSvg({
+    xRange: [0, 60], yRange: [-30, 130],
+    functions: [{ expr: '100', domain: [14, 55] }],
+    points: [{ x: 0.75, y: 0, label: 'inizio fusione' }, { x: 6.76, y: 0, label: 'fine fusione' }, { x: 55, y: 100, label: 'fine ebollizione' }],
+  });
+  const [a, b, c] = labelBoxes(svg, ['inizio fusione', 'fine fusione', 'fine ebollizione']);
+  const apart = (p: typeof a, q: typeof a) => p.x1 <= q.x0 || q.x1 <= p.x0 || p.y1 <= q.y0 || q.y1 <= p.y0;
+  assert.ok(apart(a, b), 'the two melting labels do not overlap');
+  for (const box of [a, b, c]) assert.ok(box.x0 >= 58 && box.x1 <= 616, `label inside the plot: ${JSON.stringify(box)}`);
+});
+
+test('renderPlotSvg: the legend is as wide as its longest label and avoids the curves', () => {
+  const long = 'evaporazione (sosta termica)';
+  const svg = renderPlotSvg({
+    xRange: [0, 10], yRange: [0, 10],
+    // The line runs through the top-right corner, so the legend should go elsewhere.
+    functions: [{ expr: 'x', label: 'y = x' }, { expr: '9.5', domain: [6, 10], label: long }],
+  });
+  const rect = /<rect x="([\d.]+)" y="([\d.]+)" width="([\d.]+)" height="([\d.]+)" fill="#FFFFFF" fill-opacity/.exec(svg);
+  assert.ok(rect, 'legend has a background');
+  const [x, , w] = rect.slice(1).map(Number);
+  assert.ok(w >= long.length * 12 * 0.56 + 36, 'wide enough for the longest label');
+  assert.ok(x < 300, 'placed away from the top-right corner the curves cross');
+});

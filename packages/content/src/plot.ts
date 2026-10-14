@@ -63,6 +63,12 @@ const COLORS = ['#C2410C', '#1D4ED8', '#15803D'];
 const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
 const SAMPLES = 800;
 
+interface Box { x0: number; y0: number; x1: number; y1: number }
+const overlaps = (a: Box, b: Box) => a.x0 < b.x1 && b.x0 < a.x1 && a.y0 < b.y1 && b.y0 < a.y1;
+const inPlot = (b: Box) => b.x0 >= X0 + 2 && b.x1 <= X1 - 2 && b.y0 >= Y0 + 2 && b.y1 <= Y1 - 2;
+/** Rough width of a label in the sans-serif font; enough to keep labels apart and inside the plot. */
+const textWidth = (s: string, size: number) => s.length * size * 0.56;
+
 function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
@@ -159,6 +165,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
 
   // curves
   const yspan = ymax - ymin;
+  const drawn: [number, number][] = [];
   out.push('<g clip-path="url(#plot-area)" fill="none" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round">');
   s.functions.forEach((f, i) => {
     const c = compileExpr(f.expr, ['x']);
@@ -183,6 +190,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
       }
       if (prevY !== null && Math.abs(y - prevY) > yspan) flush(); // jump across the asymptote
       cur.push(`${f2(px(x))} ${f2(Math.max(-1e5, Math.min(1e5, py(y))))}`);
+      drawn.push([px(x), py(y)]);
       prevY = y;
     }
     flush();
@@ -192,12 +200,37 @@ export function renderPlotSvg(spec: PlotSpec): string {
   });
   out.push('</g>');
 
-  // points
-  for (const p of s.points ?? []) {
-    if (p.x < xmin || p.x > xmax || p.y < ymin || p.y > ymax) continue;
+  // legend box: in the corner the curves cross least, so it hides as little as possible
+  const labelled = s.functions.map((f, i) => ({ f, i })).filter(({ f }) => f.label);
+  let legend: Box | null = null;
+  if (labelled.length) {
+    const w = Math.min(X1 - X0 - 12, Math.max(...labelled.map(({ f }) => textWidth(f.label!, 12))) + 40);
+    const h = labelled.length * 16 + 8;
+    const corners: Box[] = [
+      { x0: X1 - 6 - w, y0: Y0 + 6, x1: X1 - 6, y1: Y0 + 6 + h },
+      { x0: X0 + 6, y0: Y0 + 6, x1: X0 + 6 + w, y1: Y0 + 6 + h },
+      { x0: X1 - 6 - w, y0: Y1 - 6 - h, x1: X1 - 6, y1: Y1 - 6 },
+      { x0: X0 + 6, y0: Y1 - 6 - h, x1: X0 + 6 + w, y1: Y1 - 6 },
+    ];
+    const crossings = (b: Box) => drawn.filter(([x, y]) => x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1).length;
+    legend = corners.reduce((best, b) => (crossings(b) < crossings(best) ? b : best));
+  }
+
+  // points; each label goes beside its point where it stays inside the plot and clear of the other labels and points
+  const visible = (s.points ?? []).filter((p) => p.x >= xmin && p.x <= xmax && p.y >= ymin && p.y <= ymax);
+  const taken: Box[] = visible.map((p) => ({ x0: px(p.x) - 5, y0: py(p.y) - 5, x1: px(p.x) + 5, y1: py(p.y) + 5 }));
+  if (legend) taken.push(legend);
+  for (const p of visible) {
+    const cx = px(p.x);
+    const cy = py(p.y);
     const fill = p.open ? '#FFFFFF' : '#111827';
-    out.push(`<circle cx="${f2(px(p.x))}" cy="${f2(py(p.y))}" r="4.5" fill="${fill}" stroke="#111827" stroke-width="1.75"/>`);
-    if (p.label) out.push(`<text x="${f2(px(p.x) + 8)}" y="${f2(py(p.y) - 8)}" font-size="12" fill="#111827">${esc(p.label)}</text>`);
+    out.push(`<circle cx="${f2(cx)}" cy="${f2(cy)}" r="4.5" fill="${fill}" stroke="#111827" stroke-width="1.75"/>`);
+    if (!p.label) continue;
+    const w = textWidth(p.label, 12);
+    const spots = [[cx + 8, cy - 8], [cx - 8 - w, cy - 8], [cx + 8, cy + 18], [cx - 8 - w, cy + 18]].map(([x, y]) => ({ x0: x, y0: y - 11, x1: x + w, y1: y + 3 }));
+    const box = spots.find((b) => inPlot(b) && !taken.some((t) => overlaps(b, t))) ?? spots.find(inPlot) ?? spots[0];
+    taken.push(box);
+    out.push(`<text x="${f2(box.x0)}" y="${f2(box.y1 - 3)}" font-size="12" fill="#111827">${esc(p.label)}</text>`);
   }
 
   // annotations
@@ -207,14 +240,14 @@ export function renderPlotSvg(spec: PlotSpec): string {
   }
 
   // legend
-  const labelled = s.functions.map((f, i) => ({ f, i })).filter(({ f }) => f.label);
-  if (labelled.length) {
-    let y = Y0 + 14;
+  if (legend) {
+    let y = legend.y0 + 17;
     out.push('<g font-size="12" fill="#111827">');
+    out.push(`<rect x="${f2(legend.x0)}" y="${f2(legend.y0)}" width="${f2(legend.x1 - legend.x0)}" height="${f2(legend.y1 - legend.y0)}" fill="#FFFFFF" fill-opacity="0.92" stroke="#D1D5DB"/>`);
     for (const { f, i } of labelled) {
       const dash = f.style === 'dashed' ? ' stroke-dasharray="5 3"' : '';
-      out.push(`<line x1="${X1 - 150}" y1="${y - 4}" x2="${X1 - 128}" y2="${y - 4}" stroke="${COLORS[i % COLORS.length]}" stroke-width="2.25"${dash}/>`);
-      out.push(`<text x="${X1 - 122}" y="${y}">${esc(f.label!)}</text>`);
+      out.push(`<line x1="${f2(legend.x0 + 8)}" y1="${y - 4}" x2="${f2(legend.x0 + 30)}" y2="${y - 4}" stroke="${COLORS[i % COLORS.length]}" stroke-width="2.25"${dash}/>`);
+      out.push(`<text x="${f2(legend.x0 + 36)}" y="${y}">${esc(f.label!)}</text>`);
       y += 16;
     }
     out.push('</g>');
