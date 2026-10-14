@@ -340,7 +340,7 @@ describe('2. figure files are scoped to their section', () => {
   const plot = (expr: string) => ({ xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr, label: null, domain: null, style: null }], points: null, asymptotes: null });
   const draft = (expr: string) => ({
     markdown: 'Un paragrafo semplice sulla funzione.\n\n:::image{src="assets/example.svg" alt="Grafico" caption="Fig"}\n:::',
-    figures: [{ key: 'example', caption: 'Fig', alt: 'Grafico', plot: plot(expr) }], summary: 'riassunto',
+    figures: [{ key: 'example', kind: 'plot', caption: 'Fig', alt: 'Grafico', plot: plot(expr), structure: null, photo: null }], noFigureReason: null, summary: 'riassunto',
   });
 
   test('two sections with the same figure key keep their own drawing and references', async () => {
@@ -434,7 +434,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('citation markers of the base revision are sent to the model and come back as citations', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Prima frase.\n\nSeconda frase.', { citations: { '0': ['n1'], '1': ['n2', 'n3'] } });
-    fake.next(answer({ changes: [{ block: 0, text: 'Prima frase corretta. [[n1]]' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta. [[n1]]' }] }));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'correggi' }));
     assert.match(fake.calls[0].prompt, /Prima frase\. \[\[n1\]\]/);
     assert.match(fake.calls[0].prompt, /\[\[n2,n3\]\]/);
@@ -446,7 +446,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('same task again: no second model call and no second proposal; a new task supersedes the older pending proposal', async () => {
     seedOutline([['c1', ['s1']]]);
     const head = seedRevision('s1', 'Testo.');
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ changes: [{ block: 0, text: 'Testo due.' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
     const t1 = startTask('section.revise', { nodeId: 's1', instruction: 'a' });
     const a = await sectionRevise(ctx, t1);
     const a2 = await sectionRevise(ctx, t1);
@@ -745,21 +745,21 @@ describe('r5. a superseded proposal gives its issues back', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     ctx.db.insert('review_issues', { id: 'iA', project_id: P, node_id: 's1', source: 'review', severity: 'blocker', category: 'math', message: 'A', suggestion: 'a', status: 'open', resolution: '', created_at: now() });
-    fake.next(editDuring({ changes: [{ block: 0, text: 'Testo uno.' }] }), answer(checkGood([0])));
+    fake.next(editDuring({ figures: [], changes: [{ block: 0, text: 'Testo uno.' }] }), answer(checkGood([0])));
     const first = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
     const issue = () => ({ ...ctx.db.get<Record<string, any>>(`SELECT status, resolution FROM review_issues WHERE id = 'iA'`)! });
     assert.equal(first.status, 'proposal');
     assert.deepEqual(issue(), { status: 'proposed', resolution: `Proposal ${first.revId}` });
 
     // Regenerate the same section with an instruction: the first proposal is superseded.
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo due.' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
     const second = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'più breve' }));
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', first.revId!)!.status, 'superseded');
     assert.deepEqual(issue(), { status: 'open', resolution: '' });
     assert.ok(events('issue.updated').some((e) => e.issueIds.includes('iA')));
 
     // The issue can be sent to the AI again and, with the head unchanged, the fix is applied.
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo tre dell\'autrice.' }] }), answer(checkGood([0])));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo tre dell\'autrice.' }] }), answer(checkGood([0])));
     const third = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
     assert.equal(third.status, 'current');
     assert.deepEqual(issue(), { status: 'fixed', resolution: `Fixed by AI in revision ${third.revId}` });
@@ -816,7 +816,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const before = seedRevision('s1', 'Prima frase.\n\nSeconda frase.');
     issue('i1', { quote: 'Prima frase.' });
     ctx.db.insert('review_issues', { id: 'lint-old', project_id: P, node_id: 's1', source: 'lint', severity: 'minor', category: 'old', quote: '', message: 'vecchio', suggestion: '', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ changes: [{ block: 0, text: 'Prima frase corretta.' }] }), answer(checkGood([0])));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta.' }] }), answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(head().markdown, 'Prima frase corretta.\n\nSeconda frase.');
@@ -839,7 +839,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     fake.next(() => {
       ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1'`);
       seedRevision('s1', 'Testo dell\'autrice.');
-      return { structured: { changes: [{ block: 0, text: 'Testo AI.' }] } as never, text: '{}', usage: usageOf(1, 1) };
+      return { structured: { figures: [], changes: [{ block: 0, text: 'Testo AI.' }] } as never, text: '{}', usage: usageOf(1, 1) };
     }, answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'proposal');
@@ -851,11 +851,11 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     issue('i1');
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo con istruzione.' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo con istruzione.' }] }));
     const p = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'riscrivi' }));
     assert.equal(p.status, 'proposal');
     assert.equal(fake.calls.length, 1, 'no check for an instruction');
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo corretto.' }] }), answer(checkGood([0])));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', p.revId!)!.status, 'proposal');
@@ -866,7 +866,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const base = seedRevision('s1', `Intro.\n\n${FORMULA}\n\nFine.`);
     issue('i1', { quote: 'Intro.' });
     issue('i2', { quote: '$$x=1$$' });
-    fake.next(answer({ changes: [{ block: 0, text: 'Introduzione.' }, { block: 1, text: '' }] }), answer(checkGood([0], 2)));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Introduzione.' }, { block: 1, text: '' }] }), answer(checkGood([0], 2)));
     const r = await fix(['i1', 'i2']);
     assert.equal(r.status, 'current');
     assert.equal(head().markdown, `Introduzione.\n\n${FORMULA}\n\nFine.`);
@@ -878,7 +878,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const revisions = () => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM content_revisions')!.n;
     const n = revisions();
     issue('i3', { quote: '$$x=1$$' });
-    fake.next(answer({ changes: [{ block: 1, text: '' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }] }));
     const none = await fix(['i3']);
     assert.equal(none.skipped, 'no change survived the checks');
     assert.equal(revisions(), n);
@@ -892,7 +892,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', `A.\n\n${FORMULA}\n\nB.\n\nC.\n\nD.\n\nE.`);
     issue('i1', { quote: 'A.' });
-    fake.next(answer({ changes: [
+    fake.next(answer({ figures: [], changes: [
       { block: 1, text: ':::formula{key="altro" label="L"}\n$$x=1$$\n:::' },
       { block: 0, text: ':::note\nA.' },
       { block: 2, text: '' }, { block: 3, text: '' }, { block: 4, text: '' }, { block: 5, text: '' },
@@ -907,7 +907,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedRevision('s1', 'Vale $x+1$ qui.\n\nAltro $y$.');
     issue('i1', { quote: 'Vale $x+1$ qui.' });
     issue('i2', { quote: 'Altro $y$.' });
-    fake.next(answer({ changes: [{ block: 0, text: 'Vale $\\frac{1}{$ qui.' }, { block: 1, text: 'Altro $z$.' }] }), answer(checkGood([1], 2)));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Vale $\\frac{1}{$ qui.' }, { block: 1, text: 'Altro $z$.' }] }), answer(checkGood([1], 2)));
     const r = await fix(['i1', 'i2']);
     assert.equal(head().markdown, 'Vale $x+1$ qui.\n\nAltro $z$.');
     assert.equal(state('i2').status, 'fixed');
@@ -921,7 +921,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     issue('i1', { quote: 'Uno.' });
     issue('i2', { quote: 'Due.' });
     issue('i3', { quote: 'Tre.' });
-    fake.next(answer({ changes: [{ block: 0, text: 'Uno falso.' }, { block: 1, text: 'Due bis.' }, { block: 2, text: 'Tre bis.' }] }), answer({
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Uno falso.' }, { block: 1, text: 'Due bis.' }, { block: 2, text: 'Tre bis.' }] }), answer({
       changes: [{ block: 0, verdict: 'harmful', reason: 'afferma il falso' }, { block: 1, verdict: 'good', reason: '' }, { block: 2, verdict: 'good', reason: '' }],
       issues: [{ index: 1, fixed: true, reason: '' }, { index: 2, fixed: true, reason: '' }, { index: 3, fixed: false, reason: 'il problema resta' }],
     }));
@@ -935,7 +935,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     // Everything judged harmful: nothing is committed.
     seedOutline([['c1', ['s1']]]);
     const cur = head().id;
-    fake.next(answer({ changes: [{ block: 0, text: 'Uno peggio.' }] }), answer({ changes: [{ block: 0, verdict: 'harmful', reason: 'errore' }], issues: [{ index: 1, fixed: false, reason: 'no' }] }));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Uno peggio.' }] }), answer({ figures: [], changes: [{ block: 0, verdict: 'harmful', reason: 'errore' }], issues: [{ index: 1, fixed: false, reason: 'no' }] }));
     const none = await fix(['i1']);
     assert.equal(none.skipped, 'no change survived the checks');
     assert.equal(head().id, cur);
@@ -946,7 +946,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     issue('i1');
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo corretto.' }] }), () => new TaskError('rete assente', 'temporary'));
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), () => new TaskError('rete assente', 'temporary'));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(r.checked, false);
@@ -958,14 +958,14 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const long = (w: string) => `${w} `.repeat(30).trim();
     seedRevision('s1', [long('uno'), long('due'), long('tre'), long('quattro'), long('cinque')].join('\n\n'));
     issue('i1');
-    fake.next(answer({ changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'proposal');
     assert.equal(head().markdown.includes('due'), true, 'the text is unchanged');
     assert.deepEqual(state('i1'), { status: 'proposed', resolution: `Proposal ${r.revId}` });
 
     issue('i2', { category: 'repetition' });
-    fake.next(answer({ changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
     const again = await fix(['i2']);
     assert.equal(again.status, 'current');
     assert.equal(state('i2').status, 'fixed');
@@ -1317,5 +1317,74 @@ describe('a ready exercises source that gave no questions is split again by Prep
     assert.deepEqual(r, { questions: 3, duplicates: 0 });
     assert.deepEqual(ctx.db.all<{ kind: string; origin: string; chapter_id: string | null; topic_ids: string }>('SELECT kind, origin, chapter_id, topic_ids FROM questions').map((x) => [x.kind, x.origin, x.chapter_id, x.topic_ids].join()), Array(3).fill('exercise,authentic,,[]'));
     assert.deepEqual(await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'quiz1' })), { questions: 3, reused: true });
+  });
+});
+
+describe('chemistry figures: structures and photos', () => {
+  const fig = (o: Record<string, unknown>) => ({ key: 'acqua', kind: 'structure', caption: "Struttura di Lewis dell'acqua", alt: "Molecola d'acqua", plot: null, structure: null, photo: null, ...o });
+  const draft = (figures: unknown[], body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::') => ({
+    markdown: `L'acqua ha due coppie solitarie sull'ossigeno.\n\n${body}`, figures, noFigureReason: null, summary: 'riassunto',
+  });
+  const current = (s: string) => ctx.db.get<{ markdown: string }>(`SELECT markdown FROM content_revisions WHERE node_id = ? AND status = 'current'`, s)!.markdown;
+
+  test('a structure is drawn from SMILES, and its alt text gets the formula for the reviewer', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true } })])));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(r.figures, 1);
+    const a = ctx.db.get<{ filename: string; origin: string; alt: string; path: string }>('SELECT * FROM assets')!;
+    assert.equal(a.origin, 'structure');
+    assert.equal(a.filename, `${s1.slice(0, 8)}-acqua.svg`);
+    assert.equal(a.alt, "Molecola d'acqua (H2O)");
+    assert.match(readFileSync(resolveDataPath(ctx.config, a.path), 'utf8'), /<svg/);
+    assert.match(current(s1), new RegExp(`:::image\\{src="assets/${a.filename}" alt="Molecola d'acqua \\(H2O\\)"`));
+  });
+
+  test('an invalid SMILES or a photo without stock keys drops the figure and its block, with a note', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    const body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/fiamma.svg" alt="x" caption="y"}\n:::';
+    fake.next(answer(draft([
+      fig({ structure: { smiles: 'not((a smiles', style: 'lewis', lonePairs: true } }),
+      fig({ key: 'fiamma', kind: 'photo', photo: { query: 'sodium flame test', mustShow: 'a yellow sodium flame' } }),
+    ], body)));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(r.figures, 0);
+    assert.equal(r.figureProblems.length, 2);
+    assert.match(r.figureProblems[1], /no stock photo service/);
+    assert.doesNotMatch(current(s1), /:::image/);
+    assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
+    const { readdirSync } = await import('node:fs');
+    const { paths } = await import('../config.ts');
+    assert.deepEqual(readdirSync(paths.assets(ctx.config, P)), []);
+  });
+
+  test('the writer is told about photos only when a stock key is set', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer({ markdown: 'Testo.', figures: [], noFigureReason: 'Solo definizioni.', summary: 'r' }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(r.noFigureReason, 'Solo definizioni.');
+    assert.match(fake.calls[0].prompt, /kind: "structure"|structure: a molecule/);
+    assert.doesNotMatch(fake.calls[0].prompt, /photo: a stock photo/);
+  });
+
+  test('a fix can add a missing figure; an image block pointing at nothing is removed', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: "L'ammoniaca ha una coppia solitaria.", message: 'Manca la struttura', suggestion: 'Struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now() });
+    fake.next(answer({
+      figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true } })],
+      changes: [{ block: 0, text: "L'ammoniaca ha una coppia solitaria.\n\n:::image{src=\"assets/nh3.svg\" alt=\"a\" caption=\"c\"}\n:::\n\n:::image{src=\"assets/inventata.svg\" alt=\"a\" caption=\"c\"}\n:::" }],
+    }), answer(checkGood([0])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
+    assert.equal(r.status, 'current');
+    const a = ctx.db.get<{ filename: string; origin: string }>('SELECT * FROM assets')!;
+    assert.equal(a.origin, 'structure');
+    const md = current('s1');
+    assert.match(md, new RegExp(`src="assets/${a.filename}"`));
+    assert.doesNotMatch(md, /inventata/);
+    assert.match(fake.calls[0].system ?? '', /missing figure/);
   });
 });

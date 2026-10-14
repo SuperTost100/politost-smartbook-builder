@@ -82,6 +82,7 @@ export default function ConnectionsPage() {
             {c.providers.map((p) => <ProviderCard key={p.provider} p={p} />)}
             <NotebookCard nb={c.notebooklm} />
             <LibreCard lo={c.libreoffice} />
+            <StockCard stock={c.stock} />
           </section>
 
           {settings.data && <Routing connections={c} settings={settings.data} onSaved={(s) => qc.setQueryData(qk.settings, s)} />}
@@ -188,6 +189,44 @@ function LibreCard({ lo }: { lo: ConnectionsResponse['libreoffice'] }) {
       {lo.installed
         ? <p className="cn-advice cn-advice--success">Word and PowerPoint files are converted with LibreOffice. <code className="ui-code ui-wrap">{lo.path}</code></p>
         : <p className="cn-advice cn-advice--warning">DOCX and PPTX sources need LibreOffice to be read. Install it, then press Check again. PDF and Markdown files work without it.</p>}
+    </article>
+  );
+}
+
+const STOCK_SERVICES = [
+  { id: 'pixabay', label: 'Pixabay' },
+  { id: 'pexels', label: 'Pexels' },
+] as const;
+
+function StockCard({ stock }: { stock: ConnectionsResponse['stock'] }) {
+  const qc = useQueryClient();
+  const toast = useToast();
+  const [drafts, setDrafts] = useState<Record<string, string>>({ pixabay: '', pexels: '' });
+  const save = useMutation({
+    mutationFn: (body: { pixabay?: string | null; pexels?: string | null }) => api('PUT /api/stock-keys', { body }),
+    onSuccess: async (_r, body) => {
+      setDrafts((d) => ({ ...d, ...Object.fromEntries(Object.keys(body).map((k) => [k, ''])) }));
+      await qc.invalidateQueries({ queryKey: qk.connections });
+    },
+    onError: (e) => toast(errorText(e), { tone: 'danger' }),
+  });
+  return (
+    <article className="cn-card ui-card" aria-label="Stock photos">
+      <header className="cn-card__head"><h2 className="ui-panel-title">Stock photos</h2></header>
+      <p className="ui-muted">Real photos for the books; a model checks each one. A free key from either service is enough: get one at <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer">Pixabay</a> or <a href="https://www.pexels.com/api/" target="_blank" rel="noreferrer">Pexels</a>.</p>
+      {STOCK_SERVICES.map((s) => (
+        <div key={s.id} className="cn-key">
+          <div className="ui-row">
+            <strong>{s.label}</strong>
+            <Badge ok={stock[s.id]} yes="key saved" no="no key" />
+          </div>
+          <div className="cn-cmd">
+            <input type="password" className="ui-input ui-input--sm" aria-label={`${s.label} key`} placeholder={stock[s.id] ? 'Paste a new key to replace it' : 'Paste your key'} autoComplete="off" value={drafts[s.id]} onChange={(e) => setDrafts((d) => ({ ...d, [s.id]: e.target.value }))} />
+            <button type="button" className="ui-btn ui-btn--sm" disabled={!drafts[s.id].trim() || save.isPending} onClick={() => save.mutate({ [s.id]: drafts[s.id].trim() })}>Save</button>
+            <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" disabled={!stock[s.id] || save.isPending} onClick={() => save.mutate({ [s.id]: null })}>Remove</button>
+          </div>
+        </div>
+      ))}
     </article>
   );
 }

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ROLES, roleRouteSchema, settingsSchema, type Settings } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
+import { saveStockKeys } from '../figures/stock.ts';
 import { deps } from './deps.ts';
 import { parse } from './util.ts';
 
@@ -35,6 +36,14 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext) {
   });
 
   app.get('/api/connections', async () => deps.getConnections(ctx));
+
+  // Keys are write-only: the response says which are set, never what they are.
+  app.put('/api/stock-keys', async (req) => {
+    const key = z.string().trim().max(200).nullable().optional();
+    const body = parse(z.object({ pixabay: key, pexels: key }), req.body);
+    const next = saveStockKeys(ctx, body);
+    return { pixabay: !!next.pixabay, pexels: !!next.pexels };
+  });
 
   app.post('/api/connections/probe', async (req) => {
     const { role } = parse(z.object({ role: z.enum(ROLES) }), req.body);
