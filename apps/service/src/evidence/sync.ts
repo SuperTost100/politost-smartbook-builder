@@ -6,7 +6,7 @@ import { TaskError } from '../queue/queue.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { addFileSource, createNotebook, deleteSource, isSourceLimit, listSources, nlmFailure, NlmCallError, notebookCapacity, usageRetryAfter } from './nlm.ts';
+import { addFileSource, createNotebook, deleteSource, failedSourceId, isSourceLimit, listSources, nlmFailure, NlmCallError, notebookCapacity, usageRetryAfter } from './nlm.ts';
 
 interface ResourceRow { id: string; kind: string; filename: string; sha256: string; path: string }
 interface NotebookRow { id: string; remote_id: string; title: string }
@@ -35,8 +35,8 @@ export function resetSyncState() {
 
 export const sourceTitle = (r: { filename: string; sha256: string }) => `${r.filename} [${r.sha256.slice(0, 8)}]`;
 
-/** Ensures the project's notebook exists and every included resource is uploaded once (sha-tracked). */
-export function syncNotebook(ctx: AppContext, projectId: string, signal?: AbortSignal): Promise<{ notebookId: string; uploaded: number; skipped: number }> {
+/** Ensures the project's notebook exists and every included resource is uploaded once (sha-tracked). Files NotebookLM cannot process are listed in `failed` and left out. */
+export function syncNotebook(ctx: AppContext, projectId: string, signal?: AbortSignal): Promise<{ notebookId: string; uploaded: number; skipped: number; failed: string[] }> {
   return withLock(projectId, () => syncLocked(ctx, projectId, signal));
 }
 
@@ -50,11 +50,17 @@ async function syncLocked(ctx: AppContext, projectId: string, signal?: AbortSign
 
   let uploaded = 0;
   let skipped = 0;
+  const failed: string[] = [];
   for (const r of resources) {
     signal?.throwIfAborted();
     const row = ctx.db.get<SourceRow>('SELECT * FROM notebook_sources WHERE resource_id = ?', r.id);
     if (row && row.sha256 === r.sha256 && row.status === 'ready' && row.remote_source_id) {
       skipped++;
+      continue;
+    }
+    // NotebookLM already refused this exact file. Uploading it again only adds another failed source.
+    if (row && row.sha256 === r.sha256 && row.status === 'failed') {
+      failed.push(r.filename);
       continue;
     }
     const title = sourceTitle(r);
@@ -71,14 +77,18 @@ async function syncLocked(ctx: AppContext, projectId: string, signal?: AbortSign
     }
 
     const staleRemote = row && row.sha256 !== r.sha256 ? row.remote_source_id : null;
-    await uploadResource(ctx, project.title, projectId, r, title, signal);
-    uploaded++;
+    if (await uploadResource(ctx, project.title, projectId, r, title, signal)) {
+      uploaded++;
+    } else {
+      failed.push(r.filename);
+      ctx.events.emit('log', { message: `NotebookLM could not process ${r.filename}; evidence for this book will come from the other sources.` }, { projectId });
+    }
     if (staleRemote) await deleteSource(staleRemote, signal).catch(() => undefined);
   }
 
   const first = ctx.db.get<NotebookRow>('SELECT * FROM notebooks WHERE project_id = ? ORDER BY created_at, id LIMIT 1', projectId)
     ?? (await createProjectNotebook(ctx, project.title, projectId, signal));
-  return { notebookId: first.remote_id, uploaded, skipped };
+  return { notebookId: first.remote_id, uploaded, skipped, failed };
 }
 
 /** Matches by the exact "<filename> [sha8]" title. Falls back to an unclaimed source still carrying the bare filename (died before the rename) and renames nothing: the title is fixed on the next full sync. */
@@ -108,42 +118,58 @@ async function pickNotebook(ctx: AppContext, projectTitle: string, projectId: st
   const books = ctx.db.all<NotebookRow>('SELECT * FROM notebooks WHERE project_id = ? ORDER BY created_at, id', projectId);
   for (const nb of books) {
     if (fullRemote.has(nb.remote_id)) continue;
-    const count = ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM notebook_sources WHERE notebook_id = ? AND resource_id != ?', nb.id, resourceId)?.n ?? 0;
+    const count = ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM notebook_sources WHERE notebook_id = ? AND resource_id != ? AND status != 'failed'`, nb.id, resourceId)?.n ?? 0;
     if (count < capacity) return nb;
   }
   return createProjectNotebook(ctx, projectTitle, projectId, signal);
 }
 
-async function uploadResource(ctx: AppContext, projectTitle: string, projectId: string, r: ResourceRow, title: string, signal?: AbortSignal) {
+/** False when NotebookLM could not process the file or its converted PDF; the row is then marked 'failed'. */
+async function uploadResource(ctx: AppContext, projectTitle: string, projectId: string, r: ResourceRow, title: string, signal?: AbortSignal): Promise<boolean> {
   const { file, cleanup } = await materialize(ctx, projectId, r);
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      const nb = await pickNotebook(ctx, projectTitle, projectId, r.id, signal);
-      // Recorded before the remote call: a crash leaves 'uploading', which the next sync resolves by listing the notebook.
-      ctx.db.run(
-        `INSERT INTO notebook_sources (resource_id, notebook_id, remote_source_id, sha256, status) VALUES (?, ?, NULL, ?, 'uploading')
-         ON CONFLICT(resource_id) DO UPDATE SET notebook_id = excluded.notebook_id, remote_source_id = NULL, sha256 = excluded.sha256, status = 'uploading'`,
-        r.id, nb.id, r.sha256,
-      );
-      try {
-        const sourceId = await addFileSource(nb.remote_id, file, title, signal);
-        ctx.db.run(`UPDATE notebook_sources SET status = 'ready', remote_source_id = ? WHERE resource_id = ?`, sourceId, r.id);
-        return;
-      } catch (err) {
-        if (err instanceof NlmCallError) {
-          if (isSourceLimit(err.text) && attempt === 0) {
-            fullRemote.add(nb.remote_id);
-            continue;
-          }
-          throw nlmFailure(err.text, await usageRetryAfter().catch(() => undefined));
-        }
-        throw err;
-      }
+    // NotebookLM rejects some office files, such as a .docx made only of images. The PDF made at extraction goes up instead.
+    const converted = r.kind === 'docx' || r.kind === 'pptx' ? join(dirname(file), `${r.sha256}.pdf`) : null;
+    for (const f of converted && existsSync(converted) ? [file, converted] : [file]) {
+      if (await uploadFile(ctx, projectTitle, projectId, r, f, title, signal)) return true;
     }
-    throw new TaskError('Every NotebookLM notebook for this project is full.', 'temporary');
+    ctx.db.run(`UPDATE notebook_sources SET status = 'failed' WHERE resource_id = ?`, r.id);
+    return false;
   } finally {
     await cleanup();
   }
+}
+
+async function uploadFile(ctx: AppContext, projectTitle: string, projectId: string, r: ResourceRow, file: string, title: string, signal?: AbortSignal): Promise<boolean> {
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const nb = await pickNotebook(ctx, projectTitle, projectId, r.id, signal);
+    // Recorded before the remote call: a crash leaves 'uploading', which the next sync resolves by listing the notebook.
+    ctx.db.run(
+      `INSERT INTO notebook_sources (resource_id, notebook_id, remote_source_id, sha256, status) VALUES (?, ?, NULL, ?, 'uploading')
+       ON CONFLICT(resource_id) DO UPDATE SET notebook_id = excluded.notebook_id, remote_source_id = NULL, sha256 = excluded.sha256, status = 'uploading'`,
+      r.id, nb.id, r.sha256,
+    );
+    try {
+      const sourceId = await addFileSource(nb.remote_id, file, title, signal);
+      ctx.db.run(`UPDATE notebook_sources SET status = 'ready', remote_source_id = ? WHERE resource_id = ?`, sourceId, r.id);
+      return true;
+    } catch (err) {
+      if (err instanceof NlmCallError) {
+        if (isSourceLimit(err.text) && attempt === 0) {
+          fullRemote.add(nb.remote_id);
+          continue;
+        }
+        const kept = failedSourceId(err.text);
+        if (kept) {
+          await deleteSource(kept, signal).catch(() => undefined);
+          return false;
+        }
+        throw nlmFailure(err.text, await usageRetryAfter().catch(() => undefined));
+      }
+      throw err;
+    }
+  }
+  throw new TaskError('Every NotebookLM notebook for this project is full.', 'temporary');
 }
 
 function rethrowNlm(err: unknown): never {
