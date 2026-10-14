@@ -53,6 +53,10 @@ test('figures: preview keys are the compiled paths, and the asset record is cano
   assert.match(after.markdown, /alt="Un cerchio" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
   const input = loadBookInput(t.ctx, p.id);
   assert.deepEqual(input.assets.map((a) => [a.filename, a.caption, a.alt]), [['cerchio.svg', 'Cerchio di raggio $r$', 'Un cerchio']]);
+  // A figure no current text uses stays in the project but not in the package.
+  const extra = multipart({ caption: 'Vecchia', alt: 'Vecchia' }, [{ name: 'file', filename: 'orfana.svg', type: 'image/svg+xml', data: svg }]);
+  await t.req('POST', `/api/projects/${p.id}/assets`, extra.payload, extra.headers);
+  assert.deepEqual(loadBookInput(t.ctx, p.id).assets.map((a) => a.filename), ['cerchio.svg']);
   const chapter = compileBook(input).files['chapters/01-uno.md'] as string;
   assert.match(chapter, /alt="Un cerchio" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
   assert.ok(!chapter.includes('Vecchia'));

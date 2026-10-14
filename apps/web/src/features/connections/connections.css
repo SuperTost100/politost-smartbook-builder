@@ -36,3 +36,5 @@
 
 .cn-details > summary { cursor: pointer; font-size: 14px; font-weight: 550; }
 .cn-details .cn-models { max-height: 240px; overflow: auto; margin-top: 8px; }
+.cn-key { display: flex; flex-direction: column; gap: 6px; }
+.cn-key .ui-input { flex: 1; min-width: 0; }

@@ -22,6 +22,8 @@ export interface ConnectionsResponse {
   providers: ProviderStatus[];
   notebooklm: { installed: boolean; signedIn: boolean; account: string | null; usage: { window: string; remaining: string }[]; error: string | null; loginCommand: string };
   libreoffice: { installed: boolean; path: string | null };
+  /** Which stock photo services have a key saved. */
+  stock: { pixabay: boolean; pexels: boolean };
   node: string;
   dataDir: string;
 }
@@ -73,6 +75,7 @@ export interface Api {
   'PUT /api/settings': { body: Partial<Settings>; res: Settings };
   'GET /api/connections': { res: ConnectionsResponse };
   'POST /api/connections/probe': { body: { role: Role }; res: ProbeResult };
+  'PUT /api/stock-keys': { body: { pixabay?: string | null; pexels?: string | null }; res: { pixabay: boolean; pexels: boolean } };
 
   'GET /api/projects': { res: ProjectSummary[] };
   'POST /api/projects': { body: ProjectInput; res: Project };

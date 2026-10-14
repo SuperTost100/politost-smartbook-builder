@@ -1,11 +1,12 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { lintSection, renderPlotSvg, separateDisplayMath, splitBlocks, unwrapFormulaKeys, validatePlotSpec, type LintFinding } from '@smartbuilder/content';
+import { lintSection, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
-import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
-import { paths, resolveDataPath, toDataPath } from '../config.ts';
+import { rmSync } from 'node:fs';
+import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
+import { buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
+import { hasStockKeys } from '../figures/stock.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
@@ -156,13 +157,14 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const known = bookFormulaKeys(ctx, projectId, nodeId);
   const sectionIds = outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n');
 
+  const photos = project.options.figures && hasStockKeys(ctx);
   const prompt = draftPrompt({
     language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
     chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),
     section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
     topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
     earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
-    evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, outside: project.options.outsideMaterial,
+    evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
   });
   t.progress(`Writing "${section.title}"`);
   const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
@@ -171,48 +173,14 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
   const knownKeys = new Set([...known.map((k) => k.key), ...formulaKeyLabels(markdown).map((k) => k.key)]);
 
-  // Figures: render plots deterministically; drop image blocks whose plot is invalid. File names are scoped to the
-  // section (`<node>-<key>.svg`) so two sections can use the same figure key without touching each other's drawing.
-  const figureNotes: string[] = [];
-  const assetDir = paths.assets(ctx.config, projectId);
-  mkdirSync(assetDir, { recursive: true });
-  const prefix = nodeId.slice(0, 8);
-  const cleanKey = (key: string) => key.replace(/[^a-z0-9-]/g, '-').slice(0, 50);
-  const renames = new Map<string, string>(); // name the model wrote -> stored name
-  const newAssets: { id: string; file: string; row: Record<string, unknown> }[] = [];
-  for (const fig of data.figures ?? []) {
-    const wrote = [`${fig.key}.svg`, `${cleanKey(fig.key)}.svg`];
-    const stored = `${prefix}-${cleanKey(fig.key)}.svg`;
-    const spec = {
-      xRange: fig.plot.xRange, yRange: fig.plot.yRange, xLabel: fig.plot.xLabel ?? undefined, yLabel: fig.plot.yLabel ?? undefined,
-      functions: fig.plot.functions.map((f) => ({ expr: f.expr, label: f.label ?? undefined, domain: f.domain ?? undefined, style: f.style ?? undefined })),
-      points: (fig.plot.points ?? []).map((pt) => ({ x: pt.x, y: pt.y, label: pt.label ?? undefined, open: pt.open ?? undefined })),
-      asymptotes: (fig.plot.asymptotes ?? []).map((a) => ({ kind: a.kind, value: a.value, label: a.label ?? undefined })),
-    };
-    const v = validatePlotSpec(spec);
-    if (!v.ok) {
-      for (const w of wrote) markdown = removeImageBlock(markdown, w);
-      figureNotes.push(`${stored}: ${v.errors.join('; ')}`);
-      continue;
-    }
-    if (newAssets.some((a) => a.row.filename === stored)) continue;
-    const assetId = newId();
-    const file = join(assetDir, `${assetId}.svg`);
-    writeFileSync(`${file}.tmp`, renderPlotSvg(v.spec));
-    renameSync(`${file}.tmp`, file);
-    for (const w of wrote) renames.set(w, stored);
-    newAssets.push({
-      id: assetId, file,
-      row: {
-        id: assetId, project_id: projectId, node_id: nodeId, filename: stored, mime: 'image/svg+xml', path: toDataPath(ctx.config, file), origin: 'plot', spec: v.spec,
-        caption: fig.caption, alt: fig.alt, checks: [{ method: 'lint', ok: true, detail: 'Plot rendered from a validated spec.' }], created_at: now(),
-      },
-    });
-  }
-  // Image blocks without a rendered figure would be broken references; the others point at the stored names.
-  for (const m of [...markdown.matchAll(/:::image\{[^}]*src="assets\/([^"]+)"/g)]) if (!renames.has(m[1])) markdown = removeImageBlock(markdown, m[1]);
-  markdown = markdown.replace(/(:::image\{[^}]*src="assets\/)([^"]+)(")/g, (all, a: string, name: string, c: string) => (renames.has(name) ? `${a}${renames.get(name)}${c}` : all));
-  const figureFiles = new Set(newAssets.map((a) => a.row.filename as string));
+  // Figures: plots and structures are drawn from validated specs, photos picked from the stock services. Blocks whose
+  // figure failed are removed. File names are scoped to the section, so two sections can use the same figure key.
+  const built = await buildFigures(ctx, {
+    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos,
+    runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
+  });
+  markdown = rewriteImageRefs(markdown, built, new Set());
+  const figureNotes = built.notes;
 
   // One repair round for problems that break rendering or meaning.
   let findings = lintSection(markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
@@ -237,32 +205,23 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   // Files are on disk; the asset rows and the revision become visible together, or not at all.
   let committed!: ReturnType<typeof commitAiRevision>;
   const replaced: string[] = [];
+  let stored: string[] = [];
   try {
     ctx.db.tx(() => {
       // Text that becomes a proposal must not change the figures of the current text: its figures get names of their own.
       const applies = (currentHead(ctx, projectId, nodeId)?.id ?? null) === (head?.id ?? null);
-      for (const a of newAssets) {
-        const name = a.row.filename as string;
-        const old = ctx.db.all<{ id: string; path: string }>('SELECT id, path FROM assets WHERE project_id = ? AND node_id = ? AND filename = ?', projectId, nodeId, name);
-        if (applies) {
-          for (const o of old) { ctx.db.run('DELETE FROM assets WHERE id = ?', o.id); replaced.push(o.path); }
-        } else if (old.length) {
-          const own = name.replace(/\.svg$/, `-${a.id.slice(0, 8)}.svg`);
-          markdown = markdown.split(`src="assets/${name}"`).join(`src="assets/${own}"`);
-          a.row.filename = own;
-        }
-        ctx.db.insert('assets', a.row);
-      }
+      ({ markdown, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown, replace: applies, replaced }));
       committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head?.id ?? null, model: route.model, citations, runId: t.task.runId, taskId: t.task.id });
       recordLintIssues(ctx, projectId, nodeId, committed.revId, findings);
     });
   } catch (err) {
-    for (const a of newAssets) rmSync(a.file, { force: true });
+    discardUnstored(built, []);
     throw err;
   }
+  discardUnstored(built, stored);
   for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
-  if (newAssets.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: newAssets.map((a) => a.id) }, { projectId });
-  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: figureFiles.size, figureProblems: figureNotes, findings: findings.length, model: route.model };
+  if (stored.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
+  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
 }
 
 /** Puts [[nX]] citation markers back after their blocks (inverse of extractCitations). */
@@ -270,10 +229,6 @@ export function withMarkers(markdown: string, citations: Record<string, string[]
   return splitBlocks(markdown).map((b, i) => (citations[String(i)]?.length ? `${b.text} [[${citations[String(i)].join(',')}]]` : b.text)).join('\n\n');
 }
 
-function removeImageBlock(markdown: string, filename: string) {
-  const esc = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return markdown.replace(new RegExp(`:::image\\{[^}]*src="assets/${esc}"[^}]*\\}\\s*\\n:::\\s*\\n?`, 'g'), '').replace(new RegExp(`:::image\\{[^}]*src="assets/${esc}"[^}]*\\}\\s*\\n?`, 'g'), '');
-}
 
 export async function chapterIntro(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;

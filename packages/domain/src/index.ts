@@ -316,8 +316,8 @@ export interface Asset {
   /** File name inside the exported assets/ folder. */
   filename: string;
   mime: string;
-  origin: 'plot' | 'generated-svg' | 'imported';
-  /** Plot spec for origin "plot"; see @smartbuilder/content plot.ts. */
+  origin: 'plot' | 'structure' | 'stock' | 'generated-svg' | 'imported';
+  /** Plot spec for "plot", structure spec for "structure", search and source for "stock". */
   spec: unknown;
   caption: string;
   alt: string;

@@ -5,6 +5,8 @@ import { issuesChanged } from '../repo/issues.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
+import { buildFigures, commitFigures, discardUnstored, existingAssetNames, rewriteImageRefs } from '../figures/materialize.ts';
+import { hasStockKeys } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
@@ -263,9 +265,16 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const instructed = !!t.task.input.instruction;
   const role = instructed || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0 }),
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, figures: project.options.figures ? { photos: hasStockKeys(ctx) } : null }),
     schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
+  // A fix may add figures; image blocks pointing at neither a new figure nor an existing asset are removed.
+  const built = await buildFigures(ctx, {
+    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: hasStockKeys(ctx),
+    runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
+  });
+  const existing = existingAssetNames(ctx, projectId);
+  for (const c of data.changes) c.text = rewriteImageRefs(c.text, built, existing);
   const isIntro = !findSection(outline?.outline ?? { chapters: [], exclusions: [], notation: '' }, nodeId);
   const kind = isIntro ? 'chapter-intro' as const : 'section' as const;
 
@@ -318,6 +327,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const reasons = reverted.map((r) => r.reason);
 
   if (!surviving) {
+    discardUnstored(built, []);
     reopen(issues, (id) => `The AI fix was not applied: ${dropped(issues.find((i) => i.id === id)!) ?? fallback}`);
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
     return { skipped: 'no change survived the checks', reverted: reasons, ...(checked === undefined ? {} : { checked }) };
@@ -328,17 +338,27 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const shrunk = !!issues.length && markdown.length < head.markdown.length * 0.8 && !issues.some((i) => i.category === 'repetition');
   const answered = issues.filter((i) => !dropped(i) && !unresolved.has(issues.indexOf(i)));
   let committed!: ReturnType<typeof commitAiRevision>;
-  ctx.db.tx(() => {
-    committed = commitAiRevision(ctx, { projectId, nodeId, kind, markdown, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: instructed || shrunk || !issues.length, runId: t.task.runId, taskId: t.task.id });
-    const applied = committed.status === 'current';
-    const done = new Set(answered.map((i) => i.id));
-    if (answered.length) ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE id IN (${answered.map(() => '?').join(',')})`, applied ? 'fixed' : 'proposed', applied ? `Fixed by AI in revision ${committed.revId}` : `Proposal ${committed.revId}`, ...answered.map((i) => i.id));
-    reopen(issues.filter((i) => !done.has(i.id)), (id) => {
-      const i = issues.find((x) => x.id === id)!;
-      const r = dropped(i);
-      return r ? `The AI fix was not applied: ${r}` : `The AI fix did not resolve it: ${unresolved.get(issues.indexOf(i))}`;
+  let stored: string[] = [];
+  let saved = false;
+  try {
+    ctx.db.tx(() => {
+      let text = markdown;
+      ({ markdown: text, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown: text, replace: false, replaced: [] }));
+      committed = commitAiRevision(ctx, { projectId, nodeId, kind, markdown: text, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: instructed || shrunk || !issues.length, runId: t.task.runId, taskId: t.task.id });
+      const applied = committed.status === 'current';
+      const done = new Set(answered.map((i) => i.id));
+      if (answered.length) ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE id IN (${answered.map(() => '?').join(',')})`, applied ? 'fixed' : 'proposed', applied ? `Fixed by AI in revision ${committed.revId}` : `Proposal ${committed.revId}`, ...answered.map((i) => i.id));
+      reopen(issues.filter((i) => !done.has(i.id)), (id) => {
+        const i = issues.find((x) => x.id === id)!;
+        const r = dropped(i);
+        return r ? `The AI fix was not applied: ${r}` : `The AI fix did not resolve it: ${unresolved.get(issues.indexOf(i))}`;
+      });
     });
-  });
+    saved = true;
+  } finally {
+    discardUnstored(built, saved ? stored : []);
+  }
+  if (stored.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
   if (issues.length) issuesChanged(ctx, projectId, issues.map((i) => i.id));
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
   const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });

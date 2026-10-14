@@ -1,8 +1,9 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
+import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 7;
+export const PROMPT_VERSION = 8;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -143,20 +144,8 @@ Design the book:
 
 export const draftSchema = z.object({
   markdown: z.string().describe('the section body in PoliTost source Markdown, with [[nX]] citation markers'),
-  figures: z.array(z.object({
-    key: z.string().describe('kebab-case, used as file name'),
-    caption: z.string(),
-    alt: z.string(),
-    plot: z.object({
-      xRange: z.tuple([z.number(), z.number()]),
-      yRange: z.tuple([z.number(), z.number()]),
-      xLabel: z.string().nullable(),
-      yLabel: z.string().nullable(),
-      functions: z.array(z.object({ expr: z.string(), label: z.string().nullable(), domain: z.tuple([z.number(), z.number()]).nullable(), style: z.enum(['solid', 'dashed']).nullable() })),
-      points: z.array(z.object({ x: z.number(), y: z.number(), label: z.string().nullable(), open: z.boolean().nullable() })).nullable(),
-      asymptotes: z.array(z.object({ kind: z.enum(['vertical', 'horizontal']), value: z.number(), label: z.string().nullable() })).nullable(),
-    }),
-  })),
+  figures: z.array(figureSchema),
+  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence on why no figure would help this section; else null'),
   summary: z.string().describe('2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections'),
 });
 
@@ -177,7 +166,19 @@ export interface DraftPromptInput {
   /** The evidence reader's answer: clean formulas, unverified wording. */
   summary: string;
   figures: boolean;
+  /** Stock photos can be searched (a Pixabay or Pexels key is set). */
+  photos: boolean;
   outside: boolean;
+}
+
+/** What the writer may draw. Shared by drafting and fixes, which can both add figures. */
+export function figureRules(photos: boolean) {
+  return `FIGURES. Add a figure only where it helps the student more than words do: a relation that is easier to see as a graph, the structure of a molecule or ion the text discusses${photos ? ', a real object or phenomenon the student should recognise (lab equipment, a flame test, crystals, a precipitate, corrosion)' : ''}. Never add a decorative figure or one that repeats what a sentence already says plainly. Many sections of a science book have one or two such places; look for them. If the section has none, return an empty "figures" array and give the reason in "noFigureReason". At most 3 figures${photos ? ', at most 1 of them a photo' : ''}.
+  Kinds (set "kind" and fill only the matching spec; the others are null):
+  - plot: a function graph. Expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; a piecewise curve is several functions with a domain each. The plot must match the text exactly. Examples: a limit or an asymptote, a derivative as slope, x(t) of a motion, p(V) isotherms, a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time.
+  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. One species, or one resonance form, per figure; check every atom and charge.${photos ? `
+  - photo: a stock photo. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.` : ''}
+  Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0", "H2O"); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
 
 export function draftPrompt(p: DraftPromptInput) {
@@ -225,8 +226,8 @@ INSTRUCTIONS
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.
-- ${p.figures ? 'If a function graph would help (a limit, an asymptote, a discontinuity, a derivative as slope), request up to 2 figures in "figures" and place each one in the text with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own. Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0"); do not number figures, the builder does. Plot expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; the plot must match the text exactly.' : 'Do not add figures; return an empty "figures" array.'}
-- Return JSON: markdown (the section body, without the section title), figures, summary.`,
+- ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}
+- Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
   };
 }
 
@@ -411,6 +412,8 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that adds nothing the text does not already say plainly, and a place where a figure is clearly missing because the text describes in words a graph, the structure of a molecule or ion, or an object the student should recognise. Use category "figure" and severity minor, or major for a figure that shows something wrong. For a missing figure, quote the passage it belongs to and say in the suggestion what it should show. Do not ask for figures for their own sake.
+
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
@@ -527,14 +530,15 @@ export const patchSchema = z.object({
     block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
     text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
   })),
+  figures: z.array(figureSchema).describe('figures the new text adds with :::image blocks; usually empty'),
 });
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; figures?: { photos: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal} Keep [[nX]] citation markers and formula keys of text you keep.\n\n${formatRules(p.language)}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nOnly when a problem asks for a missing figure, add it with "figures" and an :::image block in the block it belongs to; otherwise return an empty "figures" array.\n${figureRules(p.figures.photos)}` : '\n\nReturn an empty "figures" array.'}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
@@ -547,7 +551,7 @@ Section ids you may link to: ${p.sectionIds}
 SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
-Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}], "figures": []}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
   };
 }
 

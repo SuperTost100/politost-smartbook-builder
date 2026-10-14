@@ -11,7 +11,7 @@ import { useToast } from '../../components/Toast';
 import './extras.css';
 
 type Tab = 'figures' | 'ide' | 'graphs';
-const ORIGIN_LABEL: Record<Asset['origin'], string> = { plot: 'plot', 'generated-svg': 'generated', imported: 'imported' };
+const ORIGIN_LABEL: Record<Asset['origin'], string> = { plot: 'plot', structure: 'structure', stock: 'stock photo', 'generated-svg': 'generated', imported: 'imported' };
 
 export default function ExtrasPage() {
   useDocumentTitle('Extras');

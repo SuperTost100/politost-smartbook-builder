@@ -34,13 +34,16 @@ export function loadBookInput(ctx: AppContext, projectId: string, opts: { approv
   const chapterIds = new Set(chapters.map((c) => c.id));
   const questions = listQuestions(ctx, projectId).filter((q) => q.chapterId && chapterIds.has(q.chapterId) && q.statement.trim());
   const enrichments = listEnrichments(ctx, projectId);
+  // Figures of replaced drafts stay in the project but not in the package: a stock photo weighs a few hundred KB.
+  const used = JSON.stringify([chapters, questions, enrichments]);
+  const assets = readAssetBytes(ctx, projectId).filter((a) => used.includes(`assets/${a.filename}`));
   return {
     meta: { slug: project.slug, title: project.title, subject: project.subject, authors: project.authors, language: project.language, version: '1.0.0' },
     chapters,
     omittedSectionIds,
     questions,
     enrichments,
-    assets: readAssetBytes(ctx, projectId),
+    assets,
     sections: {
       esercizi: questions.some((q) => q.kind === 'exercise'),
       esami: questions.some((q) => q.kind === 'exam'),

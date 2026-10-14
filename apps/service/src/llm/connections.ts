@@ -4,6 +4,7 @@ import { delimiter, join } from 'node:path';
 import type { ConnectionsResponse, ProviderStatus } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { notebookStatus, NLM_LOGIN_COMMAND } from '../evidence/nlm.ts';
+import { stockKeys } from '../figures/stock.ts';
 import { getFunnel, type FunnelLike } from './funnel.ts';
 
 const CLI_PROVIDERS = ['claude', 'codex', 'agent', 'antigravity'];
@@ -69,10 +70,12 @@ export async function getConnections(ctx: AppContext): Promise<ConnectionsRespon
   }
   const nb = await notebookStatus();
   const soffice = findOnPath(['soffice', 'libreoffice'], ['/Applications/LibreOffice.app/Contents/MacOS/soffice']);
+  const keys = stockKeys(ctx);
   return {
     providers: cache.value,
     notebooklm: { ...nb, loginCommand: NLM_LOGIN_COMMAND },
     libreoffice: { installed: soffice !== null, path: soffice },
+    stock: { pixabay: !!keys.pixabay, pexels: !!keys.pexels },
     node: process.version,
     dataDir: ctx.config.dataDir,
   };
