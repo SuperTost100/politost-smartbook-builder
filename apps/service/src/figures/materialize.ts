@@ -3,7 +3,6 @@
 import { renderPlotSvg, validatePlotSpec } from '@smartbuilder/content';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { Molecule } from 'openchemlib';
 import { z } from 'zod';
 import { paths, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
@@ -29,6 +28,7 @@ export const figureSchema = z.object({
     smiles: z.string(),
     style: z.enum(['lewis', 'skeletal']),
     lonePairs: z.boolean(),
+    formula: z.string().describe('the formula exactly as the text writes it, in plain text: "H2O", "NH4+", "SO4^2-", "NaCl"'),
   }).nullable().describe('for kind "structure", else null'),
   photo: z.object({
     query: z.string().describe('2-5 English words for a stock photo search'),
@@ -47,15 +47,6 @@ export interface BuiltFigures {
 
 const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
 const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
-
-/** Molecular formula of a SMILES string, e.g. "H2O"; empty when it does not parse. */
-export function molecularFormula(smiles: string): string {
-  try {
-    return Molecule.fromSmiles(smiles).getMolecularFormula().formula;
-  } catch {
-    return '';
-  }
-}
 
 function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
   return {
@@ -87,10 +78,11 @@ export async function buildFigures(ctx: AppContext, o: {
     } else if (fig.kind === 'structure' && fig.structure) {
       const v = validateStructureSpec(fig.structure);
       if (!v.ok) { out.notes.push(`${key}: ${v.errors.join('; ')}`); continue; }
-      const formula = molecularFormula(v.spec.smiles);
-      // The formula in the alt text lets the reviewer compare the drawn species with the caption.
+      // validateStructureSpec checked the formula against the SMILES. Written as the text writes it, it lets the
+      // reviewer compare the drawn species with the caption.
+      const formula = v.spec.formula ?? '';
       const alt = formula && !fig.alt.includes(formula) ? `${fig.alt} (${formula})` : fig.alt;
-      made = { bytes: renderStructureSvg(v.spec), ext: '.svg', mime: 'image/svg+xml', origin: 'structure', spec: v.spec, caption: fig.caption, alt, check: `Drawn from SMILES ${v.spec.smiles}${formula ? ` (${formula})` : ''}.` };
+      made = { bytes: renderStructureSvg(v.spec), ext: '.svg', mime: 'image/svg+xml', origin: 'structure', spec: v.spec, caption: fig.caption, alt, check: `Drawn from SMILES ${v.spec.smiles}${formula ? `, which matches ${formula}` : ''}.` };
     } else if (fig.kind === 'photo' && fig.photo) {
       if (!o.photos) { out.notes.push(`${key}: no stock photo service is set up`); continue; }
       if (photos >= 1) { out.notes.push(`${key}: only one photo per section`); continue; }

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { assertSafeSvg } from '../repo/assets.ts';
-import { nonbondingElectrons, renderStructureSvg, validateStructureSpec, type StructureSpec } from './structure.ts';
+import { formulaMatches, nonbondingElectrons, renderStructureSvg, smilesComposition, validateStructureSpec, type StructureSpec } from './structure.ts';
 
 const lewis = (smiles: string, lonePairs = true): StructureSpec => ({ smiles, style: 'lewis', lonePairs });
 const skeletal = (smiles: string): StructureSpec => ({ smiles, style: 'skeletal', lonePairs: false });
@@ -124,4 +124,54 @@ test('separate fragments are laid out side by side without overlapping', () => {
 
 test('the same spec always gives the same drawing', () => {
   assert.equal(renderStructureSvg(lewis('CCO')), renderStructureSvg(lewis('CCO')));
+});
+
+test('a formula written as in the text matches the drawn species', () => {
+  const ok = (formula: string, smiles: string) => formulaMatches(formula, smilesComposition(smiles));
+  for (const f of ['SO4^2-', 'SO42-', 'SO4 2-', 'SO₄²⁻']) assert.ok(ok(f, '[O-]S(=O)(=O)[O-]'), f);
+  assert.ok(ok('NH4+', '[NH4+]'));
+  assert.ok(ok('NH3', 'N'));
+  assert.ok(ok('H2O', 'O'));
+  assert.ok(ok('CO2', 'O=C=O'));
+  assert.ok(ok('HCO3-', 'OC(=O)[O-]'));
+  assert.ok(ok('NaCl', '[Na+].[Cl-]'));
+  assert.ok(ok('Na+ Cl-', '[Na+].[Cl-]'));
+  assert.ok(ok('Ca(OH)2', '[Ca+2].[OH-].[OH-]'));
+  assert.ok(ok('CH3COOH', 'CC(=O)O'));
+  assert.ok(!ok('NH3', '[NH4+]'), 'a missing charge and hydrogen');
+  assert.ok(!ok('SO4', '[O-]S(=O)(=O)[O-]'), 'a missing charge');
+  assert.ok(!ok('ClNa', 'O'), 'other atoms');
+  assert.ok(!ok('H2O (acqua)', 'O'), 'words are not a formula');
+});
+
+test('validation rejects a formula that does not match the SMILES', () => {
+  const r = validateStructureSpec({ ...lewis('[NH4+]'), formula: 'NH3' });
+  assert.equal(r.ok, false);
+  assert.match(r.ok ? '' : r.errors.join(' '), /formula: "NH3" does not match/);
+  assert.equal(validateStructureSpec({ ...lewis('[NH4+]'), formula: 'NH4+' }).ok, true);
+});
+
+/** Positions of the atom labels, read back from the SVG. */
+const atomsAt = (svg: string) => [...svg.matchAll(/<text x="([\d.-]+)" y="([\d.-]+)" text-anchor="middle">([A-Z][a-z]?)<\/text>/g)].map((m) => ({ x: Number(m[1]), y: Number(m[2]), el: m[3] }));
+
+test('ammonia is a T with the hydrogens left, right and below', () => {
+  const at = atomsAt(renderStructureSvg(lewis('N')));
+  const n = at.find((a) => a.el === 'N')!;
+  const h = at.filter((a) => a.el === 'H');
+  assert.equal(h.filter((a) => Math.abs(a.y - n.y) < 1).length, 2, 'two on the same line as N');
+  assert.equal(h.filter((a) => Math.abs(a.x - n.x) < 1 && a.y > n.y).length, 1, 'one below N');
+});
+
+test('a short chain is drawn on one straight line', () => {
+  for (const smiles of ['CCO', 'CC(=O)O', 'OS(=O)(=O)O']) {
+    const heavy = atomsAt(renderStructureSvg(lewis(smiles))).filter((a) => a.el !== 'H');
+    const onLine = heavy.filter((a) => Math.abs(a.y - heavy[0].y) < 1).length;
+    assert.ok(onLine >= 3, `${smiles}: backbone on one line`);
+  }
+});
+
+test('a branched molecule whose hydrogens would crowd is drawn with condensed labels', () => {
+  const svg = renderStructureSvg(lewis('CC(C)C'));
+  assert.equal(atomsAt(svg).filter((a) => a.el === 'H').length, 0, 'no separate hydrogen atoms');
+  assert.equal((svg.match(/>H<tspan[^>]*>3<\/tspan>/g) ?? []).length, 3, 'three CH3 groups');
 });

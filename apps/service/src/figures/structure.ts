@@ -6,6 +6,8 @@ export interface StructureSpec {
   smiles: string;
   style: 'lewis' | 'skeletal';
   lonePairs: boolean;
+  /** The formula as the text writes it, e.g. "NH4+", "NaCl", "SO4^2-". Checked against the SMILES. */
+  formula?: string;
   title?: string;
 }
 
@@ -16,6 +18,7 @@ const specSchema = z.object({
   smiles: z.string().trim().min(1, 'must not be empty').max(200, 'must be at most 200 characters'),
   style: z.enum(['lewis', 'skeletal']),
   lonePairs: z.boolean().default(false),
+  formula: z.string().trim().min(1).max(60).optional(),
   title: z.string().max(200).optional(),
 });
 
@@ -63,7 +66,116 @@ export function validateStructureSpec(spec: unknown): { ok: true; spec: Structur
   if (heavy > MAX_HEAVY_ATOMS) errors.push(`smiles: ${heavy} heavy atoms is too many to draw readably (at most ${MAX_HEAVY_ATOMS})`);
   const fragments = components(m).count;
   if (fragments > MAX_FRAGMENTS) errors.push(`smiles: ${fragments} separate fragments is too many (at most ${MAX_FRAGMENTS})`);
+  if (value.formula) {
+    const drawn = composition(m);
+    if (!formulaMatches(value.formula, drawn)) errors.push(`formula: "${value.formula}" does not match the SMILES, which draws ${describe(drawn)}`);
+  }
   return errors.length ? { ok: false, errors } : { ok: true, spec: value };
+}
+
+// ---------------------------------------------------------------------------------------------
+// Formulas
+// ---------------------------------------------------------------------------------------------
+
+interface Composition { atoms: Map<string, number>; charge: number }
+
+/** Atoms (implicit hydrogens included) and net charge of a parsed molecule. */
+function composition(m: OCL.Molecule): Composition {
+  const atoms = new Map<string, number>();
+  let charge = 0;
+  const add = (el: string, n: number) => atoms.set(el, (atoms.get(el) ?? 0) + n);
+  for (let i = 0; i < m.getAllAtoms(); i++) {
+    add(m.getAtomLabel(i), 1);
+    const h = m.getImplicitHydrogens(i);
+    if (h) add('H', h);
+    charge += m.getAtomCharge(i);
+  }
+  return { atoms, charge };
+}
+
+function describe(c: Composition): string {
+  const body = [...c.atoms].map(([el, n]) => `${el}${n > 1 ? n : ''}`).join('');
+  return c.charge ? `${body} with charge ${c.charge > 0 ? '+' : ''}${c.charge}` : body;
+}
+
+const SUBSCRIPTS = '₀₁₂₃₄₅₆₇₈₉';
+const SUPERSCRIPTS = '⁰¹²³⁴⁵⁶⁷⁸⁹';
+
+/** Element counts of a formula body such as "Ca(OH)2" or "CuSO4·5H2O"; null when it does not parse. */
+function parseBody(body: string): Map<string, number> | null {
+  const total = new Map<string, number>();
+  for (const part of body.split(/[·.*]/)) {
+    const m = /^(\d*)(.*)$/.exec(part)!;
+    const times = m[1] ? Number(m[1]) : 1;
+    const stack: Map<string, number>[] = [new Map()];
+    const re = /([A-Z][a-z]?)(\d*)|([([])|([)\]])(\d*)/gy;
+    let at = 0;
+    let t: RegExpExecArray | null;
+    while (at < m[2].length && (t = re.exec(m[2])) !== null) {
+      at = re.lastIndex;
+      if (t[1]) {
+        const top = stack[stack.length - 1];
+        top.set(t[1], (top.get(t[1]) ?? 0) + (t[2] ? Number(t[2]) : 1));
+      } else if (t[3]) {
+        stack.push(new Map());
+      } else {
+        if (stack.length < 2) return null;
+        const group = stack.pop()!;
+        const top = stack[stack.length - 1];
+        for (const [el, n] of group) top.set(el, (top.get(el) ?? 0) + n * (t[5] ? Number(t[5]) : 1));
+      }
+    }
+    if (at !== m[2].length || stack.length !== 1 || !stack[0].size) return null;
+    for (const [el, n] of stack[0]) total.set(el, (total.get(el) ?? 0) + n * times);
+  }
+  return total;
+}
+
+const sameAtoms = (a: Map<string, number>, b: Map<string, number>) => a.size === b.size && [...a].every(([el, n]) => b.get(el) === n);
+
+/**
+ * True when a formula written in the text ("NH4+", "SO4^2-", "SO42-", "Na+ Cl-", "NaCl") has the same atoms and net
+ * charge as the drawn species. Digits run together with a charge ("SO42-") are tried both ways.
+ */
+export function formulaMatches(formula: string, drawn: Composition): boolean {
+  const plain = formula
+    .replace(/[₀-₉]/g, (d) => String(SUBSCRIPTS.indexOf(d)))
+    .replace(/[⁰-⁹¹²³]/g, (d) => String(SUPERSCRIPTS.indexOf(d)))
+    .replace(/[⁺]/g, '+').replace(/[⁻−–]/g, '-');
+  // Several ions ("Na+ Cl-") add up; each piece carries its own charge.
+  const pieces = plain.trim().split(/\s+(?=[A-Z(])/);
+  const options: { atoms: Map<string, number>; charge: number }[][] = [];
+  for (const piece of pieces) {
+    const m = /^(.*?)(?:\^|\s)*(\d*)([+-]?)$/.exec(piece.replace(/\s+/g, ' '))!;
+    const [, head, digits, sign] = m;
+    const here: { atoms: Map<string, number>; charge: number }[] = [];
+    if (!sign) {
+      const b = parseBody(piece.replace(/\s+/g, ''));
+      if (b) here.push({ atoms: b, charge: 0 });
+    } else {
+      // Split the trailing digits between the last count and the charge: "SO42-" is SO4 2- or SO42 1-.
+      for (let k = 0; k <= digits.length; k++) {
+        const body = (head + digits.slice(0, k)).replace(/[\s^]+$/, '').replace(/\s+/g, '');
+        const size = digits.slice(k) ? Number(digits.slice(k)) : 1;
+        const b = parseBody(body);
+        if (b && size > 0) here.push({ atoms: b, charge: sign === '+' ? size : -size });
+      }
+    }
+    if (!here.length) return false;
+    options.push(here);
+  }
+  // Pieces are few and readings per piece at most three, so trying every combination is cheap.
+  const combos = options.reduce<{ atoms: Map<string, number>; charge: number }[]>((acc, opts) => acc.flatMap((a) => opts.map((o) => {
+    const sum = new Map(a.atoms);
+    for (const [el, n] of o.atoms) sum.set(el, (sum.get(el) ?? 0) + n);
+    return { atoms: sum, charge: a.charge + o.charge };
+  })), [{ atoms: new Map(), charge: 0 }]);
+  return combos.some((c) => c.charge === drawn.charge && sameAtoms(c.atoms, drawn.atoms));
+}
+
+/** Atoms and net charge of a SMILES string, for formulaMatches. */
+export function smilesComposition(smiles: string): Composition {
+  return composition(parseMolecule(smiles.trim()));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -229,22 +341,127 @@ function chargeText(charge: number): string {
   return `${n > 1 ? n : ''}${charge > 0 ? '+' : '−'}`;
 }
 
+type Point = { x: number; y: number };
+
+/**
+ * Textbook layouts for small Lewis structures, which the generic layout draws at odd angles. A molecule whose inner
+ * atoms (those with more than one neighbour) form a short chain becomes a straight line with the other atoms above, below
+ * and at the ends: H-C-C-O-H, H-O-S-O-H. An atom with three outer neighbours and a lone pair (NH3, H3O+) becomes a T
+ * with the pair on top. Other fragments keep the generic layout. Coordinates are in drawing units, y pointing down.
+ */
+function tidyLewis(m: OCL.Molecule, pos: Point[], comp: { of: number[]; count: number }) {
+  const n = pos.length;
+  const nbrs = Array.from({ length: n }, (_, i) => Array.from({ length: m.getAllConnAtoms(i) }, (_, k) => m.getConnAtom(i, k)));
+  const bondSum = Array.from({ length: n }, () => 0);
+  let total = 0;
+  for (let b = 0; b < m.getAllBonds(); b++) {
+    const [a0, a1] = [m.getBondAtom(0, b), m.getBondAtom(1, b)];
+    bondSum[a0] += m.getBondOrder(b);
+    bondSum[a1] += m.getBondOrder(b);
+    total += Math.hypot(pos[a0].x - pos[a1].x, pos[a0].y - pos[a1].y);
+  }
+  const L = m.getAllBonds() ? total / m.getAllBonds() : 1;
+  const UP = { x: 0, y: -1 };
+  const DOWN = { x: 0, y: 1 };
+  const turn = (d: Point, deg: number) => {
+    const r = (deg * Math.PI) / 180;
+    return { x: d.x * Math.cos(r) - d.y * Math.sin(r), y: d.x * Math.sin(r) + d.y * Math.cos(r) };
+  };
+  // Heavier substituents first, so a C=O oxygen takes the top slot and hydrogens fill the rest.
+  const order = (ids: number[]) => [...ids].sort((a, b) => m.getAtomicNo(b) - m.getAtomicNo(a) || a - b);
+
+  for (let c = 0; c < comp.count; c++) {
+    const ids = pos.map((_, i) => i).filter((i) => comp.of[i] === c);
+    if (ids.some((i) => m.isRingAtom(i))) continue;
+    const inner = ids.filter((i) => nbrs[i].length > 1);
+    const place = new Map<number, Point>();
+
+    if (inner.length === 1) {
+      const center = inner[0];
+      const outer = nbrs[center];
+      const nb = nonbondingElectrons(m.getAtomicNo(center), m.getAtomCharge(center), bondSum[center]);
+      if (outer.length !== 3 || !nb || nb < 2) continue;
+      place.set(center, { x: 0, y: 0 });
+      const [a, b, d] = order(outer);
+      place.set(b, { x: -L, y: 0 });
+      place.set(d, { x: L, y: 0 });
+      place.set(a, { x: 0, y: L });
+    } else if (inner.length >= 2 && inner.length <= 8) {
+      const innerNbrs = (i: number) => nbrs[i].filter((j) => nbrs[j].length > 1);
+      if (inner.some((i) => innerNbrs(i).length > 2)) continue;
+      const ends = inner.filter((i) => innerNbrs(i).length === 1);
+      if (ends.length !== 2) continue;
+      const chain = [Math.min(...ends)];
+      while (chain.length < inner.length) {
+        const next = innerNbrs(chain[chain.length - 1]).find((j) => !chain.includes(j));
+        if (next === undefined) break;
+        chain.push(next);
+      }
+      if (chain.length !== inner.length) continue;
+      let fits = true;
+      chain.forEach((atom, k) => {
+        const at = { x: k * L, y: 0 };
+        place.set(atom, at);
+        const subs = order(nbrs[atom].filter((j) => nbrs[j].length === 1));
+        const end = k === 0 || k === chain.length - 1;
+        const out = { x: k === 0 ? -1 : 1, y: 0 };
+        const slots = !end ? [[], [UP], [UP, DOWN]][subs.length]
+          : [[], [out], [turn(out, k === 0 ? 60 : -60), turn(out, k === 0 ? -60 : 60)], [out, UP, DOWN]][subs.length];
+        if (!slots) { fits = false; return; }
+        subs.forEach((s, j) => place.set(s, { x: at.x + slots[j].x * L, y: at.y + slots[j].y * L }));
+      });
+      if (!fits) continue;
+    } else {
+      continue;
+    }
+    for (const [i, p] of place) pos[i] = p;
+  }
+}
+
 const CORNERS = [-Math.PI / 4, (-3 * Math.PI) / 4, Math.PI / 4, (3 * Math.PI) / 4];
+
+/**
+ * True when two atoms of one fragment sit closer than 0.6 bond lengths: the explicit-hydrogen layout of a branched
+ * molecule can do that. Fragments are only set side by side later, so atoms of different fragments may still overlap.
+ */
+function crowded(m: OCL.Molecule, pos: Point[], comp: { of: number[] }): boolean {
+  if (!m.getAllBonds()) return false;
+  let total = 0;
+  for (let b = 0; b < m.getAllBonds(); b++) {
+    const [a0, a1] = [m.getBondAtom(0, b), m.getBondAtom(1, b)];
+    total += Math.hypot(pos[a0].x - pos[a1].x, pos[a0].y - pos[a1].y);
+  }
+  const min = (0.6 * total) / m.getAllBonds();
+  for (let i = 0; i < pos.length; i++) {
+    for (let j = i + 1; j < pos.length; j++) if (comp.of[i] === comp.of[j] && Math.hypot(pos[i].x - pos[j].x, pos[i].y - pos[j].y) < min) return true;
+  }
+  return false;
+}
 
 export function renderStructureSvg(spec: StructureSpec): string {
   const lewis = spec.style === 'lewis';
-  const m = parseMolecule(spec.smiles.trim());
+  // Lewis draws every hydrogen as an atom. When that layout crowds, it falls back to condensed labels (CH3, OH).
+  let explicitH = lewis;
+  let m = parseMolecule(spec.smiles.trim());
   if (lewis) {
     m.addImplicitHydrogens();
     m.inventCoordinates({ keepHydrogens: true });
   } else {
     m.inventCoordinates();
   }
+  let comp = components(m);
+  let pos = Array.from({ length: m.getAllAtoms() }, (_, i) => ({ x: m.getAtomX(i), y: m.getAtomY(i) }));
+  if (lewis) tidyLewis(m, pos, comp);
+  if (lewis && crowded(m, pos, comp)) {
+    explicitH = false;
+    m = parseMolecule(spec.smiles.trim());
+    m.inventCoordinates();
+    comp = components(m);
+    pos = Array.from({ length: m.getAllAtoms() }, (_, i) => ({ x: m.getAtomX(i), y: m.getAtomY(i) }));
+  }
+  const n = m.getAllAtoms();
 
   // Lay each fragment out in its own box and set them side by side.
-  const n = m.getAllAtoms();
-  const comp = components(m);
-  const pos = Array.from({ length: n }, (_, i) => ({ x: m.getAtomX(i), y: m.getAtomY(i) }));
   let cursor = 0;
   for (let c = 0; c < comp.count; c++) {
     const ids = pos.map((_, i) => i).filter((i) => comp.of[i] === c);
@@ -261,7 +478,7 @@ export function renderStructureSvg(spec: StructureSpec): string {
     const z = m.getAtomicNo(i);
     const charge = m.getAtomCharge(i);
     const symbol = m.getAtomLabel(i);
-    const hCount = lewis ? 0 : m.getImplicitHydrogens(i);
+    const hCount = explicitH ? 0 : m.getImplicitHydrogens(i);
     const bonded = m.getAllConnAtoms(i) > 0;
     let label: Label | null = null;
     if (lewis || z !== 6 || !bonded || charge !== 0 || m.getAtomRadical(i) !== 0) {
@@ -380,7 +597,7 @@ export function renderStructureSvg(spec: StructureSpec): string {
     }
 
     if (lewis && spec.lonePairs && a.box) {
-      const nb = nonbondingElectrons(a.z, a.charge, a.bondSum);
+      const nb = nonbondingElectrons(a.z, a.charge, a.bondSum + (a.label?.h ?? 0));
       if (nb) {
         const pairs = Math.floor(nb / 2);
         const odd = nb % 2;
