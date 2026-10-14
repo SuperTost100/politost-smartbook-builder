@@ -1330,7 +1330,7 @@ describe('chemistry figures: structures and photos', () => {
   test('a structure is drawn from SMILES, and its alt text gets the formula for the reviewer', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true } })])));
+    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } })])));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 1);
     const a = ctx.db.get<{ filename: string; origin: string; alt: string; path: string }>('SELECT * FROM assets')!;
@@ -1341,18 +1341,20 @@ describe('chemistry figures: structures and photos', () => {
     assert.match(current(s1), new RegExp(`:::image\\{src="assets/${a.filename}" alt="Molecola d'acqua \\(H2O\\)"`));
   });
 
-  test('an invalid SMILES or a photo without stock keys drops the figure and its block, with a note', async () => {
+  test('an invalid SMILES, a formula that does not match it or a photo without stock keys drops the figure and its block, with a note', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    const body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/fiamma.svg" alt="x" caption="y"}\n:::';
+    const body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/ammonio.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/fiamma.svg" alt="x" caption="y"}\n:::';
     fake.next(answer(draft([
-      fig({ structure: { smiles: 'not((a smiles', style: 'lewis', lonePairs: true } }),
+      fig({ structure: { smiles: 'not((a smiles', style: 'lewis', lonePairs: true, formula: 'H2O' } }),
+      fig({ key: 'ammonio', structure: { smiles: '[NH4+]', style: 'lewis', lonePairs: true, formula: 'NH3' } }),
       fig({ key: 'fiamma', kind: 'photo', photo: { query: 'sodium flame test', mustShow: 'a yellow sodium flame' } }),
     ], body)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 0);
-    assert.equal(r.figureProblems.length, 2);
-    assert.match(r.figureProblems[1], /no stock photo service/);
+    assert.equal(r.figureProblems.length, 3);
+    assert.match(r.figureProblems[1], /ammonio: formula: "NH3" does not match the SMILES/);
+    assert.match(r.figureProblems[2], /no stock photo service/);
     assert.doesNotMatch(current(s1), /:::image/);
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
     const { readdirSync } = await import('node:fs');
@@ -1375,7 +1377,7 @@ describe('chemistry figures: structures and photos', () => {
     seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
     ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: "L'ammoniaca ha una coppia solitaria.", message: 'Manca la struttura', suggestion: 'Struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now() });
     fake.next(answer({
-      figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true } })],
+      figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true, formula: 'NH3' } })],
       changes: [{ block: 0, text: "L'ammoniaca ha una coppia solitaria.\n\n:::image{src=\"assets/nh3.svg\" alt=\"a\" caption=\"c\"}\n:::\n\n:::image{src=\"assets/inventata.svg\" alt=\"a\" caption=\"c\"}\n:::" }],
     }), answer(checkGood([0])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));

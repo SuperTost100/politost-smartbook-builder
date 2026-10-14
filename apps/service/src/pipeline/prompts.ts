@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 8;
+export const PROMPT_VERSION = 9;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -176,7 +176,7 @@ export function figureRules(photos: boolean) {
   return `FIGURES. Add a figure only where it helps the student more than words do: a relation that is easier to see as a graph, the structure of a molecule or ion the text discusses${photos ? ', a real object or phenomenon the student should recognise (lab equipment, a flame test, crystals, a precipitate, corrosion)' : ''}. Never add a decorative figure or one that repeats what a sentence already says plainly. Many sections of a science book have one or two such places; look for them. If the section has none, return an empty "figures" array and give the reason in "noFigureReason". At most 3 figures${photos ? ', at most 1 of them a photo' : ''}.
   Kinds (set "kind" and fill only the matching spec; the others are null):
   - plot: a function graph. Expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; a piecewise curve is several functions with a domain each. The plot must match the text exactly. Examples: a limit or an asymptote, a derivative as slope, x(t) of a motion, p(V) isotherms, a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time.
-  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. One species, or one resonance form, per figure; check every atom and charge.${photos ? `
+  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.${photos ? `
   - photo: a stock photo. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.` : ''}
   Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0", "H2O"); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
