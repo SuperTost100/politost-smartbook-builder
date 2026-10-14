@@ -30,7 +30,7 @@ export async function gatherEvidence(ctx: AppContext, req: EvidenceRequest, opts
 }
 
 /** Ensures the project's notebook exists and every included resource is uploaded once (sha-tracked). */
-export async function syncNotebook(ctx: AppContext, projectId: string, signal?: AbortSignal): Promise<{ notebookId: string; uploaded: number; skipped: number }> {
+export async function syncNotebook(ctx: AppContext, projectId: string, signal?: AbortSignal): Promise<{ notebookId: string; uploaded: number; skipped: number; failed: string[] }> {
   return sync(ctx, projectId, signal);
 }
 

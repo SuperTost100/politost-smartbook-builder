@@ -47,6 +47,11 @@ export function isSourceLimit(text: string): boolean {
   return SOURCE_LIMIT.test(text) && !RATE_LIMIT.test(text);
 }
 
+/** The id of the source NotebookLM kept after it failed to process the file, or null for any other failure. */
+export function failedSourceId(text: string): string | null {
+  return /Source (\S+) failed to process/i.exec(text)?.[1] ?? null;
+}
+
 /** Turns nlm's error text into a TaskError the queue understands. */
 export function nlmFailure(text: string, retryAfterMs?: number): TaskError {
   const msg = text.trim().split('\n').filter(Boolean).slice(-3).join(' ').slice(0, 400) || 'nlm failed.';

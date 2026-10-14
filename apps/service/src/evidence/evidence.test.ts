@@ -203,6 +203,40 @@ describe('syncNotebook', () => {
     assert.equal(nlm.count('notebook', 'create'), 1);
   });
 
+  test('a .docx NotebookLM cannot process goes up as its converted PDF and the failed copy is deleted', async () => {
+    seedFiles();
+    const dir = join(kit.ctx.config.dataDir, 'files');
+    const sha = 'dddddddd'.padEnd(64, '4');
+    writeFileSync(join(dir, `${sha}.docx`), 'PK');
+    writeFileSync(join(dir, `${sha}.pdf`), '%PDF-d');
+    seedResource(kit.ctx, { id: 'rd', kind: 'docx', filename: 'Organica.docx', sha256: sha, path: join(dir, `${sha}.docx`) });
+    kit.ctx.db.run('UPDATE resources SET meta = ? WHERE id = ?', JSON.stringify({ pdfFile: `${sha}.pdf` }), 'rd');
+    nlm.failFiles = /\.docx$/;
+    const out = await syncNotebook(kit.ctx, 'p1');
+    assert.equal(out.uploaded, 4);
+    const nb = [...nlm.notebooks.values()][0];
+    assert.ok(!nb.sources.some((s) => s.title === 'failed'), 'the failed source is removed from the notebook');
+    assert.equal(nb.sources.filter((s) => s.title === 'Organica.docx [dddddddd]').length, 1);
+    assert.ok(nlm.calls.some((c) => c[1] === 'add' && c.includes(join(dir, `${sha}.pdf`))));
+    assert.equal(kit.ctx.db.get<{ status: string }>('SELECT status FROM notebook_sources WHERE resource_id = ?', 'rd')!.status, 'ready');
+  });
+
+  test('a file NotebookLM cannot process is skipped, the rest uploads, and later syncs do not retry it', async () => {
+    seedFiles();
+    nlm.failFiles = /b\.pdf$/;
+    const out = await syncNotebook(kit.ctx, 'p1');
+    assert.deepEqual([out.uploaded, out.skipped], [2, 0]);
+    assert.deepEqual(out.failed, ['Esami.pdf']);
+    assert.ok(![...nlm.notebooks.values()][0].sources.some((s) => s.title === 'failed'));
+    assert.equal(kit.ctx.db.get<{ status: string }>('SELECT status FROM notebook_sources WHERE resource_id = ?', 'rb')!.status, 'failed');
+
+    nlm.calls.length = 0;
+    const again = await syncNotebook(kit.ctx, 'p1');
+    assert.equal(nlm.count('source', 'add'), 0);
+    assert.deepEqual([again.uploaded, again.skipped], [0, 2]);
+    assert.deepEqual(again.failed, ['Esami.pdf']);
+  });
+
   test('NotebookLM auth failure surfaces as TaskError(auth) with the login action', async () => {
     seedFiles();
     nlm.runner = async (args) => (args[0] === 'usage' ? { code: 1, stdout: '', stderr: '' } : { code: 1, stdout: '', stderr: 'Error: Cookies have expired. Run nlm login.' });

@@ -12,6 +12,8 @@ export class FakeNlm {
   crashAfterStore = false;
   /** Source id handed out by the next `source add` (default: generated). */
   nextSourceId?: string;
+  /** Files whose upload NotebookLM keeps as a failed source, like an image-only .docx. */
+  failFiles?: RegExp;
   queryResponse: unknown = { answer: '', references: [], sources_used: [] };
   private seq = 0;
 
@@ -41,9 +43,17 @@ export class FakeNlm {
       if (nb.sources.length >= this.sourceLimit) return err(`Source limit reached: a notebook can have at most ${this.sourceLimit} sources`);
       const title = args[args.indexOf('--title') + 1];
       const id = this.nextSourceId ?? `src${++this.seq}`;
+      if (this.failFiles?.test(args[args.indexOf('--file') + 1])) {
+        nb.sources.push({ id, title: 'failed' });
+        return { code: 1, stdout: JSON.stringify({ status: 'error', error: `Source ${id} failed to process in NotebookLM.`, hint: `The failed source entry was retained for inspection. Delete it with 'nlm source delete ${id}' if it is no longer needed.` }), stderr: '' };
+      }
       nb.sources.push({ id, title });
       if (this.crashAfterStore) throw new Error('process died');
       return ok({ source_type: 'file', source_id: id, title });
+    }
+    if (a === 'source' && b === 'delete') {
+      for (const nb of this.notebooks.values()) nb.sources = nb.sources.filter((x) => x.id !== args[2]);
+      return ok({ status: 'success' });
     }
     if (a === 'notebook' && b === 'query') return ok(this.queryResponse);
     return err(`unexpected command ${args.join(' ')}`);
