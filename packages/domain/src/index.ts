@@ -316,7 +316,7 @@ export interface Asset {
   /** File name inside the exported assets/ folder. */
   filename: string;
   mime: string;
-  origin: 'plot' | 'structure' | 'stock' | 'generated-svg' | 'imported';
+  origin: 'plot' | 'structure' | 'diagram' | 'stock' | 'generated-svg' | 'imported';
   /** Plot spec for "plot", structure spec for "structure", search and source for "stock". */
   spec: unknown;
   caption: string;
@@ -346,7 +346,7 @@ export type TaskState = 'queued' | 'running' | 'succeeded' | 'retry_wait' | 'wai
 export interface RunSummary {
   id: string;
   projectId: string;
-  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research';
+  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research' | 'figures';
   status: RunStatus;
   createdAt: string;
   finishedAt: string | null;

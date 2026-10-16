@@ -8,6 +8,7 @@ import { gate, outlinePlan } from './plan.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
 import { resourceExtract, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { sectionResearch } from './research.ts';
+import { sectionFigures } from './figures.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { startRun } from './runs.ts';
 
@@ -44,4 +45,5 @@ export function registerHandlers(ctx: AppContext) {
   q.register('chapter.review', h(chapterReview));
   q.register('section.revise', h(sectionRevise));
   q.register('section.research', h(sectionResearch));
+  q.register('section.figures', h(sectionFigures));
 }

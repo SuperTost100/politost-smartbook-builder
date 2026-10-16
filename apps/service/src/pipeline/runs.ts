@@ -7,7 +7,7 @@ import { HttpError } from '../server.ts';
 import type { TaskSpec } from '../queue/queue.ts';
 import { headRevision, loadOutline, loadProject } from './util.ts';
 
-export interface RunScope { chapterIds?: string[]; nodeIds?: string[]; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck' }
+export interface RunScope { chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck' }
 
 const ACTIVE = `('running', 'pausing', 'paused', 'waiting')`;
 
@@ -47,6 +47,18 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       if (!nodeIds.length) throw new HttpError(409, 'nothing_to_research', 'No drafted section to research.', 'Draft the section first.');
       const stamp = Date.now().toString(36);
       runId = ctx.queue.createRun(projectId, 'research', nodeIds.map((nodeId) => ({ kind: 'section.research', key: `research:${nodeId}:${stamp}`, label: 'Look for outside material', input: { nodeId }, pool: 'research', maxAttempts: 2 })));
+      break;
+    }
+    case 'figures': {
+      if (!project.options.figures) throw new HttpError(409, 'figures_off', 'Figures are off for this book.', 'Turn on figures in Setup, then try again.');
+      // The given sections, or every drafted section of the given chapters (all chapters when none are given); with
+      // missingOnly, only sections without a figure.
+      const sections = (loadOutline(ctx, projectId)?.outline.chapters ?? []).flatMap((c) => c.sections.map((s) => ({ chapterId: c.id, ...s })));
+      const picked = sections.filter((s) => scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId))
+        .filter((s) => { const head = headRevision(ctx, projectId, s.id); return head && (!scope.missingOnly || !head.markdown.includes(':::image{')); });
+      if (!picked.length) throw new HttpError(409, 'nothing_to_illustrate', 'No drafted section to add figures to.', scope.missingOnly ? 'Every section already has a figure.' : 'Draft the section first.');
+      const stamp = Date.now().toString(36);
+      runId = ctx.queue.createRun(projectId, 'figures', picked.map((s) => ({ kind: 'section.figures', key: `figures:${s.id}:${stamp}`, label: `Add figures to "${s.title}"`, input: { nodeId: s.id }, pool: 'writer', maxAttempts: 2 })));
       break;
     }
     case 'review': {

@@ -109,7 +109,7 @@ export interface Api {
   'POST /api/projects/:id/outline/approve': { body: { revId: string }; res: OutlineRevision };
 
   /** Starts a run. kind=prepare: extract+map; plan: outline; generate: draft everything in scope. */
-  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; reviewMode?: 'full' | 'recheck' } }; res: RunSummary };
+  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; reviewMode?: 'full' | 'recheck'; missingOnly?: boolean } }; res: RunSummary };
   'GET /api/projects/:id/runs': { res: RunSummary[] };
   'GET /api/runs/:runId': { res: RunSummary & { tasks: TaskRow[]; usage: UsageRow[] } };
   'POST /api/runs/:runId/pause': { res: RunSummary };
@@ -127,6 +127,7 @@ export interface Api {
   'POST /api/projects/:id/sections/:nodeId/restore': { body: { revId: string }; res: SectionView };
   'POST /api/projects/:id/sections/:nodeId/regenerate': { body: { instruction?: string; selection?: string }; res: RunSummary };
   'POST /api/projects/:id/sections/:nodeId/research': { res: RunSummary };
+  'POST /api/projects/:id/sections/:nodeId/figures': { res: RunSummary };
   /** headRevId: the current revision the author saw the proposal against; accept is refused with 409 if it changed. */
   'POST /api/projects/:id/sections/:nodeId/proposal': { body: { action: 'accept' | 'reject'; revId: string; headRevId: string | null }; res: SectionView };
   /** Compiled reader Markdown for the chapter (preview). */

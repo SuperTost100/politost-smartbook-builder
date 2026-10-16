@@ -79,7 +79,13 @@ What a fresh book will still produce: on the first review, some real content err
 ## Not done or only partly done
 
 - **Outside research** runs per section from "Find outside sources" in the Manuscript, when the book's "Use verified outside material" option is on. Claude searches the web with every local tool switched off; the builder opens each page and keeps an addition only if its quote is there. Additions arrive as a proposal that lists the pages. It is not part of Generate.
-- **Figures** come in three kinds since 14 October: function plots, molecule structures drawn from SMILES (Lewis or skeletal; the writer also gives the formula as the text writes it, and a structure whose formula does not match its SMILES is dropped), and stock photos from Pixabay or Pexels that a vision model checks before they go in. Photos need a free key on the Connections screen. The writer adds a figure only where it helps and otherwise says why; the reviewer flags missing and useless figures, and a fix can add one. AI image generation is not implemented.
+- **Figures** come in seven kinds since 16 October:
+  - function plots;
+  - molecule structures drawn from SMILES, Lewis or skeletal. The writer also gives the formula as the text writes it, and a structure whose formula does not match its SMILES is dropped;
+  - four chemistry diagrams drawn from a spec: energy levels (MO diagrams, enthalpy diagrams, Hess cycles), orbital boxes (the builder checks the electron count against the species), electrochemical cells, and the periodic table with highlighted groups and trend arrows;
+  - photos from Wikimedia Commons (no key, licence in the credit), Pixabay or Pexels, checked by a vision model before they go in.
+
+  The writer is asked to find a place for a figure in most sections and must say concretely why when it adds none. The reviewer flags missing and useless figures, and a fix can add one. **Add figures** on a section, or a `figures` run with `missingOnly`, adds figures to written text without changing it: a second model drops decorative ones, and the result is applied unless the author edited the section meanwhile. AI image generation is not implemented.
 - **MATLAB examples** are not generated. Python examples are, and they run in a permission-restricted Node child process with Pyodide. Node 24 cannot restrict network access, which the comment in `pipeline/python.ts` documents.
 - **Quiz items** are a source, not book content: they are classified by topic and shown to the exercise writer as examples of level and style. The reader has no multiple-choice format, so they are not exported. The Fisica quiz file splits into 573 items but has no answers: its right options are only highlighted in the PDF.
 - **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
