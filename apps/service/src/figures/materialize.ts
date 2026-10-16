@@ -9,7 +9,8 @@ import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { cellSchema, describeDiagram, levelsSchema, orbitalsSchema, periodicSchema, renderDiagramSvg, validateDiagram, type DiagramKind } from './diagram.ts';
 import { findStockPhoto } from './stock.ts';
-import { renderStructureSvg, validateStructureSpec } from './structure.ts';
+import { renderStructureSvg, structureIdentity, validateStructureSpec } from './structure.ts';
+import { findSection, loadOutline } from '../pipeline/util.ts';
 
 export const figureSchema = z.object({
   key: z.string().describe('kebab-case, used as file name'),
@@ -42,6 +43,49 @@ export const figureSchema = z.object({
 });
 export type FigureRequest = z.infer<typeof figureSchema>;
 
+/** What makes two figures the same picture: the photo itself, the species in its drawing style, or the whole spec. */
+export function figureSignature(origin: string, spec: unknown): string {
+  const s = (spec ?? {}) as Record<string, unknown>;
+  if (origin === 'stock') return `photo:${s.provider}:${s.id}`;
+  if (origin === 'structure') return `structure:${s.style}:${structureIdentity(String(s.smiles ?? ''))}`;
+  return `${origin}:${stableJson(spec)}`;
+}
+
+const stableJson = (v: unknown): string => JSON.stringify(v, (_k, x: unknown) => (x && typeof x === 'object' && !Array.isArray(x)
+  ? Object.fromEntries(Object.entries(x as Record<string, unknown>).sort(([a], [b]) => a.localeCompare(b)))
+  : x));
+
+export interface BookFigure { nodeId: string; where: string; origin: string; caption: string; formula: string | null }
+
+/** The figures the book's current text shows, by signature. `exclude` leaves out one node, whose text is being replaced. */
+export function bookFigures(ctx: AppContext, projectId: string, exclude?: string): Map<string, BookFigure> {
+  const heads = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId)
+    .filter((h) => h.node_id !== exclude);
+  const outline = loadOutline(ctx, projectId)?.outline;
+  const out = new Map<string, BookFigure>();
+  const rows = new Map(ctx.db.all<{ filename: string; origin: string; spec: string | null; caption: string }>('SELECT filename, origin, spec, caption FROM assets WHERE project_id = ?', projectId).map((r) => [r.filename, r]));
+  for (const h of heads) {
+    const found = outline ? findSection(outline, h.node_id) : null;
+    const where = found ? `"${found.section.title}"` : 'a chapter introduction';
+    for (const m of h.markdown.matchAll(/:::image\{[^}]*src="assets\/([^"]+)"/g)) {
+      const r = rows.get(m[1]);
+      if (!r) continue;
+      const spec = r.spec ? JSON.parse(r.spec) as Record<string, unknown> : {};
+      const sig = figureSignature(r.origin, spec);
+      if (!out.has(sig)) out.set(sig, { nodeId: h.node_id, where, origin: r.origin, caption: r.caption, formula: typeof spec.formula === 'string' ? spec.formula : null });
+    }
+  }
+  return out;
+}
+
+/** The book's figures as a list for the writer, so it does not propose one of them again. */
+export function bookFigureList(figures: Map<string, BookFigure>, maxChars = 10_000): string {
+  const kind: Record<string, string> = { stock: 'photo', plot: 'plot', structure: 'structure', diagram: 'diagram' };
+  const lines = [...figures.values()].map((f) => `- ${kind[f.origin] ?? f.origin}${f.formula ? ` ${f.formula}` : ''} in ${f.where}: ${f.caption.length > 100 ? `${f.caption.slice(0, 100)}…` : f.caption}`);
+  const text = lines.join('\n');
+  return text.length > maxChars ? `${text.slice(0, maxChars)}\n…` : text;
+}
+
 export interface BuiltAsset { id: string; file: string; row: Record<string, unknown> }
 export interface BuiltFigures {
   assets: BuiltAsset[];
@@ -67,6 +111,8 @@ function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
 /** Draws or fetches every requested figure and writes its file. Figures that fail are left out, with a note. */
 export async function buildFigures(ctx: AppContext, o: {
   projectId: string; nodeId: string; language: string; figures: FigureRequest[]; photos: boolean;
+  /** The node's current text stays (a fix or the figures pass), so its figures count as taken too. */
+  keepOwn?: boolean;
   runId?: string; taskId?: string; signal?: AbortSignal; progress?: (message: string) => void;
 }): Promise<BuiltFigures> {
   const out: BuiltFigures = { assets: [], renames: new Map(), notes: [] };
@@ -74,6 +120,9 @@ export async function buildFigures(ctx: AppContext, o: {
   mkdirSync(dir, { recursive: true });
   const prefix = o.nodeId.slice(0, 8);
   let photos = 0;
+  // A picture appears once in a book: a figure the book already shows is dropped, and photo searches skip used photos.
+  const taken = bookFigures(ctx, o.projectId, o.keepOwn ? undefined : o.nodeId);
+  const usedPhotos = () => new Set([...taken.keys()].filter((k) => k.startsWith('photo:')).map((k) => k.slice('photo:'.length)));
   for (const fig of o.figures) {
     const key = cleanKey(fig.key);
     if (!key || out.renames.has(key)) continue;
@@ -102,7 +151,7 @@ export async function buildFigures(ctx: AppContext, o: {
       o.progress?.(`Looking for a photo: ${fig.photo.mustShow}`);
       let found: Awaited<ReturnType<typeof findStockPhoto>>;
       try {
-        found = await findStockPhoto(ctx, { query: fig.photo.query, mustShow: fig.photo.mustShow, language: o.language, projectId: o.projectId, runId: o.runId, taskId: o.taskId, signal: o.signal });
+        found = await findStockPhoto(ctx, { query: fig.photo.query, mustShow: fig.photo.mustShow, language: o.language, exclude: usedPhotos(), projectId: o.projectId, runId: o.runId, taskId: o.taskId, signal: o.signal });
       } catch (err) {
         // A photo is optional: when the picker cannot run, the section goes on without it.
         if (o.signal?.aborted) throw err;
@@ -120,6 +169,10 @@ export async function buildFigures(ctx: AppContext, o: {
       out.notes.push(`${key}: the ${fig.kind} figure has no ${fig.kind} spec`);
       continue;
     }
+    const sig = figureSignature(made.origin, made.spec);
+    const twin = taken.get(sig);
+    if (twin) { out.notes.push(`${key}: the same ${fig.kind} is already in ${twin.where}`); continue; }
+    taken.set(sig, { nodeId: o.nodeId, where: 'this section', origin: made.origin, caption: made.caption, formula: null });
     const id = newId();
     const file = join(dir, `${id}${made.ext}`);
     writeFileSync(`${file}.tmp`, made.bytes);

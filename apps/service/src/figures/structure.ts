@@ -22,6 +22,15 @@ const specSchema = z.object({
   title: z.string().max(200).optional(),
 });
 
+/** The same species written as two different SMILES strings ("O=C=O", "C(=O)=O") gives the same canonical code. */
+export function structureIdentity(smiles: string): string {
+  try {
+    return OCL.Molecule.fromSmiles(smiles).getIDCode();
+  } catch {
+    return smiles;
+  }
+}
+
 function parseMolecule(smiles: string): OCL.Molecule {
   try {
     const m = OCL.Molecule.fromSmiles(smiles);

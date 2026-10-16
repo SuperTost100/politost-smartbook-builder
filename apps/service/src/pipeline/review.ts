@@ -270,7 +270,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   });
   // A fix may add figures; image blocks pointing at neither a new figure nor an existing asset are removed.
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: photosAvailable(ctx),
+    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: photosAvailable(ctx), keepOwn: true,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   const existing = existingAssetNames(ctx, projectId);

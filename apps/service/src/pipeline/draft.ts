@@ -5,7 +5,7 @@ import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
+import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
 import { photosAvailable } from '../figures/stock.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
@@ -165,6 +165,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
     earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
     evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
+    bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',
   });
   t.progress(`Writing "${section.title}"`);
   const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
