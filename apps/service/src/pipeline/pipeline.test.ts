@@ -1376,6 +1376,18 @@ describe('chemistry figures: structures and photos', () => {
     assert.doesNotMatch(fake.calls[0].prompt, /photo: a stock photo/);
   });
 
+  test('a fix for a useless figure can remove it, so the issue does not stay open for ever', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const img = ':::image{src="assets/s1-retta.svg" alt="Retta" caption="Una retta"}\n:::';
+    seedRevision('s1', `Il lavoro è proporzionale allo spostamento.\n\n${img}\n\nAltro.`);
+    ctx.db.insert('review_issues', { id: 'g1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Una retta', message: 'Il grafico ripete la proporzionalità già detta nel testo.', suggestion: 'Eliminare la figura.', status: 'open', resolution: '', created_at: now() });
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['g1'] }));
+    assert.equal(r.status, 'current');
+    assert.equal(current('s1'), 'Il lavoro è proporzionale allo spostamento.\n\nAltro.');
+    assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'g1'`)!.status, 'fixed');
+  });
+
   test('a fix can add a missing figure; an image block pointing at nothing is removed', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");

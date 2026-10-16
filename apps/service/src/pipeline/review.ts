@@ -287,7 +287,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     for (const c of data.changes) if (c.block >= 0 && c.block < blocks.length) working[c.block] = c.text.trim();
   } else {
     const lint = (md: string) => lintSection(extractCitations(md, splitBlocks).markdown, { sectionId: nodeId, language: project.language });
-    const guarded = applyGuardedChanges(blocks, data.changes, lint);
+    const guarded = applyGuardedChanges(blocks, data.changes, lint, { figures: issues.some((i) => i.category === 'figure') });
     working = guarded.blocks;
     reverted = guarded.reverted;
     if (guarded.kept.length) {
@@ -335,7 +335,9 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
 
   const { markdown, citations } = extractCitations(working.filter((b) => b.trim()).join('\n\n'), splitBlocks);
   // Losing more than a fifth of the text is the author's call, unless the fix was about repetition.
-  const shrunk = !!issues.length && markdown.length < head.markdown.length * 0.8 && !issues.some((i) => i.category === 'repetition');
+  // Image blocks are not text: removing a useless figure does not shrink the section.
+  const prose = (md: string) => md.replace(/:::image\{[^}]*\}\s*\n\s*:::/g, '').length;
+  const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * 0.8 && !issues.some((i) => i.category === 'repetition');
   const answered = issues.filter((i) => !dropped(i) && !unresolved.has(issues.indexOf(i)));
   let committed!: ReturnType<typeof commitAiRevision>;
   let stored: string[] = [];

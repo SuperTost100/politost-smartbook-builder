@@ -17,6 +17,8 @@ export const MAX_DELETED_BLOCKS = 3;
 const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
 const hasDirective = (s: string) => /^[ \t]*:::/m.test(s);
+/** A block that is one :::image directive and nothing else. */
+const onlyImage = (s: string) => /^\s*:::image\{[^}]*\}\s*\n\s*:::\s*$/.test(s);
 const fenceBalance = (s: string) => {
   let n = 0;
   for (const line of s.split('\n')) {
@@ -32,8 +34,10 @@ const join = (blocks: string[]) => blocks.filter((b) => b.trim()).join('\n\n');
  * Applies `changes` to `blocks` one by one. A change is dropped (the old block stays) when it deletes a block with a heading,
  * a `:::` directive or a formula, deletes more than MAX_DELETED_BLOCKS blocks, drops a heading or formula key the old block
  * had, leaves `:::` fences unbalanced, or makes the whole section lint worse at blocker or major level (a KaTeX error).
+ * With `figures` (the fix answers a figure problem), a block that is only an image may be deleted: removing a useless
+ * figure is the fix, and refusing it left the problem open for ever.
  */
-export function applyGuardedChanges(blocks: string[], changes: BlockChange[], lint: (markdown: string) => LintFinding[]): GuardedPatch {
+export function applyGuardedChanges(blocks: string[], changes: BlockChange[], lint: (markdown: string) => LintFinding[], opts: { figures?: boolean } = {}): GuardedPatch {
   const out = [...blocks];
   const kept = new Set<number>();
   const reverted: RevertedChange[] = [];
@@ -46,7 +50,8 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     const drop = (reason: string) => { reverted.push({ block: c.block, reason }); };
     if (!text) {
       if (!old.trim()) continue;
-      if (headings(old).length || hasDirective(old) || formulaKeys(old).length) { drop('it would delete a heading, a formula or another special block'); continue; }
+      const image = opts.figures && onlyImage(old);
+      if (!image && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
       if (deleted >= MAX_DELETED_BLOCKS) { drop(`it would delete more than ${MAX_DELETED_BLOCKS} blocks`); continue; }
     } else {
       const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));

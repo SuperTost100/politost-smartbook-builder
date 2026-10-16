@@ -20,6 +20,21 @@ test('deleting a heading, a directive or a formula is reverted; deleting plain t
   assert.match(r.reverted[2].reason, /more than 3/);
 });
 
+test('a fix for a figure problem may delete a block that is only that image; nothing else changes', () => {
+  const IMG = ':::image{src="assets/s1-retta.svg" alt="a" caption="c"}\n:::';
+  const blocks = ['### Titolo', 'Testo.', IMG, F];
+  const del = [0, 2, 3].map((block) => ({ block, text: '' }));
+  // Without a figure problem the image stays, as before.
+  assert.deepEqual(applyGuardedChanges(blocks, del, lint).reverted.map((x) => x.block), [0, 2, 3]);
+  const r = applyGuardedChanges(blocks, del, lint, { figures: true });
+  assert.deepEqual(r.blocks, ['### Titolo', 'Testo.', '', F]);
+  assert.deepEqual(r.kept, [2]);
+  assert.deepEqual(r.reverted.map((x) => x.block), [0, 3]);
+  // An image inside a block with other text is removed by rewriting the block, which was always allowed.
+  const mixed = applyGuardedChanges([`Testo.\n\n${IMG}`], [{ block: 0, text: 'Testo.' }], lint, { figures: true });
+  assert.deepEqual(mixed.kept, [0]);
+});
+
 test('dropping a formula key or a heading, and unbalanced fences, are reverted', () => {
   const r = applyGuardedChanges(['### Titolo\n\nTesto.', F, 'Fine.'], [
     { block: 0, text: '### Altro titolo\n\nTesto.' },
