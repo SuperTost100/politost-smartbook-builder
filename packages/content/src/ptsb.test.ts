@@ -19,7 +19,7 @@ test('compile -> pack -> readBack round trip is ok', () => {
 test('ptsb.json manifest', () => {
   const bytes = packPtsb(compileBook(fixtureBook()), { createdAt: CREATED });
   assert.deepEqual(readPtsbManifest(bytes), {
-    formatVersion: 1, packageType: 'smartbook', encrypted: false, access: 'public', createdAt: CREATED, producer: 'politost-smart-builder/0.1.0',
+    formatVersion: 1, packageType: 'smartbook', encrypted: false, access: 'public', createdAt: CREATED, producer: 'politost-smart-builder/0.2.0',
   });
   const entries = unzipSync(bytes);
   assert.ok('ptsb.json' in entries && 'smartbook.json' in entries && 'assets/fig-vel.svg' in entries);

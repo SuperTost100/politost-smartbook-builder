@@ -2,7 +2,7 @@ import { strToU8, zipSync } from 'fflate';
 import { readPtsb } from '@politost/content-core';
 import type { CompiledBook } from './types.ts';
 
-export const PTSB_PRODUCER = 'politost-smart-builder/0.1.0';
+export const PTSB_PRODUCER = 'politost-smart-builder/0.2.0';
 
 const enc = new TextEncoder();
 const dec = new TextDecoder();
