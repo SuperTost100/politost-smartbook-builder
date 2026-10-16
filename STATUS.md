@@ -96,6 +96,12 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 
 The builder validates and previews books with content-core 0.4.0 and KaTeX 0.19, the versions the reader uses, so the preview and the reader's import check agree. Model calls go through cli-funnel 0.5.0. An answer cut off at a model's output limit now moves to the role's fallback model instead of being retried on the same one.
 
+Three things come from cli-funnel 0.5.0:
+
+- When an answer fails validation on Claude Code or Codex, the repair turn continues the same conversation, whose process stays alive for it. It sends only the problems, not the whole prompt and the answer again, and the session closes as soon as the route is done. Cursor Agent and Antigravity keep no live process, so they still get the full prompt in a new conversation.
+- Claude Code and Codex report their limits with a reset time. That time sets how long a provider stays out of first place and how long the queue waits, with no 10-minute cap. Limits that only appear in an error message are still parsed from the text and capped.
+- The builder reads Codex's usage windows at most once a minute. A full window sends the role to its fallback without a failed call first, and the Connections screen shows both windows.
+
 ## Tests and CI
 
 `npm test` runs 128 content tests and 194 service tests. `npm run test:e2e` runs 47 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.

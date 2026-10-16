@@ -1,8 +1,9 @@
 // Maps cli-funnel failures to the queue's TaskError kinds.
-import { FunnelError } from 'cli-funnel';
+import { FunnelError, type Limit } from 'cli-funnel';
 
 export type FailureKind = 'auth' | 'quota' | 'unavailable' | 'input' | 'fatal' | 'temporary' | 'aborted';
-export interface Failure { kind: FailureKind; message: string; retryAfterMs?: number; timedOut?: boolean; truncated?: boolean }
+/** `reported` is set when the wait comes from the provider's own limit report rather than from reading its message. */
+export interface Failure { kind: FailureKind; message: string; retryAfterMs?: number; reported?: boolean; timedOut?: boolean; truncated?: boolean }
 
 export const DEFAULT_QUOTA_WAIT_MS = 15 * 60_000;
 const MIN_WAIT_MS = 30_000;
@@ -15,6 +16,8 @@ const AUTH = /not (logged|signed) in|(log|sign) ?in required|please (log|sign) ?
 export function classifyError(err: unknown, now = Date.now()): Failure {
   const message = err instanceof Error ? err.message : String(err);
   const code = typeof (err as { code?: unknown } | null)?.code === 'string' ? ((err as { code: string }).code) : undefined;
+  const limit = (err as { limit?: Limit } | null)?.limit;
+  if (limit) return limitFailure(limit, message, now);
   if (err instanceof FunnelError || isFunnelErrorLike(err)) {
     switch (code) {
       case 'aborted': return { kind: 'aborted', message };
@@ -27,6 +30,20 @@ export function classifyError(err: unknown, now = Date.now()): Failure {
   if (code === '429' || QUOTA.test(message)) return { kind: 'quota', message, retryAfterMs: parseRetryAfter(message, now) };
   if (code === '401' || code === '403' || AUTH.test(message)) return { kind: 'auth', message };
   return { kind: 'temporary', message };
+}
+
+/** A limit cli-funnel reported (Claude Code, Codex). Its reset time beats anything parsed from the message. */
+export function limitFailure(limit: Limit, message: string, now = Date.now()): Failure {
+  const wait = limitWaitMs(limit, now);
+  const detail = limit.detail && !message.includes(limit.detail) ? `${message} ${limit.detail}`.trim() : message;
+  return wait !== undefined ? { kind: 'quota', message: detail, retryAfterMs: wait, reported: true } : { kind: 'quota', message: detail, retryAfterMs: parseRetryAfter(detail, now) };
+}
+
+/** How long until a reported limit clears, or undefined when the provider did not say. */
+export function limitWaitMs(limit: Limit, now = Date.now()): number | undefined {
+  const reset = limit.resetAt ? Date.parse(limit.resetAt) : NaN;
+  const ms = limit.retryAfterMs ?? (Number.isFinite(reset) ? reset - now : undefined);
+  return ms === undefined ? undefined : Math.min(MAX_WAIT_MS, Math.max(MIN_WAIT_MS, Math.round(ms)));
 }
 
 function isFunnelErrorLike(err: unknown): boolean {
