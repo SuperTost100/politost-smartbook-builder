@@ -1,11 +1,24 @@
-<img src="assets/icon.svg" width="64" height="64" alt="">
+<p align="center">
+  <img src="assets/icon.svg" width="80" height="80" alt="">
+</p>
 
-# Smart Builder
+<h1 align="center">Smart Builder</h1>
 
-A tool that turns course material into an interactive textbook. Add lecture notes, textbooks and past exams. It drafts a cited book with formulas, exercises and exam practice, and you edit it before export.
+<p align="center">
+  A local app that turns your course material into an interactive textbook.<br>
+  Add lecture notes, textbooks and past exams. It drafts a cited book with formulas and exercises, and you edit it before export.
+</p>
 
-[![CI](https://img.shields.io/github/actions/workflow/status/SuperTost100/politost-smartbook-builder/ci.yml?branch=main&label=checks)](https://github.com/SuperTost100/politost-smartbook-builder/actions/workflows/ci.yml)
-[![AGPL-3.0 license](https://img.shields.io/badge/license-AGPL--3.0-6941c6)](LICENSE)
+<p align="center">
+  <a href="https://github.com/SuperTost100/politost-smartbook-builder/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/SuperTost100/politost-smartbook-builder?label=release&color=6941c6"></a>
+  <a href="https://github.com/SuperTost100/politost-smartbook-builder/actions/workflows/ci.yml"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/SuperTost100/politost-smartbook-builder/ci.yml?branch=main&label=checks"></a>
+  <a href="LICENSE"><img alt="AGPL-3.0 license" src="https://img.shields.io/badge/license-AGPL--3.0-6941c6"></a>
+</p>
+
+<p align="center">
+  <a href="#start">Start</a> ·
+  <a href="docs/SETUP.md">Documentation</a>
+</p>
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/manuscript-dark.png">
@@ -18,7 +31,7 @@ A model asked to write a textbook chapter writes something fluent, and you can't
 
 It also reads your past exams. It counts how many exam sessions test each topic, so the book spends its depth and its exercises where the exams do.
 
-It runs on your computer. The AI work goes through the command-line tools you already pay for (Claude Code, Codex, Cursor Agent, Antigravity) by way of [cli-funnel](https://github.com/SuperTost100/cli-funnel), plus NotebookLM if you use it. There is no API bill and no account to create. The finished book is a `.ptsb` file that the [Smartbook reader](https://github.com/SuperTost100/politost-smartbook) and [Pyxis](https://github.com/SuperTost100/politost-pyxis) open.
+It runs on your computer. The AI work goes through the command-line tools you already pay for (Claude Code, Codex, Cursor Agent, Antigravity) by way of [cli-funnel](https://github.com/SuperTost100/cli-funnel), plus NotebookLM if you use it. There is no API key to set up and no account to create. The finished book is a `.ptsb` file that the [Smartbook reader](https://github.com/SuperTost100/politost-smartbook) and [Pyxis](https://github.com/SuperTost100/politost-pyxis) open.
 
 ## What it does
 
@@ -52,20 +65,20 @@ Your edits are never overwritten. AI output that arrives after you changed a sec
   </tr>
 </table>
 
-## Requirements
+## Start
+
+You need:
 
 - Node.js 22.13 or newer. 24 is recommended and pinned in `.nvmrc`.
 - At least one signed-in AI command-line tool: [Claude Code](https://docs.claude.com/en/docs/claude-code), [Codex](https://github.com/openai/codex), Cursor Agent or Antigravity.
 - Optional: [`nlm`](https://github.com/jacob-bd/gemini-notebook-mcp-cli) for NotebookLM evidence, and LibreOffice for Word and PowerPoint files.
-
-## Start
 
 ```bash
 git clone https://github.com/SuperTost100/politost-smartbook-builder.git
 cd politost-smartbook-builder
 npm ci
 npm run doctor     # what is installed and signed in, and how to fix the rest
-npm start          # builds the web app and opens on http://localhost:5300
+npm start          # builds the web app and serves it on http://localhost:5300
 ```
 
 To use it from another device on your network, such as a laptop reaching a desktop over Tailscale:
@@ -83,6 +96,17 @@ Closing the browser does not stop generation. Stopping the service pauses it, an
 Everything lives in one folder: the database, your original files, rendered pages, figures and exports. On Linux that's `~/.local/share/politost-smart-builder`. [Setup](docs/SETUP.md#data) lists the other systems, and `--data-dir` or `SMARTBUILDER_DATA_DIR` moves it. `npm run backup` writes the whole folder to one archive, and it's safe to run while the service is running.
 
 Your sources go to the AI tools you configured and, if you use it, to the book's NotebookLM notebook. Exclude a source on the Sources screen to keep it out. The models run with every tool disabled, so they only read the text Smart Builder sends and can't run commands or touch your files.
+
+## Configuration
+
+Flags go after `npm start --`. The service listens on `127.0.0.1` unless you pass `--lan`.
+
+| Setting                                          | Default                                 | What it does                                     |
+| ------------------------------------------------ | --------------------------------------- | ------------------------------------------------ |
+| `--port <n>` or `PORT`                           | `5300`                                  | Port the service listens on                      |
+| `--host <address>`                               | `127.0.0.1`, or `0.0.0.0` with `--lan`  | Address the service binds to                     |
+| `--lan`                                          | off                                     | Lets other devices connect, with an access token |
+| `--data-dir <folder>` or `SMARTBUILDER_DATA_DIR` | Per system, see [Your data](#your-data) | Where the database and files live                |
 
 ## Development
 
