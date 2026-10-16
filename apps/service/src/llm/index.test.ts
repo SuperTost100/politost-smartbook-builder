@@ -80,6 +80,41 @@ describe('schema validation and repair', () => {
     assert.equal(usageRows().length, 2);
   });
 
+  test('a live session gets only the problems for its repair turn, without the images, and is closed afterwards', async () => {
+    useRoutes('vision', { provider: 'claude', model: 'm' });
+    fake.next(
+      () => { fake.live.add('s1'); return { structured: { kind: 'zzz' }, text: '{"kind":"zzz"}', sessionId: 's1' }; },
+      () => ({ structured: { kind: 'a' }, text: '{"kind":"a"}', sessionId: 's1' }),
+    );
+    const out = await runRole(kit.ctx, { ...base, role: 'vision', schema, images: [Buffer.from('png')] });
+    assert.equal(out.data.kind, 'a');
+    const [first, repair] = fake.calls;
+    assert.equal(first.attachments?.length, 1);
+    assert.equal(repair.sessionId, 's1');
+    assert.equal(repair.attachments, undefined);
+    assert.doesNotMatch(repair.prompt, /the prompt|"kind":"zzz"/);
+    assert.match(repair.prompt, /kind/);
+    assert.match(repair.prompt, /corrected JSON only/);
+    assert.deepEqual(fake.closed, ['s1']);
+    assert.equal(fake.live.size, 0);
+  });
+
+  test('a session that is not live gets the full repair prompt in a new conversation', async () => {
+    useRoutes('bulk', { provider: 'antigravity', model: 'm' });
+    fake.next(() => ({ text: '{"kind":"zzz"}', sessionId: 'old' }), () => ({ text: '{"kind":"b"}' }));
+    const out = await runRole(kit.ctx, { ...base, role: 'bulk', schema });
+    assert.equal(out.data.kind, 'b');
+    assert.equal(fake.calls[1].sessionId, undefined);
+    assert.match(fake.calls[1].prompt, /the prompt/);
+  });
+
+  test('the session is closed when the repair turn fails too', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' });
+    fake.next(() => { fake.live.add('s2'); return { text: 'not json', sessionId: 's2' }; }, () => new Error('socket hang up'));
+    await assert.rejects(runRole(kit.ctx, { ...base, role: 'bulk', schema }), (e: unknown) => e instanceof TaskError && e.kind === 'temporary');
+    assert.deepEqual(fake.closed, ['s2']);
+  });
+
   test('still invalid after the repair: TaskError input, and no third call', async () => {
     useRoutes('bulk', { provider: 'codex', model: 'm' });
     fake.next(() => ({ text: 'not json at all' }), () => ({ text: '{"kind":"nope"}' }));
@@ -159,6 +194,60 @@ describe('error mapping and fallback', () => {
     await runRole(kit.ctx, { ...base, role: 'bulk' });
     await runRole(kit.ctx, { ...base, role: 'bulk' });
     assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'codex', 'codex']);
+  });
+
+  test('a limit cli-funnel reports sets the wait from its reset time, beyond the 10-minute cap for parsed messages', async () => {
+    useRoutes('bulk', { provider: 'claude', model: 'm' }, { provider: 'codex', model: 'm' });
+    const resetAt = new Date(Date.now() + 3 * 3600_000).toISOString();
+    fake.next(
+      () => Object.assign(new Error('Claude Code failed'), { code: 'cli-failed', limit: { kind: 'rate', resetAt, detail: 'Claude five-hour limit reached.' } }),
+      () => ({ text: 'one' }),
+      () => ({ text: 'two' }),
+    );
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    const realNow = Date.now;
+    Date.now = () => realNow() + 2 * 3600_000;
+    try {
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+    } finally {
+      Date.now = realNow;
+    }
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'codex', 'codex'], 'still cooling down two hours later');
+  });
+
+  test('a reported limit without a fallback is a quota error with the provider\'s wait', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' });
+    fake.next(() => Object.assign(new Error('failed'), { limit: { kind: 'quota', retryAfterMs: 2 * 86_400_000, detail: 'Weekly limit reached.' } }));
+    await assert.rejects(runRole(kit.ctx, { ...base, role: 'bulk' }), (e: unknown) => {
+      assert.ok(e instanceof TaskError);
+      assert.equal(e.kind, 'quota');
+      assert.equal(e.retryAfterMs, 2 * 86_400_000);
+      assert.match(e.message, /Weekly limit reached/);
+      return true;
+    });
+  });
+
+  test('an answer that arrives with a limit report is kept, and the next call starts on the fallback', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+    fake.next(() => ({ text: 'one', limit: { kind: 'rate', retryAfterMs: 3600_000, detail: 'Codex 5-hour window is full.' } }), () => ({ text: 'two' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).text, 'one');
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['codex', 'claude']);
+  });
+
+  test('a run that ends early with a limit report is a quota failure and falls back', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+    fake.next(() => ({ text: '', finishReason: 'error', limit: { kind: 'rate', detail: 'Rate limited.' } }), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).text, 'ok');
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['codex', 'claude']);
+  });
+
+  test('a full Codex usage window sends the role to its fallback without calling Codex', async () => {
+    useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+    fake.usage.codex = { provider: 'codex' as never, primary: { usedPercent: 100, windowMinutes: 300 }, limit: { kind: 'rate', retryAfterMs: 3600_000, detail: 'full' } };
+    fake.next(() => ({ text: 'ok' }));
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude']);
   });
 
   test('not installed falls back; crashes and unknown failures are temporary', async () => {
@@ -274,6 +363,12 @@ describe('classifyError and retry hints', () => {
     assert.equal(classifyError(new Error('Not logged in · Please run /login')).kind, 'auth');
     assert.equal(classifyError(new Error("You've hit your limit")).kind, 'quota');
     assert.equal(classifyError(new Error('socket hang up')).kind, 'temporary');
+    const limited = classifyError(Object.assign(new Error('Claude Code failed'), { limit: { kind: 'rate', resetAt: '2026-10-06T15:00:00Z', detail: 'Five-hour limit reached.' } }), now);
+    assert.deepEqual(limited, { kind: 'quota', message: 'Claude Code failed Five-hour limit reached.', retryAfterMs: 3 * 3600_000, reported: true });
+    const noTime = classifyError(Object.assign(new Error('x'), { limit: { kind: 'quota', detail: 'Out of credits. Try again in 2 hours.' } }), now);
+    assert.equal(noTime.kind, 'quota');
+    assert.equal(noTime.retryAfterMs, 2 * 3600_000, 'falls back to reading the message');
+    assert.equal(noTime.reported, undefined);
   });
   test('parseRetryAfter', () => {
     assert.equal(parseRetryAfter('Try again in 2 hours 5 minutes.', now), (2 * 60 + 5) * 60_000);
@@ -334,9 +429,27 @@ describe('probe and connections', () => {
     assert.equal(c.node, process.version);
     assert.equal(c.dataDir, kit.ctx.config.dataDir);
     assert.equal(typeof c.libreoffice.installed, 'boolean');
+    assert.deepEqual(claude.usage, [], 'Claude Code reports no usage windows');
+    assert.equal(claude.limit, null);
     fake.installed.agent = true;
     const again = await getConnections(kit.ctx);
     assert.equal(again.providers[2].installed, false, 'cached for 60 s');
     assert.ok(usageCalls >= 1);
+  });
+
+  test('getConnections shows the Codex usage windows and a reached limit', async () => {
+    setNlmRunner(async () => ({ code: 1, stdout: '', stderr: 'not installed' }));
+    fake.usage.codex = {
+      provider: 'codex' as never,
+      primary: { usedPercent: 100, windowMinutes: 300, resetsAt: '2026-10-16T16:33:51.000Z' },
+      secondary: { usedPercent: 10, windowMinutes: 10080 },
+      limit: { kind: 'rate', detail: '5-hour window is full.' },
+    };
+    const codex = (await getConnections(kit.ctx)).providers.find((p) => p.provider === 'codex')!;
+    assert.deepEqual(codex.usage, [
+      { window: '5 hours', usedPercent: 100, resetsAt: '2026-10-16T16:33:51.000Z' },
+      { window: '7 days', usedPercent: 10, resetsAt: null },
+    ]);
+    assert.equal(codex.limit, '5-hour window is full.');
   });
 });

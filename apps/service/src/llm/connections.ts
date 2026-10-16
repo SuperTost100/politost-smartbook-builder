@@ -5,22 +5,24 @@ import type { ConnectionsResponse, ProviderStatus } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { notebookStatus, NLM_LOGIN_COMMAND } from '../evidence/nlm.ts';
 import { stockKeys } from '../figures/stock.ts';
-import { getFunnel, type FunnelLike } from './funnel.ts';
+import type { RateLimits, UsageWindow } from 'cli-funnel';
+import { accountUsage, getFunnel, type FunnelLike } from './funnel.ts';
 
 const CLI_PROVIDERS = ['claude', 'codex', 'agent', 'antigravity'];
 const CACHE_MS = 60_000;
 
-let cache: { at: number; funnel: FunnelLike; value: ProviderStatus[] } | null = null;
+type Detected = Omit<ProviderStatus, 'usage' | 'limit'>;
+let cache: { at: number; funnel: FunnelLike; value: Detected[] } | null = null;
 
 export function resetConnectionsCache() {
   cache = null;
 }
 
-async function detectProviders(funnel: FunnelLike): Promise<ProviderStatus[]> {
+async function detectProviders(funnel: FunnelLike): Promise<Detected[]> {
   const overview = await funnel.overview();
   const byId = new Map(overview.map((o) => [o.id as string, o]));
   return Promise.all(
-    CLI_PROVIDERS.filter((id) => byId.has(id)).map(async (id): Promise<ProviderStatus> => {
+    CLI_PROVIDERS.filter((id) => byId.has(id)).map(async (id): Promise<Detected> => {
       const o = byId.get(id)!;
       const caps = o.capabilities;
       const installed = o.installation.installed;
@@ -49,6 +51,19 @@ async function detectProviders(funnel: FunnelLike): Promise<ProviderStatus[]> {
   );
 }
 
+/** "5 hours", "7 days": the length of a usage window, or which of the two it is when the CLI does not say. */
+function windowLabel(w: UsageWindow, fallback: string): string {
+  const m = w.windowMinutes;
+  if (!m) return fallback;
+  const [n, unit] = m % 1440 === 0 ? [m / 1440, 'day'] : m % 60 === 0 ? [m / 60, 'hour'] : [m, 'minute'];
+  return `${n} ${unit}${n === 1 ? '' : 's'}`;
+}
+
+function usageWindows(u: RateLimits): ProviderStatus['usage'] {
+  const windows: [UsageWindow | undefined, string][] = [[u.primary, 'Short window'], [u.secondary, 'Long window']];
+  return windows.flatMap(([w, name]) => (w ? [{ window: windowLabel(w, name), usedPercent: w.usedPercent, resetsAt: w.resetsAt ?? null }] : []));
+}
+
 export function findOnPath(names: string[], extra: string[] = []): string | null {
   const dirs = (process.env.PATH ?? '').split(delimiter).filter(Boolean);
   const candidates = [...dirs.flatMap((d) => names.map((n) => join(d, n))), ...extra];
@@ -71,8 +86,13 @@ export async function getConnections(ctx: AppContext): Promise<ConnectionsRespon
   const nb = await notebookStatus();
   const soffice = findOnPath(['soffice', 'libreoffice'], ['/Applications/LibreOffice.app/Contents/MacOS/soffice']);
   const keys = stockKeys(ctx);
+  // Usage changes with every run, so it is read on each request (accountUsage caches it for a minute).
+  const providers = await Promise.all(cache.value.map(async (p): Promise<ProviderStatus> => {
+    const u = p.installed && p.signedIn ? await accountUsage(p.provider) : null;
+    return { ...p, usage: u ? usageWindows(u) : [], limit: u?.limit?.detail ?? null };
+  }));
   return {
-    providers: cache.value,
+    providers,
     notebooklm: { ...nb, loginCommand: NLM_LOGIN_COMMAND },
     libreoffice: { installed: soffice !== null, path: soffice },
     stock: { pixabay: !!keys.pixabay, pexels: !!keys.pexels },

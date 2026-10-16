@@ -8,8 +8,8 @@ import { TaskError } from '../queue/queue.ts';
 import { paths } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { now } from '../db/db.ts';
-import { classifyError, DEFAULT_QUOTA_WAIT_MS, loginAction, type Failure } from './errors.ts';
-import { getFunnel, type FunnelLike } from './funnel.ts';
+import { classifyError, DEFAULT_QUOTA_WAIT_MS, limitFailure, limitWaitMs, loginAction, type Failure } from './errors.ts';
+import { accountUsage, getFunnel, type FunnelLike } from './funnel.ts';
 import { describeIssues, dropOptionalNulls, parseJsonAnswer, rawJsonSchema, strictify } from './schema.ts';
 
 export { getConnections, resetConnectionsCache } from './connections.ts';
@@ -48,6 +48,12 @@ export function resetLlmState() {
   cooldown.clear();
 }
 
+/** A wait the provider reported is its real reset time. One read from an error message is capped, so the provider gets tried again soon. */
+function coolDown(provider: string, f: Pick<Failure, 'retryAfterMs' | 'reported'>) {
+  const wait = f.retryAfterMs ?? DEFAULT_QUOTA_WAIT_MS;
+  cooldown.set(provider, Date.now() + (f.reported ? wait : Math.min(wait, 10 * 60_000)));
+}
+
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 
 /** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable, a timeout or a truncated answer. */
@@ -78,6 +84,14 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   // there again, so it starts on the next route instead of waiting for the timeout once more.
   if (opts.taskId && candidates.length > 1 && timedOutBefore(ctx, opts.taskId, candidates[0])) candidates = [...candidates.slice(1), candidates[0]];
 
+  // Codex reports its usage windows, so a full one sends the role to the next route without a failed call first.
+  if (candidates.length > 1) {
+    await Promise.all(candidates.map(async (c) => {
+      const limit = (await accountUsage(c.provider))?.limit;
+      if (limit) coolDown(c.provider, { retryAfterMs: limitWaitMs(limit), reported: true });
+    }));
+  }
+
   // Skip a provider that recently hit its quota when another candidate is available.
   const ready = candidates.filter((c) => (cooldown.get(c.provider) ?? 0) <= Date.now());
   if (ready.length && ready.length < candidates.length) candidates = ready;
@@ -92,7 +106,7 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
       if (!(err instanceof RouteFailure)) throw err;
       const f = err.failure;
       if (f.kind === 'quota') {
-        cooldown.set(route.provider, Date.now() + Math.min(f.retryAfterMs ?? DEFAULT_QUOTA_WAIT_MS, 10 * 60_000));
+        coolDown(route.provider, f);
         firstQuota ??= f;
       }
       lastFailure = f;
@@ -144,10 +158,6 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     for (const k of ['inputTokens', 'outputTokens'] as const) if (u[k] !== null) total[k] = (total[k] ?? 0) + u[k]!;
   };
 
-  const first = await callOnce(ctx, funnel, opts, route, opts.prompt, jsonSchema);
-  add(first.usage);
-  if (!opts.schema) return { text: first.text, data: first.text as T, route, usage: total };
-
   const check = (r: CallOutput): { ok: true; data: T } | { ok: false; problem: string } => {
     let value: unknown;
     try {
@@ -166,33 +176,35 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     return parsed.success ? { ok: true, data: parsed.data } : { ok: false, problem: describeIssues(parsed.error) };
   };
 
-  const verdict = check(first);
-  if (verdict.ok) return { text: first.text, data: verdict.data, route, usage: total };
+  const first = await callOnce(ctx, funnel, opts, route, { prompt: opts.prompt }, jsonSchema);
+  add(first.usage);
+  try {
+    if (!opts.schema) return { text: first.text, data: first.text as T, route, usage: total };
+    const verdict = check(first);
+    if (verdict.ok) return { text: first.text, data: verdict.data, route, usage: total };
 
-  const repairPrompt = [
-    opts.prompt,
-    '',
-    '---',
-    'Your previous answer did not pass validation.',
-    '',
-    'Previous answer:',
-    first.text.length > 12_000 ? `${first.text.slice(0, 12_000)}\n[truncated]` : first.text,
-    '',
-    'Problems:',
-    verdict.problem,
-    '',
-    'Reply with the corrected JSON only: no commentary, no code fence. It must satisfy the schema exactly.',
-  ].join('\n');
-  const second = await callOnce(ctx, funnel, opts, route, repairPrompt, jsonSchema);
-  add(second.usage);
-  const again = check(second);
-  if (again.ok) return { text: second.text, data: again.data, route, usage: total };
-  throw new TaskError(`The ${opts.role} model returned an invalid answer twice: ${again.problem}`, 'input', 'Retry, or choose a different model for this role.');
+    const fix = ['Your previous answer did not pass validation.', '', 'Problems:', verdict.problem, '', 'Reply with the corrected JSON only: no commentary, no code fence. It must satisfy the schema exactly.'];
+    // A live session already holds the prompt and the answer, so it only needs the problems. Other providers would replay the
+    // whole conversation (Antigravity took twice as long), so they get the prompt and the answer again in a new one.
+    const live = !!first.sessionId && funnel.sessions().some((x) => x.sessionId === first.sessionId);
+    const repair = live
+      ? { prompt: fix.join('\n'), sessionId: first.sessionId }
+      : { prompt: [opts.prompt, '', '---', fix[0], '', 'Previous answer:', first.text.length > 12_000 ? `${first.text.slice(0, 12_000)}\n[truncated]` : first.text, '', ...fix.slice(2)].join('\n') };
+    const second = await callOnce(ctx, funnel, opts, route, repair, jsonSchema);
+    add(second.usage);
+    const again = check(second);
+    if (again.ok) return { text: second.text, data: again.data, route, usage: total };
+    throw new TaskError(`The ${opts.role} model returned an invalid answer twice: ${again.problem}`, 'input', 'Retry, or choose a different model for this role.');
+  } finally {
+    // Only the repair turn uses the live process, so it closes as soon as the route is done.
+    if (first.sessionId) funnel.closeSession(first.sessionId, route.provider as never);
+  }
 }
 
-interface CallOutput { text: string; structured: unknown; usage: Usage }
+interface CallOutput { text: string; structured: unknown; usage: Usage; sessionId?: string }
 
-async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, prompt: string, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+/** One turn. With `sessionId` it continues that conversation, which already has the images. */
+async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, turn: { prompt: string; sessionId?: string }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
   const scratch = opts.web ? webFolder(ctx) : paths.scratch(ctx.config);
   mkdirSync(scratch, { recursive: true });
   const timeout = AbortSignal.timeout(llmTuning.callTimeoutMs);
@@ -211,18 +223,25 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
       },
       ...(opts.web ? { onApproval: webOnly } : {}),
       system: opts.system,
-      prompt,
-      ...(opts.images?.length ? { attachments: opts.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
+      prompt: turn.prompt,
+      ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
+      ...(opts.images?.length && !turn.sessionId ? { attachments: opts.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
       ...(jsonSchema ? { responseSchema: { name: 'response', schema: jsonSchema } } : {}),
       signal,
     });
     if (result.usage && result.usage.totalTokens > 0) usage = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens };
     if (result.finishReason === 'cancelled') throw cancelled(opts.signal, timeout);
+    if (result.limit) {
+      const f = limitFailure(result.limit, `The model stopped early (${result.finishReason}).`);
+      if (result.finishReason !== 'stop') throw new RouteFailure(f);
+      // The answer made it, but the provider said its limit is reached: the next calls start on another route.
+      coolDown(route.provider, f);
+    }
     // Retrying the same model would cut the answer off at the same place, so a truncated answer goes to the fallback.
     if (result.finishReason === 'length') throw new RouteFailure({ kind: 'temporary', message: 'The answer hit the model\'s output limit and was cut off.', truncated: true });
     if (result.finishReason !== 'stop') throw new RouteFailure({ kind: 'temporary', message: `The model stopped early (${result.finishReason}).` });
     ok = true;
-    return { text: result.text, structured: result.structured, usage };
+    return { text: result.text, structured: result.structured, usage, sessionId: result.sessionId };
   } catch (err) {
     if (err instanceof RouteFailure || isAbort(err)) throw err;
     if (opts.signal?.aborted) throw opts.signal.reason ?? abortError();

@@ -2,7 +2,7 @@
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Capabilities, ModelInfo, ProviderOverview, RunInput, RunResult } from 'cli-funnel';
+import type { Capabilities, LiveSessionInfo, ModelInfo, ProviderOverview, RateLimits, RunInput, RunResult } from 'cli-funnel';
 import type { Config } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import type { FunnelLike } from './funnel.ts';
@@ -51,6 +51,11 @@ export class FakeFunnel implements FunnelLike {
   };
   installed: Record<string, boolean> = { claude: true, codex: true, agent: false, antigravity: true };
   loggedIn: Record<string, boolean> = { claude: true, codex: true, agent: false, antigravity: false };
+  /** Session ids that stay live after their turn, as Claude Code and Codex do with keepAlive. */
+  live = new Set<string>();
+  closed: string[] = [];
+  /** What rateLimits() answers per provider. Others throw, as in cli-funnel. */
+  usage: Record<string, RateLimits> = {};
 
   next(...steps: Step[]) {
     this.steps.push(...steps);
@@ -64,6 +69,21 @@ export class FakeFunnel implements FunnelLike {
     const out = await step(input);
     if (out instanceof Error) throw out;
     return { text: '', provider: input.selection.provider, model: input.selection.model, finishReason: 'stop', toolCalls: [], deniedActions: [], ...out };
+  }
+
+  sessions(): LiveSessionInfo[] {
+    return [...this.live].map((sessionId) => ({ sessionId }) as LiveSessionInfo);
+  }
+
+  closeSession(sessionId: string): boolean {
+    this.closed.push(sessionId);
+    return this.live.delete(sessionId);
+  }
+
+  async rateLimits(id: never): Promise<RateLimits> {
+    const u = this.usage[id];
+    if (!u) throw Object.assign(new Error(`${String(id)} cannot report its usage windows.`), { code: 'unsupported' });
+    return u;
   }
 
   async overview(): Promise<ProviderOverview[]> {

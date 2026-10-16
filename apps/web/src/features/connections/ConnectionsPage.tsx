@@ -8,6 +8,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
+import { dateTime } from '../../lib/format';
 import './connections.css';
 
 const LOGIN_CMD: Record<string, string> = { claude: 'claude auth login', codex: 'codex login' };
@@ -31,6 +32,7 @@ function providerAdvice(p: ProviderStatus): { tone: 'success' | 'warning' | 'dan
       : { tone: 'warning', text: `${p.label} is not signed in. Sign in with its command line tool in a terminal on this computer, then press Check again.` };
   }
   if (p.error) return { tone: 'warning', text: `${p.label} answered with a problem: ${p.error}` };
+  if (p.limit) return { tone: 'warning', text: `${p.label} has reached its usage limit: ${p.limit} Roles that have a fallback use it until the limit resets.` };
   if (p.signedIn === null) return { tone: 'warning', text: `${p.label} is installed, but sign-in could not be checked. Try a model test below.` };
   return { tone: 'success', text: `${p.label} is ready.` };
 }
@@ -134,6 +136,10 @@ function ProviderCard({ p }: { p: ProviderStatus }) {
       </div>
       <p className={`cn-advice cn-advice--${advice.tone}`}>{advice.text}</p>
       {advice.command && <div className="cn-cmd"><code className="ui-code">{advice.command}</code><Copy text={advice.command} label={`Copy ${p.label} sign-in command`} /></div>}
+      {p.usage.length > 0 && (
+        <div><div className="ui-meta">Usage windows</div>
+          <ul className="cn-models">{p.usage.map((u) => <li key={u.window}><span>{u.window}</span><span className="ui-muted"> · {u.usedPercent}% used{u.resetsAt ? ` · resets ${dateTime(u.resetsAt)}` : ''}</span></li>)}</ul></div>
+      )}
       {p.installed && (
         <>
           <details className="cn-details">

@@ -16,6 +16,10 @@ export interface ProviderStatus {
   models: { id: string; label: string; efforts: string[] }[];
   capabilities: { images: boolean; schema: 'native' | 'prompt' | 'none'; system: boolean };
   error: string | null;
+  /** Usage windows the CLI reports. Only Codex reports them; the list is empty for the others. */
+  usage: { window: string; usedPercent: number; resetsAt: string | null }[];
+  /** The provider's own words when a usage window is full, else null. */
+  limit: string | null;
 }
 
 export interface ConnectionsResponse {
