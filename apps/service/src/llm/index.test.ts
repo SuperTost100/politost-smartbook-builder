@@ -53,7 +53,7 @@ describe('schema validation and repair', () => {
     const call = fake.calls[0];
     assert.equal(call.selection.access, 'none');
     assert.equal(call.selection.effort, 'low');
-    assert.ok(call.selection.cwd.endsWith('scratch'));
+    assert.ok(call.selection.cwd?.endsWith('scratch'));
     const js = call.responseSchema!.schema as { additionalProperties: boolean; required: string[] };
     assert.equal(js.additionalProperties, false);
     assert.deepEqual([...js.required].sort(), ['kind', 'note']);

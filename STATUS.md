@@ -94,7 +94,7 @@ GPT-6.1-Sol reviewed each milestone through `codex exec`.
 
 ## Dependencies
 
-The builder validates and previews books with content-core 0.4.0 and KaTeX 0.19, the versions the reader uses, so the preview and the reader's import check agree. Model calls go through cli-funnel 0.4.0. An answer cut off at a model's output limit now moves to the role's fallback model instead of being retried on the same one.
+The builder validates and previews books with content-core 0.4.0 and KaTeX 0.19, the versions the reader uses, so the preview and the reader's import check agree. Model calls go through cli-funnel 0.5.0. An answer cut off at a model's output limit now moves to the role's fallback model instead of being retried on the same one.
 
 ## Tests and CI
 

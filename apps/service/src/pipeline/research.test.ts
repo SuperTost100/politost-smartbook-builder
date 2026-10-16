@@ -82,7 +82,9 @@ test('a verified addition becomes a proposal after its block, citing a web note;
   const call = fake.calls[0];
   assert.equal(call.selection.access, 'supervised');
   // The folder's Claude settings take every local tool away before the approval callback is even asked.
-  const settings = JSON.parse(readFileSync(join(call.selection.cwd, '.claude', 'settings.json'), 'utf8'));
+  const cwd = call.selection.cwd;
+  assert.ok(cwd);
+  const settings = JSON.parse(readFileSync(join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.ok(['Bash', 'Read', 'Write', 'mcp__*'].every((tool) => settings.permissions.deny.includes(tool)));
   assert.equal(await call.onApproval!({ id: 'a', tool: 'WebSearch', input: {} }), 'allow');
   assert.equal(await call.onApproval!({ id: 'b', tool: 'Bash', input: {} }), 'deny');
