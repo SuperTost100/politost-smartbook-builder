@@ -6,7 +6,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
-import { hasStockKeys } from '../figures/stock.ts';
+import { photosAvailable } from '../figures/stock.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
@@ -157,7 +157,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const known = bookFormulaKeys(ctx, projectId, nodeId);
   const sectionIds = outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n');
 
-  const photos = project.options.figures && hasStockKeys(ctx);
+  const photos = project.options.figures && photosAvailable(ctx);
   const prompt = draftPrompt({
     language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
     chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),

@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 9;
+export const PROMPT_VERSION = 10;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -145,7 +145,7 @@ Design the book:
 export const draftSchema = z.object({
   markdown: z.string().describe('the section body in PoliTost source Markdown, with [[nX]] citation markers'),
   figures: z.array(figureSchema),
-  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence on why no figure would help this section; else null'),
+  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence naming what the section discusses and why no figure kind can show it; else null'),
   summary: z.string().describe('2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections'),
 });
 
@@ -166,18 +166,23 @@ export interface DraftPromptInput {
   /** The evidence reader's answer: clean formulas, unverified wording. */
   summary: string;
   figures: boolean;
-  /** Stock photos can be searched (a Pixabay or Pexels key is set). */
+  /** Photos can be searched (Wikimedia Commons, plus Pixabay or Pexels with a key). */
   photos: boolean;
   outside: boolean;
 }
 
-/** What the writer may draw. Shared by drafting and fixes, which can both add figures. */
+/** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
 export function figureRules(photos: boolean) {
-  return `FIGURES. Add a figure only where it helps the student more than words do: a relation that is easier to see as a graph, the structure of a molecule or ion the text discusses${photos ? ', a real object or phenomenon the student should recognise (lab equipment, a flame test, crystals, a precipitate, corrosion)' : ''}. Never add a decorative figure or one that repeats what a sentence already says plainly. Many sections of a science book have one or two such places; look for them. If the section has none, return an empty "figures" array and give the reason in "noFigureReason". At most 3 figures${photos ? ', at most 1 of them a photo' : ''}.
+  return `FIGURES. Students study from these pages, and a page of plain text is harder to learn from. Most sections of a science book have at least one place where a figure shows something faster than words: a relation that is easier to see as a graph, the structure of a molecule or ion, energy levels, an electron configuration, a cell or apparatus, a pattern across the periodic table${photos ? ', a real object or phenomenon the student should recognise' : ''}. Find those places and put a figure there. Never add a decorative figure or one that only repeats a sentence. Return an empty "figures" array only when nothing the section discusses fits any kind below, and then say in "noFigureReason" what the section discusses and why no kind can show it. At most 3 figures${photos ? ', at most 1 of them a photo' : ''}.
   Kinds (set "kind" and fill only the matching spec; the others are null):
-  - plot: a function graph. Expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; a piecewise curve is several functions with a domain each. The plot must match the text exactly. Examples: a limit or an asymptote, a derivative as slope, x(t) of a motion, p(V) isotherms, a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time.
-  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.${photos ? `
-  - photo: a stock photo. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.` : ''}
+  - plot: a function graph. Expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; a piecewise curve is several functions with a domain each. The plot must match the text exactly. Examples: a limit or an asymptote, a derivative as slope, x(t) of a motion, p(V) isotherms, a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time, a periodic trend against atomic number (as points).
+  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.
+  - levels: an energy-level diagram: a molecular orbital diagram, the enthalpy of reactants and products with a ΔH arrow, a Hess cycle, the energy order of orbitals. "columns" are the vertical groups from left to right (an MO diagram has three: atom, molecule, atom). Each level has a unique key, its column (from 0), an energy (only order and spacing matter), a label, "boxes" for degenerate orbitals (π2p has 2) and "electrons" (null to draw no arrows). "links" join levels by key: "dashed" for MO correlation lines, "arrow" for an energy change, labelled like "ΔH = −286 kJ".
+  - orbitals: orbital boxes for the electron configuration of one atom or ion. "species" as the text writes it ("O", "Fe3+"), "core" a noble-gas core like "[Ar]" or null, "subshells" in the order the text writes them, each with its electrons ("3d" with 5). The builder checks that the electrons add up to the species and drops the figure if they do not.
+  - cell: an electrochemical cell. "galvanic": two half-cells, a salt bridge (its electrolyte, e.g. "KNO3") and a voltmeter reading or null. "electrolytic": a generator; with saltBridge null both electrodes share one vessel, whose solution or melt is left.solution. Each side has its electrode, solution ("ZnSO4 1 M"), role (anode or cathode) and half-reaction or null.
+  - periodic: the periodic table with up to 5 groups of elements highlighted, each with its label ("Metalli alcalini"), and up to two trend arrows: "right" or "left" across a period, "up" or "down" along a group, labelled with what increases that way.${photos ? `
+  - photo: a real photo from Wikimedia Commons, Pixabay or Pexels: lab equipment, a precipitate, a flame test, crystals, minerals, corrosion, an industrial plant. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.` : ''}
+  Labels inside diagrams are plain text: digits after a symbol become subscripts and a trailing charge a superscript ("H2O", "ZnSO4", "Zn2+"); write "SO4^2-" for a polyatomic charge and "_" for other subscripts ("σ*_2p").
   Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0", "H2O"); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
 
@@ -412,7 +417,7 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
-Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that adds nothing the text does not already say plainly, and a place where a figure is clearly missing because the text describes in words a graph, the structure of a molecule or ion, or an object the student should recognise. Use category "figure" and severity minor, or major for a figure that shows something wrong. For a missing figure, quote the passage it belongs to and say in the suggestion what it should show. Do not ask for figures for their own sake.
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that adds nothing the text does not already say plainly, and a place where a figure is clearly missing because the text describes in words a graph, the structure of a molecule or ion, energy levels, an electron configuration, an electrochemical cell, a trend across the periodic table, or an object the student should recognise. Use category "figure" and severity minor, or major for a figure that shows something wrong. For a missing figure, quote the passage it belongs to and say in the suggestion what it should show. Do not ask for figures for their own sake.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
@@ -552,6 +557,58 @@ SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
 Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}], "figures": []}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+  };
+}
+
+// ---------- figures pass ----------
+
+export const figuresPassSchema = z.object({
+  figures: z.array(figureSchema.extend({
+    afterBlock: z.number().int().min(1).describe('number of the block the figure illustrates, from the [n] labels; the figure goes right after it'),
+  })),
+  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence naming what the section discusses and why no figure kind can show it; else null'),
+});
+
+/** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; photos: boolean }) {
+  const lang = languageName(p.language);
+  return {
+    system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
+
+${figureRules(p.photos)}
+
+In this task you do not write :::image blocks or any text: return each figure with "afterBlock" and the builder inserts it. Captions and alt text are in ${lang}.`,
+    prompt: `CHAPTER: ${p.chapterTitle}
+SECTION: ${p.sectionTitle}
+Figures the section already has: ${p.existing || '(none)'}
+
+TEXT, numbered by block:
+${p.blocks}
+
+INSTRUCTIONS
+- Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
+- Every number, species, label and direction in a figure must match the text exactly.
+- Return JSON: figures, noFigureReason.`,
+  };
+}
+
+export const figureCheckSchema = z.object({
+  figures: z.array(z.object({
+    index: z.number().int().min(1),
+    keep: z.boolean(),
+    reason: z.string().describe('one short sentence'),
+  })),
+});
+
+/** A second model decides whether each proposed figure earns its place, before any photo is searched or file drawn. */
+export function figureCheckPrompt(p: { language: string; items: string }) {
+  return {
+    system: `You check figures proposed for a university textbook in ${languageName(p.language)}. Keep a figure when it lets the student see something the passage explains: a graph of a relation, the structure of a species, energy levels, an electron configuration, a cell, a trend, a real object. Seeing these helps even when the text also describes them. Drop a figure that is decorative, that shows something the passage does not discuss, that does not match the passage (another species, other numbers or labels, a wrong direction), or that adds nothing a plain sentence does not already give (a straight line for a simple proportionality, a lone ion).`,
+    prompt: `PROPOSED FIGURES, each with the passage it follows:
+
+${p.items}
+
+Return JSON {"figures": [{"index": <n>, "keep": true|false, "reason": "..."}]} with one entry per figure.`,
   };
 }
 

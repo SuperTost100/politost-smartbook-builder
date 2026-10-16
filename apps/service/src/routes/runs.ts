@@ -6,13 +6,13 @@ import { getRunSummary, getTask, listRuns, usageForRun } from '../repo/index.ts'
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
 
-const kindSchema = z.enum(['prepare', 'plan', 'generate', 'review', 'export', 'regenerate', 'research']);
+const kindSchema = z.enum(['prepare', 'plan', 'generate', 'review', 'export', 'regenerate', 'research', 'figures']);
 const ids = z.array(z.string().min(1)).max(2000);
 
 export function registerRunRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/projects/:id/runs', async (req) => {
     const projectId = projectOf(ctx, req);
-    const body = parse(z.object({ kind: kindSchema, scope: z.object({ chapterIds: ids.optional(), nodeIds: ids.optional(), questionIds: ids.optional(), reviewMode: z.enum(['full', 'recheck']).optional() }).optional() }), req.body);
+    const body = parse(z.object({ kind: kindSchema, scope: z.object({ chapterIds: ids.optional(), nodeIds: ids.optional(), questionIds: ids.optional(), reviewMode: z.enum(['full', 'recheck']).optional(), missingOnly: z.boolean().optional() }).optional() }), req.body);
     return deps.startRun(ctx, projectId, body.kind, body.scope);
   });
 

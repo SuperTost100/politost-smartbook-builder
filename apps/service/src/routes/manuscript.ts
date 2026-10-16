@@ -69,6 +69,13 @@ export function registerManuscriptRoutes(app: FastifyInstance, ctx: AppContext) 
     return deps.startRun(ctx, projectId, 'research', { nodeIds: [nodeId] });
   });
 
+  app.post('/api/projects/:id/sections/:nodeId/figures', async (req) => {
+    const projectId = projectOf(ctx, req);
+    const nodeId = idParam(req, 'nodeId');
+    nodeOf(ctx, projectId, nodeId);
+    return deps.startRun(ctx, projectId, 'figures', { nodeIds: [nodeId] });
+  });
+
   app.post('/api/projects/:id/sections/:nodeId/proposal', async (req) => {
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');

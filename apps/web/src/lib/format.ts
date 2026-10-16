@@ -64,6 +64,7 @@ export const RUN_KIND_LABEL: Record<RunSummary['kind'], string> = {
   export: 'Exporting',
   regenerate: 'Regenerating',
   research: 'Researching',
+  figures: 'Adding figures',
 };
 
 export const TASK_STATE_LABEL: Record<TaskState, string> = {

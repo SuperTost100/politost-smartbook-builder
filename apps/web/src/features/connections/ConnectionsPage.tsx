@@ -219,7 +219,7 @@ function StockCard({ stock }: { stock: ConnectionsResponse['stock'] }) {
   return (
     <article className="cn-card ui-card" aria-label="Stock photos">
       <header className="cn-card__head"><h2 className="ui-panel-title">Stock photos</h2></header>
-      <p className="ui-muted">Real photos for the books; a model checks each one. A free key from either service is enough: get one at <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer">Pixabay</a> or <a href="https://www.pexels.com/api/" target="_blank" rel="noreferrer">Pexels</a>.</p>
+      <p className="ui-muted">Real photos for the books; a model checks each one. Wikimedia Commons needs no key and is always searched. A free key from <a href="https://pixabay.com/api/docs/" target="_blank" rel="noreferrer">Pixabay</a> or <a href="https://www.pexels.com/api/" target="_blank" rel="noreferrer">Pexels</a> adds their photos.</p>
       {STOCK_SERVICES.map((s) => (
         <div key={s.id} className="cn-key">
           <div className="ui-row">

@@ -6,7 +6,7 @@ import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { buildFigures, commitFigures, discardUnstored, existingAssetNames, rewriteImageRefs } from '../figures/materialize.ts';
-import { hasStockKeys } from '../figures/stock.ts';
+import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
@@ -265,12 +265,12 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const instructed = !!t.task.input.instruction;
   const role = instructed || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, figures: project.options.figures ? { photos: hasStockKeys(ctx) } : null }),
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, figures: project.options.figures ? { photos: photosAvailable(ctx) } : null }),
     schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix may add figures; image blocks pointing at neither a new figure nor an existing asset are removed.
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: hasStockKeys(ctx),
+    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: photosAvailable(ctx),
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   const existing = existingAssetNames(ctx, projectId);

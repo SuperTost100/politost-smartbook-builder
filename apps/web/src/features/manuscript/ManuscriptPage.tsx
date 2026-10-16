@@ -170,9 +170,15 @@ export default function ManuscriptPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
+  const figures = useMutation({
+    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures', { params: { id: pid, nodeId: nodeId! } }),
+    onSuccess: () => { toast('Adding figures. The text stays as it is.', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
+    onError: (e) => toast(errorText(e), { tone: 'danger' }),
+  });
+
   // Which sections are being drafted right now: running task labels that name the section.
   const activeRun = project.data?.activeRun;
-  const runDetail = useRun(activeRun && (activeRun.kind === 'generate' || activeRun.kind === 'regenerate') ? activeRun.id : undefined);
+  const runDetail = useRun(activeRun && (activeRun.kind === 'generate' || activeRun.kind === 'regenerate' || activeRun.kind === 'figures') ? activeRun.id : undefined);
   const draftingTitles = useMemo(() => {
     const running = (runDetail.data?.tasks ?? []).filter((t) => t.state === 'running').map((t) => t.label.toLowerCase());
     return flat.map((x) => x.s.title.toLowerCase()).filter((t) => running.some((l) => l.includes(t)));
@@ -221,6 +227,7 @@ export default function ManuscriptPage() {
           <Link className="ui-btn ui-btn--sm" aria-label="Reader preview" title="Reader preview" to={`/books/${pid}/preview/${loc?.chapter.chapterId ?? ''}`}><Icon name="eye" /><span className="ms-tb-label">Reader preview</span></Link>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="History" title="History" onClick={() => setHistoryOpen(true)} disabled={!nodeId}><Icon name="history" /><span className="ms-tb-label">History</span></button>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="Regenerate section" title="Regenerate section" onClick={() => setRegen({})} disabled={!section?.current}><Icon name="sparkle" /><span className="ms-tb-label">Regenerate section</span></button>
+          {project.data?.options.figures && <button type="button" className="ui-btn ui-btn--sm" aria-label="Add figures" title="Add figures" onClick={() => figures.mutate()} disabled={!section?.current || figures.isPending}><Icon name="image" /><span className="ms-tb-label">Add figures</span></button>}
           {project.data?.options.outsideMaterial && <button type="button" className="ui-btn ui-btn--sm" aria-label="Find outside sources" title="Find outside sources" onClick={() => research.mutate()} disabled={!section?.current || research.isPending}><Icon name="globe" /><span className="ms-tb-label">Find outside sources</span></button>}
         </div>
 

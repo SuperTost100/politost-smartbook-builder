@@ -1,5 +1,5 @@
-// Turns the figures a model asked for into asset files: plots and structures are drawn here, photos come from the stock
-// services. Used by drafting and by fixes, which can both add figures.
+// Turns the figures a model asked for into asset files: plots, structures and diagrams are drawn here, photos come from
+// Wikimedia Commons and the stock services. Used by drafting and by fixes, which can both add figures.
 import { renderPlotSvg, validatePlotSpec } from '@smartbuilder/content';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -7,12 +7,13 @@ import { z } from 'zod';
 import { paths, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
+import { cellSchema, describeDiagram, levelsSchema, orbitalsSchema, periodicSchema, renderDiagramSvg, validateDiagram, type DiagramKind } from './diagram.ts';
 import { findStockPhoto } from './stock.ts';
 import { renderStructureSvg, validateStructureSpec } from './structure.ts';
 
 export const figureSchema = z.object({
   key: z.string().describe('kebab-case, used as file name'),
-  kind: z.enum(['plot', 'structure', 'photo']),
+  kind: z.enum(['plot', 'structure', 'photo', 'levels', 'orbitals', 'cell', 'periodic']),
   caption: z.string(),
   alt: z.string(),
   plot: z.object({
@@ -34,6 +35,10 @@ export const figureSchema = z.object({
     query: z.string().describe('2-5 English words for a stock photo search'),
     mustShow: z.string().describe('what the photo must show, precisely'),
   }).nullable().describe('for kind "photo", else null'),
+  levels: levelsSchema.nullable().describe('for kind "levels", else null'),
+  orbitals: orbitalsSchema.nullable().describe('for kind "orbitals", else null'),
+  cell: cellSchema.nullable().describe('for kind "cell", else null'),
+  periodic: periodicSchema.nullable().describe('for kind "periodic", else null'),
 });
 export type FigureRequest = z.infer<typeof figureSchema>;
 
@@ -44,6 +49,8 @@ export interface BuiltFigures {
   renames: Map<string, string>;
   notes: string[];
 }
+
+const DIAGRAMS: readonly string[] = ['levels', 'orbitals', 'cell', 'periodic'] satisfies DiagramKind[];
 
 const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
 const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
@@ -83,6 +90,11 @@ export async function buildFigures(ctx: AppContext, o: {
       const formula = v.spec.formula ?? '';
       const alt = formula && !fig.alt.includes(formula) ? `${fig.alt} (${formula})` : fig.alt;
       made = { bytes: renderStructureSvg(v.spec), ext: '.svg', mime: 'image/svg+xml', origin: 'structure', spec: v.spec, caption: fig.caption, alt, check: `Drawn from SMILES ${v.spec.smiles}${formula ? `, which matches ${formula}` : ''}.` };
+    } else if (DIAGRAMS.includes(fig.kind) && fig[fig.kind as DiagramKind]) {
+      const kind = fig.kind as DiagramKind;
+      const v = validateDiagram(kind, fig[kind]);
+      if (!v.ok) { out.notes.push(`${key}: ${v.errors.join('; ')}`); continue; }
+      made = { bytes: renderDiagramSvg(kind, v.spec, o.language), ext: '.svg', mime: 'image/svg+xml', origin: 'diagram', spec: { kind, ...v.spec }, caption: fig.caption, alt: fig.alt, check: describeDiagram(kind, v.spec) };
     } else if (fig.kind === 'photo' && fig.photo) {
       if (!o.photos) { out.notes.push(`${key}: no stock photo service is set up`); continue; }
       if (photos >= 1) { out.notes.push(`${key}: only one photo per section`); continue; }
@@ -101,7 +113,7 @@ export async function buildFigures(ctx: AppContext, o: {
       const caption = `${fig.caption.trim().replace(/[.;:,]?$/, '.')} ${p.credit}`;
       made = {
         bytes: p.bytes, ext: p.ext, mime: p.mime, origin: 'stock', caption, alt: fig.alt,
-        spec: { provider: p.provider, id: p.id, pageUrl: p.pageUrl, author: p.author, query: fig.photo.query, mustShow: fig.photo.mustShow },
+        spec: { provider: p.provider, id: p.id, pageUrl: p.pageUrl, author: p.author, license: p.license, query: fig.photo.query, mustShow: fig.photo.mustShow },
         check: `Picked by the vision model: ${p.check}`,
       };
     } else {

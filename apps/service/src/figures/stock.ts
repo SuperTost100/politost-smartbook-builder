@@ -1,4 +1,5 @@
-// Stock photos from Pixabay and Pexels: search both, let the vision model pick one that really shows the thing, download it.
+// Photos from Wikimedia Commons, Pixabay and Pexels: search them, let the vision model pick one that really shows the thing,
+// download it. Commons needs no key and has the lab and specimen photos the stock services lack.
 import * as mupdf from 'mupdf';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -30,15 +31,24 @@ export function hasStockKeys(ctx: AppContext): boolean {
   return !!(k.pixabay || k.pexels);
 }
 
+/** Photos can always be searched: Wikimedia Commons needs no key. Tests turn Commons off. */
+export function photosAvailable(ctx: AppContext): boolean {
+  return deps.commons || hasStockKeys(ctx);
+}
+
+type Provider = 'commons' | 'pixabay' | 'pexels';
+
 export interface StockPhoto {
   bytes: Buffer;
   ext: '.jpg' | '.png' | '.webp';
   mime: string;
-  provider: 'pixabay' | 'pexels';
+  provider: Provider;
   author: string;
   pageUrl: string;
   id: string;
-  /** Caption credit, e.g. "Foto: Mario Rossi / Pexels". */
+  /** Licence of a Commons file, e.g. "CC BY-SA 4.0"; null for Pixabay and Pexels, whose licences need no notice. */
+  license: string | null;
+  /** Caption credit, e.g. "Foto: Mario Rossi / Pexels" or "Foto: Mario Rossi / Wikimedia Commons, CC BY-SA 4.0". */
   credit: string;
   /** One sentence: why the vision model accepted it. */
   check: string;
@@ -49,12 +59,15 @@ export interface StockDeps {
   runRole: <T>(ctx: AppContext, opts: RunRoleOptions<T>) => Promise<RunRoleResult<T>>;
   /** Any supported image to PNG, for the model runner. */
   toPng: (bytes: Buffer) => Buffer;
+  /** Search Wikimedia Commons (no key needed). */
+  commons: boolean;
 }
 
 const defaults: StockDeps = {
   fetch: (...a) => fetch(...a),
   runRole: (ctx, opts) => runRole(ctx, opts),
   toPng,
+  commons: true,
 };
 
 export const deps: StockDeps = { ...defaults };
@@ -64,7 +77,14 @@ export function setStockDeps(partial?: Partial<StockDeps>) {
   Object.assign(deps, defaults, partial ?? {});
 }
 
-const IMAGE_HOSTS = new Set(['pixabay.com', 'cdn.pixabay.com', 'images.pexels.com']);
+const IMAGE_HOSTS = new Set(['pixabay.com', 'cdn.pixabay.com', 'images.pexels.com', 'upload.wikimedia.org', 'thumb.wikimedia.org']);
+// Wikimedia asks API clients for a User-Agent that names the tool and a way to reach its authors.
+const USER_AGENT = 'PolitostSmartbookBuilder/0.2 (https://github.com/SuperTost100/politost-smartbook-builder)';
+// Commons only serves thumbnails at standard widths (500 and 960 work, 640 does not).
+const COMMONS_PREVIEW = 500;
+const COMMONS_LARGE = 960;
+// Licences a book can carry with a credit line. GFDL-only files need the whole licence text, so they are skipped.
+const COMMONS_LICENSES = /^(cc0|public domain|pd\b|cc[ -]by(-sa)? \d(\.\d)?)/i;
 const MAX_BYTES = 1_500_000;
 const SEARCH_TIMEOUT_MS = 10_000;
 const DOWNLOAD_TIMEOUT_MS = 20_000;
@@ -74,10 +94,11 @@ const MAX_REDIRECTS = 3;
 const TYPES: Record<string, StockPhoto['ext']> = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
 
 interface Candidate {
-  provider: 'pixabay' | 'pexels';
+  provider: Provider;
   id: string;
   author: string;
   pageUrl: string;
+  license: string | null;
   /** True for Pixabay illustrations and vectors. */
   drawing: boolean;
   previewUrl: string;
@@ -110,7 +131,7 @@ async function downloadImage(url: string, signal?: AbortSignal): Promise<{ bytes
   try {
     let current = allowedImageUrl(url);
     for (let hop = 0; current && hop <= MAX_REDIRECTS; hop++) {
-      const res = await deps.fetch(current, { redirect: 'manual', signal: sig });
+      const res = await deps.fetch(current, { redirect: 'manual', signal: sig, headers: { 'User-Agent': USER_AGENT } });
       if (res.status >= 300 && res.status < 400) {
         const loc = res.headers.get('location');
         await res.body?.cancel();
@@ -139,7 +160,7 @@ async function downloadImage(url: string, signal?: AbortSignal): Promise<{ bytes
 
 async function getJson(url: string, headers: Record<string, string>, signal?: AbortSignal): Promise<any | null> {
   try {
-    const res = await deps.fetch(url, { headers, signal: withTimeout(SEARCH_TIMEOUT_MS, signal) });
+    const res = await deps.fetch(url, { headers: { 'User-Agent': USER_AGENT, ...headers }, signal: withTimeout(SEARCH_TIMEOUT_MS, signal) });
     return res.ok ? await res.json() : null;
   } catch {
     return null;
@@ -157,7 +178,7 @@ async function searchPixabay(key: string, query: string, signal?: AbortSignal): 
     const web = str(h.webformatURL);
     if (!web || !h.id) continue;
     out.push({
-      provider: 'pixabay', id: String(h.id), author: str(h.user), pageUrl: str(h.pageURL),
+      provider: 'pixabay', id: String(h.id), author: str(h.user), pageUrl: str(h.pageURL), license: null,
       drawing: str(h.type) !== '' && str(h.type) !== 'photo',
       previewUrl: web, largeUrl: web.replace('_640', '_960'), largeFallbackUrl: web,
     });
@@ -175,17 +196,47 @@ async function searchPexels(key: string, query: string, signal?: AbortSignal): P
     const medium = str(p.src?.medium);
     const large = str(p.src?.large);
     if (!medium || !large || !p.id) continue;
-    out.push({ provider: 'pexels', id: String(p.id), author: str(p.photographer), pageUrl: str(p.url), drawing: false, previewUrl: medium, largeUrl: large });
+    out.push({ provider: 'pexels', id: String(p.id), author: str(p.photographer), pageUrl: str(p.url), license: null, drawing: false, previewUrl: medium, largeUrl: large });
     if (out.length === PER_SERVICE) break;
   }
   return out;
 }
 
-function interleave(a: Candidate[], b: Candidate[]): Candidate[] {
+/** Commons' Artist field is HTML (often a user page link); the credit needs its text. */
+function plainText(html: string): string {
+  return html.replace(/<[^>]*>/g, ' ').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&#0?39;/g, "'").replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&nbsp;/g, ' ')
+    .replace(/\s+/g, ' ').trim().slice(0, 80);
+}
+
+async function searchCommons(query: string, signal?: AbortSignal): Promise<Candidate[]> {
+  const url = `https://commons.wikimedia.org/w/api.php?${new URLSearchParams({
+    action: 'query', format: 'json', formatversion: '2', generator: 'search', gsrsearch: `${query.slice(0, 100)} filetype:bitmap`, gsrnamespace: '6', gsrlimit: '10',
+    prop: 'imageinfo', iiprop: 'url|extmetadata|mime|size', iiurlwidth: String(COMMONS_LARGE), iiextmetadatafilter: 'LicenseShortName|Artist',
+  })}`;
+  const data = await getJson(url, {}, signal);
+  const pages: any[] = Array.isArray(data?.query?.pages) ? [...data.query.pages].sort((a, b) => (a.index ?? 0) - (b.index ?? 0)) : [];
   const out: Candidate[] = [];
-  for (let i = 0; i < Math.max(a.length, b.length) && out.length < MAX_CANDIDATES; i++) {
-    if (a[i]) out.push(a[i]);
-    if (b[i] && out.length < MAX_CANDIDATES) out.push(b[i]);
+  for (const p of pages) {
+    const ii = p.imageinfo?.[0];
+    const license = str(ii?.extmetadata?.LicenseShortName?.value).trim();
+    if (!ii || !TYPES[str(ii.mime)] || !COMMONS_LICENSES.test(license)) continue;
+    const large = str(ii.thumburl) || str(ii.url);
+    if (!large) continue;
+    // A thumbnail URL ends in /<width>px-<name>; the preview is the same file at the smaller standard width.
+    const preview = Number(ii.width) > COMMONS_PREVIEW && large.includes(`/${COMMONS_LARGE}px-`) ? large.replace(`/${COMMONS_LARGE}px-`, `/${COMMONS_PREVIEW}px-`) : large;
+    out.push({
+      provider: 'commons', id: str(p.title), author: plainText(str(ii.extmetadata?.Artist?.value)), pageUrl: str(ii.descriptionurl), license,
+      drawing: str(ii.mime) !== 'image/jpeg', previewUrl: preview, largeUrl: large,
+    });
+    if (out.length === PER_SERVICE) break;
+  }
+  return out;
+}
+
+function interleave(...lists: Candidate[][]): Candidate[] {
+  const out: Candidate[] = [];
+  for (let i = 0; i < Math.max(...lists.map((l) => l.length)); i++) {
+    for (const l of lists) if (l[i] && out.length < MAX_CANDIDATES) out.push(l[i]);
   }
   return out;
 }
@@ -199,7 +250,7 @@ function pickPrompt(mustShow: string, count: number): string {
     `The candidates are the ${count} images attached, in order (1 to ${count}). One of them may go into a university textbook.`,
     `It must show: ${mustShow}`,
     'Answer with the number of the candidate that clearly shows exactly that, or null if none does.',
-    'Reject candidates that are blurry, carry a watermark or text overlay, show people posing, or have a decorative stock look. Prefer accuracy over beauty.',
+    'Reject candidates that are blurry, carry a watermark or text overlay, are drawings or diagrams with written labels, show people posing, or have a decorative stock look. Prefer accuracy over beauty.',
     'In "reason", give one short sentence in English: why the chosen image fits, or why none does.',
   ].join('\n');
 }
@@ -207,8 +258,8 @@ function pickPrompt(mustShow: string, count: number): string {
 function creditFor(c: Candidate, language: string): string {
   const it = language.toLowerCase().startsWith('it');
   const what = c.drawing ? (it ? 'Immagine' : 'Image') : it ? 'Foto' : 'Photo';
-  const service = c.provider === 'pixabay' ? 'Pixabay' : 'Pexels';
-  return `${what}: ${c.author ? `${c.author} / ` : ''}${service}`;
+  const service = c.provider === 'commons' ? 'Wikimedia Commons' : c.provider === 'pixabay' ? 'Pixabay' : 'Pexels';
+  return `${what}: ${c.author ? `${c.author} / ` : ''}${service}${c.license ? `, ${c.license}` : ''}`;
 }
 
 export async function findStockPhoto(ctx: AppContext, opts: {
@@ -216,13 +267,14 @@ export async function findStockPhoto(ctx: AppContext, opts: {
   projectId: string; runId?: string; taskId?: string; signal?: AbortSignal;
 }): Promise<{ ok: true; photo: StockPhoto } | { ok: false; reason: string }> {
   const keys = stockKeys(ctx);
-  if (!keys.pixabay && !keys.pexels) return { ok: false, reason: 'No stock photo service is set up. Add a Pixabay or Pexels key on the Connections screen.' };
+  if (!photosAvailable(ctx)) return { ok: false, reason: 'No photo service is set up. Add a Pixabay or Pexels key on the Connections screen.' };
 
-  const [fromPixabay, fromPexels] = await Promise.all([
+  const [fromCommons, fromPixabay, fromPexels] = await Promise.all([
+    deps.commons ? searchCommons(opts.query, opts.signal) : [],
     keys.pixabay ? searchPixabay(keys.pixabay, opts.query, opts.signal) : [],
     keys.pexels ? searchPexels(keys.pexels, opts.query, opts.signal) : [],
   ]);
-  const found = interleave(fromPixabay, fromPexels);
+  const found = interleave(fromCommons, fromPixabay, fromPexels);
   if (!found.length) return { ok: false, reason: `No stock photos found for "${opts.query}".` };
 
   // Previews that cannot be fetched or converted drop out; the model sees the rest in order.
@@ -249,7 +301,7 @@ export async function findStockPhoto(ctx: AppContext, opts: {
   return {
     ok: true,
     photo: {
-      ...file, provider: chosen.provider, author: chosen.author, pageUrl: chosen.pageUrl, id: chosen.id,
+      ...file, provider: chosen.provider, author: chosen.author, pageUrl: chosen.pageUrl, id: chosen.id, license: chosen.license,
       credit: creditFor(chosen, opts.language), check: data.reason,
     },
   };
