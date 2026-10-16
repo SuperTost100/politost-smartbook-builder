@@ -141,7 +141,10 @@ export function formulaMatches(formula: string, drawn: Composition): boolean {
   const plain = formula
     .replace(/[₀-₉]/g, (d) => String(SUBSCRIPTS.indexOf(d)))
     .replace(/[⁰-⁹¹²³]/g, (d) => String(SUPERSCRIPTS.indexOf(d)))
-    .replace(/[⁺]/g, '+').replace(/[⁻−–]/g, '-');
+    .replace(/[⁺]/g, '+').replace(/[⁻−–]/g, '-')
+    // Bonds in a condensed structural formula ("CH2=CH2", "HC≡CH", "CH3-CH2-OH") carry no atoms. A hyphen is a bond only
+    // when an atom or group follows it; at the end it is a charge.
+    .replace(/[=≡]/g, '').replace(/-(?=[A-Z(])/g, '');
   // Several ions ("Na+ Cl-") add up; each piece carries its own charge.
   const pieces = plain.trim().split(/\s+(?=[A-Z(])/);
   const options: { atoms: Map<string, number>; charge: number }[][] = [];

@@ -60,7 +60,10 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   t.progress(`Checking ${proposed.length} proposed figure${proposed.length === 1 ? '' : 's'}`);
   const items = proposed.map((f, i) => {
     const spec = (f as Record<string, unknown>)[f.kind] ?? null;
-    return `${i + 1}. kind: ${f.kind}\ncaption: ${f.caption}\nspec: ${truncate(JSON.stringify(spec), 1500)}\npassage: ${truncate(blocks[f.afterBlock - 1].text, 1500)}`;
+    // The paragraph before the figure, with the one before it and the one after it: a figure often sums up several.
+    const around = [blocks[f.afterBlock - 2]?.text, blocks[f.afterBlock - 1].text].filter((b): b is string => !!b).map((b) => truncate(b, 1200)).join('\n\n');
+    const next = blocks[f.afterBlock]?.text;
+    return `${i + 1}. kind: ${f.kind}\ncaption: ${f.caption}\nspec: ${truncate(JSON.stringify(spec), 1500)}\npassage: ${around}${next ? `\nafter the figure: ${truncate(next, 800)}` : ''}`;
   }).join('\n\n');
   const verdict = await runRole(ctx, { role: 'checker', ...figureCheckPrompt({ language: project.language, items }), schema: figureCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const kept = proposed.filter((f, i) => {

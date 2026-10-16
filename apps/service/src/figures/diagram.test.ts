@@ -6,6 +6,7 @@ import { ELEMENTS, parseSpecies, suggestSymbol } from './elements.ts';
 import {
   chemPlain,
   chemRuns,
+  chemWidth,
   describeDiagram,
   hundFill,
   renderDiagramSvg,
@@ -161,6 +162,11 @@ test('chemistry markup: automatic formatting of formulas and ions', () => {
   assert.equal(marked('ΔH = -286 kJ'), 'ΔH = −286 kJ');
 });
 
+test('chemistry markup: a group in parentheses after _ or ^ keeps its parentheses', () => {
+  assert.deepEqual(chemRuns('S_(g)'), [{ text: 'S', kind: 'n' }, { text: '(g)', kind: 'sub' }]);
+  assert.equal(chemPlain('S_(l)'), 'S(l)');
+});
+
 test('chemistry markup: explicit _ and ^', () => {
   assert.equal(marked('H_2O'), 'H[2]O');
   assert.equal(marked('σ*_2p'), 'σ{*}[2p]');
@@ -287,14 +293,41 @@ test('levels: validation rules', () => {
 
 test('levels: fields left out count as null, and levels need room in their column', () => {
   const sparse = {
+    yLabel: 'Energia',
     columns: [{}],
     levels: [{ key: 'a', column: 0, energy: 0, label: 'A' }, { key: 'b', column: 0, energy: 0.07, label: 'B' }, { key: 'c', column: 0, energy: 10, label: 'C' }],
     links: [],
   };
   assert.match(errors('levels', sparse).join(' | '), /too close in column 0/);
-  const ok = validateDiagram('levels', { columns: [{}], levels: [{ key: 'a', column: 0, energy: 0, label: 'A' }, { key: 'b', column: 0, energy: 1, label: 'B' }], links: [] });
+  const ok = validateDiagram('levels', { yLabel: 'H', columns: [{}], levels: [{ key: 'a', column: 0, energy: 0, label: 'A' }, { key: 'b', column: 0, energy: 1, label: 'B' }], links: [] });
   assert.equal(ok.ok, true);
-  assert.equal(ok.ok && (ok.spec as LevelsSpec).yLabel, null);
+  assert.equal(ok.ok && (ok.spec as LevelsSpec).columns[0].label, null);
+});
+
+test('levels: an arrow label is never dropped, even with one column and no free spot', () => {
+  const one: LevelsSpec = { yLabel: 'Energia', columns: [{ label: null }],
+    levels: [{ key: 'r', column: 0, energy: 0, label: 'CH4 + 2 O2', boxes: null, electrons: null }, { key: 'p', column: 0, energy: -890, label: 'CO2 + 2 H2O', boxes: null, electrons: null }],
+    links: [{ from: 'r', to: 'p', style: 'arrow', label: 'ΔH < 0 (fortemente esotermica)' }] };
+  assert.ok(textOf(render('levels', one)).includes('ΔH &lt; 0 (fortemente esotermica)'));
+});
+
+test('levels: the vertical axis must name an energy, so a conversion scheme is refused', () => {
+  const scheme = {
+    yLabel: null, columns: [{ label: 'Massa (g)' }, { label: 'Moli (mol)' }],
+    levels: [{ key: 'm', column: 0, energy: 0, label: 'm', boxes: null, electrons: null }, { key: 'n', column: 1, energy: 0, label: 'n', boxes: null, electrons: null }],
+    links: [{ from: 'm', to: 'n', style: 'arrow', label: 'n = m/M' }],
+  };
+  assert.match(errors('levels', scheme).join(' | '), /yLabel: name the energy on the vertical axis/);
+  assert.match(errors('levels', { ...scheme, yLabel: '  ' }).join(' | '), /yLabel: name the energy/);
+});
+
+test('levels: a long arrow label shrinks to stay inside the figure', () => {
+  const svg = render('levels', with_(enthalpy, { links: [{ ...enthalpy.links[0], label: 'ΔH < 0 (fortemente esotermica, -890 kJ)' }] }));
+  const m = /<text x="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*text-anchor="start"[^>]*font-weight="600"[^>]*>ΔH &lt; 0/.exec(svg) ?? /<text x="([\d.]+)"[^>]*font-size="([\d.]+)"[^>]*>ΔH &lt; 0/.exec(svg);
+  assert.ok(m, 'the label is drawn');
+  const [x, fs] = [Number(m[1]), Number(m[2])];
+  assert.ok(fs < 12.5);
+  assert.ok(x + chemWidth('ΔH < 0 (fortemente esotermica, -890 kJ)', fs) * 1.1 <= 640, 'inside the 640 px width');
 });
 
 // ---- 2. Orbital boxes -------------------------------------------------------------------------
@@ -365,11 +398,20 @@ test('cell: electrolysis of molten NaCl uses one vessel and a generator; the gen
   assert.ok(twoVessels.includes('Ponte salino (KNO3)') && twoVessels.includes('Generatore'));
 });
 
+test('cell: a galvanic cell without a salt bridge has one shared vessel, like a lead-acid battery', () => {
+  const lead: CellSpec = { type: 'galvanic', saltBridge: null, meter: '2,0 V',
+    left: { electrode: 'Pb', solution: 'H2SO4', role: 'anode', halfReaction: 'Pb + SO4^2- -> PbSO4 + 2e^-' },
+    right: { electrode: 'PbO2', solution: 'H2SO4', role: 'cathode', halfReaction: null } };
+  const t = textOf(render('cell', lead));
+  assert.ok(t.includes('Anodo (−)') && t.includes('Catodo (+)') && t.includes('V'));
+  assert.ok(!t.some((x) => x.startsWith('Ponte salino')));
+  assert.match(describeDiagram('cell', lead), /one shared vessel/);
+});
+
 test('cell: validation rules', () => {
   const bad = (patch: object) => errors('cell', with_(daniell, patch)).join(' | ');
   assert.match(bad({ right: { ...daniell.right, role: 'anode' } }), /right\.role: left and right are both "anode"/);
   assert.match(bad({ left: { ...daniell.left, role: 'cathode' } }), /both "cathode"/);
-  assert.match(bad({ saltBridge: null }), /saltBridge: a galvanic cell needs a salt bridge/);
   assert.match(bad({ type: 'electrolytic' }), /meter: only a galvanic cell has a voltmeter/);
   assert.match(bad({ type: 'sideways' }), /type/);
   assert.match(bad({ left: { ...daniell.left, electrode: '' } }), /left\.electrode: must not be empty/);

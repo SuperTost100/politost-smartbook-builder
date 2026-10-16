@@ -1425,7 +1425,7 @@ describe('figures pass: figures for written sections, text untouched', () => {
     const origins = ctx.db.all<{ origin: string }>('SELECT origin FROM assets ORDER BY filename').map((a) => a.origin);
     assert.deepEqual(origins, ['diagram', 'structure']);
     assert.match(fake.calls[0].system ?? '', /you do not change it/);
-    assert.match(fake.calls[1].prompt, /passage: La reazione libera calore\./);
+    assert.match(fake.calls[1].prompt, /passage: L'ammoniaca ha una coppia solitaria\.\n\nLa reazione libera calore\.\nafter the figure: Fine\./);
   });
 
   test('a figure the check drops, or one placed after a block that does not exist, is left out with a note', async () => {
