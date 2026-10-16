@@ -138,6 +138,12 @@ test('a formula written as in the text matches the drawn species', () => {
   assert.ok(ok('Na+ Cl-', '[Na+].[Cl-]'));
   assert.ok(ok('Ca(OH)2', '[Ca+2].[OH-].[OH-]'));
   assert.ok(ok('CH3COOH', 'CC(=O)O'));
+  // Condensed structural formulas keep their bonds.
+  assert.ok(ok('CH2=CH2', 'C=C'));
+  assert.ok(ok('HC≡CH', 'C#C'));
+  assert.ok(ok('CH3-CH2-OH', 'CCO'));
+  assert.ok(ok('CH3COO-', 'CC(=O)[O-]'), 'a trailing hyphen is still a charge');
+  assert.ok(!ok('CH2=CH2', 'C#C'), 'other hydrogens');
   assert.ok(!ok('NH3', '[NH4+]'), 'a missing charge and hydrogen');
   assert.ok(!ok('SO4', '[O-]S(=O)(=O)[O-]'), 'a missing charge');
   assert.ok(!ok('ClNa', 'O'), 'other atoms');

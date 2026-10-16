@@ -11,7 +11,7 @@ import { ELEMENTS, elementBySymbol, parseSpecies, suggestSymbol } from './elemen
 // ---------------------------------------------------------------------------------------------
 
 export const levelsSchema = z.object({
-  yLabel: z.string().nullable().describe('Label of the vertical axis, e.g. "Energia" or "H"; null for none'),
+  yLabel: z.string().nullable().describe('The energy on the vertical axis, e.g. "Energia", "H" or "S"; required'),
   columns: z
     .array(z.object({ label: z.string().nullable().describe('Text under the column, e.g. "O", "O_2", "Reagenti"') }))
     .describe('1 to 4 columns, left to right'),
@@ -54,7 +54,7 @@ export const cellSchema = z.object({
   type: z.enum(['galvanic', 'electrolytic']),
   left: electrodeSchema,
   right: electrodeSchema,
-  saltBridge: z.string().nullable().describe('Salt bridge electrolyte, e.g. "KNO_3"; galvanic cells need one; electrolytic null means one shared vessel'),
+  saltBridge: z.string().nullable().describe('Salt bridge electrolyte, e.g. "KNO_3"; null means both electrodes share one vessel (a lead-acid battery, molten NaCl)'),
   meter: z.string().nullable().describe('Voltmeter reading such as "1,10 V"; galvanic only'),
 });
 
@@ -180,6 +180,13 @@ export function chemRuns(text: string): Run[] {
       const end = text.indexOf('}', i + 2);
       if (end > 0) {
         body = text.slice(i + 2, end);
+        used = end - i + 1;
+      }
+    } else if (text[i + 1] === '(') {
+      // A state or other group in parentheses keeps them: "S_(g)" is S with "(g)" lowered.
+      const end = text.indexOf(')', i + 2);
+      if (end > 0) {
+        body = text.slice(i + 1, end + 1);
         used = end - i + 1;
       }
     } else {
@@ -426,7 +433,9 @@ function levelYs(levels: LevelsSpec['levels']): { ys: number[]; range: number } 
 }
 
 function checkLevels(s: LevelsSpec, e: Errors) {
-  e.maybe('yLabel', s.yLabel, LIMITS.short);
+  // The vertical axis is an energy. Without one, the diagram is a flow chart in disguise, which this kind cannot show.
+  if (!s.yLabel?.trim()) e.add('yLabel', 'name the energy on the vertical axis ("Energia", "H", "S"); an energy-level diagram is not a flow chart or a conversion scheme');
+  else e.maybe('yLabel', s.yLabel, LIMITS.short);
   if (s.columns.length < 1 || s.columns.length > LIMITS.columns) e.add('columns', `has ${s.columns.length} columns, use 1 to ${LIMITS.columns}`);
   s.columns.forEach((c, i) => e.maybe(`columns.${i}.label`, c.label, LIMITS.short));
   if (s.levels.length < 1 || s.levels.length > LIMITS.levels) e.add('levels', `has ${s.levels.length} levels, use 1 to ${LIMITS.levels}`);
@@ -519,7 +528,6 @@ function checkCell(s: CellSpec, e: Errors) {
   if (s.left.role === s.right.role) e.add('right.role', `left and right are both "${s.left.role}"; a cell has one anode and one cathode`);
   e.maybe('saltBridge', s.saltBridge, LIMITS.short);
   if (s.saltBridge !== null && !s.saltBridge.trim()) e.add('saltBridge', 'must not be blank; use null for none');
-  if (s.type === 'galvanic' && s.saltBridge === null) e.add('saltBridge', 'a galvanic cell needs a salt bridge (for example "KNO_3")');
   if (s.meter !== null) {
     if (s.type !== 'galvanic') e.add('meter', 'only a galvanic cell has a voltmeter; use null');
     else e.maybe('meter', s.meter, 20);
@@ -698,7 +706,10 @@ function renderLevels(s: LevelsSpec, it: boolean): string {
     const color = ACCENT[arrowNo++ % ACCENT.length];
     const a = byKey.get(k.from)!;
     const b = byKey.get(k.to)!;
-    const w = k.label ? chemWidth(k.label, 12.5) : 0;
+    // Arrow labels are bold, which the width estimate does not cover: 15% more keeps them inside the figure. A long label
+    // gets a smaller font instead of running off the edge.
+    const lfs = k.label ? fitFs(k.label, 12.5, 190) : 12.5;
+    const w = k.label ? chemWidth(k.label, lfs) * 1.15 : 0;
     const ymin = Math.min(a.y, b.y);
     const ymax = Math.max(a.y, b.y);
     let x: number;
@@ -710,7 +721,7 @@ function renderLevels(s: LevelsSpec, it: boolean): string {
       drawn.push(arrow(from, a.y, to, a.y, color));
       if (k.label) {
         const mid = (l.x1 + r.x0) / 2;
-        drawn.push(T(mid, a.y - 8, k.label, { fs: 12.5, fill: color, anchor: 'middle', weight: 600 }));
+        drawn.push(T(mid, a.y - 8, k.label, { fs: lfs, fill: color, anchor: 'middle', weight: 600 }));
         occ.push({ x0: mid - w / 2, x1: mid + w / 2, y0: a.y - 21, y1: a.y - 6 });
       }
       continue;
@@ -757,10 +768,21 @@ function renderLevels(s: LevelsSpec, it: boolean): string {
     }
     occ.push({ x0: x - 3, x1: x + 3, y0: ymin, y1: ymax });
     drawn.push(arrow(x, a.y, x, b.y, color));
+    // A label that found no free spot still goes beside its arrow, on the roomier side and shrunk to fit: a ΔH value
+    // must never disappear.
+    let fs = lfs;
+    if (k.label && !box) {
+      const roomR = bounds.x1 - (x + 8);
+      const roomL = x - 8 - bounds.x0;
+      fs = fitFs(k.label, lfs, Math.max(roomR, roomL) / 1.15);
+      const ww = chemWidth(k.label, fs) * 1.15;
+      const ly = (ymin + ymax) / 2;
+      box = roomR >= roomL ? { x0: x + 8, x1: x + 8 + ww, y0: ly - 9, y1: ly + 9 } : { x0: x - 8 - ww, x1: x - 8, y0: ly - 9, y1: ly + 9 };
+    }
     if (k.label && box) {
       occ.push(box);
       const anchorEnd = box.x1 < x;
-      drawn.push(T(anchorEnd ? box.x1 : box.x0, (box.y0 + box.y1) / 2 + 4.5, k.label, { fs: 12.5, fill: color, anchor: anchorEnd ? 'end' : 'start', weight: 600 }));
+      drawn.push(T(anchorEnd ? box.x1 : box.x0, (box.y0 + box.y1) / 2 + 4.5, k.label, { fs, fill: color, anchor: anchorEnd ? 'end' : 'start', weight: 600 }));
     }
   }
   if (guides.length) out.push(`<g stroke="${FAINT}" stroke-width="1" stroke-dasharray="1.5 3" stroke-linecap="round">${guides.join('')}</g>`);
@@ -871,7 +893,7 @@ function renderCell(s: CellSpec, it: boolean): string {
   const surface = 232;
   const floor = 346;
   const galvanic = s.type === 'galvanic';
-  const shared = !galvanic && s.saltBridge === null;
+  const shared = s.saltBridge === null;
   const anodeLeft = s.left.role === 'anode';
   const dir = anodeLeft ? 1 : -1; // electrons run left to right when the anode is on the left
   const mid = W / 2;
@@ -935,7 +957,10 @@ function renderCell(s: CellSpec, it: boolean): string {
     const color = c.role === 'anode' ? ACCENT[0] : ACCENT[1];
     const caption = `${word[c.role]} (${sign(c.role)})`;
     out.push(T(cx, floor + 26, caption, { fs: 14, anchor: 'middle', fill: color, weight: 600 }));
-    if (c.halfReaction) out.push(T(cx, floor + 46, c.halfReaction, { fs: fitFs(c.halfReaction, 12.5, shared ? 180 : 290), anchor: 'middle', fill: SOFT }));
+    // With one vessel the electrodes are too close for two half-reactions side by side: they go on two centred lines, each
+    // in the colour of its electrode's caption.
+    if (c.halfReaction && shared) out.push(T(W / 2, floor + 46 + i * 18, c.halfReaction, { fs: fitFs(c.halfReaction, 12.5, 560), anchor: 'middle', fill: color }));
+    else if (c.halfReaction) out.push(T(cx, floor + 46, c.halfReaction, { fs: fitFs(c.halfReaction, 12.5, 290), anchor: 'middle', fill: SOFT }));
   });
   return finish(out);
 }
