@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 11;
+export const PROMPT_VERSION = 12;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -169,6 +169,8 @@ export interface DraftPromptInput {
   /** Photos can be searched (Wikimedia Commons, plus Pixabay or Pexels with a key). */
   photos: boolean;
   outside: boolean;
+  /** Figures other sections already show, one per line; empty when there are none. */
+  bookFigures?: string;
 }
 
 /** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
@@ -231,7 +233,7 @@ INSTRUCTIONS
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.
-- ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}
+- ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
 - Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
   };
 }
@@ -570,7 +572,7 @@ export const figuresPassSchema = z.object({
 });
 
 /** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
-export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; photos: boolean }) {
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; photos: boolean; elsewhere?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
@@ -581,7 +583,7 @@ In this task you do not write :::image blocks or any text: return each figure wi
     prompt: `CHAPTER: ${p.chapterTitle}
 SECTION: ${p.sectionTitle}
 Figures the section already has: ${p.existing || '(none)'}
-
+${p.elsewhere ? `Figures other sections already show (the book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption):\n${p.elsewhere}\n` : ''}
 TEXT, numbered by block:
 ${p.blocks}
 

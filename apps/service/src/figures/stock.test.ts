@@ -256,4 +256,12 @@ describe('findStockPhoto', () => {
     assert.equal(seen.images, 2);
     assert.ok(r.ok && r.photo.provider === 'pixabay' && r.photo.license === null);
   });
+
+  it('never offers a photo the book already uses', async () => {
+    const f = fakeFetch({ commons: { query: { pages: [commonsPage(1), commonsPage(2)] } } });
+    setStockDeps({ fetch: f.fn, toPng: (b) => b, ...model(1) });
+    const r = await findStockPhoto(t.ctx, { query: 'q', mustShow: 'm', language: 'it', projectId: 'p1', exclude: new Set(['commons:File:Precipitate 1.jpg']) });
+    assert.equal(seen.images, 1);
+    assert.ok(r.ok && r.photo.id === 'File:Precipitate 2.jpg');
+  });
 });

@@ -1467,6 +1467,29 @@ describe('figures pass: figures for written sections, text untouched', () => {
     assert.match(fake.calls[0].prompt, /at most 2 figures/);
   });
 
+  test('a picture appears once in the book: a figure another section shows is dropped, and the writer sees the list', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Il diossido di carbonio.\n\n:::image{src="assets/s1-co2.svg" alt="a" caption="Struttura di Lewis di CO2"}\n:::');
+    ctx.db.insert('assets', { id: newId(), project_id: P, node_id: 's1', filename: 's1-co2.svg', mime: 'image/svg+xml', path: 'x', origin: 'structure', spec: { smiles: 'O=C=O', style: 'lewis', lonePairs: true, formula: 'CO2' }, caption: 'Struttura di Lewis di CO2', alt: 'a', checks: [], created_at: now() });
+    seedRevision('s2', 'Il CO2 è apolare.\n\nFine.');
+    // The same species as another SMILES string is still the same picture.
+    fake.next(answer({ figures: [fig({ key: 'co2', caption: 'CO2', alt: 'CO2', structure: { smiles: 'C(=O)=O', style: 'lewis', lonePairs: true, formula: 'CO2' } }), fig({ afterBlock: 2 })], noFigureReason: null }), answer(keepAll(2)));
+    const r = await sectionFigures(ctx, startTask('section.figures', { nodeId: 's2' }));
+    assert.equal(r.added, 1);
+    assert.ok(r.figureProblems!.some((n) => /co2: the same structure is already in "Sezione 1\.1"/.test(n)), r.figureProblems!.join(' | '));
+    assert.match(fake.calls[0].prompt, /Figures other sections already show[\s\S]*- structure CO2 in "Sezione 1\.1": Struttura di Lewis di CO2/);
+    assert.doesNotMatch(fake.calls[1].prompt, /lonePairs/, 'the check does not judge the lone-pair switch');
+  });
+
+  test('two equal figures proposed together keep only the first', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Uno.\n\nDue.');
+    fake.next(answer({ figures: [fig({}), fig({ key: 'nh3-bis', afterBlock: 2 })], noFigureReason: null }), answer(keepAll(2)));
+    const r = await sectionFigures(ctx, startTask('section.figures', { nodeId: 's1' }));
+    assert.equal(r.added, 1);
+    assert.ok(r.figureProblems!.some((n) => /nh3-bis: the same structure is already in this section/.test(n)));
+  });
+
   test('a figures run can target only the sections without a figure', async () => {
     seedOutline([['c1', ['s1', 's2', 's3']]]);
     seedRevision('s1', 'Testo.\n\n:::image{src="assets/a.svg" alt="a" caption="c"}\n:::');

@@ -1,7 +1,7 @@
 // Figures for sections that are already written: the text stays as it is, each figure goes in after the block it illustrates.
 import { splitBlocks } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
-import { buildFigures, commitFigures, discardUnstored, existingAssetNames, rewriteImageRefs } from '../figures/materialize.ts';
+import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstored, existingAssetNames, rewriteImageRefs } from '../figures/materialize.ts';
 import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { currentHead } from '../repo/content.ts';
@@ -43,7 +43,7 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
     ...figuresPassPrompt({
       language: project.language, bookTitle: project.title, chapterTitle: found.chapter.title, sectionTitle: found.section.title,
       blocks: truncate(blocks.map((b, i) => `[${i + 1}] ${b.text}`).join('\n\n'), 60_000),
-      existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, photos,
+      existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, photos, elsewhere: bookFigureList(bookFigures(ctx, projectId, nodeId)),
     }),
     schema: figuresPassSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
@@ -59,7 +59,9 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   // A second model drops figures that decorate or do not match their passage, before any photo is searched or file drawn.
   t.progress(`Checking ${proposed.length} proposed figure${proposed.length === 1 ? '' : 's'}`);
   const items = proposed.map((f, i) => {
-    const spec = (f as Record<string, unknown>)[f.kind] ?? null;
+    // lonePairs only switches lone pairs on; the builder draws the ones the species has, so the check need not judge it.
+    const raw = (f as Record<string, unknown>)[f.kind] ?? null;
+    const spec = f.kind === 'structure' && raw ? { ...(raw as Record<string, unknown>), lonePairs: undefined } : raw;
     // The paragraph before the figure, with the one before it and the one after it: a figure often sums up several.
     const around = [blocks[f.afterBlock - 2]?.text, blocks[f.afterBlock - 1].text].filter((b): b is string => !!b).map((b) => truncate(b, 1200)).join('\n\n');
     const next = blocks[f.afterBlock]?.text;
@@ -74,7 +76,7 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   if (!kept.length) return { added: 0, figureProblems: notes, model: route.model };
 
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: kept, photos,
+    projectId, nodeId, language: project.language, figures: kept, photos, keepOwn: true,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   notes.push(...built.notes);

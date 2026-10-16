@@ -264,6 +264,8 @@ function creditFor(c: Candidate, language: string): string {
 
 export async function findStockPhoto(ctx: AppContext, opts: {
   query: string; mustShow: string; language: string;
+  /** "provider:id" of photos the book already uses; they are never offered again. */
+  exclude?: Set<string>;
   projectId: string; runId?: string; taskId?: string; signal?: AbortSignal;
 }): Promise<{ ok: true; photo: StockPhoto } | { ok: false; reason: string }> {
   const keys = stockKeys(ctx);
@@ -274,7 +276,8 @@ export async function findStockPhoto(ctx: AppContext, opts: {
     keys.pixabay ? searchPixabay(keys.pixabay, opts.query, opts.signal) : [],
     keys.pexels ? searchPexels(keys.pexels, opts.query, opts.signal) : [],
   ]);
-  const found = interleave(fromCommons, fromPixabay, fromPexels);
+  const fresh = (l: Candidate[]) => l.filter((c) => !opts.exclude?.has(`${c.provider}:${c.id}`));
+  const found = interleave(fresh(fromCommons), fresh(fromPixabay), fresh(fromPexels));
   if (!found.length) return { ok: false, reason: `No stock photos found for "${opts.query}".` };
 
   // Previews that cannot be fetched or converted drop out; the model sees the rest in order.
