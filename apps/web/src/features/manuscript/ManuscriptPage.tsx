@@ -18,6 +18,7 @@ import { DiffList } from './DiffList';
 import { EvidenceDrawer, IssueGroup } from './EvidenceDrawer';
 import { HistoryDialog } from './HistoryDialog';
 import { ProposalBanner } from './ProposalBanner';
+import { FiguresDialog } from './FiguresDialog';
 import { RegenerateDialog } from './RegenerateDialog';
 import { Rail, RailLegend } from './Rail';
 import { useSection, useSectionEditor } from './useSectionEditor';
@@ -44,6 +45,7 @@ export default function ManuscriptPage() {
   const [railDrawer, setRailDrawer] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
   const [regen, setRegen] = useState<{ selection?: string } | null>(null);
+  const [figuresOpen, setFiguresOpen] = useState(false);
   const [sel, setSel] = useState<number | null>(null);
   const [focusNote, setFocusNote] = useState<string | undefined>();
   const [focusIdx, setFocusIdx] = useState(0);
@@ -170,12 +172,6 @@ export default function ManuscriptPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
 
-  const figures = useMutation({
-    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures', { params: { id: pid, nodeId: nodeId! } }),
-    onSuccess: () => { toast('Adding figures. The text stays as it is.', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
-    onError: (e) => toast(errorText(e), { tone: 'danger' }),
-  });
-
   // Which sections are being drafted right now: running task labels that name the section.
   const activeRun = project.data?.activeRun;
   const runDetail = useRun(activeRun && (activeRun.kind === 'generate' || activeRun.kind === 'regenerate' || activeRun.kind === 'figures') ? activeRun.id : undefined);
@@ -227,7 +223,7 @@ export default function ManuscriptPage() {
           <Link className="ui-btn ui-btn--sm" aria-label="Reader preview" title="Reader preview" to={`/books/${pid}/preview/${loc?.chapter.chapterId ?? ''}`}><Icon name="eye" /><span className="ms-tb-label">Reader preview</span></Link>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="History" title="History" onClick={() => setHistoryOpen(true)} disabled={!nodeId}><Icon name="history" /><span className="ms-tb-label">History</span></button>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="Regenerate section" title="Regenerate section" onClick={() => setRegen({})} disabled={!section?.current}><Icon name="sparkle" /><span className="ms-tb-label">Regenerate section</span></button>
-          {project.data?.options.figures && <button type="button" className="ui-btn ui-btn--sm" aria-label="Add figures" title="Add figures" onClick={() => figures.mutate()} disabled={!section?.current || figures.isPending}><Icon name="image" /><span className="ms-tb-label">Add figures</span></button>}
+          {project.data?.options.figures && <button type="button" className="ui-btn ui-btn--sm" aria-label="Add figures" title="Add figures" onClick={() => setFiguresOpen(true)} aria-haspopup="dialog"><Icon name="image" /><span className="ms-tb-label">Add figures</span></button>}
           {project.data?.options.outsideMaterial && <button type="button" className="ui-btn ui-btn--sm" aria-label="Find outside sources" title="Find outside sources" onClick={() => research.mutate()} disabled={!section?.current || research.isPending}><Icon name="globe" /><span className="ms-tb-label">Find outside sources</span></button>}
         </div>
 
@@ -347,6 +343,7 @@ export default function ManuscriptPage() {
         </Dialog>
       )}
       {nodeId && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} pid={pid} nodeId={nodeId} currentId={section?.current?.id ?? null} onRestored={setSectionData} />}
+      {project.data?.options.figures && <FiguresDialog open={figuresOpen} onClose={() => setFiguresOpen(false)} pid={pid} nodeId={section?.current && loc && loc.index >= 0 ? nodeId ?? null : null} sectionTitle={title} chapter={loc?.chapter ?? null} />}
       {nodeId && <RegenerateDialog open={!!regen} onClose={() => setRegen(null)} pid={pid} nodeId={nodeId} selection={regen?.selection} label={regen?.selection ? 'Regenerate selection' : 'Regenerate section'} />}
     </div>
   );
