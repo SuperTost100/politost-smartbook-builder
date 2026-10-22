@@ -10,7 +10,7 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
-import { chapterEnrich, enrichGraph } from './enrich.ts';
+import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
 import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
@@ -326,6 +326,38 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(again, { reused: 2 });
     assert.equal(fake.calls.length, 1);
     assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0, 'the picker saves nothing itself');
+  });
+
+  test('a MATLAB book gets a script for each picked section; a Python book still gets one per chapter', async () => {
+    seedOutline([['c1', ['s1', 's2', 's3']]]);
+    for (const s of ['s1', 's2', 's3']) seedRevision(s, `Testo ${s}.`);
+    const picks = { graphs: [], ide: [{ sectionId: 's1', purpose: 'a' }, { sectionId: 's1', purpose: 'doppione' }, { sectionId: 's2', purpose: 'b' }, { sectionId: 's3', purpose: 'c' }] };
+
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: false, ide: true, labLanguage: 'matlab' }), P);
+    const m = startTask('chapter.enrich', { chapterId: 'c1' });
+    fake.next(answer(picks));
+    assert.deepEqual(await chapterEnrich(ctx, m), { picked: 3 });
+    assert.deepEqual(taskKeys(m.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.ide:s1', 'enrich.ide:s2', 'enrich.ide:s3']);
+    assert.match(fake.calls.at(-1)!.prompt, /at most 3 sections for a MATLAB example/);
+
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: false, ide: true }), P);
+    const py = startTask('chapter.enrich', { chapterId: 'c1' });
+    fake.next(answer(picks));
+    assert.deepEqual(await chapterEnrich(ctx, py), { picked: 1 });
+  });
+
+  test('a MATLAB example is saved as matlab after numbl runs it', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il ciclo for.');
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ ide: true, labLanguage: 'matlab' }), P);
+    const t = startTask('enrich.ide', { nodeId: 's1', purpose: 'cicli' });
+    fake.next(answer({ id: 'somma', title: 'Somma', description: 'Cambia n', code: "s = 0;\nfor k = 1:4\n  s = s + k;\nend\nfprintf('s = %d\\n', s);", expectedOutput: 's = 10' }));
+    assert.deepEqual(await enrichIde(ctx, t), { made: 1 });
+    const row = ctx.db.get<{ payload: string; status: string; checks: string }>(`SELECT payload, status, checks FROM enrichments WHERE kind = 'ide'`)!;
+    assert.equal(json<{ language: string }>(row.payload, { language: '' }).language, 'matlab');
+    assert.equal(row.status, 'verified');
+    assert.match(row.checks, /Ran in numbl/);
+    assert.match(fake.calls.at(-1)!.system ?? '', /numbl/);
   });
 
   test('a child is idempotent: it saves one graph and skips when the section already has one', async () => {

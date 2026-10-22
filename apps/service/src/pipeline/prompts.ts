@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 12;
+export const PROMPT_VERSION = 13;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -171,6 +171,8 @@ export interface DraftPromptInput {
   outside: boolean;
   /** Figures other sections already show, one per line; empty when there are none. */
   bookFigures?: string;
+  /** The book teaches this programming language; its lab examples are added separately. */
+  teaches?: 'matlab';
 }
 
 /** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
@@ -232,7 +234,8 @@ INSTRUCTIONS
 - Cover the objectives in a logical order: motivation, definitions, results with hypotheses, at least one fully worked example, typical mistakes. Use ### subsections for the planned subsections.
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
-- Where the sources disagree, follow the course notes and mention the other convention in one sentence.
+- Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
+- This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
 - ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
 - Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
   };
@@ -350,13 +353,16 @@ export const enrichPickSchema = z.object({
   ide: z.array(z.object({ sectionId: z.string(), purpose: z.string() })),
 });
 
-export function enrichPickPrompt(p: { sections: string; graphs: boolean; ide: boolean }) {
+export function enrichPickPrompt(p: { sections: string; graphs: boolean; ide: boolean; lab: 'python' | 'matlab'; maxIde: number }) {
+  const ide = p.lab === 'matlab'
+    ? `at most ${p.maxIde} sections for a MATLAB example. The book teaches MATLAB, so give a script to every section whose commands, functions or methods a student should try (most of them); skip only sections with nothing to run`
+    : `at most ${p.maxIde} section${p.maxIde === 1 ? '' : 's'} for a Python example`;
   return {
-    system: 'You decide where interactive material helps students learn. Interactive graphs fit concepts students understand by exploring a function. Python examples fit numerical methods, sequences and series, approximations and computations worth running. Choose few, high-value places; it is fine to choose none.',
+    system: `You decide where interactive material helps students learn. Interactive graphs fit concepts students understand by exploring a function. ${p.lab === 'matlab' ? 'MATLAB examples fit commands and functions worth trying, numerical methods, matrices, plots and computations worth running.' : 'Python examples fit numerical methods, sequences and series, approximations and computations worth running.'} Choose high-value places; it is fine to choose none.`,
     prompt: `Sections (id | title | summary):
 ${p.sections}
 
-Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? 'at most 1 section for a Python example' : 'no Python examples'}. Return JSON with sectionId and purpose for each.`,
+Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? ide : `no ${p.lab === 'matlab' ? 'MATLAB' : 'Python'} examples`}. Return JSON with sectionId and purpose for each.`,
   };
 }
 
@@ -390,9 +396,15 @@ export const ideSchema = z.object({
   expectedOutput: z.string().describe('what the program prints, exactly or approximately'),
 });
 
-export function idePrompt(p: { language: string; purpose: string; section: string }) {
+/** What the MATLAB lab (numbl in the reader) can run. Functions it lacks make the check fail, so the writer avoids them. */
+const MATLAB_LAB_RULES = `It runs in numbl, a MATLAB-compatible interpreter in the browser: core MATLAB only, no toolboxes (no syms, no Optimization or Statistics toolbox), no input(), no files, no network. Available: scalars, vectors and matrices, : and end indexing, element-wise operators, A\\b, lu, qr, chol, inv, det, norm, cond, eig, rank, linspace, zeros, ones, eye, diag, triu, tril, rand, size, length, numel, sum, cumsum, prod, max, min, abs, sort, find, any, all, mod, floor, round, the elementary functions, polyval, polyfit, roots, interp1, trapz, diff, meshgrid, fzero, integral, hilb, vander, magic, anonymous functions with @, for, while, if/elseif/else, switch, break, logical operators, fprintf, disp, sprintf, num2str, error, tic/toc, and 2-D plots (plot, semilogy, semilogx, loglog, bar, subplot, hold on, figure, xlabel, ylabel, title, legend, grid on, axis). Not available: format long or format short (print digits with fprintf instead), eval, fminsearch, fminbnd, spline, pchip, ode45, quad, 3-D plots (surf, mesh, plot3, contour), text annotations, input(). Define your own functions as local functions at the end of the script, after the code that calls them; a script never starts with a function. Do not rely on how MATLAB displays a value without a semicolon beyond the variable name and its value: show results with fprintf or disp.`;
+
+export function idePrompt(p: { language: string; purpose: string; section: string; lab: 'python' | 'matlab' }) {
+  const lang = languageName(p.language);
   return {
-    system: `You write a short Python 3 example for a textbook in ${languageName(p.language)}. It runs in Pyodide in the browser: standard library only (math, fractions, decimal, itertools, statistics), no numpy, no matplotlib, no input(), no files, no network, under 40 lines, prints its results. Comments and printed labels in ${languageName(p.language)}.`,
+    system: p.lab === 'matlab'
+      ? `You write a short MATLAB script for a textbook in ${lang} that teaches MATLAB. ${MATLAB_LAB_RULES} Under 60 lines; it prints its results (and may draw at most 2 figures). Comments, printed labels, plot titles and labels in ${lang}. Use the commands and functions the section explains, in the way it explains them.`
+      : `You write a short Python 3 example for a textbook in ${lang}. It runs in Pyodide in the browser: standard library only (math, fractions, decimal, itertools, statistics), no numpy, no matplotlib, no input(), no files, no network, under 40 lines, prints its results. Comments and printed labels in ${lang}.`,
     prompt: `Purpose: ${p.purpose}
 Section text:
 ${p.section}

@@ -166,6 +166,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
     evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
     bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',
+    teaches: project.options.labLanguage === 'matlab' ? 'matlab' : undefined,
   });
   t.progress(`Writing "${section.title}"`);
   const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });

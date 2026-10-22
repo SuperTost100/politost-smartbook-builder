@@ -39,7 +39,7 @@ It runs on your computer. The AI work goes through the command-line tools you al
 2. **Maps the course.** It keeps each source's own index, splits past exams into sessions and questions, and counts how often each topic appears.
 3. **Proposes an outline** that you edit and approve. Topics the exams test often get deeper sections and more exercises.
 4. **Writes each section from evidence.** NotebookLM, or a local search plus a reader model, returns verbatim passages. Each one is located on its page before the writer may cite it.
-5. **Checks its own output.** Lint catches broken formulas, leftover model commentary and Unicode math. A second model solves every exercise again, Python examples run in Pyodide, and graphs are evaluated over their domain.
+5. **Checks its own output.** Lint catches broken formulas, leftover model commentary and Unicode math. A second model solves every exercise again, Python examples run in Pyodide and MATLAB examples in numbl, and graphs are evaluated over their domain.
 6. **Lets you finish the book.** Edit any block with a live formula preview, regenerate a passage with an instruction, accept or reject AI proposals, and export a validated `.ptsb`.
 
 Your edits are never overwritten. AI output that arrives after you changed a section becomes a proposal you accept or reject.

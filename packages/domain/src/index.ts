@@ -64,6 +64,8 @@ export type Settings = z.infer<typeof settingsSchema>;
 export const bookOptionsSchema = z.object({
   outsideMaterial: z.boolean().default(false),
   ide: z.boolean().default(true),
+  /** Language of the lab examples. MATLAB runs in the reader through numbl. */
+  labLanguage: z.enum(['python', 'matlab']).default('python'),
   graphs: z.boolean().default(true),
   figures: z.boolean().default(true),
   /** Hold every chapter after the first until the author approves chapter 1. */
