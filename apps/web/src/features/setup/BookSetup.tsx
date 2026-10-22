@@ -10,7 +10,7 @@ import { useToast } from '../../components/Toast';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
-  outsideMaterial: false, ide: true, graphs: true, figures: true, firstChapterGate: true, outlineGate: true,
+  outsideMaterial: false, ide: true, labLanguage: 'python', graphs: true, figures: true, firstChapterGate: true, outlineGate: true,
   exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [],
 };
 
@@ -145,6 +145,17 @@ export default function BookSetup() {
         <h2 id="su-opts" className="ui-panel-title">What goes in the book</h2>
         <Toggle label="Use verified outside material" hint="Allow explanations that go beyond your sources, when they can be verified. Off keeps the book to your material." checked={opts.outsideMaterial} onChange={(v) => set('outsideMaterial', v)} />
         <Toggle label="IDE examples" checked={opts.ide} onChange={(v) => set('ide', v)} />
+        {opts.ide && (
+          <fieldset className="su-fieldset">
+            <legend className="ui-field__label">Lab language</legend>
+            <div className="ui-row" role="radiogroup" aria-label="Lab language">
+              {([['python', 'Python'], ['matlab', 'MATLAB']] as const).map(([v, l]) => (
+                <label key={v} className="ui-check"><input type="radio" name="su-lab" checked={opts.labLanguage === v} onChange={() => set('labLanguage', v)} />{l}</label>
+              ))}
+            </div>
+            <p className="ui-field__hint">A MATLAB book gets up to one example per section, and the text writes commands as inline code. A Python book gets one example per chapter.</p>
+          </fieldset>
+        )}
         <Toggle label="Graphs" checked={opts.graphs} onChange={(v) => set('graphs', v)} />
         <Toggle label="Figures" checked={opts.figures} onChange={(v) => set('figures', v)} />
         <Toggle label="Outline approval gate" hint="Drafting waits until you approve the outline." checked={opts.outlineGate} onChange={(v) => set('outlineGate', v)} />
