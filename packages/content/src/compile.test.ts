@@ -159,6 +159,15 @@ test('content-core validators run on the compiled output', () => {
   assert.ok(warn.findings.some((f) => f.rule === 'content-core' && f.severity === 'minor' && /hint mancante/.test(f.message)));
 });
 
+test('lab titles and descriptions lose Markdown backticks, which the reader would print; the code keeps them', () => {
+  const input = fixtureBook();
+  input.enrichments.push(enrichment({ id: 'm', kind: 'ide', nodeId: 'sec-vel', payload: { id: 'radici', title: 'Radici con `fzero`', language: 'matlab', description: 'Cambia gli estremi passati a `fzero`.', code: "disp('`a`')" } }));
+  const snippet = JSON.parse(text(compileBook(input), 'ide.json')).find((s: { id: string }) => s.id === 'radici');
+  assert.equal(snippet.title, 'Radici con fzero');
+  assert.equal(snippet.description, 'Cambia gli estremi passati a fzero.');
+  assert.equal(snippet.code, "disp('`a`')");
+});
+
 test('smartbook.json: metadata, section labels and flags', () => {
   const cfg = JSON.parse(text(compileBook(fixtureBook()), 'smartbook.json'));
   assert.equal(cfg.id, 'fisica-demo');

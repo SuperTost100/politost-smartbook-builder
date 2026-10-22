@@ -556,6 +556,12 @@ function compileQuestions(
 // ---------------------------------------------------------------------------------------------
 
 /** Compile a whole book to reader files (smartbook.json, chapters/*.md, esercizi.md, esami.md, ide.json, grafici.json, assets/*). */
+/** The reader prints a lab snippet's title and description as plain text, so `linspace` would show its backticks. */
+function plainLabText(payload: Record<string, unknown>): Record<string, unknown> {
+  const plain = (v: unknown) => (typeof v === 'string' ? v.replace(/`([^`\n]+)`/g, '$1') : v);
+  return { ...payload, title: plain(payload.title), description: plain(payload.description) };
+}
+
 export function compileBook(input: BookInput): CompiledBook {
   const findings: LintFinding[] = [];
   const files: Record<string, string | Uint8Array> = {};
@@ -635,7 +641,7 @@ export function compileBook(input: BookInput): CompiledBook {
       .filter(({ e }) => e.kind === kind)
       .sort((a, b) => orderOf(a.e.nodeId) - orderOf(b.e.nodeId) || a.i - b.i)
       .map(({ e }) => e.payload);
-  if (wanted.ide) files['ide.json'] = `${JSON.stringify(payloads('ide'), null, 2)}\n`;
+  if (wanted.ide) files['ide.json'] = `${JSON.stringify(payloads('ide').map(plainLabText), null, 2)}\n`;
   if (wanted.grafici) files['grafici.json'] = `${JSON.stringify(payloads('graph'), null, 2)}\n`;
 
   const labels = labelsFor(language);
