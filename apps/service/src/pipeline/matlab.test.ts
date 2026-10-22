@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { checkLabCode } from './enrich.ts';
 import { runMatlab } from './matlab.ts';
 
 test('a course script runs: loops, a local function, matrices and the shims', async () => {
@@ -25,6 +26,12 @@ test('plots are counted per figure, and close all forgets the earlier ones', asy
   const r = await runMatlab("plot(1:3, [1 4 9]);\nclose all\nx = linspace(0, 1);\nplot(x, x.^2); hold on; plot(x, x.^3);\nfigure; semilogy(1:5, 10.^(1:5));", 20_000);
   assert.equal(r.ok, true, r.error);
   assert.equal(r.figures, 2);
+});
+
+test('a figure cleared with clf or closed does not count, so a script that shows nothing fails the check', async () => {
+  assert.equal((await runMatlab('plot(1:3); clf;', 20_000)).figures, 0);
+  assert.equal((await runMatlab('plot(1:3); figure; plot(1:2); close', 20_000)).figures, 1);
+  assert.equal((await checkLabCode('matlab', 'plot(1:3); clf;')).ok, false);
 });
 
 test('an error names its line and keeps the output printed before it', async () => {

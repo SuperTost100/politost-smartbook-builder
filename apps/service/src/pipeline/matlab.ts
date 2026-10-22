@@ -48,6 +48,7 @@ try {
     for (const i of instructions) {
       if (i.type === 'set_figure_handle') figure = i.handle;
       else if (plotTypes.has(i.type)) figures.add(figure);
+      else if (i.type === 'clf' || i.type === 'close') figures.delete(figure);
       else if (i.type === 'close_all') figures.clear();
     }
     reply({ ok: true, stdout: out, figures: figures.size });
