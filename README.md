@@ -128,6 +128,12 @@ CI runs `typecheck`, `test` and the web build on every push.
 | [Architecture](docs/ARCHITECTURE.md)     | How the service, the queue and the web app fit together      |
 | [Status](STATUS.md)                      | What works today and what is still open                      |
 
+## Sources and copyright
+
+Smart Builder doesn't check who owns the material you import. You need the right to use your sources, and to share the books you make from them if you share those books. Photos from Pixabay and Wikimedia Commons carry their credit in the caption. Keep it when you publish. The AI tools you connect have their own terms, and those terms apply when Smart Builder uses them for you.
+
+Smart Builder comes as is, with no warranty and no liability for what you make with it. Sections 15 and 16 of the [license](LICENSE) give the full wording.
+
 ## License
 
 AGPL-3.0-or-later. Smart Builder uses [MuPDF](https://mupdf.com/) (AGPL) for PDF reading and code adapted from the [Smartbook reader](https://github.com/SuperTost100/politost-smartbook) (AGPL). Books you make with it are yours and aren't covered by this license.
