@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { test } from 'node:test';
-import { runPython } from './python.ts';
+import { pyodideDir, runPython } from './python.ts';
 
 test('a normal example runs and returns its output (Pyodide found from the package directory)', async () => {
   const r = await runPython('import math\nprint(1)\nprint(round(math.pi, 3))', 30_000);
   assert.equal(r.ok, true, r.error);
   assert.equal(r.stdout.trim(), '1\n3.142');
-  assert.match(r.version, /^0\.\d+/);
+  assert.equal(r.version, JSON.parse(readFileSync(join(pyodideDir(), 'package.json'), 'utf8')).version);
 });
 
 test('a Python error is reported, with the output printed before it', async () => {
