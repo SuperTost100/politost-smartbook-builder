@@ -126,11 +126,12 @@ function prepareRun(ctx: AppContext, projectId: string) {
 }
 
 /** The active generate run that still has an unfinished draft for every one of these sections, if there is one. */
-/** Sections with an unfinished task in an active figures run, mapped to that run. */
+/** Sections with an unfinished task in an active figures run, mapped to that run. A cancelling run counts, because its
+ * running task can still finish and apply its figures. */
 function sectionsInFiguresRuns(ctx: AppContext, projectId: string): Map<string, string> {
   const rows = ctx.db.all<{ runId: string; nodeId: string }>(
     `SELECT t.run_id AS runId, json_extract(t.input, '$.nodeId') AS nodeId FROM tasks t JOIN runs r ON r.id = t.run_id
-     WHERE r.project_id = ? AND r.kind = 'figures' AND r.status IN ${ACTIVE} AND t.kind = 'section.figures'
+     WHERE r.project_id = ? AND r.kind = 'figures' AND r.status IN ('running', 'pausing', 'paused', 'waiting', 'cancelling') AND t.kind = 'section.figures'
        AND t.state NOT IN ('succeeded', 'failed', 'cancelled', 'skipped')`, projectId);
   return new Map(rows.map((r) => [r.nodeId, r.runId]));
 }

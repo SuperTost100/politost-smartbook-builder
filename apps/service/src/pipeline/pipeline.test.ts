@@ -1582,6 +1582,12 @@ describe('figures pass: figures for written sections, text untouched', () => {
     const later = startRun(ctx, P, 'figures', { nodeIds: ['s1'] });
     ctx.queue.cancel(later.id);
     assert.notEqual(later.id, first.id);
+    // A run that is cancelling while its task still runs keeps the section.
+    ctx.db.run(`UPDATE runs SET status = 'cancelling' WHERE id = ?`, later.id);
+    ctx.db.run(`UPDATE tasks SET state = 'running' WHERE run_id = ?`, later.id);
+    assert.equal(startRun(ctx, P, 'figures', { nodeIds: ['s1'] }).id, later.id);
+    ctx.db.run(`UPDATE tasks SET state = 'cancelled' WHERE run_id = ?`, later.id);
+    ctx.db.run(`UPDATE runs SET status = 'cancelled' WHERE id = ?`, later.id);
     await new Promise((r) => setImmediate(r));
   });
 });
