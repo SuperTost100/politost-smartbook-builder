@@ -1561,5 +1561,26 @@ describe('figures pass: figures for written sections, text untouched', () => {
     // Let the queue's scheduled tick run while the database is still open.
     await new Promise((r) => setImmediate(r));
   });
+
+  test('a section already in an active figures run is not added again: a double click joins the run', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Testo uno.');
+    seedRevision('s2', 'Testo due.');
+    const first = startRun(ctx, P, 'figures', { nodeIds: ['s1'] });
+    const again = startRun(ctx, P, 'figures', { nodeIds: ['s1'] });
+    assert.equal(again.id, first.id);
+    const book = startRun(ctx, P, 'figures', {});
+    assert.notEqual(book.id, first.id);
+    const nodes = (id: string) => ctx.db.all<{ input: string }>('SELECT input FROM tasks WHERE run_id = ?', id).map((t) => json<{ nodeId: string }>(t.input, { nodeId: '' }).nodeId);
+    assert.deepEqual(nodes(first.id), ['s1']);
+    assert.deepEqual(nodes(book.id), ['s2']);
+    ctx.queue.cancel(first.id);
+    ctx.queue.cancel(book.id);
+    // Once the first run is over, the section can be illustrated again.
+    const later = startRun(ctx, P, 'figures', { nodeIds: ['s1'] });
+    ctx.queue.cancel(later.id);
+    assert.notEqual(later.id, first.id);
+    await new Promise((r) => setImmediate(r));
+  });
 });
 
