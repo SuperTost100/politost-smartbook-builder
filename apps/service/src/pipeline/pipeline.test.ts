@@ -346,6 +346,19 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await chapterEnrich(ctx, py), { picked: 1 });
   });
 
+  test('picks for unknown sections do not use up the places for graphs and examples', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    for (const s of ['s1', 's2']) seedRevision(s, `Testo ${s}.`);
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: true, labLanguage: 'matlab' }), P);
+    const t = startTask('chapter.enrich', { chapterId: 'c1' });
+    fake.next(answer({
+      graphs: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's1', purpose: 'doppione' }, { sectionId: 's2', purpose: 'b' }],
+      ide: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's2', purpose: 'b' }],
+    }));
+    assert.deepEqual(await chapterEnrich(ctx, t), { picked: 4 });
+    assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.graph:s2', 'enrich.ide:s1', 'enrich.ide:s2']);
+  });
+
   test('a MATLAB example is saved as matlab after numbl runs it', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Il ciclo for.');

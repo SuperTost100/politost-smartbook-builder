@@ -41,12 +41,14 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
     schema: enrichPickSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const have = new Set(sections.map((s) => s.id));
+  // Drop unknown and repeated sections before the cap, so they don't use up places.
+  const usable = <T extends { sectionId: string }>(picks: T[]) => uniqueSections(picks.filter((p) => have.has(p.sectionId)));
   const force = t.task.input.force ? { force: true } : {};
   const titleOf = (id: string) => chapter.sections.find((s) => s.id === id)?.title ?? '';
   const specs: TaskSpec[] = [
-    ...(project.options.graphs ? data.graphs.slice(0, 2) : []).filter((p) => have.has(p.sectionId))
+    ...(project.options.graphs ? usable(data.graphs).slice(0, 2) : [])
       .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
-    ...(project.options.ide ? uniqueSections(data.ide).slice(0, maxIde) : []).filter((p) => have.has(p.sectionId))
+    ...(project.options.ide ? usable(data.ide).slice(0, maxIde) : [])
       .map((p) => ({ kind: 'enrich.ide', key: `enrich.ide:${p.sectionId}`, label: `Write a ${LAB_NAME[lab]} example for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
   ];
   t.enqueue(specs);
