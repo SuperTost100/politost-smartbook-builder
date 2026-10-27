@@ -1574,6 +1574,8 @@ describe('figures pass: figures for written sections, text untouched', () => {
     const nodes = (id: string) => ctx.db.all<{ input: string }>('SELECT input FROM tasks WHERE run_id = ?', id).map((t) => json<{ nodeId: string }>(t.input, { nodeId: '' }).nodeId);
     assert.deepEqual(nodes(first.id), ['s1']);
     assert.deepEqual(nodes(book.id), ['s2']);
+    // Every section taken, by two different runs: refused, since no single run covers the request.
+    assert.throws(() => startRun(ctx, P, 'figures', {}), (e: Error & { status?: number; code?: string }) => e.status === 409 && e.code === 'figures_running');
     ctx.queue.cancel(first.id);
     ctx.queue.cancel(book.id);
     // Once the first run is over, the section can be illustrated again.

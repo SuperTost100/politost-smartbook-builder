@@ -61,7 +61,12 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       // scope can't illustrate it twice. When every picked section is taken, the request joins that run.
       const busy = sectionsInFiguresRuns(ctx, projectId);
       const fresh = picked.filter((s) => !busy.has(s.id));
-      if (!fresh.length) { runId = busy.get(picked[0]!.id)!; break; }
+      if (!fresh.length) {
+        const owners = new Set(picked.map((s) => busy.get(s.id)!));
+        if (owners.size > 1) throw new HttpError(409, 'figures_running', 'These sections are already getting figures in other runs.', 'Wait for those runs to finish, or open them from the Run panel.');
+        runId = [...owners][0]!;
+        break;
+      }
       const stamp = Date.now().toString(36);
       runId = ctx.queue.createRun(projectId, 'figures', fresh.map((s) => ({ kind: 'section.figures', key: `figures:${s.id}:${stamp}`, label: `Add figures to "${s.title}"`, input: { nodeId: s.id }, pool: 'writer', maxAttempts: 2 })));
       break;
