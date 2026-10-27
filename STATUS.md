@@ -1,6 +1,6 @@
 # Status
 
-Last updated 16 October 2026.
+Last updated 27 October 2026.
 
 ## What works
 
@@ -110,7 +110,7 @@ Three things come from cli-funnel 0.5.0:
 
 ## Tests and CI
 
-`npm test` runs 128 content tests and 277 service tests. `npm run test:e2e` runs 54 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 130 content tests and 328 service tests. `npm run test:e2e` runs 54 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
 
 ## Your running instance
 
