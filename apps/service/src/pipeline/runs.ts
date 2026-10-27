@@ -57,8 +57,18 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       const picked = sections.filter((s) => scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId))
         .filter((s) => { const head = headRevision(ctx, projectId, s.id); return head && (!scope.missingOnly || !head.markdown.includes(':::image{')); });
       if (!picked.length) throw new HttpError(409, 'nothing_to_illustrate', 'No drafted section to add figures to.', scope.missingOnly ? 'Every section already has a figure.' : 'Draft the section first.');
+      // A section that an active figures run still has to do is left to that run, so a double click or an overlapping
+      // scope can't illustrate it twice. When every picked section is taken, the request joins that run.
+      const busy = sectionsInFiguresRuns(ctx, projectId);
+      const fresh = picked.filter((s) => !busy.has(s.id));
+      if (!fresh.length) {
+        const owners = new Set(picked.map((s) => busy.get(s.id)!));
+        if (owners.size > 1) throw new HttpError(409, 'figures_running', 'These sections are already getting figures in other runs.', 'Wait for those runs to finish, or open them from the Run panel.');
+        runId = [...owners][0]!;
+        break;
+      }
       const stamp = Date.now().toString(36);
-      runId = ctx.queue.createRun(projectId, 'figures', picked.map((s) => ({ kind: 'section.figures', key: `figures:${s.id}:${stamp}`, label: `Add figures to "${s.title}"`, input: { nodeId: s.id }, pool: 'writer', maxAttempts: 2 })));
+      runId = ctx.queue.createRun(projectId, 'figures', fresh.map((s) => ({ kind: 'section.figures', key: `figures:${s.id}:${stamp}`, label: `Add figures to "${s.title}"`, input: { nodeId: s.id }, pool: 'writer', maxAttempts: 2 })));
       break;
     }
     case 'review': {
@@ -116,6 +126,16 @@ function prepareRun(ctx: AppContext, projectId: string) {
 }
 
 /** The active generate run that still has an unfinished draft for every one of these sections, if there is one. */
+/** Sections with an unfinished task in an active figures run, mapped to that run. A cancelling run counts, because its
+ * running task can still finish and apply its figures. */
+function sectionsInFiguresRuns(ctx: AppContext, projectId: string): Map<string, string> {
+  const rows = ctx.db.all<{ runId: string; nodeId: string }>(
+    `SELECT t.run_id AS runId, json_extract(t.input, '$.nodeId') AS nodeId FROM tasks t JOIN runs r ON r.id = t.run_id
+     WHERE r.project_id = ? AND r.kind = 'figures' AND r.status IN ('running', 'pausing', 'paused', 'waiting', 'cancelling') AND t.kind = 'section.figures'
+       AND t.state NOT IN ('succeeded', 'failed', 'cancelled', 'skipped')`, projectId);
+  return new Map(rows.map((r) => [r.nodeId, r.runId]));
+}
+
 function runDraftingNodes(ctx: AppContext, projectId: string, nodeIds: string[]): string | null {
   const runs = ctx.db.all<{ id: string }>(`SELECT id FROM runs WHERE project_id = ? AND kind = 'generate' AND status IN ${ACTIVE} ORDER BY created_at DESC`, projectId);
   for (const r of runs) {
