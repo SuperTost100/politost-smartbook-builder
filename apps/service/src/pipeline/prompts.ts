@@ -244,11 +244,14 @@ export interface DraftPromptInput {
 /** How the exam format steers the writing of a section. */
 function examFocus(p: NonNullable<DraftPromptInput['program']>, language: string) {
   const mark = language === 'it' ? "**Dimostrazione richiesta all'esame.**" : '**Proof asked at the exam.**';
-  const proofs = p.exam.proofs === 'required'
-    ? `The exam asks for proofs. For every theorem of this section that has a standard proof, give the complete proof. Put the line ${mark} on its own immediately before each such proof.`
-    : p.exam.proofs === 'none' && !p.exam.oral
-      ? 'The exam is written and asks for no proofs: put the weight on methods and fully worked exercises; keep proofs brief (the idea in a few lines), and mark none of them.'
-      : `Give the complete proof, with the line ${mark} on its own immediately before it, only for the results listed under "proofs asked" below; other proofs stay brief.`;
+  // Only program content is asked at the exam, so a section without program items marks no proof as asked.
+  const proofs = !p.items.length
+    ? `This section teaches no program item of its own (a recap or a bridge): give proofs only as far as the explanation needs them, and never use the line ${mark}.`
+    : p.exam.proofs === 'required'
+      ? `The exam asks for proofs. For every theorem of this section that has a standard proof, give the complete proof. Put the line ${mark} on its own immediately before each such proof.`
+      : p.exam.proofs === 'none' && !p.exam.oral
+        ? 'The exam is written and asks for no proofs: put the weight on methods and fully worked exercises; keep proofs brief (the idea in a few lines), and mark none of them.'
+        : `Give the complete proof, with the line ${mark} on its own immediately before it, only for the results listed under "proofs asked" below; other proofs stay brief.`;
   // A section with no program item (a prerequisite recap, say) still follows the exam format, but gets no scope to stay inside.
   const items = p.items.length ? `COURSE PROGRAM ITEMS this section teaches (title | what the program says | proofs asked):
 ${p.items.map((i) => `- ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), 800) || '-'} | ${i.proofs.join('; ') || '-'}`).join('\n')}

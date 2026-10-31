@@ -341,13 +341,14 @@ describe('the writer gets the program items and the exam format', () => {
     assert.match(prompt, /The exam asks for proofs\. For every theorem[\s\S]*\*\*Dimostrazione richiesta all'esame\.\*\*/);
   });
 
-  test('a section with no program item keeps the exam format but gets no scope to stay inside', async () => {
+  test('a section with no program item keeps the exam format but gets no scope to stay inside and marks no proof', async () => {
     seedProgram([item('derivate', { title: 'Derivate' })], { proofs: 'required' });
     seedOutline([['c1', [section('s1', { programItems: [] })]]]);
     await draftOf('s1');
     const { prompt } = fake.calls[0];
     assert.doesNotMatch(prompt, /COURSE PROGRAM ITEMS|stay inside what the program lists|none assigned/);
-    assert.match(prompt, /EXAM: [\s\S]*The exam asks for proofs\./);
+    assert.match(prompt, /EXAM: [\s\S]*teaches no program item of its own[\s\S]*never use the line \*\*Dimostrazione richiesta all'esame\.\*\*/);
+    assert.doesNotMatch(prompt, /The exam asks for proofs\./);
   });
 
   test('written only and no proofs: the weight goes to methods; the proof line is not used', async () => {
