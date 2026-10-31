@@ -102,7 +102,8 @@ export function AlignmentPanel({ pid }: { pid: string }) {
 
   const findings = report?.findings ?? [];
   const applied = !!report?.appliedAt;
-  const stale = !!report && !!current && report.outlineRevId !== current.id;
+  // Reports are made on the approved outline, which can be older than the newest (unapproved) revision.
+  const stale = !!report && !!project.data && report.outlineRevId !== project.data.outlineRevId;
   const covered = report ? report.coverage.filter((c) => c.nodeIds.length > 0).length : 0;
   const busy = !!alignRun || check.isPending || apply.isPending;
   const counts = alignRun ? runCounts(alignRun) : null;

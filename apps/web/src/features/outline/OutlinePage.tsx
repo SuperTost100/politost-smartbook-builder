@@ -92,7 +92,8 @@ export default function OutlinePage() {
   });
 
   const topics = topicsQ.data ?? [];
-  const programItems = programQ.data?.status === 'ready' ? programQ.data.items : [];
+  // Same rule as the service: items from an earlier reading stay in use while a new one runs or fails.
+  const programItems = programQ.data?.items ?? [];
   const resources = (resourcesQ.data ?? []).filter((r) => r.status === 'ready' && r.included);
   const approved = !!current?.approvedAt && !dirty;
   const hasSources = resources.length > 0;

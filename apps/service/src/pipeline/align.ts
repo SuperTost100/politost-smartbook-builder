@@ -236,7 +236,9 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
           const section: OutlineSection = { id: newId(), title: f.suggested.title, objectives: f.suggested.objectives, topicIds: [], depth: f.suggested.depth, subsections: [], programItems: [f.item], role: 'content' };
           // Sections added after the same section keep the report's order, and none goes behind the exam guide.
           const anchor = `${chapter.id}:${f.suggested.afterSectionId ?? ''}`;
-          const index = (f.suggested.afterSectionId ? chapter.sections.findIndex((s) => s.id === f.suggested.afterSectionId) + 1 : 0) + (inserted.get(anchor) ?? 0);
+          // An anchor removed earlier in this apply puts the section at the end of the chapter, not at its start.
+          const afterAt = f.suggested.afterSectionId ? chapter.sections.findIndex((s) => s.id === f.suggested.afterSectionId) : -1;
+          const index = (!f.suggested.afterSectionId ? 0 : afterAt >= 0 ? afterAt + 1 : chapter.sections.length) + (inserted.get(anchor) ?? 0);
           inserted.set(anchor, (inserted.get(anchor) ?? 0) + 1);
           const guideAt = chapter.sections.findIndex((s) => s.role === 'exam-guide');
           chapter.sections.splice(guideAt >= 0 ? Math.min(index, guideAt) : index, 0, section);

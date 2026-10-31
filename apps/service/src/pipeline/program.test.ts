@@ -573,6 +573,12 @@ describe('Align book', () => {
     assert.deepEqual(deps, [`draft:${fresh}`]);
   });
 
+  test('a new section whose anchor is removed in the same apply goes to the end of the chapter, before the exam guide', async () => {
+    const { revId } = book();
+    await apply(reportOf(revId, [offWhole('s2'), missing({ chapterId: 'c1', afterSectionId: 's2', title: 'Nuova' }), { kind: 'exam-guide', chapterId: 'c1', message: 'g' }]).id);
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.title), ['Titolo s1', 'Nuova', "Come viene chiesto all'esame"]);
+  });
+
   test('Put back restores a removed section where it was, with its text, once', async () => {
     const { revId } = book();
     const report = reportOf(revId, [offWhole('s2'), { kind: 'exam-guide', chapterId: 'c1', message: 'g' }]);
