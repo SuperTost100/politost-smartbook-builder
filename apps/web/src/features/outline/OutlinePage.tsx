@@ -173,7 +173,12 @@ export default function OutlinePage() {
                     count={draft.chapters.length}
                     topics={topics}
                     programItems={programItems}
-                    onChange={(next) => update((o) => ({ ...o, chapters: o.chapters.map((c, i) => (i === ci ? next : c)) }))}
+                    onChange={(next) => update((o) => {
+                      const chapters = o.chapters.map((c, i) => (i === ci ? next : c));
+                      // An item a section now teaches is no longer left out (the planner applies the same rule).
+                      const taught = new Set(chapters.flatMap((c) => c.sections.flatMap((s) => s.programItems)));
+                      return { ...o, chapters, programExclusions: o.programExclusions.filter((e) => !taught.has(e.item)) };
+                    })}
                     onMove={(dir) => { update((o) => ({ ...o, chapters: move(o.chapters, ci, dir) })); focusLater(`ol-ch-${ch.id}`); }}
                     onRemove={() => update((o) => ({ ...o, chapters: o.chapters.filter((_, i) => i !== ci) }))}
                   />
@@ -362,6 +367,8 @@ function TopicPicker({ topics, value, onChange, id }: { topics: Topic[]; value: 
 function ProgramPicker({ items, value, onChange, id }: { items: ProgramItem[]; value: string[]; onChange: (v: string[]) => void; id: string }) {
   const [q, setQ] = useState('');
   const shown = items.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
+  // Keys the program no longer has stay listed, so the author can untick them.
+  const stale = value.filter((k) => !items.some((t) => t.key === k));
   return (
     <div className="ui-field">
       <label className="ui-field__label ol-small-label" htmlFor={`ol-pq-${id}`}>Program items taught here</label>
@@ -373,7 +380,13 @@ function ProgramPicker({ items, value, onChange, id }: { items: ProgramItem[]; v
             <span className="ui-wrap">{t.title}</span>
           </label>
         ))}
-        {shown.length === 0 && <span className="ui-muted">No item matches.</span>}
+        {stale.map((k) => (
+          <label key={k} className="ui-check">
+            <input type="checkbox" checked onChange={() => onChange(value.filter((x) => x !== k))} />
+            <span className="ui-wrap">{k} <span className="ui-muted">(no longer in the program)</span></span>
+          </label>
+        ))}
+        {shown.length === 0 && stale.length === 0 && <span className="ui-muted">No item matches.</span>}
       </div>
     </div>
   );
@@ -500,7 +513,7 @@ function ProgramCoverage({ outline, items, onExclude }: { outline: Outline | nul
               <span className="ol-topic__name ui-wrap">{item.title}</span>
               <span className="ui-badge ui-badge--warning">Uncovered</span>
             </div>
-            {excluding !== item.key ? (
+            {!outline ? null : excluding !== item.key ? (
               <div className="ol-topic__row"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => { setExcluding(item.key); setReason(''); }}>Leave out</button></div>
             ) : (
               <form className="ol-exclude" onSubmit={(e) => { e.preventDefault(); if (reason.trim()) { onExclude(item.key, reason.trim()); setExcluding(null); } }}>

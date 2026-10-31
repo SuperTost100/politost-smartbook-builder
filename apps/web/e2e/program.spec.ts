@@ -95,6 +95,20 @@ test.describe('outline with a program', () => {
     await expect(cov.getByText('1 uncovered')).toBeVisible();
     await expect(cov.getByText('Fuori dal tempo del corso')).toBeVisible();
   });
+
+  test('teaching a left-out item clears its exclusion', async ({ page }) => {
+    await page.goto('/books/p1/outline');
+    const cov = page.getByRole('region', { name: 'Program coverage' });
+    await expect(cov.getByText('Il programma le rimanda al corso di Analisi 2.')).toBeVisible();
+    const row = page.locator('.ol-section', { has: page.getByLabel('Title of section 1.3') });
+    await row.getByRole('button', { name: /topic/ }).click();
+    const picker = row.getByRole('group', { name: 'Program items' });
+    await picker.getByLabel('Equazioni differenziali').check();
+    await expect(cov.getByText('Il programma le rimanda al corso di Analisi 2.')).toHaveCount(0);
+
+    await picker.getByLabel('Equazioni differenziali').uncheck();
+    await expect(cov.getByText('Equazioni differenziali')).toBeVisible();
+  });
 });
 
 test.describe('alignment panel', () => {
