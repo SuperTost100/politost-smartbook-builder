@@ -35,6 +35,19 @@ describe('course program', () => {
     assert.equal(url.body.program.url, 'https://didattica.polito.it/guide');
   });
 
+  it('refuses a new program or edited items while a reading runs', async () => {
+    const id = await newProject('prog-busy');
+    assert.equal((await t.req('PUT', `/api/projects/${id}/program`, { text: 'Programma: limiti.', url: null })).status, 200);
+    t.ctx.db.run(`INSERT INTO runs (id, project_id, kind, status, created_at) VALUES ('busy-run', ?, 'program', 'running', ?)`, id, new Date().toISOString());
+    const again = await t.req('PUT', `/api/projects/${id}/program`, { text: 'Programma: derivate.', url: null });
+    assert.equal(again.status, 409);
+    assert.equal(again.body.error.code, 'program_running');
+    assert.equal((await t.req('GET', `/api/projects/${id}/program`)).body.text, 'Programma: limiti.', 'the new text is not saved');
+    assert.equal((await t.req('PUT', `/api/projects/${id}/program/items`, { items, examFormat: fmt })).status, 409);
+    t.ctx.db.run(`UPDATE runs SET status = 'completed' WHERE id = 'busy-run'`);
+    assert.equal((await t.req('PUT', `/api/projects/${id}/program/items`, { items, examFormat: fmt })).status, 200);
+  });
+
   it('refuses an empty program, a bad address, and an unknown book', async () => {
     const id = await newProject('prog-2');
     const empty = await t.req('PUT', `/api/projects/${id}/program`, { text: '  ', url: null });

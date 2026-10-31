@@ -82,6 +82,8 @@ export async function programParse(ctx: AppContext, t: TaskContext) {
     const items = assignKeys(data.items.filter((i) => i.title.trim()), row.items);
     if (!items.length) throw new TaskError('No program items were found in that text.', 'input', 'Check that the text holds the course program ("Programma"), then try again.');
     const examFormat = examFormatSchema.parse({ ...data.examFormat, summary: data.examFormat.summary.slice(0, 3000) });
+    // The author can remove the program while the planner reads it; saving would bring it back.
+    if (!getProgram(ctx, projectId)) return { skipped: 'program removed while it was read' };
     saveProgramItems(ctx, projectId, { items, examFormat, sourceText, parsed: true });
     return { items: items.length, model: route.model, kept: items.filter((i) => row.items.some((o) => o.key === i.key)).length };
   } catch (err) {

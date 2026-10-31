@@ -4,12 +4,18 @@ import { z } from 'zod';
 import { examFormatSchema, programInputSchema, programItemSchema } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { applyBlocker, checkBlocker, restoreRemoved } from '../pipeline/align.ts';
+import { activeRun } from '../pipeline/runs.ts';
 import { deleteProgram, getProgram, getReport, latestReport, saveProgramInput, saveProgramItems, setProgramStatus } from '../repo/index.ts';
 import { HttpError } from '../server.ts';
 import { deps } from './deps.ts';
 import { parse, projectOf } from './util.ts';
 
 const MAX_ITEMS = 400;
+
+/** A running reading would overwrite a new input or the author's edits with items from the old text. */
+const readingBlocker = (ctx: AppContext, id: string) => activeRun(ctx, id, 'program')
+  ? new HttpError(409, 'program_running', 'The program is being read right now.', 'Wait for the reading to finish, then try again.')
+  : null;
 
 export function registerProgramRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/program', async (req) => getProgram(ctx, projectOf(ctx, req)));
@@ -18,6 +24,8 @@ export function registerProgramRoutes(app: FastifyInstance, ctx: AppContext) {
     const id = projectOf(ctx, req);
     const input = parse(programInputSchema, req.body);
     if (!input.text.trim() && !input.url) throw new HttpError(400, 'invalid', 'There is no program to read.', 'Paste the program text or give the address of the course guide.');
+    const reading = readingBlocker(ctx, id);
+    if (reading) throw reading;
     saveProgramInput(ctx, id, { text: input.text, url: input.url });
     try {
       const run = deps.startRun(ctx, id, 'program');
@@ -31,6 +39,8 @@ export function registerProgramRoutes(app: FastifyInstance, ctx: AppContext) {
   app.put('/api/projects/:id/program/items', async (req) => {
     const id = projectOf(ctx, req);
     const body = parse(z.object({ items: z.array(programItemSchema).max(MAX_ITEMS), examFormat: examFormatSchema }), req.body);
+    const reading = readingBlocker(ctx, id);
+    if (reading) throw reading;
     const twice = body.items.find((it, i) => body.items.findIndex((x) => x.key === it.key) !== i);
     if (twice) throw new HttpError(400, 'invalid', `Two program items use the key "${twice.key}".`, 'Give every item its own key.', twice.key);
     return saveProgramItems(ctx, id, body);

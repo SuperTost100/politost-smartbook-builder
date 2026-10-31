@@ -318,7 +318,7 @@ function SectionRow({ section, label, index, count, topics, programItems, onChan
         <div className="ol-section__body">
           {guide && <p className="ui-muted ol-hint">Closes the chapter. Written from the chapter’s exam questions: how often its topics came up, the exercise types, a method for each and the usual mistakes.</p>}
           <Lines id={`ol-sobj-${section.id}`} label="Objectives" value={section.objectives} onChange={(objectives) => onChange({ ...section, objectives })} />
-          {!guide && programItems.length > 0 && <ProgramPicker items={programItems} value={section.programItems} onChange={(next) => onChange({ ...section, programItems: next })} id={section.id} />}
+          {!guide && (programItems.length > 0 || section.programItems.length > 0) && <ProgramPicker items={programItems} value={section.programItems} onChange={(next) => onChange({ ...section, programItems: next })} id={section.id} />}
           <TopicPicker topics={topics} value={section.topicIds} onChange={(topicIds) => onChange({ ...section, topicIds })} id={section.id} />
           <div className="ol-subs">
             <div className="ui-field__label ol-small-label">Subsections</div>

@@ -147,6 +147,15 @@ describe('program.parse', () => {
     assert.equal(new Set(out.map((i) => i.key)).size, out.length);
   });
 
+  test('a program removed while it is read stays removed', async () => {
+    saveProgramInput(ctx, P, { text: GUIDE, url: 'https://didattica.example/guide' });
+    programDeps.fetchGuide = async () => { ctx.db.run('DELETE FROM course_programs WHERE project_id = ?', P); return 'Pagina.'; };
+    fake.next(answer(parsed([{ key: 'limiti', title: 'Limiti' }])));
+    const r = await programParse(ctx, startTask('program.parse', {}, 'program'));
+    assert.deepEqual(r, { skipped: 'program removed while it was read' });
+    assert.equal(getProgram(ctx, P), null);
+  });
+
   test('a second reading keeps the keys the outline refers to', async () => {
     seedProgram([item('limiti', { title: 'Limiti di funzioni' }), item('derivate', { title: 'Derivate' })]);
     ctx.db.run(`UPDATE course_programs SET text = ? WHERE project_id = ?`, GUIDE, P);

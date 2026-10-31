@@ -16,7 +16,7 @@ export interface RunScope {
 const ACTIVE = `('running', 'pausing', 'paused', 'waiting')`;
 
 /** The active run of a kind. Section-scoped generate runs (snapshot.nodeIds) are not "the" book run. */
-function activeRun(ctx: AppContext, projectId: string, kind: string) {
+export function activeRun(ctx: AppContext, projectId: string, kind: string) {
   return ctx.db.get<{ id: string }>(`SELECT id FROM runs WHERE project_id = ? AND kind = ? AND status IN ${ACTIVE} AND json_extract(snapshot, '$.nodeIds') IS NULL ORDER BY created_at DESC LIMIT 1`, projectId, kind)?.id ?? null;
 }
 
