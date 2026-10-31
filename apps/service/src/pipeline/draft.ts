@@ -11,10 +11,13 @@ import { gatherEvidence, transcribePage } from '../evidence/index.ts';
 import { runRole } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
-import { draftPrompt, draftSchema, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
+import { readyProgram } from '../repo/program.ts';
+import { chapterExamStats } from './exam.ts';
+import { draftPrompt, draftSchema, examGuidePrompt, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
 const MAX_TRANSCRIBED_PAGES = 4;
+const MAX_GUIDE_QUESTIONS = 80;
 
 export async function sectionEvidence(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
@@ -125,6 +128,12 @@ export function bookFormulaKeys(ctx: AppContext, projectId: string, excludeNode?
   return rows.filter((r) => r.node_id !== excludeNode).flatMap((r) => formulaKeyLabels(r.markdown));
 }
 
+/** The summary a section's draft task recorded for the writers of later sections. */
+function sectionSummary(ctx: AppContext, projectId: string, nodeId: string): string | undefined {
+  const done = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'section.draft' AND state = 'succeeded' AND json_extract(input, '$.nodeId') = ? ORDER BY finished_at DESC LIMIT 1`, projectId, nodeId);
+  return done ? json<{ summary?: string }>(done.result, {}).summary : undefined;
+}
+
 export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
@@ -157,17 +166,36 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   const known = bookFormulaKeys(ctx, projectId, nodeId);
   const sectionIds = outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n');
 
-  const photos = project.options.figures && photosAvailable(ctx);
-  const prompt = draftPrompt({
-    language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
-    chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),
-    section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
-    topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
-    earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
-    evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
-    bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',
-    teaches: project.options.labLanguage === 'matlab' ? 'matlab' : undefined,
-  });
+  const program = readyProgram(ctx, projectId);
+  // The closing exam guide of a chapter is written from the chapter's exam questions, with no evidence and no figures.
+  const guide = section.role === 'exam-guide';
+  const photos = project.options.figures && !guide && photosAvailable(ctx);
+  let prompt: { system: string; prompt: string };
+  if (guide) {
+    const stats = chapterExamStats(ctx, projectId, chapter);
+    if (!stats.questions.length) return { skipped: 'no exam question on the topics of this chapter' };
+    const topicName = new Map(loadTopics(ctx, projectId).map((tp) => [tp.id, tp.name]));
+    prompt = examGuidePrompt({
+      language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
+      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId), section: { id: section.id, title: section.title },
+      sessions: { asked: stats.asked, total: stats.total }, exam: program?.examFormat,
+      questions: truncate(stats.questions.slice(0, MAX_GUIDE_QUESTIONS).map((q) => `${q.examGroup} | ${q.examDate ?? '-'} | n. ${q.number ?? '?'} | ${q.topicIds.map((id) => topicName.get(id)).filter(Boolean).join(', ') || '-'} | ${truncate(q.statement.replace(/\s+/g, ' ').trim(), 420)}`).join('\n'), 40_000),
+      sectionSummaries: chapter.sections.filter((s) => s.id !== nodeId).map((s) => `- ${s.title} [${s.id}]: ${sectionSummary(ctx, projectId, s.id) ?? s.objectives.join('; ')}`).join('\n'),
+      knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
+    });
+  } else {
+    prompt = draftPrompt({
+      language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
+      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),
+      section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
+      topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
+      earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
+      evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
+      bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',
+      teaches: project.options.labLanguage === 'matlab' ? 'matlab' : undefined,
+      program: program ? { items: section.programItems.map((k) => program.items.find((i) => i.key === k)).filter((i) => !!i), exam: program.examFormat } : undefined,
+    });
+  }
   t.progress(`Writing "${section.title}"`);
   const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   t.setProvider(route.provider);
@@ -178,7 +206,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   // Figures: plots and structures are drawn from validated specs, photos picked from the stock services. Blocks whose
   // figure failed are removed. File names are scoped to the section, so two sections can use the same figure key.
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos,
+    projectId, nodeId, language: project.language, figures: project.options.figures && !guide ? data.figures ?? [] : [], photos,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   markdown = rewriteImageRefs(markdown, built, new Set());

@@ -166,6 +166,8 @@ export interface Api {
    * issue-fix flow. `findings` are indexes into report.findings; empty means all.
    */
   'POST /api/projects/:id/alignment/apply': { body: { reportId: string; findings?: number[] }; res: RunSummary };
+  /** Put a section that Align book removed back into the outline where it was, with its text. */
+  'POST /api/projects/:id/alignment/restore': { body: { reportId: string; nodeId: string }; res: AlignmentReport };
 
   'GET /api/projects/:id/issues': { res: ReviewIssue[] };
   'PATCH /api/issues/:iid': { body: { status: ReviewIssue['status']; resolution?: string }; res: ReviewIssue };

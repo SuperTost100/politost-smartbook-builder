@@ -10,6 +10,7 @@ import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/Toast';
 import { MathText } from '../../components/MathText';
 import { ConfirmDialog } from '../../components/Dialog';
+import { AlignmentPanel } from './AlignmentPanel';
 import './review.css';
 
 const SEVERITIES: IssueSeverity[] = ['blocker', 'major', 'minor'];
@@ -97,6 +98,8 @@ export default function ReviewPage() {
           <button type="button" className="ui-btn" onClick={() => review.mutate(undefined)} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>
         </div>
       </div>
+
+      <AlignmentPanel pid={pid} />
 
       <div className="rv-filters ui-row" role="group" aria-label="Filters">
         <label><span className="ui-sr">Severity</span><select className="ui-select ui-select--sm" value={sev} onChange={(e) => setSev(e.target.value)}><option value="">All severities</option>{SEVERITIES.map((s) => <option key={s} value={s}>{label(s)}</option>)}</select></label>

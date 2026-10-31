@@ -334,6 +334,8 @@ export interface AlignmentReport {
   appliedAt: string | null;
   /** What Align book did, one line per change, in English for the author. */
   applied: string[];
+  /** Sections Align book took out of the outline. Their text stays in the database, so Put back restores them. */
+  removed: { nodeId: string; title: string; chapterId: string; afterSectionId: string | null; restoredAt: string | null }[];
 }
 
 // ---------- Content ----------

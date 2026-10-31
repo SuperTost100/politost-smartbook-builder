@@ -1,11 +1,12 @@
 /** In-browser API mock for screenshots and layout checks: independent of the service routes. */
 import type { Page, Route } from '@playwright/test';
+import type { AlignmentReport, CourseProgram } from '@smartbuilder/domain';
 
 const now = new Date();
 const ago = (min: number) => new Date(now.getTime() - min * 60_000).toISOString();
 
 const emptyCounts = { resources: 0, sections: 0, drafted: 0, questions: 0, openIssues: 0 };
-const baseOptions = { outsideMaterial: false, ide: true, graphs: true, figures: true, firstChapterGate: true, outlineGate: true, exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [] };
+const baseOptions = { outsideMaterial: false, ide: true, graphs: true, figures: true, firstChapterGate: true, outlineGate: true, exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete' };
 
 const projects = [
   {
@@ -32,17 +33,60 @@ const topics = [
 const outline = {
   chapters: [
     { id: 'c1', slug: 'limiti', title: 'Limiti e continuità', objectives: ['Calcolare limiti di successioni e funzioni', 'Riconoscere le forme indeterminate'], prerequisites: [], sections: [
-      { id: 's1', title: 'Definizione di limite', objectives: ['Enunciare la definizione epsilon-delta'], topicIds: ['t1', 't2'], depth: 'deep', subsections: [{ id: 'ss1', title: 'Intorni', objectives: [] }, { id: 'ss2', title: 'Limite destro e sinistro', objectives: [] }] },
-      { id: 's2', title: 'Limiti notevoli', objectives: [], topicIds: ['t2'], depth: 'standard', subsections: [] },
-      { id: 's3', title: 'Continuità', objectives: [], topicIds: ['t3'], depth: 'standard', subsections: [] },
+      { id: 's1', title: 'Definizione di limite', objectives: ['Enunciare la definizione epsilon-delta'], topicIds: ['t1', 't2'], depth: 'deep', programItems: ['limiti-successioni', 'limiti-funzioni'], role: 'content', subsections: [{ id: 'ss1', title: 'Intorni', objectives: [] }, { id: 'ss2', title: 'Limite destro e sinistro', objectives: [] }] },
+      { id: 's2', title: 'Limiti notevoli', objectives: [], topicIds: ['t2'], depth: 'standard', programItems: ['limiti-notevoli'], role: 'content', subsections: [] },
+      { id: 's3', title: 'Continuità', objectives: [], topicIds: ['t3'], depth: 'standard', programItems: [], role: 'content', subsections: [] },
+      { id: 's6', title: 'Come viene chiesto all’esame', objectives: [], topicIds: [], depth: 'standard', programItems: [], role: 'exam-guide', subsections: [] },
     ] },
     { id: 'c2', slug: 'derivate', title: 'Calcolo differenziale', objectives: [], prerequisites: ['c1'], sections: [
-      { id: 's4', title: 'Derivata e retta tangente', objectives: [], topicIds: ['t4'], depth: 'standard', subsections: [] },
-      { id: 's5', title: 'Studio di funzione', objectives: [], topicIds: ['t5'], depth: 'deep', subsections: [] },
+      { id: 's4', title: 'Derivata e retta tangente', objectives: [], topicIds: ['t4'], depth: 'standard', programItems: ['derivate'], role: 'content', subsections: [] },
+      { id: 's5', title: 'Studio di funzione', objectives: [], topicIds: ['t5'], depth: 'deep', programItems: ['studio-funzione'], role: 'content', subsections: [] },
     ] },
   ],
   exclusions: [{ topicId: 't8', reason: 'Fuori programma quest’anno' }],
+  programExclusions: [{ item: 'equazioni-differenziali', reason: 'Il programma le rimanda al corso di Analisi 2.' }],
   notation: '',
+};
+
+const programData: CourseProgram = {
+  projectId: 'p1',
+  text: 'Programma\n1. Successioni e limiti di successioni\n2. Limiti di funzioni e limiti notevoli\n3. Derivate\n4. Studio di funzione\n5. Integrali impropri\n6. Serie numeriche\n\nModalità d’esame: prova scritta di 2 ore.',
+  url: 'https://didattica.polito.it/pls/portal30/gap.pkg_guide.viewGap?p_cod_ins=01RKQ',
+  sourceText: '',
+  items: [
+    { key: 'limiti-successioni', title: 'Limiti di successioni', details: 'Definizione di limite, teoremi di confronto e monotonia.', proofs: [] },
+    { key: 'limiti-funzioni', title: 'Limiti di funzioni', details: 'Definizione epsilon-delta, unicità del limite, limiti laterali.', proofs: ['Unicità del limite'] },
+    { key: 'limiti-notevoli', title: 'Limiti notevoli', details: '', proofs: [] },
+    { key: 'derivate', title: 'Derivate', details: 'Derivata e retta tangente, regole di derivazione, teorema di Fermat.', proofs: ['Teorema di Fermat'] },
+    { key: 'studio-funzione', title: 'Studio di funzione', details: 'Crescenza, concavità, asintoti, grafico.', proofs: [] },
+    { key: 'integrali-impropri', title: 'Integrali impropri', details: 'Criteri del confronto e dell’ordine di infinitesimo.', proofs: [] },
+    { key: 'serie-numeriche', title: 'Serie numeriche', details: 'Criteri di convergenza.', proofs: [] },
+    { key: 'equazioni-differenziali', title: 'Equazioni differenziali', details: '', proofs: [] },
+  ],
+  examFormat: { written: true, oral: false, proofs: 'some', summary: 'Prova scritta di 2 ore con quattro esercizi. Nessun materiale consentito. Una dimostrazione tra quelle del programma può essere chiesta nel primo esercizio.' },
+  status: 'ready',
+  error: null,
+  parsedAt: ago(200),
+  updatedAt: ago(200),
+};
+
+const alignmentData: AlignmentReport = {
+  id: 'al1', projectId: 'p1', outlineRevId: 'o1',
+  coverage: [
+    { item: 'limiti-successioni', nodeIds: ['s1'] }, { item: 'limiti-funzioni', nodeIds: ['s1'] }, { item: 'limiti-notevoli', nodeIds: ['s2'] }, { item: 'derivate', nodeIds: ['s4'] },
+    { item: 'studio-funzione', nodeIds: ['s5'] }, { item: 'integrali-impropri', nodeIds: [] }, { item: 'serie-numeriche', nodeIds: [] }, { item: 'equazioni-differenziali', nodeIds: [] },
+  ],
+  findings: [
+    { kind: 'missing', item: 'serie-numeriche', message: 'No section teaches series. The program lists convergence criteria and 3 of 12 exam sessions ask them.', suggested: { chapterId: 'c2', afterSectionId: 's5', title: 'Serie numeriche e criteri di convergenza', objectives: ['Applicare i criteri del confronto e del rapporto'], depth: 'standard' } },
+    { kind: 'missing', item: 'integrali-impropri', message: 'Improper integrals are in the program and no section covers them.', suggested: { chapterId: 'c2', afterSectionId: null, title: 'Integrali impropri', objectives: [], depth: 'brief' } },
+    { kind: 'thin', item: 'studio-funzione', nodeId: 's5', message: 'Function study is in 25 of 27 exam sessions but the section has one worked example and no table of signs.' },
+    { kind: 'proof', item: 'derivate', nodeId: 's4', message: 'The program asks for the proof of Fermat’s theorem. The section states it without a proof.' },
+    { kind: 'off-program', nodeId: 's3', whole: true, message: 'The section is a long detour on topological continuity that the program does not mention.', quote: '' },
+    { kind: 'off-program', nodeId: 's2', whole: false, message: 'A paragraph on Fourier series goes beyond the program.', quote: 'Un cenno alle serie di Fourier mostra come $\\sin x$ si approssima con polinomi.' },
+    { kind: 'order', nodeId: 's5', message: 'Studio di funzione uses derivatives, which the next chapter section teaches later.' },
+    { kind: 'exam-guide', chapterId: 'c2', message: 'Chapter 2 has exam questions in 9 of 12 sessions and no exam guide.' },
+  ],
+  model: 'claude-opus-5-5', createdAt: ago(12), appliedAt: null, applied: [], removed: [],
 };
 
 const notes = [
@@ -112,9 +156,17 @@ const chapters = [
 
 const pageSvg = (label: string) => `<svg xmlns="http://www.w3.org/2000/svg" width="900" height="1200" viewBox="0 0 900 1200"><rect width="900" height="1200" fill="#fff"/><text x="70" y="110" font-family="Georgia" font-size="34" font-weight="700" fill="#222">2.3 Definizione di limite</text>${Array.from({ length: 18 }, (_, i) => `<rect x="70" y="${180 + i * 46}" width="${620 + ((i * 53) % 150)}" height="12" rx="4" fill="#c9ccd6"/>`).join('')}<rect x="60" y="364" width="760" height="40" fill="rgba(244,185,66,0.45)"/><rect x="60" y="410" width="520" height="40" fill="rgba(244,185,66,0.45)"/><text x="70" y="1130" font-family="monospace" font-size="22" fill="#555">${label}</text></svg>`;
 
-export function mockData() { return { projects, resources, topics, outline, chapters }; }
+export function mockData() { return { projects, resources, topics, outline, chapters, programData, alignmentData }; }
 
-export async function mockApi(page: Page, opts: { empty?: boolean } = {}) {
+export async function mockApi(page: Page, opts: { empty?: boolean; program?: boolean; alignment?: boolean; staleReport?: boolean } = {}) {
+  // Course program and alignment keep their state for the life of the page, like the service would.
+  type Program = CourseProgram;
+  const st: { program: Program | null; report: AlignmentReport | null; parsePolls: number } = {
+    program: opts.program === false ? null : structuredClone(programData),
+    report: opts.alignment === false ? null : { ...structuredClone(alignmentData), ...(opts.staleReport ? { outlineRevId: 'o0' } : {}) },
+    parsePolls: 0,
+  };
+  const runSummary = (kind: string) => ({ id: 'r9', projectId: 'p1', kind, status: 'running', createdAt: new Date().toISOString(), finishedAt: null, counts: { running: 1 }, waiting: null });
   await page.route('**/api/**', async (route: Route) => {
     const req = route.request();
     const url = new URL(req.url());
@@ -123,6 +175,35 @@ export async function mockApi(page: Page, opts: { empty?: boolean } = {}) {
     const json = (body: unknown, status = 200) => route.fulfill({ status, contentType: 'application/json', body: JSON.stringify(body) });
 
     if (path === '/api/events') return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }, body: ': connected\nretry: 600000\n\n' });
+    if (/^\/api\/projects\/\w+\/program$/.test(path)) {
+      if (method === 'GET') {
+        if (st.program?.status === 'parsing' && ++st.parsePolls >= 2) st.program = { ...st.program, status: 'ready', parsedAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+        return json(st.program);
+      }
+      if (method === 'PUT') {
+        const body = req.postDataJSON() as { text: string; url: string | null };
+        st.parsePolls = 0;
+        st.program = { ...(st.program ?? { ...programData, items: [], examFormat: { written: true, oral: false, proofs: 'some', summary: '' } }), text: body.text, url: body.url, status: 'parsing', updatedAt: new Date().toISOString() };
+        return json({ program: st.program, run: runSummary('program') });
+      }
+      if (method === 'DELETE') { st.program = null; return json({ ok: true }); }
+    }
+    if (/^\/api\/projects\/\w+\/program\/items$/.test(path) && method === 'PUT' && st.program) {
+      const body = req.postDataJSON() as { items: Program['items']; examFormat: Program['examFormat'] };
+      st.program = { ...st.program, items: body.items, examFormat: body.examFormat, updatedAt: new Date().toISOString() };
+      return json(st.program);
+    }
+    if (/^\/api\/projects\/\w+\/alignment$/.test(path)) return json(st.report);
+    if (/\/alignment\/check$/.test(path)) { st.report = { ...structuredClone(alignmentData), id: 'al2', createdAt: new Date().toISOString() }; return json(runSummary('align')); }
+    if (/\/alignment\/apply$/.test(path)) {
+      if (st.report) st.report = { ...st.report, appliedAt: new Date().toISOString(), applied: ['Added section “Serie numeriche e criteri di convergenza” to chapter 2 and queued it for writing.', 'Removed section 1.3 Continuità from the outline.', 'Opened a review issue to expand 2.2 Studio di funzione.'], removed: [{ nodeId: 's3', title: 'Continuità', chapterId: 'c1', afterSectionId: 's2', restoredAt: null }] };
+      return json(runSummary('align'));
+    }
+    if (/\/alignment\/restore$/.test(path) && st.report) {
+      const { nodeId } = req.postDataJSON() as { nodeId: string };
+      st.report = { ...st.report, removed: st.report.removed.map((r) => (r.nodeId === nodeId ? { ...r, restoredAt: new Date().toISOString() } : r)) };
+      return json(st.report);
+    }
     if (/\/pages\/\d+\/image$/.test(path)) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: pageSvg(`page ${path.split('/').at(-2)}`) });
     if (path === '/api/projects') return json(opts.empty ? [] : projects);
     const proj = /^\/api\/projects\/(\w+)$/.exec(path);

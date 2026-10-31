@@ -1,5 +1,6 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
 import { applyGuardedChanges, compileChapter, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
+import { outlineSchema } from '@smartbuilder/domain';
 import { currentHeads } from '../repo/content.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
@@ -10,7 +11,8 @@ import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
-import { fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
+import { readyProgram } from '../repo/program.ts';
+import { fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
@@ -79,6 +81,10 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
   const inNodes = reviewNodes.map(() => '?').join(',');
   const notation = outline!.outline.notation;
+  // The reviewer learns what the exam covers, so it flags extra material as minor instead of inventing scope.
+  const program = readyProgram(ctx, projectId);
+  const chapterItems = program ? program.items.filter((i) => chapter.sections.some((s) => s.programItems.includes(i.key))) : [];
+  const programText = chapterItems.length ? programItemsText(chapterItems, 300) : undefined;
 
   const sectionText = (x: (typeof sections)[number]) => `=== [${x.s.id}] ${x.s.title} ===\n${x.head!.markdown}`;
   const sectionEvidence = (id: string, max = 6000) => {
@@ -134,7 +140,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   };
 
   const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }) => runRole(ctx, {
-    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled }),
+    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const objectivesOf = (list: typeof chapter.sections) => list.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
@@ -236,6 +242,9 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
  */
 export interface ReviseResult { revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean }
 
+/** Program issues about thin coverage or a missing proof ask the fix to add material; every other fix stays minimal. */
+const adds = (i: { category: string }) => i.category === 'program-thin' || i.category === 'program-proof';
+
 export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<ReviseResult> {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
@@ -251,7 +260,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const requests = [
     t.task.input.instruction ? `Author's instruction: ${t.task.input.instruction}` : '',
     t.task.input.selection ? `Apply it to this passage: "${t.task.input.selection}"` : '',
-    ...issues.map((i, n) => `${n + 1}. ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`),
+    ...issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`),
   ].filter(Boolean).join('\n');
   if (!requests) return { skipped: 'nothing requested' };
   const p = ctx.db.get('SELECT * FROM evidence_packets WHERE project_id = ? AND node_id = ? ORDER BY created_at DESC LIMIT 1', projectId, nodeId);
@@ -263,9 +272,10 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const blocks = splitBlocks(withMarkers(head.markdown, baseCitations)).map((b) => b.text);
   // Blockers and the author's own instructions get the strongest writer; everything else the cheaper editor.
   const instructed = !!t.task.input.instruction;
-  const role = instructed || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
+  const grows = issues.some(adds);
+  const role = instructed || grows || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, figures: project.options.figures ? { photos: photosAvailable(ctx) } : null }),
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures: project.options.figures ? { photos: photosAvailable(ctx) } : null }),
     schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix may add figures; image blocks pointing at neither a new figure nor an existing asset are removed.
@@ -275,7 +285,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   });
   const existing = existingAssetNames(ctx, projectId);
   for (const c of data.changes) c.text = rewriteImageRefs(c.text, built, existing);
-  const isIntro = !findSection(outline?.outline ?? { chapters: [], exclusions: [], notation: '' }, nodeId);
+  const isIntro = !findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId);
   const kind = isIntro ? 'chapter-intro' as const : 'section' as const;
 
   // An author's instruction is taken as written and waits as a proposal. A fix for issues passes the guards first.
@@ -297,8 +307,8 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
         const verdict = await runRole(ctx, {
           role: 'checker',
           ...fixCheckPrompt({
-            language: project.language,
-            issues: issues.map((i, n) => `${n + 1}. [${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`).join('\n'),
+            language: project.language, additive: grows,
+            issues: issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}[${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`).join('\n'),
             changes: guarded.kept.map((n) => `[B${n}]\nBLOCK BEFORE:\n${clip(blocks[n - 1])}\nOLD:\n${clip(blocks[n])}\nNEW:\n${working[n].trim() ? clip(working[n]) : '(deleted)'}\nBLOCK AFTER:\n${clip(blocks[n + 1])}`).join('\n\n'),
           }),
           schema: fixCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,

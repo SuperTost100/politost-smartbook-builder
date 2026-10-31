@@ -2,6 +2,7 @@ import type { AppContext } from '../context.ts';
 import { now } from '../db/db.ts';
 import { syncNotebook } from '../evidence/index.ts';
 import type { TaskContext } from '../queue/queue.ts';
+import { alignApply, alignCheck } from './align.ts';
 import { chapterIntro, sectionDraft, sectionEvidence } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { gate, outlinePlan } from './plan.ts';
@@ -10,6 +11,7 @@ import { resourceExtract, resourceIndex, resourceQuestions, topicsMap } from './
 import { sectionResearch } from './research.ts';
 import { sectionFigures } from './figures.ts';
 import { chapterReview, sectionRevise } from './review.ts';
+import { programParse } from './program.ts';
 import { startRun } from './runs.ts';
 
 /** Registers every task handler with the queue. */
@@ -46,4 +48,7 @@ export function registerHandlers(ctx: AppContext) {
   q.register('section.revise', h(sectionRevise));
   q.register('section.research', h(sectionResearch));
   q.register('section.figures', h(sectionFigures));
+  q.register('program.parse', h(programParse));
+  q.register('program.check', h(alignCheck));
+  q.register('program.apply', h(alignApply));
 }

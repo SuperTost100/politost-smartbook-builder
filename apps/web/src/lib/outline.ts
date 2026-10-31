@@ -1,8 +1,8 @@
-import type { Outline, OutlineChapter, OutlineSection, Question, Topic } from '@smartbuilder/domain';
+import type { Outline, OutlineChapter, OutlineSection, ProgramItem, Question, Topic } from '@smartbuilder/domain';
 import { newId, slugify } from './format';
 
 export function emptyOutline(): Outline {
-  return { chapters: [], exclusions: [], notation: '' };
+  return { chapters: [], exclusions: [], programExclusions: [], notation: '' };
 }
 
 export function newChapter(n: number): OutlineChapter {
@@ -11,7 +11,7 @@ export function newChapter(n: number): OutlineChapter {
 }
 
 export function newSection(): OutlineSection {
-  return { id: newId('s'), title: 'New section', objectives: [], topicIds: [], depth: 'standard', subsections: [] };
+  return { id: newId('s'), title: 'New section', objectives: [], topicIds: [], depth: 'standard', subsections: [], programItems: [], role: 'content' };
 }
 
 export function move<T>(list: T[], from: number, dir: -1 | 1): T[] {
@@ -31,6 +31,7 @@ export function mergeSections(sections: OutlineSection[], from: number, into: nu
     ...a,
     objectives: [...a.objectives, ...b.objectives.filter((o) => !a.objectives.includes(o))],
     topicIds: [...new Set([...a.topicIds, ...b.topicIds])],
+    programItems: [...new Set([...a.programItems, ...b.programItems])],
     depth: rank(a.depth) >= rank(b.depth) ? a.depth : b.depth,
     subsections: [...a.subsections, { id: newId('ss'), title: b.title, objectives: b.objectives }, ...b.subsections],
   };
@@ -60,4 +61,18 @@ export function sessionsPhrase(n: number, total: number): string {
   if (n === 0) return 'Not in any exam session';
   if (total >= n) return `Appears in ${n} of ${total} exam sessions`;
   return `Appears in ${n} exam ${n === 1 ? 'session' : 'sessions'}`;
+}
+
+export interface ProgramItemCoverage {
+  item: ProgramItem;
+  sections: { id: string; title: string; number: string }[];
+  excludedReason: string | null;
+}
+
+/** Where each program item is taught, and which items the outline leaves out on purpose. */
+export function programCoverage(outline: Outline, items: ProgramItem[]): ProgramItemCoverage[] {
+  const bySection = new Map<string, { id: string; title: string; number: string }[]>();
+  outline.chapters.forEach((c, ci) => c.sections.forEach((s, si) => s.programItems.forEach((k) => bySection.set(k, [...(bySection.get(k) ?? []), { id: s.id, title: s.title, number: `${ci + 1}.${si + 1}` }]))));
+  const excl = new Map(outline.programExclusions.map((e) => [e.item, e.reason]));
+  return items.map((item) => ({ item, sections: bySection.get(item.key) ?? [], excludedReason: excl.get(item.key) ?? null }));
 }

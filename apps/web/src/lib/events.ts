@@ -13,9 +13,9 @@ const TASK_SUCCEEDED_KEYS = ['questions', 'assets', 'enrichments', 'issues'];
 
 /** Query keys touched by each event type. A key is the first element of the query key. */
 const INVALIDATE: Record<string, string[]> = {
-  'task.state': ['runs', 'run', 'project', 'projects'],
+  'task.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment'],
   'task.progress': ['run'],
-  'run.state': ['runs', 'run', 'project', 'projects'],
+  'run.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment'],
   'content.saved': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],
   'proposal.created': ['manuscript', 'section', 'history', 'issues'],
   'proposal.decided': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],

@@ -37,3 +37,26 @@ test('migration 3 backfills imported_at and reopens issues stranded on a superse
   assert.deepEqual(issues, { stranded: ['open', ''], waiting: ['proposed', 'Proposal live'], done: ['fixed', 'Fixed by accepting proposal old'] });
   db.close();
 });
+
+test('migration 5 adds the course program and alignment report tables, which go with the project', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'sbm-')), 'db.sqlite');
+  const raw = new DatabaseSync(file);
+  raw.exec('PRAGMA foreign_keys = ON');
+  for (const m of MIGRATIONS.slice(0, 4)) raw.exec(m);
+  raw.exec('CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version (version) VALUES (4)');
+  raw.exec(`INSERT INTO projects (id, slug, title, subject, created_at, updated_at) VALUES ('p', 'p', 'P', 'S', 'now', 'now')`);
+  raw.close();
+
+  const db = new Db(file);
+  assert.equal(db.get<{ version: number }>('SELECT version FROM schema_version')!.version, MIGRATIONS.length);
+  db.run(`INSERT INTO course_programs (project_id, text, updated_at) VALUES ('p', 'Programma', 'now')`);
+  const program = db.get<Record<string, unknown>>(`SELECT * FROM course_programs WHERE project_id = 'p'`)!;
+  assert.deepEqual([program.items, program.exam_format, program.status, program.url, program.parsed_at], ['[]', '{}', 'idle', null, null]);
+  db.run(`INSERT INTO alignment_reports (id, project_id, outline_rev_id, created_at) VALUES ('r', 'p', 'rev', 'now')`);
+  const report = db.get<Record<string, unknown>>(`SELECT * FROM alignment_reports WHERE id = 'r'`)!;
+  assert.deepEqual([report.coverage, report.findings, report.applied, report.applied_at], ['[]', '[]', '[]', null]);
+  db.run(`DELETE FROM projects WHERE id = 'p'`);
+  assert.equal(db.get(`SELECT 1 FROM course_programs`), undefined);
+  assert.equal(db.get(`SELECT 1 FROM alignment_reports`), undefined);
+  db.close();
+});
