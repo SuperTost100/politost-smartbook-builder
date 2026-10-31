@@ -44,7 +44,9 @@ describe('course program', () => {
     assert.equal(again.body.error.code, 'program_running');
     assert.equal((await t.req('GET', `/api/projects/${id}/program`)).body.text, 'Programma: limiti.', 'the new text is not saved');
     assert.equal((await t.req('PUT', `/api/projects/${id}/program/items`, { items, examFormat: fmt })).status, 409);
-    t.ctx.db.run(`UPDATE runs SET status = 'completed' WHERE id = 'busy-run'`);
+    t.ctx.db.run(`UPDATE runs SET status = 'cancelling' WHERE id = 'busy-run'`);
+    assert.equal((await t.req('PUT', `/api/projects/${id}/program/items`, { items, examFormat: fmt })).status, 409, 'a cancelling reading still counts');
+    t.ctx.db.run(`UPDATE runs SET status = 'cancelled' WHERE id = 'busy-run'`);
     assert.equal((await t.req('PUT', `/api/projects/${id}/program/items`, { items, examFormat: fmt })).status, 200);
   });
 

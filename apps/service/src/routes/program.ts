@@ -12,8 +12,12 @@ import { parse, projectOf } from './util.ts';
 
 const MAX_ITEMS = 400;
 
-/** A running reading would overwrite a new input or the author's edits with items from the old text. */
-const readingBlocker = (ctx: AppContext, id: string) => activeRun(ctx, id, 'program')
+/**
+ * A running reading would overwrite a new input or the author's edits with items from the old text. A cancelling one
+ * still counts until its task exits (activeRun leaves it out so a new reading starts a run of its own).
+ */
+const readingBlocker = (ctx: AppContext, id: string) => (activeRun(ctx, id, 'program')
+  || ctx.db.get(`SELECT id FROM runs WHERE project_id = ? AND kind = 'program' AND status = 'cancelling' LIMIT 1`, id))
   ? new HttpError(409, 'program_running', 'The program is being read right now.', 'Wait for the reading to finish, then try again.')
   : null;
 
