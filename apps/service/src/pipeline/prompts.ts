@@ -249,11 +249,12 @@ function examFocus(p: NonNullable<DraftPromptInput['program']>, language: string
     : p.exam.proofs === 'none' && !p.exam.oral
       ? 'The exam is written and asks for no proofs: put the weight on methods and fully worked exercises; keep proofs brief (the idea in a few lines), and mark none of them.'
       : `Give the complete proof, with the line ${mark} on its own immediately before it, only for the results listed under "proofs asked" below; other proofs stay brief.`;
-  return `COURSE PROGRAM ITEMS this section teaches (title | what the program says | proofs asked):
-${p.items.map((i) => `- ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), 800) || '-'} | ${i.proofs.join('; ') || '-'}`).join('\n') || '- (none assigned)'}
-EXAM: ${examFormatText(p.exam)}
-${proofs}
-Cover every program item above and stay inside what the program lists: no extra theory the exam never asks.`;
+  // A section with no program item (a prerequisite recap, say) still follows the exam format, but gets no scope to stay inside.
+  const items = p.items.length ? `COURSE PROGRAM ITEMS this section teaches (title | what the program says | proofs asked):
+${p.items.map((i) => `- ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), 800) || '-'} | ${i.proofs.join('; ') || '-'}`).join('\n')}
+` : '';
+  return `${items}EXAM: ${examFormatText(p.exam)}
+${proofs}${p.items.length ? '\nCover every program item above and stay inside what the program lists: no extra theory the exam never asks.' : ''}`;
 }
 
 /** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
