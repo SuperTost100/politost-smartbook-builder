@@ -94,6 +94,8 @@ export default function OutlinePage() {
   const topics = topicsQ.data ?? [];
   // Same rule as the service: items from an earlier reading stay in use while a new one runs or fails.
   const programItems = programQ.data?.items ?? [];
+  // Until the program has loaded, every assigned key would look stale and offer an untick that drops a real assignment.
+  const programKnown = programQ.isSuccess;
   const resources = (resourcesQ.data ?? []).filter((r) => r.status === 'ready' && r.included);
   const approved = !!current?.approvedAt && !dirty;
   const hasSources = resources.length > 0;
@@ -173,6 +175,7 @@ export default function OutlinePage() {
                     count={draft.chapters.length}
                     topics={topics}
                     programItems={programItems}
+                    programKnown={programKnown}
                     onChange={(next) => update((o) => {
                       const chapters = o.chapters.map((c, i) => (i === ci ? next : c));
                       // An item a section now teaches is no longer left out (the planner applies the same rule).
@@ -226,8 +229,8 @@ function Lines({ id, label, value, onChange, rows = 2 }: { id: string; label: st
   );
 }
 
-function ChapterCard({ chapter, index, count, topics, programItems, onChange, onMove, onRemove }: {
-  chapter: OutlineChapter; index: number; count: number; topics: Topic[]; programItems: ProgramItem[];
+function ChapterCard({ chapter, index, count, topics, programItems, programKnown, onChange, onMove, onRemove }: {
+  chapter: OutlineChapter; index: number; count: number; topics: Topic[]; programItems: ProgramItem[]; programKnown: boolean;
   onChange: (c: OutlineChapter) => void; onMove: (d: -1 | 1) => void; onRemove: () => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -267,6 +270,7 @@ function ChapterCard({ chapter, index, count, topics, programItems, onChange, on
                 index={si}
                 topics={topics}
                 programItems={programItems}
+                programKnown={programKnown}
                 onChange={(next) => setSections(chapter.sections.map((x, i) => (i === si ? next : x)))}
                 onMove={(d) => { setSections(move(chapter.sections, si, d)); focusLater(`ol-sec-${s.id}`); }}
                 onRemove={() => setSections(chapter.sections.filter((_, i) => i !== si))}
@@ -282,8 +286,8 @@ function ChapterCard({ chapter, index, count, topics, programItems, onChange, on
   );
 }
 
-function SectionRow({ section, label, index, count, topics, programItems, onChange, onMove, onRemove, onMerge, canMerge }: {
-  section: OutlineSection; label: string; index: number; count: number; topics: Topic[]; programItems: ProgramItem[];
+function SectionRow({ section, label, index, count, topics, programItems, programKnown, onChange, onMove, onRemove, onMerge, canMerge }: {
+  section: OutlineSection; label: string; index: number; count: number; topics: Topic[]; programItems: ProgramItem[]; programKnown: boolean;
   onChange: (s: OutlineSection) => void; onMove: (d: -1 | 1) => void; onRemove: () => void; onMerge: (dir: -1 | 1) => void; canMerge: (dir: -1 | 1) => boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -318,7 +322,7 @@ function SectionRow({ section, label, index, count, topics, programItems, onChan
         <div className="ol-section__body">
           {guide && <p className="ui-muted ol-hint">Closes the chapter. Written from the chapter’s exam questions: how often its topics came up, the exercise types, a method for each and the usual mistakes.</p>}
           <Lines id={`ol-sobj-${section.id}`} label="Objectives" value={section.objectives} onChange={(objectives) => onChange({ ...section, objectives })} />
-          {!guide && (programItems.length > 0 || section.programItems.length > 0) && <ProgramPicker items={programItems} value={section.programItems} onChange={(next) => onChange({ ...section, programItems: next })} id={section.id} />}
+          {!guide && programKnown && (programItems.length > 0 || section.programItems.length > 0) && <ProgramPicker items={programItems} value={section.programItems} onChange={(next) => onChange({ ...section, programItems: next })} id={section.id} />}
           <TopicPicker topics={topics} value={section.topicIds} onChange={(topicIds) => onChange({ ...section, topicIds })} id={section.id} />
           <div className="ol-subs">
             <div className="ui-field__label ol-small-label">Subsections</div>

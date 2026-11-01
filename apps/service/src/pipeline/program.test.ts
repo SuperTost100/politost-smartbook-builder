@@ -536,8 +536,11 @@ describe('Align book', () => {
 
   function book(extra: Record<string, unknown> = {}) {
     seedProgram([item('limiti', { title: 'Limiti', details: 'unicità del limite', proofs: ['unicità del limite'] }), item('derivate', { title: 'Derivate' }), item('serie', { title: 'Serie' })]);
+    // Chapter 1 has a past exam question on its topics, so it can get an exam guide.
+    seedTopic('t-limiti', 'Limiti');
+    seedExam('Esame A', ['t-limiti']);
     const seeded = seedOutline([
-      ['c1', [section('s1', { programItems: ['limiti'] }), section('s2', { title: 'Cenni di topologia' })]],
+      ['c1', [section('s1', { programItems: ['limiti'], topicIds: [topicId('t-limiti')] }), section('s2', { title: 'Cenni di topologia' })]],
       ['c2', [section('s3', { programItems: ['derivate'] })]],
     ]);
     seedRevision('s1', 'Limiti.\n\nTesto del limite.');
@@ -640,6 +643,15 @@ describe('Align book', () => {
     assert.deepEqual(approved().chapters[1].sections.map((s) => s.id), ['s3'], 'no second section');
     assert.ok(taskKeys(runOf(t)).includes('draft:s3'));
     assert.match(getReport(ctx, P, (t.task.input as { reportId: string }).reportId).applied[0], /Queued the section "Titolo s3" for writing/);
+  });
+
+  test('an exam guide is not added when no exam question is on the chapter any more', async () => {
+    const { revId } = book();
+    const report = reportOf(revId, [{ kind: 'exam-guide', chapterId: 'c1', message: 'g' }]);
+    ctx.db.run(`DELETE FROM questions WHERE project_id = ?`, P);
+    await apply(report.id);
+    assert.ok(!approved().chapters[0].sections.some((s) => s.role === 'exam-guide'));
+    assert.match(getReport(ctx, P, report.id).applied[0], /no past exam question is on its topics any more/);
   });
 
   test('Put back restores a removed section where it was, with its text, once', async () => {

@@ -9,7 +9,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { approveOutline, getReport, insertIssue, insertReport, readyProgram, repairHead, reportInputs, saveOutline } from '../repo/index.ts';
 import { programFingerprint } from './program.ts';
 import { HttpError } from '../server.ts';
-import { chaptersMissingGuide, examGuideSection, examSessionTotal } from './exam.ts';
+import { chapterExamStats, chaptersMissingGuide, examGuideSection, examSessionTotal } from './exam.ts';
 import { alignPrompt, alignSchema, examFormatText, programItemsText } from './prompts.ts';
 import { generateSpecs, regenerateSpecs } from './runs.ts';
 import { findSection, formulaKeys, headRevision, loadOutline, loadProject, loadTopics } from './util.ts';
@@ -287,6 +287,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
           const chapter = outline.chapters.find((c) => c.id === f.chapterId);
           if (!chapter) { lines.push('Skipped an exam guide: the chapter is gone.'); break; }
           if (chapter.sections.some((s) => s.role === 'exam-guide')) { lines.push(`Skipped the exam guide of chapter ${q(chapter.title)}: it has one already.`); break; }
+          // The exam questions can change after the check without touching the outline; a guide with none would never be written.
+          if (chapterExamStats(ctx, projectId, chapter).asked === 0) { lines.push(`Skipped the exam guide of chapter ${q(chapter.title)}: no past exam question is on its topics any more.`); break; }
           const guide = examGuideSection(language);
           chapter.sections.push(guide);
           newNodes.push(guide.id);
