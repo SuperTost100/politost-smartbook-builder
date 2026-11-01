@@ -240,6 +240,13 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
     return null;
   };
 
+  /** An open program issue on a written section, reused when the same report or a repeat asks again. */
+  const programIssue = (nodeId: string, revId: string, category: 'program-thin' | 'program-proof', message: string, suggestion: string) => {
+    const existing = ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'program' AND category = ? AND status IN ('open', 'proposed') AND message = ?`, projectId, nodeId, category, message);
+    issueIds.push(existing?.id ?? insertIssue(ctx, { projectId, nodeId, revId, source: 'program', severity: 'major', category, message, suggestion }).id);
+  };
+  const teach = (it: ProgramItem) => `Teach ${q(it.title)} fully, as the course program words it: ${it.details || it.title}. Add the definitions, the statements with every hypothesis and the worked examples the exam needs, in the style of the section.`;
+
   ctx.db.tx(() => {
     for (const f of findings) {
       switch (f.kind) {
@@ -248,7 +255,13 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
           const it = item(f.item);
           if (!chapter || !it) { lines.push(`Skipped the new section for "${f.item}": ${chapter ? 'the program item was removed' : 'the chapter is gone'}.`); break; }
           const assigned = outline.chapters.flatMap((c) => c.sections).filter((s) => s.programItems.includes(f.item) && s.role === 'content');
-          if (assigned.some((s) => heads.some((h) => h.node_id === s.id))) { lines.push(`Skipped the new section for "${it.title}": a section teaches it already.`); break; }
+          // The checker read the written section and found the item not taught there: the section is extended, not doubled.
+          const written = assigned.map((s) => ({ s, head: headRevision(ctx, projectId, s.id) })).find((x) => x.head);
+          if (written) {
+            programIssue(written.s.id, written.head!.id, 'program-thin', f.message, teach(it));
+            lines.push(`Asked the fixer to teach ${q(it.title)} in ${q(written.s.title)}, the section planned for it.`);
+            break;
+          }
           // A section planned for the item but never written is written now, not doubled.
           if (assigned[0]) {
             if (!unwritten.includes(assigned[0].id)) unwritten.push(assigned[0].id);
@@ -289,11 +302,9 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
           if (!it || !found || !head) { lines.push(`Skipped a ${f.kind === 'thin' ? 'depth' : 'proof'} fix for ${q(f.item)}: ${!it ? 'the program item was removed' : !found ? 'the section is gone' : 'the section has no text'}.`); break; }
           const category = f.kind === 'thin' ? 'program-thin' : 'program-proof';
           const suggestion = f.kind === 'thin'
-            ? `Teach ${q(it.title)} fully, as the course program words it: ${it.details || it.title}. Add the definitions, the statements with every hypothesis and the worked examples the exam needs, in the style of the section.`
+            ? teach(it)
             : `Add the complete proof of ${it.proofs.length ? it.proofs.join('; ') : `the main results of ${q(it.title)}`}, and put the line ${proofMark(language)} on its own immediately before it.`;
-          const existing = ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'program' AND category = ? AND status IN ('open', 'proposed') AND message = ?`, projectId, f.nodeId, category, f.message);
-          const id = existing?.id ?? insertIssue(ctx, { projectId, nodeId: f.nodeId, revId: head.id, source: 'program', severity: 'major', category, message: f.message, suggestion }).id;
-          issueIds.push(id);
+          programIssue(f.nodeId, head.id, category, f.message, suggestion);
           lines.push(f.kind === 'thin'
             ? `Asked the fixer to teach ${q(it.title)} in more depth in ${q(found.section.title)}.`
             : `Asked the fixer to add the proof of ${q(it.title)} to ${q(found.section.title)}.`);

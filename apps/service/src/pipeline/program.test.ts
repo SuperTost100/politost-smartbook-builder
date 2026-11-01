@@ -610,6 +610,18 @@ describe('Align book', () => {
     assert.deepEqual(approved().chapters[0].sections.map((s) => s.title), ['Titolo s1', 'Nuova', "Come viene chiesto all'esame"]);
   });
 
+  test('a missing item planned for a written section becomes a fix on that section, not a skip or a second section', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].programItems', json('["derivate","serie"]')) WHERE id = ?`, revId);
+    const t = startTask('program.apply', { reportId: reportOf(revId, [missing()]).id, findings: [] }, 'align');
+    const r = await alignApply(ctx, t);
+    assert.deepEqual([r.added, r.fixes, r.outlineChanged], [0, 1, false]);
+    const [issue] = issues();
+    assert.deepEqual([issue.category, issue.node_id], ['program-thin', 's3']);
+    assert.match(issue.suggestion, /Teach "Serie" fully/);
+    assert.ok(taskKeys(runOf(t)).some((k) => k.startsWith('fix:s3:')));
+  });
+
   test('a missing item planned for a section that is not written yet gets that section written, not a second one', async () => {
     const { revId } = book();
     ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].programItems', json('["derivate","serie"]')) WHERE id = ?`, revId);
