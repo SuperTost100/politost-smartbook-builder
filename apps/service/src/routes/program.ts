@@ -4,6 +4,7 @@ import { z } from 'zod';
 import { examFormatSchema, programInputSchema, programItemSchema } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { applyBlocker, checkBlocker, restoreRemoved } from '../pipeline/align.ts';
+import { referencedProgramKeys, reserveNewKeys } from '../pipeline/program.ts';
 import { activeRun } from '../pipeline/runs.ts';
 import { deleteProgram, getProgram, getReport, latestReport, saveProgramInput, saveProgramItems, setProgramStatus } from '../repo/index.ts';
 import { HttpError } from '../server.ts';
@@ -47,7 +48,7 @@ export function registerProgramRoutes(app: FastifyInstance, ctx: AppContext) {
     if (reading) throw reading;
     const twice = body.items.find((it, i) => body.items.findIndex((x) => x.key === it.key) !== i);
     if (twice) throw new HttpError(400, 'invalid', `Two program items use the key "${twice.key}".`, 'Give every item its own key.', twice.key);
-    return saveProgramItems(ctx, id, body);
+    return saveProgramItems(ctx, id, { ...body, items: reserveNewKeys(body.items, getProgram(ctx, id)?.items ?? [], referencedProgramKeys(ctx, id)) });
   });
 
   app.delete('/api/projects/:id/program', async (req) => {

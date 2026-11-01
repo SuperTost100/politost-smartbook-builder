@@ -13,7 +13,7 @@ import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, check
 import { sectionDraft } from './draft.ts';
 import { chapterExamStats } from './exam.ts';
 import { outlinePlan } from './plan.ts';
-import { assignKeys, programDeps, programParse } from './program.ts';
+import { assignKeys, programDeps, programFingerprint, programParse, referencedProgramKeys, reserveNewKeys } from './program.ts';
 import { alignSchema } from './prompts.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { generateSpecs, startRun } from './runs.ts';
@@ -145,6 +145,16 @@ describe('program.parse', () => {
     ], before);
     assert.deepEqual(out.map((i) => i.key), ['derivate', 'derivate-2', 'limiti-2', 'serie-numeriche', 'serie-numeriche-2']);
     assert.equal(new Set(out.map((i) => i.key)).size, out.length);
+  });
+
+  test('assignKeys and reserveNewKeys never hand out a key an outline still names', () => {
+    // The program was removed and read again: "limiti" is no longer in it, but a section still names it.
+    const out = assignKeys([{ key: 'limiti', title: 'Limiti', details: '', proofs: [] }], [], new Set(['limiti']));
+    assert.deepEqual(out.map((i) => i.key), ['limiti-2']);
+    const saved = reserveNewKeys([item('derivate'), item('limiti'), item('serie')], [item('derivate')], new Set(['derivate', 'limiti', 'limiti-2']));
+    assert.deepEqual(saved.map((i) => i.key), ['derivate', 'limiti-3', 'serie'], 'an existing item keeps its key; a new one avoids every named key');
+    seedOutline([['c1', [section('s1', { programItems: ['limiti', 'fermat'] })]]]);
+    assert.deepEqual([...referencedProgramKeys(ctx, P)].sort(), ['fermat', 'limiti']);
   });
 
   test('a program removed while it is read stays removed', async () => {
@@ -726,6 +736,24 @@ describe('Align book', () => {
     // A retried task after the changes were saved does nothing more.
     assert.deepEqual(await apply(report.id), { reused: true, applied: 1 });
     assert.equal(outlineRevisions().length, 2);
+  });
+
+  test('a report is stale once the program or a section it names changes', async () => {
+    const { revId } = book();
+    const inputs = () => ({ program: programFingerprint(getProgram(ctx, P)!), heads: { s2: head('s2')!.id } });
+    const report = insertReport(ctx, { projectId: P, outlineRevId: revId, coverage: [], findings: [offWhole('s2')], model: 'm', inputs: inputs() });
+    assert.equal(applyBlocker(ctx, P, report), null);
+    seedRevision('s1', 'Un altro testo.');
+    assert.equal(applyBlocker(ctx, P, report), null, 'a section the report does not name may change');
+    seedRevision('s2', 'Topologia riscritta.');
+    assert.match(applyBlocker(ctx, P, report)?.message ?? '', /section the report talks about changed/);
+
+    const second = insertReport(ctx, { projectId: P, outlineRevId: revId, coverage: [], findings: [offWhole('s2')], model: 'm', inputs: inputs() });
+    assert.equal(applyBlocker(ctx, P, second), null);
+    ctx.db.run(`UPDATE course_programs SET status = 'parsing' WHERE project_id = ?`, P);
+    assert.equal(applyBlocker(ctx, P, second), null, 'a reading status alone changes nothing');
+    seedProgram([item('limiti', { title: 'Limiti' })]);
+    assert.match(applyBlocker(ctx, P, second)?.message ?? '', /course program changed/);
   });
 
   test('findings that no longer fit are skipped with a line, not applied', async () => {

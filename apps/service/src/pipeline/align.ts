@@ -6,7 +6,8 @@ import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { approveOutline, getReport, insertIssue, insertReport, readyProgram, repairHead, saveOutline } from '../repo/index.ts';
+import { approveOutline, getReport, insertIssue, insertReport, readyProgram, repairHead, reportInputs, saveOutline } from '../repo/index.ts';
+import { programFingerprint } from './program.ts';
 import { HttpError } from '../server.ts';
 import { chaptersMissingGuide, examGuideSection, examSessionTotal } from './exam.ts';
 import { alignPrompt, alignSchema, examFormatText, programItemsText } from './prompts.ts';
@@ -155,7 +156,9 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
   const texts = new Map<string, string>();
   for (const c of current.outline.chapters) for (const s of c.sections) { const h = headRevision(ctx, projectId, s.id); if (h) texts.set(s.id, h.markdown); }
   const { coverage, findings } = validateAlignment(data, { program: program.items, outline: current.outline, texts, guides: guideFindings(ctx, projectId, current.outline) });
-  const report = insertReport(ctx, { projectId, outlineRevId: current.revId, coverage, findings, model: route.model });
+  const named = [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
+  const heads = Object.fromEntries(named.map((id) => [id, headRevision(ctx, projectId, id)?.id ?? null]));
+  const report = insertReport(ctx, { projectId, outlineRevId: current.revId, coverage, findings, model: route.model, inputs: { program: programFingerprint(program), heads } });
   const count = (kind: AlignmentFinding['kind']) => findings.filter((f) => f.kind === kind).length;
   return {
     reportId: report.id, findings: findings.length, missing: count('missing'), thin: count('thin'), proof: count('proof'), offProgram: count('off-program'), order: count('order'),
@@ -171,6 +174,14 @@ export function applyBlocker(ctx: AppContext, projectId: string, report: Alignme
   if (report.outlineRevId !== loadProject(ctx, projectId).outlineRevId) {
     return new HttpError(409, 'report_stale', 'The outline changed after this report was made.', 'Check alignment again, then apply the new report.');
   }
+  // A finding read against an older program or older section text could remove or cut what is now in scope.
+  const inputs = reportInputs(ctx, report.id);
+  const program = readyProgram(ctx, projectId);
+  if (inputs.program && (!program || programFingerprint(program) !== inputs.program)) {
+    return new HttpError(409, 'report_stale', 'The course program changed after this report was made.', 'Check alignment again, then apply the new report.');
+  }
+  const edited = Object.entries(inputs.heads ?? {}).find(([id, rev]) => (headRevision(ctx, projectId, id)?.id ?? null) !== rev);
+  if (edited) return new HttpError(409, 'report_stale', 'A section the report talks about changed after the report was made.', 'Check alignment again, then apply the new report.');
   return null;
 }
 

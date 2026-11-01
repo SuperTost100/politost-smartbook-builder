@@ -78,8 +78,15 @@ export function getReport(ctx: AppContext, projectId: string, id: string): Align
   return mapReport(r);
 }
 
-export function insertReport(ctx: AppContext, v: { projectId: string; outlineRevId: string; coverage: AlignmentReport['coverage']; findings: AlignmentFinding[]; model: string }): AlignmentReport {
+/** What a report was made from, beyond the outline revision: the program's fingerprint and the text revision of every section a finding names. */
+export interface ReportInputs { program?: string; heads?: Record<string, string | null> }
+
+export function insertReport(ctx: AppContext, v: { projectId: string; outlineRevId: string; coverage: AlignmentReport['coverage']; findings: AlignmentFinding[]; model: string; inputs?: ReportInputs }): AlignmentReport {
   const id = newId();
-  ctx.db.insert('alignment_reports', { id, project_id: v.projectId, outline_rev_id: v.outlineRevId, coverage: v.coverage, findings: v.findings, model: v.model, created_at: now(), applied: [] });
+  ctx.db.insert('alignment_reports', { id, project_id: v.projectId, outline_rev_id: v.outlineRevId, coverage: v.coverage, findings: v.findings, model: v.model, created_at: now(), applied: [], inputs: v.inputs ?? {} });
   return getReport(ctx, v.projectId, id);
+}
+
+export function reportInputs(ctx: AppContext, reportId: string): ReportInputs {
+  return json<ReportInputs>(ctx.db.get<{ inputs: string }>('SELECT inputs FROM alignment_reports WHERE id = ?', reportId)?.inputs, {});
 }

@@ -320,7 +320,8 @@ export const MIGRATIONS: string[] = [
     created_at TEXT NOT NULL,
     applied_at TEXT,
     applied TEXT NOT NULL DEFAULT '[]',
-    removed TEXT NOT NULL DEFAULT '[]'
+    removed TEXT NOT NULL DEFAULT '[]',
+    inputs TEXT NOT NULL DEFAULT '{}'
   );
   CREATE INDEX alignment_project ON alignment_reports(project_id);
   `,

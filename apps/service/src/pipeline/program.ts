@@ -1,6 +1,8 @@
 // Course program: the pasted text and/or the course guide page, read into editable items and the exam format.
 import { examFormatSchema, programItemSchema, type CourseProgram, type ProgramItem } from '@smartbuilder/domain';
+import { createHash } from 'node:crypto';
 import type { AppContext } from '../context.ts';
+import { json } from '../db/db.ts';
 import { ExtractError } from '../extract/errors.ts';
 import { htmlToMarkdown } from '../extract/html.ts';
 import { safeFetch } from '../extract/safe-fetch.ts';
@@ -28,12 +30,13 @@ const norm = (title: string) => title.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, 
  * Keys and limits for freshly parsed items. An item whose title did not change keeps the key it had, so outline references
  * survive a second reading; every other key comes from the parser, made unique against all keys in use.
  */
-export function assignKeys(parsed: { key: string; title: string; details: string; proofs: string[] }[], previous: ProgramItem[]): ProgramItem[] {
+export function assignKeys(parsed: { key: string; title: string; details: string; proofs: string[] }[], previous: ProgramItem[], referenced: Set<string> = new Set()): ProgramItem[] {
   const free = new Map<string, string[]>();
   for (const p of previous) free.set(norm(p.title), [...(free.get(norm(p.title)) ?? []), p.key]);
   const keys: (string | null)[] = parsed.map((it) => free.get(norm(it.title))?.shift() ?? null);
-  // A key of an item that changed or went away is not given to another item: references to it must not point at a different topic.
-  const taken = new Set(previous.map((p) => p.key));
+  // A key of an item that changed or went away, or that an outline still names, is not given to another item: references
+  // to it must not point at a different topic.
+  const taken = new Set([...previous.map((p) => p.key), ...referenced, ...keys.filter((k) => k !== null)]);
   return parsed.map((it, i) => {
     let key = keys[i];
     if (!key) {
@@ -79,7 +82,7 @@ export async function programParse(ctx: AppContext, t: TaskContext) {
       role: 'planner', ...programPrompt({ language: project.language, text: sourceText }), schema: programSchema,
       projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
-    const items = assignKeys(data.items.filter((i) => i.title.trim()), row.items);
+    const items = assignKeys(data.items.filter((i) => i.title.trim()), row.items, referencedProgramKeys(ctx, projectId));
     if (!items.length) throw new TaskError('No program items were found in that text.', 'input', 'Check that the text holds the course program ("Programma"), then try again.');
     const examFormat = examFormatSchema.parse({ ...data.examFormat, summary: data.examFormat.summary.slice(0, 3000) });
     // The author can remove the program while the planner reads it; saving would bring it back.
@@ -92,3 +95,34 @@ export async function programParse(ctx: AppContext, t: TaskContext) {
     throw err;
   }
 }
+
+/** Program keys named by any outline revision of the book, including older ones that Put back can restore sections from. */
+export function referencedProgramKeys(ctx: AppContext, projectId: string): Set<string> {
+  const keys = new Set<string>();
+  for (const r of ctx.db.all<{ outline: string }>('SELECT outline FROM outline_revisions WHERE project_id = ?', projectId)) {
+    const outline = json<{ chapters?: { sections?: { programItems?: string[] }[] }[] }>(r.outline, {});
+    for (const c of outline.chapters ?? []) for (const s of c.sections ?? []) for (const k of s.programItems ?? []) keys.add(k);
+  }
+  return keys;
+}
+
+/**
+ * Keys for items the author saves: an item already in the program keeps its key, and a new item whose key an outline
+ * still names (an item removed earlier, or a program deleted and read again) gets a fresh one, so the old references stay
+ * stale instead of pointing at it.
+ */
+export function reserveNewKeys(items: ProgramItem[], current: ProgramItem[], referenced: Set<string>): ProgramItem[] {
+  const existing = new Set(current.map((i) => i.key));
+  const taken = new Set([...referenced, ...items.map((i) => i.key)]);
+  return items.map((it) => {
+    if (existing.has(it.key) || !referenced.has(it.key)) return it;
+    const base = it.key.slice(0, 70);
+    let key = `${base}-2`;
+    for (let n = 3; taken.has(key); n++) key = `${base}-${n}`;
+    taken.add(key);
+    return { ...it, key };
+  });
+}
+
+/** Changes when the items or the exam format change, not when only the reading status does. */
+export const programFingerprint = (p: { items: ProgramItem[]; examFormat: unknown }) => createHash('sha1').update(JSON.stringify([p.items, p.examFormat])).digest('hex');
