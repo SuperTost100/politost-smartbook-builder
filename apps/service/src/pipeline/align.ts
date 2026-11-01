@@ -355,11 +355,13 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
     }
     // The tasks join this run, so it stays active until the new sections are written and the fixes are done.
     const toWrite = [...newNodes, ...unwritten];
-    // Fixes go first, and a chapter's review waits for the fixes in that chapter as well as for its new drafts.
+    // Fixes go first. A chapter's new drafts and its review wait for the fixes in that chapter, so they read the fixed text
+    // and its formula keys.
     const fixes = issueIds.length ? regenerateSpecs(ctx, projectId, { issueIds }) : [];
-    const fixKeys = (chapterId: string) => fixes.filter((f) => f.kind === 'section.revise' && chapterOf(f.input!.nodeId as string)?.id === chapterId).map((f) => f.key);
+    const fixKeys = (chapterId: string | undefined) => fixes.filter((f) => f.kind === 'section.revise' && chapterId && chapterOf(f.input!.nodeId as string)?.id === chapterId).map((f) => f.key);
+    const chapterOfSpec = (w: { kind: string; input?: Record<string, unknown> }) => (w.kind === 'chapter.review' ? w.input!.chapterId as string : w.kind === 'section.draft' ? chapterOf(w.input!.nodeId as string)?.id : undefined);
     const writes = (toWrite.length ? writeSpecs(ctx, projectId, toWrite) : [])
-      .map((w) => (w.kind === 'chapter.review' ? { ...w, deps: [...(w.deps ?? []), ...fixKeys(w.input!.chapterId as string)] } : w));
+      .map((w) => { const extra = fixKeys(chapterOfSpec(w)); return extra.length ? { ...w, deps: [...(w.deps ?? []), ...extra] } : w; });
     const specs = [...fixes, ...writes];
     if (specs.length) t.enqueue(specs);
     ctx.db.run('UPDATE alignment_reports SET applied_at = ?, applied = ?, removed = ? WHERE id = ?', now(), JSON.stringify(lines), JSON.stringify(removed), reportId);
