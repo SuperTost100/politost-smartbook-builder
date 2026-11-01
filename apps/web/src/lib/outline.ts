@@ -47,7 +47,8 @@ export interface TopicCoverage {
 
 export function coverage(outline: Outline, topics: Topic[]): TopicCoverage[] {
   const bySection = new Map<string, { id: string; title: string; chapter: number; number: string }[]>();
-  outline.chapters.forEach((c, ci) => c.sections.forEach((s, si) => s.topicIds.forEach((t) => bySection.set(t, [...(bySection.get(t) ?? []), { id: s.id, title: s.title, chapter: ci + 1, number: `${ci + 1}.${si + 1}` }]))));
+  // An exam guide teaches no topic of its own (the service reads its chapter's topics from the other sections).
+  outline.chapters.forEach((c, ci) => c.sections.forEach((s, si) => { if (s.role !== 'exam-guide') s.topicIds.forEach((t) => bySection.set(t, [...(bySection.get(t) ?? []), { id: s.id, title: s.title, chapter: ci + 1, number: `${ci + 1}.${si + 1}` }])); }));
   const excl = new Map(outline.exclusions.map((e) => [e.topicId, e.reason]));
   return topics.map((topic) => ({ topic, sections: bySection.get(topic.id) ?? [], excludedReason: excl.get(topic.id) ?? null }));
 }
