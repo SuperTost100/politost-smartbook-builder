@@ -392,6 +392,8 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     const section = before && outlineSchema.parse(JSON.parse(before.outline)).chapters.flatMap((c) => c.sections).find((s) => s.id === nodeId);
     if (!section) throw new HttpError(409, 'gone', 'The outline this section came from is gone.', 'Add the section again in the Outline tab.');
     const outline: Outline = structuredClone(current.outline);
+    // Items the section teaches again are no longer left out.
+    outline.programExclusions = outline.programExclusions.filter((e) => !section.programItems.includes(e.item));
     const chapter = outline.chapters.find((c) => c.id === entry.chapterId);
     if (!chapter) throw new HttpError(409, 'chapter_gone', 'The chapter this section belonged to is no longer in the outline.', 'Add the chapter again in the Outline tab, then put the section back.');
     const after = entry.afterSectionId ? chapter.sections.findIndex((s) => s.id === entry.afterSectionId) : -1;

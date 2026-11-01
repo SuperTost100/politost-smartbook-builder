@@ -645,6 +645,18 @@ describe('Align book', () => {
     assert.match(getReport(ctx, P, (t.task.input as { reportId: string }).reportId).applied[0], /Queued the section "Titolo s3" for writing/);
   });
 
+  test('Put back clears the exclusions of the items the restored section teaches', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections[1].programItems', json('["serie"]')) WHERE id = ?`, revId);
+    const report = reportOf(revId, [offWhole('s2')]);
+    await apply(report.id);
+    const after = ctx.db.get<{ id: string }>('SELECT outline_rev_id AS id FROM projects')!.id;
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.programExclusions', json('[{"item":"serie","reason":"Analisi 2"}]')) WHERE id = ?`, after);
+    restoreRemoved(ctx, P, report.id, 's2');
+    assert.deepEqual(approved().programExclusions, []);
+    assert.deepEqual(approved().chapters[0].sections[1].programItems, ['serie']);
+  });
+
   test('an exam guide is not added when no exam question is on the chapter any more', async () => {
     const { revId } = book();
     const report = reportOf(revId, [{ kind: 'exam-guide', chapterId: 'c1', message: 'g' }]);

@@ -94,8 +94,9 @@ export default function OutlinePage() {
   const topics = topicsQ.data ?? [];
   // Same rule as the service: items from an earlier reading stay in use while a new one runs or fails.
   const programItems = programQ.data?.items ?? [];
-  // Until the program has loaded, every assigned key would look stale and offer an untick that drops a real assignment.
-  const programKnown = programQ.isSuccess;
+  // Until the program has loaded once, every assigned key would look stale and offer an untick that drops a real
+  // assignment. A failed refetch keeps the loaded data, so the picker stays.
+  const programKnown = programQ.data !== undefined;
   const resources = (resourcesQ.data ?? []).filter((r) => r.status === 'ready' && r.included);
   const approved = !!current?.approvedAt && !dirty;
   const hasSources = resources.length > 0;
