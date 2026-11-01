@@ -8,7 +8,7 @@ import { ExtractError } from '../extract/errors.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
 import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
-import { getProgram, getReport, insertReport, saveProgramInput, saveProgramItems } from '../repo/index.ts';
+import { getProgram, getReport, insertReport, reportInputs, saveProgramInput, saveProgramItems } from '../repo/index.ts';
 import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, checkBlocker, guideFindings, validateAlignment } from './align.ts';
 import { sectionDraft } from './draft.ts';
 import { chapterExamStats } from './exam.ts';
@@ -153,8 +153,10 @@ describe('program.parse', () => {
     assert.deepEqual(out.map((i) => i.key), ['limiti-2']);
     const saved = reserveNewKeys([item('derivate'), item('limiti'), item('serie')], [item('derivate')], new Set(['derivate', 'limiti', 'limiti-2']));
     assert.deepEqual(saved.map((i) => i.key), ['derivate', 'limiti-3', 'serie'], 'an existing item keeps its key; a new one avoids every named key');
-    seedOutline([['c1', [section('s1', { programItems: ['limiti', 'fermat'] })]]]);
-    assert.deepEqual([...referencedProgramKeys(ctx, P)].sort(), ['fermat', 'limiti']);
+    const { revId } = seedOutline([['c1', [section('s1', { programItems: ['limiti', 'fermat'] })]]]);
+    const o = json<Outline>(ctx.db.get<{ outline: string }>('SELECT outline FROM outline_revisions WHERE id = ?', revId)!.outline, {} as Outline);
+    ctx.db.run('UPDATE outline_revisions SET outline = ? WHERE id = ?', JSON.stringify({ ...o, programExclusions: [{ item: 'serie', reason: 'Analisi 2' }] }), revId);
+    assert.deepEqual([...referencedProgramKeys(ctx, P)].sort(), ['fermat', 'limiti', 'serie']);
   });
 
   test('a program removed while it is read stays removed', async () => {
@@ -736,6 +738,16 @@ describe('Align book', () => {
     // A retried task after the changes were saved does nothing more.
     assert.deepEqual(await apply(report.id), { reused: true, applied: 1 });
     assert.equal(outlineRevisions().length, 2);
+  });
+
+  test('the report keeps the revisions the planner read, so an edit during the call makes it stale', async () => {
+    book();
+    const read = head('s2')!.id;
+    const reply = answer({ coverage: [], findings: [{ kind: 'off-program', item: null, nodeId: 's2', whole: true, quote: null, message: 'Outside.', chapterId: null, afterSectionId: null, title: null, objectives: [], depth: null }] });
+    fake.next(() => { seedRevision('s2', 'Riscritta mentre il planner legge.'); return reply(); });
+    const r = await alignCheck(ctx, startTask('program.check', {}, 'align'));
+    assert.deepEqual(reportInputs(ctx, r.reportId).heads, { s2: read });
+    assert.match(applyBlocker(ctx, P, getReport(ctx, P, r.reportId))?.message ?? '', /section the report talks about changed/);
   });
 
   test('a report is stale once the program or a section it names changes', async () => {

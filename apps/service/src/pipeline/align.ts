@@ -147,17 +147,20 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
   const current = loadOutline(ctx, projectId)!;
   const project = loadProject(ctx, projectId);
   const total = examSessionTotal(ctx, projectId);
+  // The texts the planner reads, taken with the digest: the report must be checked against these revisions, not against
+  // edits made while the planner works.
+  const texts = new Map<string, string>();
+  const seen = new Map<string, string>();
+  for (const c of current.outline.chapters) for (const s of c.sections) { const h = headRevision(ctx, projectId, s.id); if (h) { texts.set(s.id, h.markdown); seen.set(s.id, h.id); } }
   t.progress('Reading the book against the program');
   const { data, route } = await runRole(ctx, {
     role: 'planner',
     ...alignPrompt({ language: project.language, program: programItemsText(program.items), exam: examFormatText(program.examFormat), outline: bookDigest(ctx, projectId, current.outline, total), sessions: total }),
     schema: alignSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
-  const texts = new Map<string, string>();
-  for (const c of current.outline.chapters) for (const s of c.sections) { const h = headRevision(ctx, projectId, s.id); if (h) texts.set(s.id, h.markdown); }
   const { coverage, findings } = validateAlignment(data, { program: program.items, outline: current.outline, texts, guides: guideFindings(ctx, projectId, current.outline) });
   const named = [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
-  const heads = Object.fromEntries(named.map((id) => [id, headRevision(ctx, projectId, id)?.id ?? null]));
+  const heads = Object.fromEntries(named.map((id) => [id, seen.get(id) ?? null]));
   const report = insertReport(ctx, { projectId, outlineRevId: current.revId, coverage, findings, model: route.model, inputs: { program: programFingerprint(program), heads } });
   const count = (kind: AlignmentFinding['kind']) => findings.filter((f) => f.kind === kind).length;
   return {

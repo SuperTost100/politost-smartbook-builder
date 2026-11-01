@@ -96,12 +96,13 @@ export async function programParse(ctx: AppContext, t: TaskContext) {
   }
 }
 
-/** Program keys named by any outline revision of the book, including older ones that Put back can restore sections from. */
+/** Program keys named by any outline revision of the book (sections and exclusions), including older ones that Put back can restore sections from. */
 export function referencedProgramKeys(ctx: AppContext, projectId: string): Set<string> {
   const keys = new Set<string>();
   for (const r of ctx.db.all<{ outline: string }>('SELECT outline FROM outline_revisions WHERE project_id = ?', projectId)) {
-    const outline = json<{ chapters?: { sections?: { programItems?: string[] }[] }[] }>(r.outline, {});
+    const outline = json<{ chapters?: { sections?: { programItems?: string[] }[] }[]; programExclusions?: { item: string }[] }>(r.outline, {});
     for (const c of outline.chapters ?? []) for (const s of c.sections ?? []) for (const k of s.programItems ?? []) keys.add(k);
+    for (const e of outline.programExclusions ?? []) keys.add(e.item);
   }
   return keys;
 }
