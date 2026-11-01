@@ -595,6 +595,15 @@ describe('Align book', () => {
     assert.deepEqual([r.added, r.fixes, r.outlineChanged], [2, 1, true]);
   });
 
+  test('a chapter review queued by Align book waits for the fixes in that chapter too', async () => {
+    const { revId } = book();
+    const t = startTask('program.apply', { reportId: reportOf(revId, [missing({ chapterId: 'c1', afterSectionId: 's1', title: 'Nuova' }), { kind: 'thin', item: 'limiti', nodeId: 's1', message: 'Short.' }]).id, findings: [] }, 'align');
+    await alignApply(ctx, t);
+    const deps = ctx.db.all<{ key: string }>(`SELECT dt.key FROM tasks r JOIN task_deps d ON d.task_id = r.id JOIN tasks dt ON dt.id = d.dep_id WHERE r.run_id = ? AND r.key = 'review:c1'`, runOf(t)).map((x) => x.key);
+    assert.ok(deps.some((k) => k.startsWith('draft:')), deps.join());
+    assert.ok(deps.some((k) => k.startsWith('fix:s1:')), deps.join());
+  });
+
   test('new sections in written chapters get evidence, drafts and a chapter review, not a new introduction, practice or graph picks', async () => {
     const { revId } = book();
     const t = startTask('program.apply', { reportId: reportOf(revId, [missing()]).id, findings: [] }, 'align');

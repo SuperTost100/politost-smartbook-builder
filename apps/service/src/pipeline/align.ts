@@ -355,7 +355,12 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
     }
     // The tasks join this run, so it stays active until the new sections are written and the fixes are done.
     const toWrite = [...newNodes, ...unwritten];
-    const specs = [...(toWrite.length ? writeSpecs(ctx, projectId, toWrite) : []), ...(issueIds.length ? regenerateSpecs(ctx, projectId, { issueIds }) : [])];
+    // Fixes go first, and a chapter's review waits for the fixes in that chapter as well as for its new drafts.
+    const fixes = issueIds.length ? regenerateSpecs(ctx, projectId, { issueIds }) : [];
+    const fixKeys = (chapterId: string) => fixes.filter((f) => f.kind === 'section.revise' && chapterOf(f.input!.nodeId as string)?.id === chapterId).map((f) => f.key);
+    const writes = (toWrite.length ? writeSpecs(ctx, projectId, toWrite) : [])
+      .map((w) => (w.kind === 'chapter.review' ? { ...w, deps: [...(w.deps ?? []), ...fixKeys(w.input!.chapterId as string)] } : w));
+    const specs = [...fixes, ...writes];
     if (specs.length) t.enqueue(specs);
     ctx.db.run('UPDATE alignment_reports SET applied_at = ?, applied = ?, removed = ? WHERE id = ?', now(), JSON.stringify(lines), JSON.stringify(removed), reportId);
   });
