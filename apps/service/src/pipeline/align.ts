@@ -240,9 +240,9 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
     return null;
   };
 
-  /** An open program issue on a written section, reused when the same report or a repeat asks again. */
+  /** An open program issue on a written section, reused when a repeat asks the same; the suggestion names the item, so two items never share one. */
   const programIssue = (nodeId: string, revId: string, category: 'program-thin' | 'program-proof', message: string, suggestion: string) => {
-    const existing = ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'program' AND category = ? AND status IN ('open', 'proposed') AND message = ?`, projectId, nodeId, category, message);
+    const existing = ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'program' AND category = ? AND status IN ('open', 'proposed') AND message = ? AND suggestion = ?`, projectId, nodeId, category, message, suggestion);
     issueIds.push(existing?.id ?? insertIssue(ctx, { projectId, nodeId, revId, source: 'program', severity: 'major', category, message, suggestion }).id);
   };
   const teach = (it: ProgramItem) => `Teach ${q(it.title)} fully, as the course program words it: ${it.details || it.title}. Add the definitions, the statements with every hypothesis and the worked examples the exam needs, in the style of the section.`;

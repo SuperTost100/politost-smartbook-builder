@@ -622,6 +622,14 @@ describe('Align book', () => {
     assert.ok(taskKeys(runOf(t)).some((k) => k.startsWith('fix:s3:')));
   });
 
+  test('two missing items with the same message on one written section get one issue each', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].programItems', json('["derivate","serie","limiti"]')) WHERE id = ?`, revId);
+    const second: AlignmentFinding = { ...missing(), item: 'limiti' } as AlignmentFinding;
+    await apply(reportOf(revId, [missing(), second]).id);
+    assert.deepEqual(issues().map((i) => i.suggestion.match(/Teach "(\w+)"/)?.[1]).sort(), ['Limiti', 'Serie']);
+  });
+
   test('a missing item planned for a section that is not written yet gets that section written, not a second one', async () => {
     const { revId } = book();
     ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].programItems', json('["derivate","serie"]')) WHERE id = ?`, revId);
