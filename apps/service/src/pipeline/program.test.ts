@@ -657,6 +657,28 @@ describe('Align book', () => {
     assert.deepEqual(approved().chapters[0].sections[1].programItems, ['serie']);
   });
 
+  test('neighbours removed together come back in their order, whichever is put back first', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections', json(?)) WHERE id = ?`,
+      JSON.stringify(['s1', 'sa', 'sb', 'sc'].map((id) => section(id))), revId);
+    const report = reportOf(revId, [offWhole('sb'), offWhole('sa')]);
+    await apply(report.id);
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1', 'sc']);
+    restoreRemoved(ctx, P, report.id, 'sb');
+    restoreRemoved(ctx, P, report.id, 'sa');
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1', 'sa', 'sb', 'sc']);
+  });
+
+  test('a figures run never picks an exam guide', () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_insert(outline, '$.chapters[0].sections[#]', json(?)) WHERE id = ?`, JSON.stringify(section('g9', { role: 'exam-guide' })), revId);
+    seedRevision('g9', 'Guida.');
+    const run = startRun(ctx, P, 'figures', { chapterIds: ['c1'] });
+    const keys = taskKeys(run.id);
+    assert.ok(keys.some((k) => k.startsWith('figures:s1:')), keys.join());
+    assert.ok(!keys.some((k) => k.includes('g9')), keys.join());
+  });
+
   test('an exam guide is not added when no exam question is on the chapter any more', async () => {
     const { revId } = book();
     const report = reportOf(revId, [{ kind: 'exam-guide', chapterId: 'c1', message: 'g' }]);

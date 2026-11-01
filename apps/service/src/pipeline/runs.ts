@@ -58,7 +58,8 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       // The given sections, or every drafted section of the given chapters (all chapters when none are given); with
       // missingOnly, only sections without a figure.
       const sections = (loadOutline(ctx, projectId)?.outline.chapters ?? []).flatMap((c) => c.sections.map((s) => ({ chapterId: c.id, ...s })));
-      const picked = sections.filter((s) => scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId))
+      // Exam guides are written from exam questions and carry no figures.
+      const picked = sections.filter((s) => s.role !== 'exam-guide' && (scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId)))
         .filter((s) => { const head = headRevision(ctx, projectId, s.id); return head && (!scope.missingOnly || !head.markdown.includes(':::image{')); });
       if (!picked.length) throw new HttpError(409, 'nothing_to_illustrate', 'No drafted section to add figures to.', scope.missingOnly ? 'Every section already has a figure.' : 'Draft the section first.');
       // A section that an active figures run still has to do is left to that run, so a double click or an overlapping

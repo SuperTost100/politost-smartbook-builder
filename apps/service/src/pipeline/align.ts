@@ -389,14 +389,19 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     if (!current) throw new HttpError(409, 'outline_not_approved', 'The outline is not approved.', 'Approve the outline in the Outline tab first.');
     if (current.outline.chapters.some((c) => c.sections.some((s) => s.id === nodeId))) throw new HttpError(409, 'already_restored', 'This section is in the outline already.', 'Reload the report.');
     const before = ctx.db.get<{ outline: string }>('SELECT outline FROM outline_revisions WHERE id = ? AND project_id = ?', report.outlineRevId, projectId);
-    const section = before && outlineSchema.parse(JSON.parse(before.outline)).chapters.flatMap((c) => c.sections).find((s) => s.id === nodeId);
+    const source = before ? outlineSchema.parse(JSON.parse(before.outline)) : null;
+    const section = source?.chapters.flatMap((c) => c.sections).find((s) => s.id === nodeId);
     if (!section) throw new HttpError(409, 'gone', 'The outline this section came from is gone.', 'Add the section again in the Outline tab.');
     const outline: Outline = structuredClone(current.outline);
     // Items the section teaches again are no longer left out.
     outline.programExclusions = outline.programExclusions.filter((e) => !section.programItems.includes(e.item));
     const chapter = outline.chapters.find((c) => c.id === entry.chapterId);
     if (!chapter) throw new HttpError(409, 'chapter_gone', 'The chapter this section belonged to is no longer in the outline.', 'Add the chapter again in the Outline tab, then put the section back.');
-    const after = entry.afterSectionId ? chapter.sections.findIndex((s) => s.id === entry.afterSectionId) : -1;
+    // After the nearest section that preceded it in the report's outline and is still there, so neighbours removed together
+    // come back in their order whichever is put back first.
+    const original = source!.chapters.find((c) => c.id === entry.chapterId)?.sections.map((s) => s.id) ?? [];
+    const earlier = original.slice(0, Math.max(0, original.indexOf(nodeId))).reverse();
+    const after = earlier.map((id) => chapter.sections.findIndex((s) => s.id === id)).find((i) => i >= 0) ?? -1;
     const guide = chapter.sections.findIndex((s) => s.role === 'exam-guide');
     const at = Math.min(after + 1, guide >= 0 ? guide : chapter.sections.length);
     chapter.sections.splice(at, 0, section);
