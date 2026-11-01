@@ -221,6 +221,7 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   const lines: string[] = [];
   const removed: AlignmentReport['removed'] = [];
   const newNodes: string[] = [];
+  const unwritten: string[] = [];
   const issueIds: string[] = [];
   const inserted = new Map<string, number>();
   let changed = false;
@@ -246,7 +247,14 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
           const chapter = outline.chapters.find((c) => c.id === f.suggested.chapterId);
           const it = item(f.item);
           if (!chapter || !it) { lines.push(`Skipped the new section for "${f.item}": ${chapter ? 'the program item was removed' : 'the chapter is gone'}.`); break; }
-          if (outline.chapters.some((c) => c.sections.some((s) => s.programItems.includes(f.item) && s.role === 'content'))) { lines.push(`Skipped the new section for "${it.title}": a section teaches it already.`); break; }
+          const assigned = outline.chapters.flatMap((c) => c.sections).filter((s) => s.programItems.includes(f.item) && s.role === 'content');
+          if (assigned.some((s) => heads.some((h) => h.node_id === s.id))) { lines.push(`Skipped the new section for "${it.title}": a section teaches it already.`); break; }
+          // A section planned for the item but never written is written now, not doubled.
+          if (assigned[0]) {
+            if (!unwritten.includes(assigned[0].id)) unwritten.push(assigned[0].id);
+            lines.push(`Queued the section ${q(assigned[0].title)} for writing: it is planned for ${q(it.title)} but not written yet.`);
+            break;
+          }
           const section: OutlineSection = { id: newId(), title: f.suggested.title, objectives: f.suggested.objectives, topicIds: [], depth: f.suggested.depth, subsections: [], programItems: [f.item], role: 'content' };
           // Sections added after the same section keep the report's order, and none goes behind the exam guide.
           const anchor = `${chapter.id}:${f.suggested.afterSectionId ?? ''}`;
@@ -333,7 +341,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
       ctx.events.emit('outline.created', { revId: rev.id, origin: 'ai', align: reportId }, { projectId, runId: t.task.runId });
     }
     // The tasks join this run, so it stays active until the new sections are written and the fixes are done.
-    const specs = [...(newNodes.length ? writeSpecs(ctx, projectId, newNodes) : []), ...(issueIds.length ? regenerateSpecs(ctx, projectId, { issueIds }) : [])];
+    const toWrite = [...newNodes, ...unwritten];
+    const specs = [...(toWrite.length ? writeSpecs(ctx, projectId, toWrite) : []), ...(issueIds.length ? regenerateSpecs(ctx, projectId, { issueIds }) : [])];
     if (specs.length) t.enqueue(specs);
     ctx.db.run('UPDATE alignment_reports SET applied_at = ?, applied = ?, removed = ? WHERE id = ?', now(), JSON.stringify(lines), JSON.stringify(removed), reportId);
   });

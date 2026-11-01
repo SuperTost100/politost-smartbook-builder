@@ -610,6 +610,18 @@ describe('Align book', () => {
     assert.deepEqual(approved().chapters[0].sections.map((s) => s.title), ['Titolo s1', 'Nuova', "Come viene chiesto all'esame"]);
   });
 
+  test('a missing item planned for a section that is not written yet gets that section written, not a second one', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].programItems', json('["derivate","serie"]')) WHERE id = ?`, revId);
+    ctx.db.run(`DELETE FROM content_revisions WHERE node_id = 's3'`);
+    const t = startTask('program.apply', { reportId: reportOf(revId, [missing()]).id, findings: [] }, 'align');
+    const r = await alignApply(ctx, t);
+    assert.equal(r.added, 0);
+    assert.deepEqual(approved().chapters[1].sections.map((s) => s.id), ['s3'], 'no second section');
+    assert.ok(taskKeys(runOf(t)).includes('draft:s3'));
+    assert.match(getReport(ctx, P, (t.task.input as { reportId: string }).reportId).applied[0], /Queued the section "Titolo s3" for writing/);
+  });
+
   test('Put back restores a removed section where it was, with its text, once', async () => {
     const { revId } = book();
     const report = reportOf(revId, [offWhole('s2'), { kind: 'exam-guide', chapterId: 'c1', message: 'g' }]);

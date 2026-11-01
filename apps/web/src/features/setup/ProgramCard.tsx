@@ -23,9 +23,12 @@ const toRows = (items: ProgramItem[]): Row[] => items.map((i) => ({ ...i, rid: i
 
 const cleanProofs = (proofs: string[]) => proofs.map((l) => l.trim()).filter(Boolean);
 
-/** The items as the service stores them: existing keys are kept, new rows get a kebab-case key from the title that no other row uses. */
-function withKeys(rows: Row[]): ProgramItem[] {
-  const taken = new Set(rows.filter((r) => r.key).map((r) => r.key));
+/**
+ * The items as the service stores them: existing keys are kept, new rows get a kebab-case key from the title that no other
+ * row uses and no saved item used, so a row added after removing an item never takes over the removed item's key.
+ */
+function withKeys(rows: Row[], saved: ProgramItem[]): ProgramItem[] {
+  const taken = new Set([...rows.filter((r) => r.key).map((r) => r.key), ...saved.map((i) => i.key)]);
   return rows.map(({ rid: _rid, ...item }) => {
     const clean = { ...item, title: item.title.trim(), proofs: cleanProofs(item.proofs) };
     if (clean.key) return clean;
@@ -61,7 +64,7 @@ export function ProgramCard({ pid }: { pid: string }) {
 
   const parsing = program?.status === 'parsing';
   const showItems = !!program && !parsing && (program.status === 'ready' || program.items.length > 0);
-  const items = withKeys(rows);
+  const items = withKeys(rows, program?.items ?? []);
   const dirty = !!program && (JSON.stringify(rows.map(norm)) !== JSON.stringify(program.items.map(norm)) || JSON.stringify(normExam(exam)) !== JSON.stringify(normExam(program.examFormat)));
   const textDirty = !!program && (text !== program.text || (url.trim() || null) !== program.url);
 
