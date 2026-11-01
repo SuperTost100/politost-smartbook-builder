@@ -5,6 +5,8 @@ import { newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, WaitForUser, type TaskContext } from '../queue/queue.ts';
 import { outlinePrompt, plannedOutlineSchema } from './prompts.ts';
+import { readyProgram } from '../repo/program.ts';
+import { appendExamGuides } from './exam.ts';
 import { sourceIndexesText } from './prepare.ts';
 import { loadOutline, loadProject, loadTopics, slugify } from './util.ts';
 
@@ -23,14 +25,21 @@ export async function outlinePlan(ctx: AppContext, t: TaskContext) {
   const topicText = topics.map((tp) => `${keyOf(tp.id)} | ${tp.name} | ${tp.examSessions} | ${tp.prerequisites.map(keyOf).join(', ') || '-'}`).join('\n');
   const resources = ctx.db.all<{ id: string; filename: string }>(`SELECT id, filename FROM resources WHERE project_id = ? AND included = 1 AND role IN ('theory', 'mixed') ORDER BY created_at`, projectId);
 
+  const program = readyProgram(ctx, projectId);
   const { data, route } = await runRole(ctx, {
     role: 'planner',
-    ...outlinePrompt({ title: project.title, subject: project.subject, language: project.language, audience: project.audience, goals: project.goals, topics: topicText, indexes: sourceIndexesText(ctx, resources), sessions }),
+    ...outlinePrompt({
+      title: project.title, subject: project.subject, language: project.language, audience: project.audience, goals: project.goals, topics: topicText,
+      indexes: sourceIndexesText(ctx, resources), sessions, program: program ? { items: program.items, exam: program.examFormat } : undefined,
+    }),
     schema: plannedOutlineSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
 
   const valid = new Set(topics.map((tp) => keyOf(tp.id)));
   const toId = (k: string) => topics.find((tp) => keyOf(tp.id) === k)?.id;
+  // Program keys the model made up are dropped like unknown topics; an item taught somewhere is not also an exclusion.
+  const itemKeys = new Set(program?.items.map((i) => i.key));
+  const taught = new Set(data.chapters.flatMap((c) => c.sections.flatMap((s) => s.programItems)));
   const usedSlugs = new Set<string>();
   const outline: Outline = outlineSchema.parse({
     notation: data.notation,
@@ -43,18 +52,21 @@ export async function outlinePlan(ctx: AppContext, t: TaskContext) {
         sections: c.sections.map((s) => ({
           id: newId(), title: s.title, objectives: s.objectives, depth: s.depth,
           topicIds: s.topics.filter((k) => valid.has(k)).map(toId).filter(Boolean),
+          programItems: [...new Set(s.programItems.filter((k) => itemKeys.has(k)))],
           subsections: s.subsections.map((ss) => ({ id: newId(), title: ss.title, objectives: ss.objectives })),
         })),
       };
     }),
     exclusions: data.exclusions.filter((e) => valid.has(e.topic)).map((e) => ({ topicId: toId(e.topic)!, reason: e.reason })),
+    programExclusions: data.programExclusions.filter((e, i, all) => itemKeys.has(e.item) && !taught.has(e.item) && all.findIndex((x) => x.item === e.item) === i),
   });
+  const guides = appendExamGuides(ctx, projectId, outline, project.language);
 
   const revId = newId();
   ctx.db.insert('outline_revisions', { id: revId, project_id: projectId, outline, origin: 'ai', note: `run:${t.task.runId}`, created_at: now(), approved_at: null });
   ctx.db.run(`UPDATE projects SET stage = 'outline', updated_at = ? WHERE id = ?`, now(), projectId);
   ctx.events.emit('outline.created', { revId, model: route.model }, { projectId, runId: t.task.runId });
-  return { revId, chapters: outline.chapters.length, sections: outline.chapters.reduce((n, c) => n + c.sections.length, 0) };
+  return { revId, chapters: outline.chapters.length, sections: outline.chapters.reduce((n, c) => n + c.sections.length, 0), examGuides: guides };
 }
 
 /**

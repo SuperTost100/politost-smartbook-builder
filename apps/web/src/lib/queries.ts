@@ -26,6 +26,8 @@ export const qk = {
   enrichments: (pid: string) => ['enrichments', pid] as const,
   issues: (pid: string) => ['issues', pid] as const,
   exports: (pid: string) => ['exports', pid] as const,
+  program: (pid: string) => ['program', pid] as const,
+  alignment: (pid: string) => ['alignment', pid] as const,
 };
 
 export const useProjects = () => useQuery({ queryKey: qk.projects, queryFn: () => api('GET /api/projects') });
@@ -50,6 +52,16 @@ export const useQuestions = (pid: string | undefined) =>
   useQuery({ queryKey: qk.questions(pid ?? ''), queryFn: () => api('GET /api/projects/:id/questions', { params: { id: pid! } }), enabled: !!pid });
 export const useExports = (pid: string | undefined) =>
   useQuery({ queryKey: qk.exports(pid ?? ''), queryFn: () => api('GET /api/projects/:id/exports', { params: { id: pid! } }), enabled: !!pid });
+/** `poll` is a safety net while a run that writes the program or the report is active. */
+export const useProgram = (pid: string | undefined) =>
+  useQuery({
+    queryKey: qk.program(pid ?? ''),
+    queryFn: () => api('GET /api/projects/:id/program', { params: { id: pid! } }),
+    enabled: !!pid,
+    refetchInterval: (q) => (q.state.data?.status === 'parsing' ? 3000 : false),
+  });
+export const useAlignment = (pid: string | undefined, poll = false) =>
+  useQuery({ queryKey: qk.alignment(pid ?? ''), queryFn: () => api('GET /api/projects/:id/alignment', { params: { id: pid! } }), enabled: !!pid, refetchInterval: poll ? 4000 : false });
 export const useConnections = () => useQuery({ queryKey: qk.connections, queryFn: () => api('GET /api/connections'), staleTime: 15_000 });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => api('GET /api/settings') });
 

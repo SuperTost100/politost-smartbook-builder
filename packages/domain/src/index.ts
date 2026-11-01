@@ -76,6 +76,8 @@ export const bookOptionsSchema = z.object({
   exercisesPerHotTopic: z.number().int().min(0).max(30).default(6),
   /** Restrict drafting to these chapter ids; empty means all. */
   chapterScope: z.array(z.string()).default([]),
+  /** What Align book does with a section outside the course program: remove it from the outline, or keep it with a note. */
+  offProgram: z.enum(['delete', 'mark']).default('delete'),
 });
 export type BookOptions = z.infer<typeof bookOptionsSchema>;
 
@@ -219,6 +221,10 @@ export const outlineSectionSchema = z.object({
   topicIds: z.array(z.string()).default([]),
   depth: z.enum(['brief', 'standard', 'deep']).default('standard'),
   subsections: z.array(outlineSubsectionSchema).default([]),
+  /** Course program items this section teaches (ProgramItem.key). */
+  programItems: z.array(z.string()).default([]),
+  /** 'exam-guide' is the chapter's closing "Come viene chiesto all'esame" section, written from the chapter's exam questions. */
+  role: z.enum(['content', 'exam-guide']).default('content'),
 });
 export const outlineChapterSchema = z.object({
   id: z.string(),
@@ -232,6 +238,8 @@ export const outlineSchema = z.object({
   chapters: z.array(outlineChapterSchema),
   /** Topics deliberately left out, with the reason. */
   exclusions: z.array(z.object({ topicId: z.string(), reason: z.string() })).default([]),
+  /** Course program items deliberately left out of the book, with the reason. */
+  programExclusions: z.array(z.object({ item: z.string(), reason: z.string() })).default([]),
   notation: z.string().default(''),
 });
 export type OutlineSubsection = z.infer<typeof outlineSubsectionSchema>;
@@ -247,6 +255,87 @@ export interface OutlineRevision {
   createdAt: string;
   approvedAt: string | null;
   note: string;
+}
+
+// ---------- Course program ----------
+
+/** One entry of the official course program, e.g. "Serie numeriche: criteri di convergenza". */
+export const programItemSchema = z.object({
+  /** Stable kebab-case key, unique in the program. */
+  key: z.string().regex(/^[a-z0-9-]+$/).max(80),
+  title: z.string().min(1).max(300),
+  /** The program's own wording for this item, kept verbatim where possible. */
+  details: z.string().max(2000).default(''),
+  /** Theorems or results whose proof the program or the exam format asks for. */
+  proofs: z.array(z.string().max(300)).default([]),
+});
+export type ProgramItem = z.infer<typeof programItemSchema>;
+
+/** How the course is examined, read from the program's "Modalità d'esame". */
+export const examFormatSchema = z.object({
+  written: z.boolean().default(true),
+  oral: z.boolean().default(false),
+  /** required: proofs are asked at the exam; some: only the listed ones; none: no proofs are asked. */
+  proofs: z.enum(['required', 'some', 'none']).default('some'),
+  /** Short description in the book language: parts, length, what is allowed, how it is graded. */
+  summary: z.string().max(3000).default(''),
+});
+export type ExamFormat = z.infer<typeof examFormatSchema>;
+
+export const programInputSchema = z.object({
+  /** Program text pasted by the author (Programma, and Modalità d'esame when available). */
+  text: z.string().max(60_000).default(''),
+  /** Course guide page to fetch instead of, or in addition to, the text. */
+  url: z.string().url().max(2000).nullable().default(null),
+});
+export type ProgramInput = z.infer<typeof programInputSchema>;
+
+export interface CourseProgram {
+  projectId: string;
+  text: string;
+  url: string | null;
+  /** Text actually read (pasted text plus the fetched page), what items were parsed from. */
+  sourceText: string;
+  items: ProgramItem[];
+  examFormat: ExamFormat;
+  /** idle: nothing parsed yet; parsing: a program run is active; ready: items are usable. */
+  status: 'idle' | 'parsing' | 'ready' | 'failed';
+  error: string | null;
+  parsedAt: string | null;
+  updatedAt: string;
+}
+
+/** One finding of the alignment check between the course program and the book. */
+export type AlignmentFinding =
+  /** A program item no section teaches. `suggested` is where a new section would go. */
+  | { kind: 'missing'; item: string; message: string; suggested: { chapterId: string; afterSectionId: string | null; title: string; objectives: string[]; depth: 'brief' | 'standard' | 'deep' } }
+  /** A program item a section teaches too briefly for its exam weight. */
+  | { kind: 'thin'; item: string; nodeId: string; message: string }
+  /** The exam asks for a proof the section does not give. */
+  | { kind: 'proof'; item: string; nodeId: string; message: string }
+  /** A section, or part of one, outside the program. `whole` means the entire section is off-program. */
+  | { kind: 'off-program'; nodeId: string; whole: boolean; message: string; quote: string }
+  /** A section that comes before a section it depends on. */
+  | { kind: 'order'; nodeId: string; message: string }
+  /** A chapter without its closing exam-guide section. */
+  | { kind: 'exam-guide'; chapterId: string; message: string };
+
+export interface AlignmentReport {
+  id: string;
+  projectId: string;
+  /** The outline revision the check read. A report on an older outline can't be applied. */
+  outlineRevId: string;
+  /** Per program item, the sections that teach it. */
+  coverage: { item: string; nodeIds: string[] }[];
+  findings: AlignmentFinding[];
+  model: string;
+  createdAt: string;
+  /** Set when Align book used this report. */
+  appliedAt: string | null;
+  /** What Align book did, one line per change, in English for the author. */
+  applied: string[];
+  /** Sections Align book took out of the outline. Their text stays in the database, so Put back restores them. */
+  removed: { nodeId: string; title: string; chapterId: string; afterSectionId: string | null; restoredAt: string | null }[];
 }
 
 // ---------- Content ----------
@@ -348,7 +437,7 @@ export type TaskState = 'queued' | 'running' | 'succeeded' | 'retry_wait' | 'wai
 export interface RunSummary {
   id: string;
   projectId: string;
-  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research' | 'figures';
+  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research' | 'figures' | 'program' | 'align';
   status: RunStatus;
   createdAt: string;
   finishedAt: string | null;
@@ -387,7 +476,7 @@ export interface UsageRow {
 
 export type IssueSeverity = 'blocker' | 'major' | 'minor';
 export type IssueStatus = 'open' | 'proposed' | 'fixed' | 'accepted' | 'dismissed';
-export type IssueSource = 'lint' | 'review' | 'verification';
+export type IssueSource = 'lint' | 'review' | 'verification' | 'program';
 
 export interface ReviewIssue {
   id: string;

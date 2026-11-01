@@ -14,3 +14,34 @@
 .rv-msg { font-size: 15px; }
 .rv-sug { font-size: 14px; color: var(--ink-muted); }
 .rv-quote .katex-display, .rv-msg .katex-display, .rv-sug .katex-display { margin: 4px 0; overflow-x: auto; overflow-y: hidden; }
+
+.al-panel { display: flex; flex-direction: column; gap: 14px; }
+.al-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.al-head > div:first-child { min-width: 0; flex: 1 1 320px; display: flex; flex-direction: column; gap: 2px; }
+.al-lede { font-size: 14px; line-height: 20px; max-width: 72ch; }
+.al-spin { margin-top: 3px; }
+.al-clear { display: flex; gap: 8px; align-items: flex-start; color: var(--success); font-size: 14px; }
+.al-clear svg { flex: none; margin-top: 3px; }
+.al-applied { margin: 4px 0; padding-left: 18px; display: flex; flex-direction: column; gap: 2px; }
+.al-removed { margin: 4px 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 6px; }
+.al-removed > li { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.al-removed .ui-btn { flex: none; white-space: nowrap; }
+.al-group { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; }
+.al-group > summary { display: flex; align-items: center; gap: 8px; cursor: pointer; list-style: none; font-weight: 600; font-size: 15px; min-height: 28px; }
+.al-group > summary::-webkit-details-marker { display: none; }
+.al-group > summary::before { content: '▾'; flex: none; color: var(--ink-subtle); width: 14px; }
+.al-group:not([open]) > summary::before { content: '▸'; }
+.al-hint { font-size: 13px; line-height: 18px; margin: 4px 0 0 22px; max-width: 72ch; }
+.al-bulk { margin: 2px 0 0 22px; }
+.al-list { list-style: none; margin: 8px 0 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.al-finding { display: flex; gap: 12px; padding: 12px 14px; border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
+.al-finding.is-picked { background: var(--accent-soft); }
+.al-finding__title { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; font-size: 14px; }
+.al-title-text { font-weight: 600; }
+.al-suggest { font-size: 14px; }
+.al-confirm { display: flex; flex-direction: column; gap: 10px; }
+.al-confirm ul { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
+@media (max-width: 720px) {
+  .al-finding { padding: 10px 12px; gap: 10px; }
+  .al-hint, .al-bulk { margin-left: 0; }
+}

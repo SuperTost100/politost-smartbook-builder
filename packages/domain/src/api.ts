@@ -2,6 +2,7 @@
 // Bodies are JSON unless noted. Errors use ApiError from index.ts with an HTTP status.
 // Mutations require the header `x-smartbuilder: 1` (CSRF guard).
 import type {
+  AlignmentReport, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
   Asset, BookOptions, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
   ProjectInput, ProjectSummary, Question, Resource, ResourceRole, ReviewIssue, RunSummary, Settings,
   SourceIndex, TaskRow, Topic, UsageRow, Role,
@@ -147,6 +148,26 @@ export interface Api {
   'GET /api/projects/:id/enrichments': { res: Enrichment[] };
   'PATCH /api/enrichments/:eid': { body: { payload: Record<string, unknown> }; res: Enrichment };
   'DELETE /api/enrichments/:eid': { res: { ok: true } };
+
+  /** The course program; null fields until the author saves one. */
+  'GET /api/projects/:id/program': { res: CourseProgram | null };
+  /** Save pasted text and/or a course guide URL and start a `program` run that reads it into items. */
+  'PUT /api/projects/:id/program': { body: ProgramInput; res: { program: CourseProgram; run: RunSummary } };
+  /** Replace the parsed items and exam format after the author edited them. Keys must stay unique. */
+  'PUT /api/projects/:id/program/items': { body: { items: ProgramItem[]; examFormat: ExamFormat }; res: CourseProgram };
+  'DELETE /api/projects/:id/program': { res: { ok: true } };
+  /** Latest alignment report, or null when the book was never checked. */
+  'GET /api/projects/:id/alignment': { res: AlignmentReport | null };
+  /** Start an `align` run that checks the book against the program and stores a report. */
+  'POST /api/projects/:id/alignment/check': { res: RunSummary };
+  /**
+   * Start an `align` run that applies a report: adds missing sections and exam guides to the outline and writes them,
+   * removes or marks off-program sections (BookOptions.offProgram), and fixes thin coverage and missing proofs through the
+   * issue-fix flow. `findings` are indexes into report.findings; empty means all.
+   */
+  'POST /api/projects/:id/alignment/apply': { body: { reportId: string; findings?: number[] }; res: RunSummary };
+  /** Put a section that Align book removed back into the outline where it was, with its text. */
+  'POST /api/projects/:id/alignment/restore': { body: { reportId: string; nodeId: string }; res: AlignmentReport };
 
   'GET /api/projects/:id/issues': { res: ReviewIssue[] };
   'PATCH /api/issues/:iid': { body: { status: ReviewIssue['status']; resolution?: string }; res: ReviewIssue };

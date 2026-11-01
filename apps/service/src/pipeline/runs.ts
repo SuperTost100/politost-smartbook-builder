@@ -1,18 +1,22 @@
 // Run planning: turns an author action into a task graph.
 import { createHash } from 'node:crypto';
-import type { RunSummary } from '@smartbuilder/domain';
+import type { OutlineSection, RunSummary } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { now } from '../db/db.ts';
 import { HttpError } from '../server.ts';
 import type { TaskSpec } from '../queue/queue.ts';
 import { headRevision, loadOutline, loadProject } from './util.ts';
 
-export interface RunScope { chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck' }
+export interface RunScope {
+  chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck';
+  /** align runs: apply this report (the chosen finding indexes; empty means all) instead of checking the book. */
+  align?: { reportId: string; findings?: number[] };
+}
 
 const ACTIVE = `('running', 'pausing', 'paused', 'waiting')`;
 
 /** The active run of a kind. Section-scoped generate runs (snapshot.nodeIds) are not "the" book run. */
-function activeRun(ctx: AppContext, projectId: string, kind: string) {
+export function activeRun(ctx: AppContext, projectId: string, kind: string) {
   return ctx.db.get<{ id: string }>(`SELECT id FROM runs WHERE project_id = ? AND kind = ? AND status IN ${ACTIVE} AND json_extract(snapshot, '$.nodeIds') IS NULL ORDER BY created_at DESC LIMIT 1`, projectId, kind)?.id ?? null;
 }
 
@@ -54,7 +58,8 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       // The given sections, or every drafted section of the given chapters (all chapters when none are given); with
       // missingOnly, only sections without a figure.
       const sections = (loadOutline(ctx, projectId)?.outline.chapters ?? []).flatMap((c) => c.sections.map((s) => ({ chapterId: c.id, ...s })));
-      const picked = sections.filter((s) => scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId))
+      // Exam guides are written from exam questions and carry no figures.
+      const picked = sections.filter((s) => s.role !== 'exam-guide' && (scope.nodeIds?.length ? scope.nodeIds.includes(s.id) : !scope.chapterIds?.length || scope.chapterIds.includes(s.chapterId)))
         .filter((s) => { const head = headRevision(ctx, projectId, s.id); return head && (!scope.missingOnly || !head.markdown.includes(':::image{')); });
       if (!picked.length) throw new HttpError(409, 'nothing_to_illustrate', 'No drafted section to add figures to.', scope.missingOnly ? 'Every section already has a figure.' : 'Draft the section first.');
       // A section that an active figures run still has to do is left to that run, so a double click or an overlapping
@@ -90,6 +95,21 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
           }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
       runId = ctx.queue.createRun(projectId, 'review', specs);
+      break;
+    }
+    case 'program': {
+      const existing = activeRun(ctx, projectId, 'program');
+      if (existing) { runId = existing; break; }
+      runId = ctx.queue.createRun(projectId, 'program', [{ kind: 'program.parse', key: 'program', label: 'Read the course program', pool: 'planner', maxAttempts: 2 }]);
+      break;
+    }
+    case 'align': {
+      const apply = scope.align;
+      const existing = activeRun(ctx, projectId, 'align');
+      if (existing) throw new HttpError(409, 'align_running', 'The book is already being checked or aligned.', 'Wait for that run to finish, or open it from the Run panel.');
+      runId = ctx.queue.createRun(projectId, 'align', apply
+        ? [{ kind: 'program.apply', key: `apply:${apply.reportId}`, label: 'Align the book with the program', input: { reportId: apply.reportId, findings: apply.findings ?? [] } }]
+        : [{ kind: 'program.check', key: `check:${Date.now().toString(36)}`, label: 'Check the book against the program', pool: 'planner', maxAttempts: 2 }]);
       break;
     }
     default:
@@ -147,6 +167,23 @@ function runDraftingNodes(ctx: AppContext, projectId: string, nodeIds: string[])
 }
 
 /**
+ * Evidence and draft tasks of sections. A chapter's exam guide has no evidence task: it is written from the exam questions
+ * and waits for the drafts of the chapter's other sections, so the examples it names can link to finished sections.
+ */
+function sectionSpecs(sections: OutlineSection[], after: string[], evidencePool: string): TaskSpec[] {
+  const specs: TaskSpec[] = [];
+  const content = sections.filter((s) => s.role !== 'exam-guide');
+  for (const s of content) {
+    specs.push({ kind: 'section.evidence', key: `evidence:${s.id}`, label: `Gather evidence for "${s.title}"`, input: { nodeId: s.id }, deps: after, pool: evidencePool });
+    specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
+  }
+  for (const s of sections.filter((x) => x.role === 'exam-guide')) {
+    specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [...after, ...content.map((x) => `draft:${x.id}`)], pool: 'writer' });
+  }
+  return specs;
+}
+
+/**
  * Task graph of a generate run. With `nodeIds` it is section-scoped: evidence and draft for those sections only, no
  * first-chapter gate, and a chapter's introduction, practice, extras and review only once every section of the chapter is
  * either in scope or already written (so a single new section does not trigger them on half a chapter).
@@ -168,10 +205,7 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
       const picked = c.sections.filter((s) => asked.has(s.id));
       const introAsked = asked.has(c.id);
       if (!picked.length && !introAsked) continue;
-      for (const s of picked) {
-        specs.push({ kind: 'section.evidence', key: `evidence:${s.id}`, label: `Gather evidence for "${s.title}"`, input: { nodeId: s.id }, pool: evidencePool });
-        specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
-      }
+      specs.push(...sectionSpecs(picked, [], evidencePool));
       const drafts = picked.map((s) => `draft:${s.id}`);
       if (introAsked) specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'editor' });
       const complete = picked.length > 0 && c.sections.every((s) => asked.has(s.id) || headRevision(ctx, projectId, s.id));
@@ -189,10 +223,7 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
   const gated = project.options.firstChapterGate && chapters.length > 1;
   chapters.forEach((c, i) => {
     const after = gated && i > 0 ? ['gate:first-chapter'] : [];
-    for (const s of c.sections) {
-      specs.push({ kind: 'section.evidence', key: `evidence:${s.id}`, label: `Gather evidence for "${s.title}"`, input: { nodeId: s.id }, deps: after, pool: evidencePool });
-      specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
-    }
+    specs.push(...sectionSpecs(c.sections, after, evidencePool));
     const drafts = c.sections.map((s) => `draft:${s.id}`);
     specs.push({ kind: 'chapter.intro', key: `intro:${c.id}`, label: `Introduce "${c.title}"`, input: { chapterId: c.id }, deps: drafts, pool: 'editor' });
     specs.push({ kind: 'chapter.practice', key: `practice:${c.id}`, label: `Plan practice for "${c.title}"`, input: { chapterId: c.id }, deps: drafts });
@@ -210,7 +241,7 @@ export function generateSpecs(ctx: AppContext, projectId: string, chapterIds?: s
   return specs;
 }
 
-function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunScope): TaskSpec[] {
+export function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunScope): TaskSpec[] {
   const stamp = Date.now().toString(36);
   const specs: TaskSpec[] = [];
   for (const nodeId of scope.nodeIds ?? []) {

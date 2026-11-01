@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQueries, useQueryClient } from '@tanstack/react-query';
-import type { Outline, OutlineChapter, OutlineSection, Resource, Topic } from '@smartbuilder/domain';
+import type { Outline, OutlineChapter, OutlineSection, ProgramItem, Resource, Topic } from '@smartbuilder/domain';
 import { api, errorText, isConflict } from '../../lib/api';
-import { qk, useOutline, useProject, useQuestions, useResources, useTopics } from '../../lib/queries';
-import { coverage, emptyOutline, examSessionTotal, mergeSections, move, newChapter, newSection, sessionsPhrase } from '../../lib/outline';
+import { qk, useOutline, useProgram, useProject, useQuestions, useResources, useTopics } from '../../lib/queries';
+import { coverage, emptyOutline, examSessionTotal, mergeSections, move, newChapter, newSection, programCoverage, sessionsPhrase } from '../../lib/outline';
 import { newId, slugify, timeAgo } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
@@ -23,6 +23,7 @@ export default function OutlinePage() {
   const resourcesQ = useResources(pid);
   const questionsQ = useQuestions(pid);
   const project = useProject(pid);
+  const programQ = useProgram(pid);
 
   const current = outlineQ.data?.current ?? null;
   const [draft, setDraft] = useState<Outline | null>(null);
@@ -91,6 +92,11 @@ export default function OutlinePage() {
   });
 
   const topics = topicsQ.data ?? [];
+  // Same rule as the service: items from an earlier reading stay in use while a new one runs or fails.
+  const programItems = programQ.data?.items ?? [];
+  // Until the program has loaded once, every assigned key would look stale and offer an untick that drops a real
+  // assignment. A failed refetch keeps the loaded data, so the picker stays.
+  const programKnown = programQ.data !== undefined;
   const resources = (resourcesQ.data ?? []).filter((r) => r.status === 'ready' && r.included);
   const approved = !!current?.approvedAt && !dirty;
   const hasSources = resources.length > 0;
@@ -169,7 +175,14 @@ export default function OutlinePage() {
                     index={ci}
                     count={draft.chapters.length}
                     topics={topics}
-                    onChange={(next) => update((o) => ({ ...o, chapters: o.chapters.map((c, i) => (i === ci ? next : c)) }))}
+                    programItems={programItems}
+                    programKnown={programKnown}
+                    onChange={(next) => update((o) => {
+                      const chapters = o.chapters.map((c, i) => (i === ci ? next : c));
+                      // An item a section now teaches is no longer left out (the planner applies the same rule).
+                      const taught = new Set(chapters.flatMap((c) => c.sections.flatMap((s) => s.programItems)));
+                      return { ...o, chapters, programExclusions: o.programExclusions.filter((e) => !taught.has(e.item)) };
+                    })}
                     onMove={(dir) => { update((o) => ({ ...o, chapters: move(o.chapters, ci, dir) })); focusLater(`ol-ch-${ch.id}`); }}
                     onRemove={() => update((o) => ({ ...o, chapters: o.chapters.filter((_, i) => i !== ci) }))}
                   />
@@ -184,7 +197,14 @@ export default function OutlinePage() {
           )}
         </section>
 
-        <aside className="ol-coverage" aria-label="Topic coverage">
+        <aside className="ol-coverage" aria-label="Coverage">
+          {programItems.length > 0 && (
+            <ProgramCoverage
+              outline={draft}
+              items={programItems}
+              onExclude={(item, reason) => update((o) => ({ ...o, programExclusions: [...o.programExclusions.filter((e) => e.item !== item), ...(reason !== null ? [{ item, reason }] : [])] }))}
+            />
+          )}
           <Coverage outline={draft} topics={topics} total={examSessionTotal(questionsQ.data ?? [])} onExclude={(topicId, reason) => update((o) => ({ ...o, exclusions: [...o.exclusions.filter((e) => e.topicId !== topicId), ...(reason !== null ? [{ topicId, reason }] : [])] }))} loading={topicsQ.isLoading} />
         </aside>
       </div>
@@ -210,8 +230,8 @@ function Lines({ id, label, value, onChange, rows = 2 }: { id: string; label: st
   );
 }
 
-function ChapterCard({ chapter, index, count, topics, onChange, onMove, onRemove }: {
-  chapter: OutlineChapter; index: number; count: number; topics: Topic[];
+function ChapterCard({ chapter, index, count, topics, programItems, programKnown, onChange, onMove, onRemove }: {
+  chapter: OutlineChapter; index: number; count: number; topics: Topic[]; programItems: ProgramItem[]; programKnown: boolean;
   onChange: (c: OutlineChapter) => void; onMove: (d: -1 | 1) => void; onRemove: () => void;
 }) {
   const [open, setOpen] = useState(true);
@@ -250,10 +270,13 @@ function ChapterCard({ chapter, index, count, topics, onChange, onMove, onRemove
                 count={chapter.sections.length}
                 index={si}
                 topics={topics}
+                programItems={programItems}
+                programKnown={programKnown}
                 onChange={(next) => setSections(chapter.sections.map((x, i) => (i === si ? next : x)))}
                 onMove={(d) => { setSections(move(chapter.sections, si, d)); focusLater(`ol-sec-${s.id}`); }}
                 onRemove={() => setSections(chapter.sections.filter((_, i) => i !== si))}
                 onMerge={(dir) => setSections(mergeSections(chapter.sections, si, si + dir))}
+                canMerge={(dir) => chapter.sections[si].role === 'content' && chapter.sections[si + dir]?.role === 'content'}
               />
             ))}
           </ol>
@@ -264,17 +287,20 @@ function ChapterCard({ chapter, index, count, topics, onChange, onMove, onRemove
   );
 }
 
-function SectionRow({ section, label, index, count, topics, onChange, onMove, onRemove, onMerge }: {
-  section: OutlineSection; label: string; index: number; count: number; topics: Topic[];
-  onChange: (s: OutlineSection) => void; onMove: (d: -1 | 1) => void; onRemove: () => void; onMerge: (dir: -1 | 1) => void;
+function SectionRow({ section, label, index, count, topics, programItems, programKnown, onChange, onMove, onRemove, onMerge, canMerge }: {
+  section: OutlineSection; label: string; index: number; count: number; topics: Topic[]; programItems: ProgramItem[]; programKnown: boolean;
+  onChange: (s: OutlineSection) => void; onMove: (d: -1 | 1) => void; onRemove: () => void; onMerge: (dir: -1 | 1) => void; canMerge: (dir: -1 | 1) => boolean;
 }) {
   const [open, setOpen] = useState(false);
+  const guide = section.role === 'exam-guide';
+  const itemTitle = new Map(programItems.map((i) => [i.key, i.title]));
   const setSubs = (subsections: OutlineSection['subsections']) => onChange({ ...section, subsections });
   return (
     <li className="ol-section">
       <div className="ol-section__head">
         <span className="ol-num ui-mono">{label}</span>
         <input id={`ol-sec-${section.id}`} className="ui-input ol-title" aria-label={`Title of section ${label}`} value={section.title} onChange={(e) => onChange({ ...section, title: e.target.value })} onKeyDown={(e) => onReorderKey(e, onMove)} />
+        {guide && <span className="ui-badge ui-badge--accent ol-role">Exam guide</span>}
         <select className="ui-select ui-select--sm ol-depth" aria-label={`Depth of section ${label}`} value={section.depth} onChange={(e) => onChange({ ...section, depth: e.target.value as OutlineSection['depth'] })}>
           <option value="brief">Brief</option><option value="standard">Standard</option><option value="deep">Deep</option>
         </select>
@@ -286,10 +312,19 @@ function SectionRow({ section, label, index, count, topics, onChange, onMove, on
           <button type="button" className="ui-btn ui-btn--ghost ui-btn--icon ui-btn--sm" aria-label={`Move section ${label} down`} disabled={index === count - 1} onClick={() => onMove(1)}><Icon name="arrow-down" /></button>
         </div>
       </div>
+      {programItems.length > 0 && !guide && (
+        <p className="ol-section__items" aria-label={`Program items of section ${label}`}>
+          {section.programItems.length === 0
+            ? <span className="ui-badge ui-badge--warning">No program item</span>
+            : section.programItems.map((k) => <span key={k} className={`ui-badge ol-chip${itemTitle.has(k) ? '' : ' ui-badge--warning'}`} title={itemTitle.get(k) ?? 'This item is not in the program'}>{itemTitle.get(k) ?? k}</span>)}
+        </p>
+      )}
       {open && (
         <div className="ol-section__body">
+          {guide && <p className="ui-muted ol-hint">Closes the chapter. Written from the chapter’s exam questions: how often its topics came up, the exercise types, a method for each and the usual mistakes.</p>}
           <Lines id={`ol-sobj-${section.id}`} label="Objectives" value={section.objectives} onChange={(objectives) => onChange({ ...section, objectives })} />
-          <TopicPicker topics={topics} value={section.topicIds} onChange={(topicIds) => onChange({ ...section, topicIds })} id={section.id} />
+          {!guide && programKnown && (programItems.length > 0 || section.programItems.length > 0) && <ProgramPicker items={programItems} value={section.programItems} onChange={(next) => onChange({ ...section, programItems: next })} id={section.id} />}
+          {!guide && <TopicPicker topics={topics} value={section.topicIds} onChange={(topicIds) => onChange({ ...section, topicIds })} id={section.id} />}
           <div className="ol-subs">
             <div className="ui-field__label ol-small-label">Subsections</div>
             {section.subsections.map((sub, i) => (
@@ -303,8 +338,8 @@ function SectionRow({ section, label, index, count, topics, onChange, onMove, on
             <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost" style={{ alignSelf: 'flex-start' }} onClick={() => setSubs([...section.subsections, { id: newId('ss'), title: 'New subsection', objectives: [] }])}><Icon name="plus" />Add subsection</button>
           </div>
           <div className="ui-row ol-danger-row">
-            <button type="button" className="ui-btn ui-btn--sm" disabled={index === 0} onClick={() => onMerge(-1)}><Icon name="merge" />Merge into previous section</button>
-            <button type="button" className="ui-btn ui-btn--sm" disabled={index === count - 1} onClick={() => onMerge(1)}><Icon name="merge" />Merge into next section</button>
+            <button type="button" className="ui-btn ui-btn--sm" disabled={index === 0 || !canMerge(-1)} onClick={() => onMerge(-1)}><Icon name="merge" />Merge into previous section</button>
+            <button type="button" className="ui-btn ui-btn--sm" disabled={index === count - 1 || !canMerge(1)} onClick={() => onMerge(1)}><Icon name="merge" />Merge into next section</button>
             <button type="button" className="ui-btn ui-btn--sm ui-btn--danger" onClick={onRemove}><Icon name="trash" />Remove section</button>
           </div>
         </div>
@@ -329,6 +364,34 @@ function TopicPicker({ topics, value, onChange, id }: { topics: Topic[]; value: 
           </label>
         ))}
         {shown.length === 0 && <span className="ui-muted">No topic matches.</span>}
+      </div>
+    </div>
+  );
+}
+
+function ProgramPicker({ items, value, onChange, id }: { items: ProgramItem[]; value: string[]; onChange: (v: string[]) => void; id: string }) {
+  const [q, setQ] = useState('');
+  const shown = items.filter((t) => t.title.toLowerCase().includes(q.toLowerCase()));
+  // Keys the program no longer has stay listed, so the author can untick them.
+  const stale = value.filter((k) => !items.some((t) => t.key === k));
+  return (
+    <div className="ui-field">
+      <label className="ui-field__label ol-small-label" htmlFor={`ol-pq-${id}`}>Program items taught here</label>
+      <input id={`ol-pq-${id}`} className="ui-input ui-input--sm" type="search" placeholder="Filter program items" value={q} onChange={(e) => setQ(e.target.value)} />
+      <div className="ol-topic-list" role="group" aria-label="Program items">
+        {shown.map((t) => (
+          <label key={t.key} className="ui-check">
+            <input type="checkbox" checked={value.includes(t.key)} onChange={(e) => onChange(e.target.checked ? [...value, t.key] : value.filter((x) => x !== t.key))} />
+            <span className="ui-wrap">{t.title}</span>
+          </label>
+        ))}
+        {stale.map((k) => (
+          <label key={k} className="ui-check">
+            <input type="checkbox" checked onChange={() => onChange(value.filter((x) => x !== k))} />
+            <span className="ui-wrap">{k} <span className="ui-muted">(no longer in the program)</span></span>
+          </label>
+        ))}
+        {shown.length === 0 && stale.length === 0 && <span className="ui-muted">No item matches.</span>}
       </div>
     </div>
   );
@@ -429,5 +492,64 @@ function Coverage({ outline, topics, total, onExclude, loading }: { outline: Out
         })}
       </ul>
     </>
+  );
+}
+
+/** Which program items the outline teaches, which it leaves out with a reason, and which nothing covers yet. */
+function ProgramCoverage({ outline, items, onExclude }: { outline: Outline | null; items: ProgramItem[]; onExclude: (item: string, reason: string | null) => void }) {
+  const pid = useBookId();
+  const [excluding, setExcluding] = useState<string | null>(null);
+  const [reason, setReason] = useState('');
+  const rows = useMemo(() => (outline ? programCoverage(outline, items) : items.map((item) => ({ item, sections: [], excludedReason: null as string | null }))), [outline, items]);
+  const gaps = rows.filter((r) => r.sections.length === 0 && r.excludedReason === null);
+  const left = rows.filter((r) => r.excludedReason !== null);
+  const covered = rows.filter((r) => r.sections.length > 0);
+  return (
+    <section className="ol-prog" aria-labelledby="ol-prog-title">
+      <div className="ol-cov-head">
+        <h2 id="ol-prog-title" className="ui-panel-title">Program coverage</h2>
+        <span className={`ui-badge ${gaps.length ? 'ui-badge--warning' : 'ui-badge--success'}`}>{gaps.length ? `${gaps.length} uncovered` : 'All covered'}</span>
+      </div>
+      <p className="ui-muted ol-hint">{covered.length} of {items.length} program items have a section{left.length ? `, ${left.length} left out` : ''}. <Link to={`/books/${pid}/settings`}>Edit the program</Link></p>
+      <ul className="ol-cov">
+        {gaps.map(({ item }) => (
+          <li key={item.key} className="ol-topic is-gap">
+            <div className="ol-topic__top">
+              <span className="ol-topic__name ui-wrap">{item.title}</span>
+              <span className="ui-badge ui-badge--warning">Uncovered</span>
+            </div>
+            {!outline ? null : excluding !== item.key ? (
+              <div className="ol-topic__row"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => { setExcluding(item.key); setReason(''); }}>Leave out</button></div>
+            ) : (
+              <form className="ol-exclude" onSubmit={(e) => { e.preventDefault(); if (reason.trim()) { onExclude(item.key, reason.trim()); setExcluding(null); } }}>
+                <input className="ui-input ui-input--sm" aria-label={`Reason for leaving out ${item.title}`} placeholder="Why leave it out" value={reason} onChange={(e) => setReason(e.target.value)} autoFocus />
+                <button type="submit" className="ui-btn ui-btn--sm" disabled={!reason.trim()}>Leave out</button>
+                <button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => setExcluding(null)}>Cancel</button>
+              </form>
+            )}
+          </li>
+        ))}
+        {left.map(({ item, excludedReason }) => (
+          <li key={item.key} className="ol-topic">
+            <div className="ol-topic__top">
+              <span className="ol-topic__name ui-wrap">{item.title}</span>
+              <span className="ui-badge">Left out</span>
+            </div>
+            <p className="ol-topic__where">{excludedReason}</p>
+            <div className="ol-topic__row"><button type="button" className="ui-btn ui-btn--ghost ui-btn--sm" onClick={() => onExclude(item.key, null)}>Include again</button></div>
+          </li>
+        ))}
+      </ul>
+      {covered.length > 0 && (
+        <details className="ol-src">
+          <summary><span>Covered ({covered.length})</span></summary>
+          <ul className="ol-tree ol-covered">
+            {covered.map(({ item, sections }) => (
+              <li key={item.key}><span className="ui-wrap">{item.title}</span> <span className="ui-mono ui-muted">{sections.map((s) => s.number).join(', ')}</span></li>
+            ))}
+          </ul>
+        </details>
+      )}
+    </section>
   );
 }

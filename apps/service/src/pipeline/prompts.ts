@@ -1,9 +1,10 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
+import type { ExamFormat, ProgramItem } from '@smartbuilder/domain';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 13;
+export const PROMPT_VERSION = 14;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -96,6 +97,58 @@ For every question id, return its topic keys and a difficulty (facile, medio, di
   };
 }
 
+// ---------- course program ----------
+
+const clip = (s: string, n: number) => (s.length <= n ? s : `${s.slice(0, n)}…`);
+
+/** The program items as the planner and the checker read them: key | title | details | proofs. */
+export function programItemsText(items: ProgramItem[], detailChars = 500) {
+  return items.map((i) => `${i.key} | ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), detailChars) || '-'} | ${i.proofs.join('; ') || '-'}`).join('\n');
+}
+
+export function examFormatText(f: ExamFormat) {
+  const proofs = f.proofs === 'required' ? 'proofs of theorems are asked' : f.proofs === 'none' ? 'no proofs are asked' : 'only the proofs the program lists are asked';
+  return `${[f.written ? 'written exam' : '', f.oral ? 'oral exam' : ''].filter(Boolean).join(' and ') || 'exam format not given'}; ${proofs}.${f.summary ? ` ${f.summary}` : ''}`;
+}
+
+export const programSchema = z.object({
+  items: z.array(z.object({
+    key: z.string().describe('kebab-case ASCII key from the title, unique'),
+    title: z.string().describe('short title of the topic, in the program\'s wording'),
+    details: z.string().describe('what the program says about it, verbatim where possible; empty if nothing more'),
+    proofs: z.array(z.string()).describe('theorems or results whose proof is asked, as the program names them'),
+  })),
+  examFormat: z.object({
+    written: z.boolean(),
+    oral: z.boolean().describe('true when an oral exam is part of the exam, even if optional'),
+    proofs: z.enum(['required', 'some', 'none']),
+    summary: z.string().describe('2-4 sentences in the book language: the parts of the exam, their length and weight, what is allowed'),
+  }),
+});
+
+export function programPrompt(p: { language: string; text: string }) {
+  const lang = languageName(p.language);
+  return {
+    system: `You read the official program of a university course (a PoliTo course guide, usually in Italian) and turn it into a list of program items and the exam format. You copy what the program says; you never add topics, merge topics or leave one out.`,
+    prompt: `COURSE GUIDE TEXT:
+${p.text}
+
+Return JSON {"items": [...], "examFormat": {...}}.
+
+ITEMS
+- One item for each topic the program lists, in the program's order. A paragraph of the program usually names several topics separated by full stops, semicolons or commas; each listed topic is its own item ("Limiti di funzioni e successioni" and "Teoremi sui limiti: unicità, permanenza del segno, confronto" are two items). Do not merge things the program lists separately and do not split one listed topic into smaller ones. A heading that only introduces a list ("Limiti e continuità:") is not an item by itself.
+- title: short, in the program's own words. details: the program's sentence or clause for this item, verbatim, including its sub-topics; put the hours ("Circa 15 ore") on the last item of their group only if they help, otherwise leave them out.
+- key: lower-case ASCII with hyphens, at most 50 characters, derived from the title, different for every item.
+- proofs: theorems or results whose proof the program says is asked or taught ("con dimostrazione", "dim."). An empty list when the program does not say.
+- Only the program of the course. Leave out prerequisites, organization of the lessons, bibliography, grading rules.
+
+EXAM FORMAT (from the part about the exam, "Modalità di verifica / esame")
+- written: a written test or written paper is part of the exam. oral: an oral exam is part of it, also when it is optional.
+- proofs: "required" when the guide says the exam asks the theory, theorems and their proofs; "none" when it says the exam is only exercises or multiple-choice questions and does not ask proofs; "some" otherwise (only the proofs the program names).
+- summary: ${lang}, 2-4 sentences: the parts of the exam (test, written paper, oral), their duration and points, what is allowed. Facts from the text only.`,
+  };
+}
+
 // ---------- outline ----------
 
 export const plannedOutlineSchema = z.object({
@@ -110,13 +163,15 @@ export const plannedOutlineSchema = z.object({
       objectives: z.array(z.string()),
       topics: z.array(z.string()).describe('topic keys'),
       depth: z.enum(['brief', 'standard', 'deep']),
+      programItems: z.array(z.string()).describe('keys of the course program items this section teaches; empty when there is no program'),
       subsections: z.array(z.object({ title: z.string(), objectives: z.array(z.string()) })),
     })),
   })),
   exclusions: z.array(z.object({ topic: z.string(), reason: z.string() })),
+  programExclusions: z.array(z.object({ item: z.string(), reason: z.string() })).describe('program items left out of the book, with the reason; empty when there is no program'),
 });
 
-export function outlinePrompt(p: { title: string; subject: string; language: string; audience: string; goals: string; topics: string; indexes: string; sessions: number }) {
+export function outlinePrompt(p: { title: string; subject: string; language: string; audience: string; goals: string; topics: string; indexes: string; sessions: number; program?: { items: ProgramItem[]; exam: ExamFormat } }) {
   const lang = languageName(p.language);
   return {
     system: `You are the editor of a university textbook written in ${lang}. You design the book's common index from the course's sources and its exam history. The index must respect prerequisites, cover every topic the course needs, and give more depth to topics that the exams test often, without dropping topics the exams never test.`,
@@ -129,14 +184,23 @@ ${p.topics}
 
 Source indexes, for reference (the book may reorganize them):
 ${p.indexes}
+${p.program ? `
+COURSE PROGRAM (official; key | title | what the program says | proofs asked):
+${programItemsText(p.program.items)}
 
+EXAM: ${examFormatText(p.program.exam)}
+` : ''}
 Design the book:
 - Chapters in teaching order; each chapter has 3-8 sections; each section covers one or a few closely related topic keys and has 1-4 concrete learning objectives (what the student can do afterwards).
 - depth: "deep" for topics in many exam sessions or that are hard, "brief" for background, "standard" otherwise.
 - Subsections only where a section clearly has distinct parts.
 - Every topic key appears in some section, or in exclusions with a reason.
 - notation: the conventions to use throughout (e.g. how to write the domain, intervals, derivatives, limits), in ${lang}.
-- Titles in ${lang}, short, without numbering. slug: kebab-case from the chapter title.`,
+- Titles in ${lang}, short, without numbering. slug: kebab-case from the chapter title.${p.program ? `
+- The course program decides the scope; the exam frequency only decides the depth. Every program item key goes in "programItems" of the section that teaches it (a section can teach several items, an item can be taught across sections), or in "programExclusions" with a reason when the book leaves it out. An item must not appear in both. Use only the keys listed above.
+- A source topic the program does not cover (and the exams do not need as a prerequisite) goes in "exclusions" with a reason such as "not in the course program"; a short recap of a prerequisite may stay inside a related section, it does not get a section of its own. Do not drop a program item because the sources are thin on it: keep the section.
+- Do not add the final exam-guide section of a chapter: the builder adds it.` : `
+- There is no course program: leave "programItems" and "programExclusions" empty.`}`,
   };
 }
 
@@ -173,6 +237,27 @@ export interface DraftPromptInput {
   bookFigures?: string;
   /** The book teaches this programming language; its lab examples are added separately. */
   teaches?: 'matlab';
+  /** The course program items this section teaches and the exam format; absent when the book has no program. */
+  program?: { items: ProgramItem[]; exam: ExamFormat };
+}
+
+/** How the exam format steers the writing of a section. */
+function examFocus(p: NonNullable<DraftPromptInput['program']>, language: string) {
+  const mark = language === 'it' ? "**Dimostrazione richiesta all'esame.**" : '**Proof asked at the exam.**';
+  // Only program content is asked at the exam, so a section without program items marks no proof as asked.
+  const proofs = !p.items.length
+    ? `This section teaches no program item of its own (a recap or a bridge): give proofs only as far as the explanation needs them, and never use the line ${mark}.`
+    : p.exam.proofs === 'required'
+      ? `The exam asks for proofs. For every theorem of this section that has a standard proof, give the complete proof. Put the line ${mark} on its own immediately before each such proof.`
+      : p.exam.proofs === 'none' && !p.exam.oral
+        ? 'The exam is written and asks for no proofs: put the weight on methods and fully worked exercises; keep proofs brief (the idea in a few lines), and mark none of them.'
+        : `Give the complete proof, with the line ${mark} on its own immediately before it, only for the results listed under "proofs asked" below; other proofs stay brief.`;
+  // A section with no program item (a prerequisite recap, say) still follows the exam format, but gets no scope to stay inside.
+  const items = p.items.length ? `COURSE PROGRAM ITEMS this section teaches (title | what the program says | proofs asked):
+${p.items.map((i) => `- ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), 800) || '-'} | ${i.proofs.join('; ') || '-'}`).join('\n')}
+` : '';
+  return `${items}EXAM: ${examFormatText(p.exam)}
+${proofs}${p.items.length ? '\nCover every program item above and stay inside what the program lists: no extra theory the exam never asks.' : ''}`;
 }
 
 /** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
@@ -208,7 +293,7 @@ Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
 Depth: ${p.section.depth} (about ${length} words)
 Topics and how often the exams test them:
 ${p.topics}
-
+${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
 Notation to follow:
 ${p.notation || '(standard notation of the field)'}
 
@@ -238,6 +323,122 @@ INSTRUCTIONS
 - This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
 - ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
 - Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
+  };
+}
+
+// ---------- exam guide ----------
+
+/** Title and objectives of the closing section of a chapter. English is used for every language but Italian. */
+export function examGuideText(language: string) {
+  return language === 'it'
+    ? { title: "Come viene chiesto all'esame", objectives: ["Riconoscere i tipi di esercizio che l'esame propone su questo capitolo", 'Applicare un metodo passo per passo a ciascun tipo', 'Evitare gli errori tipici'] }
+    : { title: 'How the exam asks it', objectives: ['Recognise the kinds of exercise the exam sets on this chapter', 'Apply a step-by-step method to each kind', 'Avoid the typical mistakes'] };
+}
+
+export interface ExamGuidePromptInput {
+  language: string;
+  bookTitle: string;
+  audience: string;
+  notation: string;
+  chapterTitle: string;
+  chapterPlan: string;
+  section: { id: string; title: string };
+  /** Computed by the builder: how many of the sessions asked about the chapter's topics. */
+  sessions: { asked: number; total: number };
+  /** Exam questions of the chapter, one block each, already cut to a readable length. */
+  questions: string;
+  /** What the sections of the chapter say, for linking and for not repeating them. */
+  sectionSummaries: string;
+  knownFormulas: string;
+  sectionIds: string;
+  exam?: ExamFormat;
+}
+
+export function examGuidePrompt(p: ExamGuidePromptInput) {
+  const lang = languageName(p.language);
+  const it = p.language === 'it';
+  return {
+    system: `You write the closing section of a chapter of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. The section tells the student how the exam really asks the chapter's topics, using the past exam questions you are given. You describe only what those questions show; you never invent sessions, dates or exercises.
+
+${formatRules(p.language)}`,
+    prompt: `CHAPTER: ${p.chapterTitle}
+Chapter plan (sections in order; yours is marked ►):
+${p.chapterPlan}
+
+YOUR SECTION: ${p.section.title}  (section id ${p.section.id})
+${p.exam ? `Exam format: ${examFormatText(p.exam)}
+` : ''}
+FACT, computed by the builder (state it exactly, in your own words): ${p.sessions.asked} of the ${p.sessions.total} past exam sessions included questions on this chapter's topics.
+
+Notation to follow:
+${p.notation || '(standard notation of the field)'}
+
+What the chapter's sections contain (link to them, do not repeat them):
+${p.sectionSummaries || '(not available)'}
+
+Known formula keys (reference them with {{formula:@key}}; never define a formula block with one of these keys again):
+${p.knownFormulas || '(none)'}
+
+Section ids you may link to:
+${p.sectionIds}
+
+PAST EXAM QUESTIONS ON THIS CHAPTER (session | date | number | topics | statement):
+${p.questions}
+
+INSTRUCTIONS
+- Open with the fact above in one or two sentences: in how many sessions the chapter came up, and which kind of exercise comes up most.
+- Group the questions into the recurring types of exercise (3-6 types). For each type, a ### subsection with: what the exam asks, a step-by-step method as a numbered list, the typical mistakes, and one or two named examples. Name an example by its session and number exactly as the list gives them, e.g. ${it ? '"Esame del 25 gennaio 2023, esercizio 2"' : '"Exam of 25 January 2023, exercise 2"'}, and say in one sentence what it asks and how the method solves it. Do not copy the full statement.
+- Link each method to the chapter section that teaches the underlying result with [testo](ref:section/<sectionId>), using only the ids above.
+- A type that appears in one session only is mentioned briefly, not given a subsection.
+- Do not add figures. Return an empty "figures" array and null "noFigureReason".
+- Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
+  };
+}
+
+// ---------- alignment with the course program ----------
+
+export const alignSchema = z.object({
+  coverage: z.array(z.object({ item: z.string(), nodeIds: z.array(z.string()) })).describe('for every program item key, the ids of the sections that teach it (empty when none does)'),
+  findings: z.array(z.object({
+    kind: z.enum(['missing', 'thin', 'proof', 'off-program', 'order']),
+    item: z.string().nullable().describe('program item key; for missing, thin and proof'),
+    nodeId: z.string().nullable().describe('section id; for thin, proof, off-program and order'),
+    whole: z.boolean().nullable().describe('off-program only: true when the entire section is outside the program'),
+    quote: z.string().nullable().describe('off-program, not whole: the heading or statement line, verbatim from the section digest, where the off-program passage starts'),
+    message: z.string().describe('English, one or two sentences for the author'),
+    chapterId: z.string().nullable().describe('missing only: chapter id for the new section'),
+    afterSectionId: z.string().nullable().describe('missing only: the section the new one follows; null puts it at the start of the chapter'),
+    title: z.string().nullable().describe('missing only: title of the new section, in the book language'),
+    objectives: z.array(z.string()).describe('missing only: 1-4 objectives in the book language; otherwise empty'),
+    depth: z.enum(['brief', 'standard', 'deep']).nullable().describe('missing only'),
+  })),
+});
+
+export function alignPrompt(p: { language: string; program: string; exam: string; outline: string; sessions: number }) {
+  const lang = languageName(p.language);
+  return {
+    system: `You check a university textbook against the official program of its course. You are given the program, the exam format and a digest of every section (title, objectives, headings, statement labels, whether it contains a proof, length, how often the exam tests its topics). You decide what the book misses, what it covers too thinly for its exam weight, which required proofs are absent, and which material is outside the program. You work from the digest only; you never invent what a section contains.`,
+    prompt: `COURSE PROGRAM (key | title | what the program says | proofs asked):
+${p.program}
+
+EXAM: ${p.exam}
+Past exam sessions in the book's archive: ${p.sessions}.
+
+BOOK DIGEST (chapters in order; each section: [id] title | depth | length | proof | program items assigned | exam sessions of its topics):
+${p.outline}
+
+Return JSON {"coverage": [...], "findings": [...]}.
+
+COVERAGE: one entry per program item key, with the ids of the sections that teach it substantially (empty when none does).
+
+FINDINGS (be selective: a few solid findings beat a long list of doubtful ones; every finding is about one place)
+- missing: a program item that no section teaches. Give item, chapterId, afterSectionId (the section it should follow so prerequisites come first; null for the start of the chapter), title, 1-4 objectives and depth, all in ${lang} for title and objectives. Never suggest a position after an exam-guide section.
+- thin: a section teaches a program item but too briefly for what the exam asks (many sessions test it, yet the section is brief or short and has few statements). Give item and nodeId.
+- proof: the program or the exam format asks for a proof ("proofs asked", or the exam format says proofs are asked) that the section does not contain (its digest shows no proof or no matching statement). Give item and nodeId.
+- off-program: material outside the program. whole=true when the section's whole subject is not in the program (nodeId only). whole=false for a passage inside an otherwise fine section: give the verbatim heading or statement line from the digest as quote. Short recaps of prerequisites are not off-program. Sections whose title is an exam guide are never off-program.
+- order: a section relies on something that a later section teaches. Give nodeId.
+- Do not report exam guides (missing chapter closers); the builder checks those itself.
+- message: English, one or two sentences, naming the item or section by its title.`,
   };
 }
 
@@ -426,7 +627,7 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string; program?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
@@ -434,6 +635,8 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
 Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that adds nothing the text does not already say plainly, and a place where a figure is clearly missing because the text describes in words a graph, the structure of a molecule or ion, energy levels, an electron configuration, an electrochemical cell, a trend across the periodic table, or an object the student should recognise. Use category "figure" and severity minor, or major for a figure that shows something wrong. For a missing figure, quote the passage it belongs to and say in the suggestion what it should show. Do not ask for figures for their own sake.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
+
+A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
 Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
     prompt: `Chapter: ${p.chapterTitle}
@@ -443,7 +646,7 @@ ${p.objectives}
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
 
-${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
+${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue, category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
 EVIDENCE the writer had (verbatim source passages):
@@ -505,7 +708,7 @@ export const fixCheckSchema = z.object({
 });
 
 /** A cheap second look at an AI fix before it replaces the text. */
-export function fixCheckPrompt(p: { language: string; issues: string; changes: string }) {
+export function fixCheckPrompt(p: { language: string; issues: string; changes: string; additive?: boolean }) {
   return {
     system: `You check edits made to a university textbook written in ${languageName(p.language)}. Each edit was meant to fix a listed problem. Judge every changed block and every issue; be strict about mathematics, lenient about style.`,
     prompt: `ISSUES THE EDITS SHOULD FIX:
@@ -514,7 +717,7 @@ ${p.issues}
 CHANGED BLOCKS (old text, new text and the neighbouring blocks for context):
 ${p.changes}
 
-For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, changes the meaning beyond what the issues asked, or adds more than one new sentence of claims, caveats or explanations the issues did not ask for. Otherwise "good".
+For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, changes the meaning beyond what the issues asked, or adds more than one new sentence of claims, caveats or explanations the issues did not ask for. Otherwise "good".${p.additive ? ' Issues marked [add material] ask for new material (more depth, a missing proof): adding it is what they ask, so it is good when it is correct, complete and consistent with the rest of the section.' : ''}
 For each issue say whether the edits fixed it ("fixed": true) or not; if not, give the reason in one short sentence.
 
 Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reason": "..."}], "issues": [{"index": <number>, "fixed": <boolean>, "reason": "..."}]}.`,
@@ -553,11 +756,13 @@ export const patchSchema = z.object({
 });
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; figures?: { photos: boolean } | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: { photos: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
+  // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
+  const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nOnly when a problem asks for a missing figure, add it with "figures" and an :::image block in the block it belongs to; otherwise return an empty "figures" array.\n${figureRules(p.figures.photos)}` : '\n\nReturn an empty "figures" array.'}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nOnly when a problem asks for a missing figure, add it with "figures" and an :::image block in the block it belongs to; otherwise return an empty "figures" array.\n${figureRules(p.figures.photos)}` : '\n\nReturn an empty "figures" array.'}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 

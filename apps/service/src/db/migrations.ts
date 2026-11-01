@@ -295,4 +295,34 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE topics ADD COLUMN priority_locked INTEGER NOT NULL DEFAULT 0;
   `,
+  // 5: the course program (parsed items and exam format) and alignment reports of a book against it.
+  `
+  CREATE TABLE course_programs (
+    project_id TEXT PRIMARY KEY REFERENCES projects(id) ON DELETE CASCADE,
+    text TEXT NOT NULL DEFAULT '',
+    url TEXT,
+    source_text TEXT NOT NULL DEFAULT '',
+    items TEXT NOT NULL DEFAULT '[]',
+    exam_format TEXT NOT NULL DEFAULT '{}',
+    status TEXT NOT NULL DEFAULT 'idle',
+    error TEXT,
+    parsed_at TEXT,
+    updated_at TEXT NOT NULL
+  );
+
+  CREATE TABLE alignment_reports (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+    outline_rev_id TEXT NOT NULL,
+    coverage TEXT NOT NULL DEFAULT '[]',
+    findings TEXT NOT NULL DEFAULT '[]',
+    model TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    applied_at TEXT,
+    applied TEXT NOT NULL DEFAULT '[]',
+    removed TEXT NOT NULL DEFAULT '[]',
+    inputs TEXT NOT NULL DEFAULT '{}'
+  );
+  CREATE INDEX alignment_project ON alignment_reports(project_id);
+  `,
 ];

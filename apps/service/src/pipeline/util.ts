@@ -1,5 +1,5 @@
 import type { Outline, OutlineChapter, OutlineSection, Project, Topic } from '@smartbuilder/domain';
-import { bookOptionsSchema } from '@smartbuilder/domain';
+import { bookOptionsSchema, outlineSchema } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json } from '../db/db.ts';
 import { TaskError } from '../queue/queue.ts';
@@ -20,7 +20,7 @@ export function loadOutline(ctx: AppContext, projectId: string, allowUnapproved 
   const p = ctx.db.get<{ outline_rev_id: string | null }>('SELECT outline_rev_id FROM projects WHERE id = ?', projectId);
   let row = p?.outline_rev_id ? ctx.db.get<{ id: string; outline: string }>('SELECT id, outline FROM outline_revisions WHERE id = ?', p.outline_rev_id) : undefined;
   if (!row && allowUnapproved) row = ctx.db.get('SELECT id, outline FROM outline_revisions WHERE project_id = ? ORDER BY created_at DESC LIMIT 1', projectId);
-  return row ? { revId: row.id, outline: json(row.outline, { chapters: [], exclusions: [], notation: '' }) } : null;
+  return row ? { revId: row.id, outline: outlineSchema.parse(json(row.outline, { chapters: [] })) } : null;
 }
 
 export function findSection(outline: Outline, nodeId: string): { chapter: OutlineChapter; section: OutlineSection; chapterIndex: number; sectionIndex: number } | null {

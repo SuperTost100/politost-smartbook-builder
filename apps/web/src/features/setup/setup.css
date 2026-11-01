@@ -10,3 +10,22 @@
 .su-actions { margin-top: 4px; }
 .su-why { font-size: 14px; }
 @media (max-width: 720px) { .su-two { grid-template-columns: 1fr; } }
+
+.pg-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; flex-wrap: wrap; }
+.pg-head > div { min-width: 0; flex: 1 1 320px; display: flex; flex-direction: column; gap: 2px; }
+.pg-text { min-height: 128px; }
+.pg-when { font-size: 13px; }
+.pg-spin { margin-top: 3px; }
+.pg-rule { border: 0; border-top: 1px solid var(--border); margin: 4px 0; width: 100%; }
+.pg-sub { font: 600 15px/22px var(--font-sans); }
+.pg-items-head { display: flex; flex-direction: column; gap: 2px; }
+.pg-items { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.pg-item { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
+.pg-item__top { display: flex; align-items: center; gap: 8px; padding: 6px 8px; }
+.pg-item__title { flex: 1; min-width: 0; font-weight: 600; }
+.pg-item__body { padding: 10px 12px 12px 44px; border-top: 1px dashed var(--border); display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 12px; background: var(--surface-raised); }
+.pg-lines { field-sizing: content; min-height: 3lh; }
+.pg-add { align-self: flex-start; }
+@media (max-width: 720px) { .pg-item__body { grid-template-columns: 1fr; padding-left: 12px; } }
+.pg-small { font-size: 13px; color: var(--ink-muted); font-weight: 500; }
+.pg-num { color: var(--ink-muted); font-size: 12px; min-width: 24px; text-align: right; }

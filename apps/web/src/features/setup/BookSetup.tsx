@@ -7,11 +7,12 @@ import { qk, useProject } from '../../lib/queries';
 import { slugify } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
+import { ProgramCard } from './ProgramCard';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
   outsideMaterial: false, ide: true, labLanguage: 'python', graphs: true, figures: true, firstChapterGate: true, outlineGate: true,
-  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [],
+  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete',
 };
 
 type LangChoice = 'it' | 'en' | 'other';
@@ -141,6 +142,13 @@ export default function BookSetup() {
         </div>
       </section>
 
+      {editing ? <ProgramCard pid={id!} /> : (
+        <section className="ui-card ui-card--pad su-section" aria-labelledby="su-program-later">
+          <h2 id="su-program-later" className="ui-panel-title">Course program</h2>
+          <p className="ui-field__hint">After you create the book, come back to Book setup to add its course program. The outline and the alignment check use it.</p>
+        </section>
+      )}
+
       <section className="ui-card ui-card--pad su-section" aria-labelledby="su-opts">
         <h2 id="su-opts" className="ui-panel-title">What goes in the book</h2>
         <Toggle label="Use verified outside material" hint="Allow explanations that go beyond your sources, when they can be verified. Off keeps the book to your material." checked={opts.outsideMaterial} onChange={(v) => set('outsideMaterial', v)} />
@@ -158,6 +166,15 @@ export default function BookSetup() {
         )}
         <Toggle label="Graphs" checked={opts.graphs} onChange={(v) => set('graphs', v)} />
         <Toggle label="Figures" checked={opts.figures} onChange={(v) => set('figures', v)} />
+        <fieldset className="su-fieldset">
+          <legend className="ui-field__label">Sections outside the course program</legend>
+          <div className="ui-row" role="radiogroup" aria-label="Sections outside the course program">
+            {([['delete', 'Remove off-program sections'], ['mark', 'Keep them with a note']] as const).map(([v, l]) => (
+              <label key={v} className="ui-check"><input type="radio" name="su-off" checked={opts.offProgram === v} onChange={() => set('offProgram', v)} />{l}</label>
+            ))}
+          </div>
+          <p className="ui-field__hint">What Align book does with a section the program does not ask for. Removed sections stay in the outline history. A kept section starts with a note that the exam does not ask it.</p>
+        </fieldset>
         <Toggle label="Outline approval gate" hint="Drafting waits until you approve the outline." checked={opts.outlineGate} onChange={(v) => set('outlineGate', v)} />
         <Toggle label="First-chapter approval gate" hint="Chapters after the first wait until you approve chapter 1." checked={opts.firstChapterGate} onChange={(v) => set('firstChapterGate', v)} />
       </section>
