@@ -267,7 +267,19 @@ export function protectDisplayMathBrackets(text: string): string {
   }).join('\n');
 }
 
+/** A formula reference already reads "(n)"; parentheses written around it alone would show "((n))". */
+const WRAPPED_FORMULA_REF = /\((\{\{formula:[\d.]+\}\}|\[\([\d.]+\)\]\(ref:formula\/[\d.]+\))\)/g;
+
 function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
+  return resolveRefTokens(line, lineNo, env).replace(WRAPPED_FORMULA_REF, (full: string, ref: string, offset: number, all: string) => {
+    // Keep the reader's spaces where the dropped parenthesis touched a word.
+    const before = WORD.test(all[offset - 1] ?? '') ? ' ' : '';
+    const after = WORD.test(all[offset + full.length] ?? '') ? ' ' : '';
+    return `${before}${ref}${after}`;
+  });
+}
+
+function resolveRefTokens(line: string, lineNo: number, env: RefEnv): string {
   line = protectMathBrackets(line);
   return line.replace(REF_TOKEN, (full, hoverAt: string | undefined, hoverKey: string | undefined, label: string | undefined, kind: string | undefined, target: string | undefined, offset: number) => {
     let out: string;
