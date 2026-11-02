@@ -259,8 +259,11 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
     const formulas = ownFormulas(nodeId);
     // Only text still in the book: a section removed earlier keeps its text as it was, for Put back.
     const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+    // A formula key that a section still in the book also defines keeps its references.
+    const kept = new Set(heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    const gone = formulas.filter((f) => !kept.has(f.key));
     return heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id) && refersTo(h.markdown, nodeId))
-      .filter((h) => repairHead(ctx, projectId, h.node_id, (md) => dropReferences(md, nodeId, formulas))).length;
+      .filter((h) => repairHead(ctx, projectId, h.node_id, (md) => dropReferences(md, nodeId, gone))).length;
   };
 
   /** An open program issue on a written section, reused when a repeat asks the same; the suggestion names the item, so two items never share one. */
@@ -441,9 +444,10 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     // The restored text may point at sections that are still out of the book (removed with it, or later): those links and
     // formula references become plain text in a new revision; the stored one stays in the history.
     const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((x) => x.id)]));
-    const outside = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId)
-      .filter((h) => !inBook.has(h.node_id));
-    repairHead(ctx, projectId, nodeId, (md) => outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown)), md));
+    const all = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
+    const kept = new Set(all.filter((h) => inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    const outside = all.filter((h) => !inBook.has(h.node_id));
+    repairHead(ctx, projectId, nodeId, (md) => outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown).filter((f) => !kept.has(f.key))), md));
     const removed = report.removed.map((r) => (r.nodeId === nodeId ? { ...r, restoredAt: now() } : r));
     ctx.db.run('UPDATE alignment_reports SET removed = ? WHERE id = ?', JSON.stringify(removed), reportId);
     ctx.events.emit('outline.created', { revId: rev.id, origin: 'human', restore: nodeId }, { projectId });

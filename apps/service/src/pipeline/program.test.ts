@@ -790,6 +790,14 @@ describe('Align book', () => {
     assert.equal(head('s1')!.markdown, 'Limiti. Vedi la topologia e aperti.');
   });
 
+  test('a formula key that a section still in the book also defines keeps its references', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Limiti.\n\n:::formula{key="k-topo" label="Aperti"}\n$$B$$\n:::' WHERE node_id = 's1'`);
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi {{formula:@k-topo}}.' WHERE node_id = 's3'`);
+    await apply(reportOf(revId, [offWhole('s2')]).id);
+    assert.equal(head('s3')!.markdown, 'Derivate. Vedi {{formula:@k-topo}}.');
+  });
+
   test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
     const { revId } = book();
     ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
