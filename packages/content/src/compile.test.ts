@@ -92,12 +92,12 @@ test('references get spaces when they touch words', () => {
 test('a formula reference in parentheses loses them: it already reads "(n)"', () => {
   const b = compileBook(fixtureBook({
     chapters: [
-      { id: 'c1', slug: 'c1', number: 1, title: 'C1', intro: '', sections: [{ id: 's1', title: 'S1', markdown: ':::formula{key="k" label="K"}\n$$a=b$$\n:::\n\nCon il limite ({{formula:@k}}), poi.' }] },
+      { id: 'c1', slug: 'c1', number: 1, title: 'C1', intro: '', sections: [{ id: 's1', title: 'S1', markdown: ':::formula{key="k" label="K"}\n$$a=b$$\n:::\n\nCon il limite ({{formula:@k}}), poi ( {{formula:@k}} ).' }] },
       { id: 'c2', slug: 'c2', number: 2, title: 'C2', intro: '', sections: [{ id: 's2', title: 'S2', markdown: 'Si applica il criterio ({{formula:@k}}) oppure (vedi {{formula:@k}}), o x({{formula:@k}})y.' }] },
     ],
     questions: [], enrichments: [],
   }));
-  assert.ok(text(b, 'chapters/01-c1.md').includes('Con il limite {{formula:1.1}}, poi.'));
+  assert.ok(text(b, 'chapters/01-c1.md').includes('Con il limite {{formula:1.1}}, poi {{formula:1.1}}.'));
   assert.ok(text(b, 'chapters/02-c2.md').includes('Si applica il criterio [(1.1)](ref:formula/1.1) oppure (vedi [(1.1)](ref:formula/1.1)), o x [(1.1)](ref:formula/1.1) y.'), 'only parentheses that wrap the reference alone go');
 });
 

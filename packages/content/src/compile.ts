@@ -268,7 +268,7 @@ export function protectDisplayMathBrackets(text: string): string {
 }
 
 /** A formula reference already reads "(n)"; parentheses written around it alone would show "((n))". */
-const WRAPPED_FORMULA_REF = /\((\{\{formula:[\d.]+\}\}|\[\([\d.]+\)\]\(ref:formula\/[\d.]+\))\)/g;
+const WRAPPED_FORMULA_REF = /\([ \t]*(\{\{formula:[\d.]+\}\}|\[\([\d.]+\)\]\(ref:formula\/[\d.]+\))[ \t]*\)/g;
 
 function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
   return resolveRefTokens(line, lineNo, env).replace(WRAPPED_FORMULA_REF, (full: string, ref: string, offset: number, all: string) => {
