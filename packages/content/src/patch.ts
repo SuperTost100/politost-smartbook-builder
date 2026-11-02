@@ -117,7 +117,8 @@ export function unwrapFormulaKeys(markdown: string, taken: Set<string>): string 
 export function repairSectionRefs(markdown: string, nodes: { id: string; slug?: string }[]): string {
   const known = new Set(nodes.map((n) => n.id));
   const bySlug = new Map(nodes.filter((n) => n.slug).map((n) => [n.slug!, n.id]));
-  return markdown.replace(/\[([^\]]*)\]\(ref:section\/([^)\s]+)\)/g, (full, label: string, id: string) => {
+  // The label has no "[" of its own, so a match can't start at the "[" of an earlier interval like ]a,b[.
+  return markdown.replace(/\[([^[\]]*)\]\(ref:section\/([^)\s]+)\)/g, (full, label: string, id: string) => {
     if (known.has(id)) return full;
     const near = nodes.filter((n) => n.id.slice(0, 8) === id.slice(0, 8));
     const target = bySlug.get(id) ?? (near.length === 1 ? near[0].id : null);

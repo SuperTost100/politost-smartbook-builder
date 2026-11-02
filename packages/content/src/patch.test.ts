@@ -85,4 +85,5 @@ test('section links to an unknown id are pointed at the node they mean, or becom
     'nessuno',
     'e [giusto](ref:section/ab4a5b0e-7d31-4742-b8ee-ebcf244154f2).',
   ].join(' '));
+  assert.equal(repairSectionRefs('$]a,b[$; vedi [teorema](ref:section/missing)', nodes), '$]a,b[$; vedi teorema');
 });
