@@ -312,8 +312,9 @@ function resolveFormula(byKey: boolean, key: string, label: string | null, full:
   if (label !== null) return `[${label || `(${id})`}](ref:formula/${id})`;
   const sameChapter = env.chapterNumber !== null && id.startsWith(`${env.chapterNumber}.`);
   if (env.hoverSameChapterOnly && !sameChapter) {
-    // The reader's validator only accepts hover references inside the same chapter; link instead.
-    return `[formula (${id})](ref:formula/${id})`;
+    // The reader's validator only accepts hover references inside the same chapter; link instead. The label is "(id)",
+    // as the reader shows a same-chapter chip, so text that writes "la formula" before the reference never doubles it.
+    return `[(${id})](ref:formula/${id})`;
   }
   return `{{formula:${id}}}`;
 }
