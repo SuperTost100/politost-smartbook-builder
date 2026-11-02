@@ -816,16 +816,29 @@ describe('Align book', () => {
     assert.equal(head('s3')!.markdown, 'Derivate. Vedi {{formula:@k-topo}}.');
   });
 
-  test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
+  test('delete still marks a section that past exam questions in the book refer to, or the only section of its chapter', async () => {
     const { revId } = book();
-    ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exam', origin: 'authentic', exam_group: 'Esame', exam_date: null, number: '1', statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
     const report = reportOf(revId, [offWhole('s2'), offWhole('s3')]);
     await apply(report.id);
     assert.equal(outlineRevisions().length, 1, 'neither section was removed');
     assert.ok(head('s2')!.markdown.startsWith(MARK_IT));
     const [first, second] = getReport(ctx, P, report.id).applied;
-    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because exercises of the book refer to it/);
+    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because past exam questions in the book refer to it/);
     assert.match(second, /Kept the section "Titolo s3" instead of removing it, because it is the only section of its chapter/);
+  });
+
+  test('generated exercises on a removed section leave the book with it; exercises already out of the book do not hold it', async () => {
+    const { revId } = book();
+    const q = (id: string, chapter: string | null) => ctx.db.insert('questions', { id, project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Usa {{formula:@k-topo}}.', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: chapter, status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    q('q-gen', 'c1');
+    q('q-out', null);
+    ctx.db.insert('questions', { id: 'q-exam-out', project_id: P, kind: 'exam', origin: 'authentic', exam_group: 'Esame', exam_date: null, number: '2', statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: null, status: 'issue', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    const report = reportOf(revId, [offWhole('s2')]);
+    await apply(report.id);
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1']);
+    assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-gen'`)!.c, null);
+    assert.match(getReport(ctx, P, report.id).applied[0], /1 generated exercise on it left the book/);
   });
 
   test('a passage is an issue whose fix removes it (delete) or adds the note before it (mark); a repeated report reuses the open issue', async () => {
