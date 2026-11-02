@@ -824,7 +824,7 @@ describe('Align book', () => {
     assert.equal(outlineRevisions().length, 1, 'neither section was removed');
     assert.ok(head('s2')!.markdown.startsWith(MARK_IT));
     const [first, second] = getReport(ctx, P, report.id).applied;
-    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because past exam questions in the book refer to it/);
+    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because exam questions or exercises from the sources or the author refer to it/);
     assert.match(second, /Kept the section "Titolo s3" instead of removing it, because it is the only section of its chapter/);
   });
 
@@ -839,6 +839,24 @@ describe('Align book', () => {
     assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1']);
     assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-gen'`)!.c, null);
     assert.match(getReport(ctx, P, report.id).applied[0], /1 generated exercise on it left the book/);
+  });
+
+  test('author exercises keep a section; an exercise leaves once even when two removed sections are its topic; a formula still in the book keeps it', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate.\n\n:::formula{key="k-topo" label="Aperti"}\n$$C$$\n:::' WHERE node_id = 's3'`);
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections', json(?)) WHERE id = ?`, JSON.stringify(['s1', 's2', 'sa', 'sb'].map((id) => section(id))), revId);
+    seedRevision('sa', 'A.'); seedRevision('sb', 'B.');
+    const q = (id: string, origin: string, statement: string) => ctx.db.insert('questions', { id, project_id: P, kind: 'exercise', origin, exam_group: null, exam_date: null, number: null, statement, hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    q('q-author', 'adapted', 'Vedi [qui](ref:section/s1).');
+    q('q-two', 'generated', 'Vedi [a](ref:section/sa) e [b](ref:section/sb).');
+    q('q-formula', 'generated', 'Usa {{formula:@k-topo}}.');
+    const report = reportOf(revId, [offWhole('s1'), offWhole('sa'), offWhole('sb'), offWhole('s2')]);
+    await apply(report.id);
+    const lines = getReport(ctx, P, report.id).applied;
+    assert.match(lines.find((l) => l.includes('"Titolo s1"'))!, /Kept the section/);
+    assert.equal(ctx.db.get<{ r: number }>(`SELECT rev AS r FROM questions WHERE id = 'q-two'`)!.r, 2, 'detached once');
+    assert.equal(lines.filter((l) => /generated exercise/.test(l)).length, 1);
+    assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-formula'`)!.c, 'c1', 's3 still defines k-topo');
   });
 
   test('a passage is an issue whose fix removes it (delete) or adds the note before it (mark); a repeated report reuses the open issue', async () => {
