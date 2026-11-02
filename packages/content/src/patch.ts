@@ -37,7 +37,11 @@ const join = (blocks: string[]) => blocks.filter((b) => b.trim()).join('\n\n');
  * With `figures` (the fix answers a figure problem), a block that is only an image may be deleted: removing a useless
  * figure is the fix, and refusing it left the problem open for ever.
  */
-export function applyGuardedChanges(blocks: string[], changes: BlockChange[], lint: (markdown: string) => LintFinding[], opts: { figures?: boolean } = {}): GuardedPatch {
+/**
+ * `removals`: the fix removes off-program material, so whole blocks may go, headings, formulas and ::: blocks included,
+ * and up to five times the usual number of them. Changed (not deleted) blocks keep every guard.
+ */
+export function applyGuardedChanges(blocks: string[], changes: BlockChange[], lint: (markdown: string) => LintFinding[], opts: { figures?: boolean; removals?: boolean } = {}): GuardedPatch {
   const out = [...blocks];
   const kept = new Set<number>();
   const reverted: RevertedChange[] = [];
@@ -51,8 +55,9 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     if (!text) {
       if (!old.trim()) continue;
       const image = opts.figures && onlyImage(old);
-      if (!image && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
-      if (deleted >= MAX_DELETED_BLOCKS) { drop(`it would delete more than ${MAX_DELETED_BLOCKS} blocks`); continue; }
+      if (!image && !opts.removals && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
+      const limit = opts.removals ? MAX_DELETED_BLOCKS * 5 : MAX_DELETED_BLOCKS;
+      if (deleted >= limit) { drop(`it would delete more than ${limit} blocks`); continue; }
     } else {
       const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));
       if (lostKey) { drop(`it drops the formula "${lostKey}"`); continue; }

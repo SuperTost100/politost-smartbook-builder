@@ -1,7 +1,7 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
-import { applyGuardedChanges, compileChapter, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
+import { applyGuardedChanges, compileChapter, dropReferences, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
 import { outlineSchema } from '@smartbuilder/domain';
-import { currentHeads } from '../repo/content.ts';
+import { currentHeads, repairHead } from '../repo/content.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
@@ -13,7 +13,7 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { CUT, fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
-import { extractCitations, findSection, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
+import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
@@ -297,7 +297,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     for (const c of data.changes) if (c.block >= 0 && c.block < blocks.length) working[c.block] = c.text.trim();
   } else {
     const lint = (md: string) => lintSection(extractCitations(md, splitBlocks).markdown, { sectionId: nodeId, language: project.language });
-    const guarded = applyGuardedChanges(blocks, data.changes, lint, { figures: issues.some((i) => i.category === 'figure') });
+    const guarded = applyGuardedChanges(blocks, data.changes, lint, { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') });
     working = guarded.blocks;
     reverted = guarded.reverted;
     if (guarded.kept.length) {
@@ -349,7 +349,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   // Losing more than a fifth of the text is the author's call, unless the fix was about repetition.
   // Image blocks are not text: removing a useless figure does not shrink the section.
   const prose = (md: string) => md.replace(/:::image\{[^}]*\}\s*\n\s*:::/g, '').length;
-  const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * 0.8 && !issues.some((i) => i.category === 'repetition');
+  const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * 0.8 && !issues.some((i) => i.category === 'repetition' || i.category === 'program-off');
   const answered = issues.filter((i) => !dropped(i) && !unresolved.has(issues.indexOf(i)));
   let committed!: ReturnType<typeof commitAiRevision>;
   let stored: string[] = [];
@@ -360,6 +360,15 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       ({ markdown: text, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown: text, replace: false, replaced: [] }));
       committed = commitAiRevision(ctx, { projectId, nodeId, kind, markdown: text, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: instructed || shrunk || !issues.length, runId: t.task.runId, taskId: t.task.id });
       const applied = committed.status === 'current';
+      // Formulas a removal took out of this section: other sections in the book refer to them by name from now on.
+      if (applied && issues.some((i) => i.category === 'program-off')) {
+        const left = new Set(formulaKeyLabels(text).map((f) => f.key));
+        const gone = formulaKeyLabels(head.markdown).filter((f) => !left.has(f.key));
+        const elsewhere = new Set(bookFormulaKeys(ctx, projectId, nodeId).map((k) => k.key));
+        const lost = gone.filter((f) => !elsewhere.has(f.key));
+        const inBook = new Set((loadOutline(ctx, projectId)?.outline.chapters ?? []).flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+        if (lost.length) for (const other of inBook) if (other !== nodeId) repairHead(ctx, projectId, other, (md) => dropReferences(md, '', lost));
+      }
       const done = new Set(answered.map((i) => i.id));
       if (answered.length) ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE id IN (${answered.map(() => '?').join(',')})`, applied ? 'fixed' : 'proposed', applied ? `Fixed by AI in revision ${committed.revId}` : `Proposal ${committed.revId}`, ...answered.map((i) => i.id));
       reopen(issues.filter((i) => !done.has(i.id)), (id) => {

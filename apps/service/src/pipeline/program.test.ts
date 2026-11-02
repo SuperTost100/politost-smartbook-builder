@@ -1013,6 +1013,18 @@ describe('fixes for program issues may add material', () => {
     assert.match(fake.calls[1].prompt, /it is not in the book, so never judge a block unfinished because of it/);
   });
 
+  test('an off-program passage fix may delete a subsection with its formula; other sections then name the formula', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Prima.\n\n### Formula di Binet\n\n:::formula{key="binet" label="Formula di Binet"}\n$$u\'\'+u=0$$\n:::\n\nUso della formula.');
+    seedRevision('s2', 'Vedi la {{formula:@binet}}.');
+    issue('i1', 'program-off', { quote: 'Formula di Binet' });
+    fake.next(answer({ figures: [], changes: [1, 2, 3].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2, 3])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
+    assert.equal(r.status, 'current', 'not held back as a proposal for shrinking');
+    assert.equal(head('s1')!.markdown, 'Prima.');
+    assert.equal(head('s2')!.markdown, 'Vedi la formula di Binet.');
+  });
+
   test('other fixes stay minimal: no permission to grow, editor role', async () => {
     ctx.db.run(`DELETE FROM content_revisions`);
     seedRevision('s1', 'Prima, un paragrafo abbastanza lungo perché toglierne uno corto non sia più di un quinto del testo.\n\nSeconda.');
