@@ -27,6 +27,7 @@ export const LINT_RULES = [
   'duplicate-graph',
   'section-ref-unknown',
   'exercise-fence',
+  'placeholder',
 ] as const;
 export type LintRule = (typeof LINT_RULES)[number];
 
@@ -78,6 +79,7 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   'code-fence': 'blocker',
   image: 'blocker',
   'exercise-fence': 'blocker',
+  placeholder: 'blocker',
   'colon-dangling': 'major',
   'unicode-math': 'major',
   'bold-unpaired': 'major',
@@ -272,6 +274,11 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       add(mk('code-fence', file, 'Code fences are not supported by the reader.', l.n, t));
       continue;
     }
+    // A placeholder a model wrote instead of the symbol it meant ($[?]$, ???); it is checked in math too.
+    // One finding per placeholder, so a fix that adds a second one on the same line still counts as worse.
+    // Inline code is left out (an old MATLAB error starts with ???); math is not, so masked text cannot be used here.
+    const noCode = l.kind === 'math' || l.kind === 'formula-body' ? t : t.replace(/`[^`]*`/g, '');
+    for (const _ of noCode.matchAll(/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/g)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
     if (l.kind === 'math' || l.kind === 'formula-body') continue;
     if (/^\s*:{4,}\s*\w/.test(t)) add(mk('formula-malformed', file, 'Block fences use exactly three colons (:::).', l.n, t));
 

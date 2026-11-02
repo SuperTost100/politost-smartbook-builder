@@ -52,6 +52,24 @@ test('formula-malformed: duplicate keys; valid blocks pass', () => {
   assert.ok(!has(':::formula{label="Vel" key="vel"}\n$$\nv = s/t\n$$\n:::', 'formula-malformed'));
 });
 
+// ---- placeholders --------------------------------------------------------------------------
+
+test('placeholder: a [?] or ??? a model left in prose or math is a blocker', () => {
+  for (const c of [
+    'È per questo che $[?]$ si misura tramite $q_p$.',
+    'Si ottiene $\\lbrack ?\\rbrack$ come risultato.',
+    '$$\nq = [?]\n$$',
+    'Il valore è ??? kJ.',
+  ]) {
+    const f = find(`Testo.\n\n${c}`, 'placeholder');
+    assert.ok(f, c);
+    assert.equal(f!.severity, 'blocker', c);
+  }
+  assert.equal(find('Un intervallo $[0,1]$ e una domanda: vale davvero?', 'placeholder'), undefined);
+  assert.equal(find('MATLAB rispondeva con `??? Undefined function` a un nome sbagliato.', 'placeholder'), undefined, 'inline code is not content');
+  assert.equal(lint('Valori: $[?]$ e $[?]$, poi ???.').filter((f) => f.rule === 'placeholder').length, 3, 'one finding per placeholder, so adding one on the same line counts');
+});
+
 // ---- meta-leak (F-04) --------------------------------------------------------------------
 
 test('meta-leak: model commentary is flagged as blocker', () => {

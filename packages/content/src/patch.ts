@@ -27,13 +27,23 @@ const fenceBalance = (s: string) => {
   }
   return n;
 };
-const serious = (f: LintFinding[]) => f.filter((x) => x.severity === 'blocker' || x.severity === 'major').length;
+/** Blocker and major findings counted per rule and severity, so trading one kind of error for another still counts as worse. */
+const serious = (f: LintFinding[]) => {
+  const n = new Map<string, number>();
+  for (const x of f) {
+    if (x.severity !== 'blocker' && x.severity !== 'major') continue;
+    const k = `${x.rule}:${x.severity}`;
+    n.set(k, (n.get(k) ?? 0) + 1);
+  }
+  return n;
+};
+const worse = (after: Map<string, number>, base: Map<string, number>) => [...after].some(([k, n]) => n > (base.get(k) ?? 0));
 const join = (blocks: string[]) => blocks.filter((b) => b.trim()).join('\n\n');
 
 /**
  * Applies `changes` to `blocks` one by one. A change is dropped (the old block stays) when it deletes a block with a heading,
  * a `:::` directive or a formula, deletes more than MAX_DELETED_BLOCKS blocks, drops a heading or formula key the old block
- * had, leaves `:::` fences unbalanced, or makes the whole section lint worse at blocker or major level (a KaTeX error).
+ * had, leaves `:::` fences unbalanced, or adds a blocker or major lint finding of any rule (a KaTeX error, a placeholder).
  * With `figures` (the fix answers a figure problem), a block that is only an image may be deleted: removing a useless
  * figure is the fix, and refusing it left the problem open for ever.
  */
@@ -46,7 +56,7 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
   const kept = new Set<number>();
   const reverted: RevertedChange[] = [];
   let deleted = 0;
-  let base = -1;
+  let base: Map<string, number> | null = null;
   for (const c of changes) {
     if (!Number.isInteger(c.block) || c.block < 0 || c.block >= out.length) continue;
     const old = out[c.block];
@@ -65,11 +75,11 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
       if (headings(old).some((h) => !newHeadings.includes(h))) { drop('it drops or rewrites a heading'); continue; }
       if (fenceBalance(text) !== 0 && fenceBalance(text) !== fenceBalance(old)) { drop('it leaves a ::: fence open'); continue; }
     }
-    if (base < 0) base = serious(lint(join(out)));
+    base ??= serious(lint(join(out)));
     const next = [...out];
     next[c.block] = text;
     const after = serious(lint(join(next)));
-    if (after > base) { drop('it introduces a formula or formatting error'); continue; }
+    if (worse(after, base)) { drop('it introduces a formula or formatting error'); continue; }
     base = after;
     out[c.block] = text;
     kept.add(c.block);
