@@ -19,13 +19,16 @@ export function stripGeneratorMarkup(s: string): string {
 
 /**
  * A control character in LaTeX text is almost always a backslash that was eaten by an escape: "\f" in "\frac", "\b" in
- * "\beta", or a stray byte in front of the command name. ANSI colour sequences come from the CLI that ran the model.
+ * "\beta", or a stray byte in front of the command name. ANSI colour and terminal mode sequences come from the CLI that
+ * ran the model.
  * Function names KaTeX lacks, such as \cotan or \sen, become \operatorname{...}; \Q and \C become \mathbb{Q} and \mathbb{C}.
  * Tool-call markup the model wrapped its answer in is removed.
  */
 export function sanitizeModelText(s: string): string {
   return stripGeneratorMarkup(s)
-    .replace(/\x1b\[[0-9;]*[A-Za-z]/g, '')
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    // A terminal mode code ("[?25l" hides the cursor) whose escape byte the CLI already dropped; never valid text.
+    .replace(/\[\?\d+[hl]/g, '')
     .replace(/\t(?=[a-z])/g, (c, at: number, all: string) => (TAB_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\t' : c))
     .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\n' : c))
     .replace(/[\x00-\x08\x0b-\x1f]/g, (c, at: number, all: string) => {

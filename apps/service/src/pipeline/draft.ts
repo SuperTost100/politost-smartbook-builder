@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { lintSection, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { lintSection, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -101,7 +101,10 @@ export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId
     // A formula key another section already defines is unwrapped; display math sharing a block with inline math is
     // separated for good (human saves are never touched). Block citations follow.
     const taken = new Set(bookFormulaKeys(ctx, p.projectId, p.nodeId).map((k) => k.key));
-    const markdown = separateDisplayMath(unwrapFormulaKeys(p.markdown, taken));
+    // Links to an id the model miscopied point at the node it meant, or lose the link.
+    const nodes = (loadOutline(ctx, p.projectId)?.outline.chapters ?? []).flatMap((c) => [{ id: c.id, slug: c.slug }, ...c.sections.map((s) => ({ id: s.id }))]);
+    const linked = nodes.length ? repairSectionRefs(p.markdown, nodes) : p.markdown;
+    const markdown = separateDisplayMath(unwrapFormulaKeys(linked, taken));
     const citations = markdown === p.markdown ? p.citations ?? {} : carryCitations(p.markdown, markdown, p.citations ?? {});
     const { revision, applied } = insertProposal(ctx, p.projectId, p.nodeId, markdown, p.baseRevId, p.origin ?? 'ai', p.model, citations, { kind: p.kind, forceProposal: p.forceProposal, taskId: p.taskId });
     ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai', status: revision.status }, { projectId: p.projectId, runId: p.runId ?? null });

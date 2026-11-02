@@ -7,6 +7,13 @@ test('a control character before a letter replaces the eaten backslash', () => {
   assert.equal(sanitizeModelText('$\u0001alpha$'), '$\\alpha$');
 });
 
+test('terminal mode codes such as hide-cursor vanish, with or without their escape byte', () => {
+  assert.equal(sanitizeModelText('$[\u001b[?25l\\mathbb{R}$'), '$[\\mathbb{R}$');
+  assert.equal(sanitizeModelText('$[?25l\\mathbb{R}$ e [?25h fine'), '$\\mathbb{R}$ e  fine');
+  assert.equal(sanitizeModelText('\u001b[?2004hTesto'), 'Testo');
+  assert.equal(sanitizeModelText('$[2,+\\infty[$'), '$[2,+\\infty[$', 'an interval is not a terminal code');
+});
+
 test('form feed, backspace and carriage return restore \\f, \\b and \\r commands', () => {
   assert.equal(sanitizeModelText('$\u000crac{1}{2}$'), '$\\frac{1}{2}$');
   assert.equal(sanitizeModelText('$\u0008eta$'), '$\\beta$');

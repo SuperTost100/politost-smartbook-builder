@@ -108,3 +108,20 @@ export function unwrapFormulaKeys(markdown: string, taken: Set<string>): string 
   }
   return out.join('\n');
 }
+
+/**
+ * Section links whose id is in no outline node, which models write when they copy a long id from a list or use a
+ * chapter's slug instead of its id. A link whose id shares its first 8 characters with exactly one node, or equals a
+ * chapter slug, points there; any other becomes its plain label.
+ */
+export function repairSectionRefs(markdown: string, nodes: { id: string; slug?: string }[]): string {
+  const known = new Set(nodes.map((n) => n.id));
+  const bySlug = new Map(nodes.filter((n) => n.slug).map((n) => [n.slug!, n.id]));
+  // The label has no "[" of its own, so a match can't start at the "[" of an earlier interval like ]a,b[.
+  return markdown.replace(/\[([^[\]]*)\]\(ref:section\/([^)\s]+)\)/g, (full, label: string, id: string) => {
+    if (known.has(id)) return full;
+    const near = nodes.filter((n) => n.id.slice(0, 8) === id.slice(0, 8));
+    const target = bySlug.get(id) ?? (near.length === 1 ? near[0].id : null);
+    return target ? `[${label}](ref:section/${target})` : label;
+  });
+}

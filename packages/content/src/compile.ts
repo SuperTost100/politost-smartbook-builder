@@ -225,10 +225,46 @@ const WORD = /[\p{L}\p{N}]/u;
  * Optional arguments such as \sqrt[3]{x} keep their brackets.
  */
 export function protectMathBrackets(line: string): string {
-  return line.replace(/\$\$[^$]*\$\$|\$[^$\n]+\$/g, (math) =>
-    math.replace(/(\\sqrt)\[([^\[\]]*)\]/g, '$1\u0000$2\u0001')
-      .replace(/\[/g, '\\lbrack ').replace(/\]/g, '\\rbrack ')
-      .replace(/\u0000/g, '[').replace(/\u0001/g, ']'));
+  return line.replace(/\$\$[^$]*\$\$|\$[^$\n]+\$/g, protectBrackets);
+}
+
+/**
+ * Brackets in a piece of math become \lbrack and \rbrack, except the optional argument right after a command, as in
+ * \sqrt[3]{x}, \xrightarrow[n\to\infty]{} or the \\[4pt] of an aligned block. Those are balanced, so no link can start
+ * inside them.
+ */
+function protectBrackets(math: string): string {
+  return math.replace(/(\\(?:[A-Za-z]+|\\))\[([^[\]]*)\]/g, '$1\u0000$2\u0001')
+    .replace(/\[/g, '\\lbrack ').replace(/\]/g, '\\rbrack ')
+    .replace(/\u0000/g, '[').replace(/\u0001/g, ']');
+}
+
+/**
+ * The same for display math written over several lines ("$$", the formula, "$$", formula blocks too), which the
+ * line-by-line pass misses because its inner lines carry no "$". Every "$$" is paired in order, one-line blocks
+ * included, and fenced code is left as it is. Line breaks are kept, so line numbers don't move.
+ */
+export function protectDisplayMathBrackets(text: string): string {
+  let fence: string | null = null;
+  let inside = false;
+  return text.split('\n').map((line) => {
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+    if (fence !== null) {
+      // Only a marker with nothing but spaces after it closes the fence ("~~~js" inside it is code).
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length && !f[2].trim()) fence = null;
+      return line;
+    }
+    if (f && !inside) { fence = f[1]; return line; }
+    // Inline code is kept as it is, and a "$$" inside it is not a delimiter. Elsewhere the pieces between "$$" alternate
+    // between text and math, starting from the state the line opens in.
+    return line.split(/(`[^`]*`)/).map((chunk, c) => {
+      if (c % 2 === 1 && !inside) return chunk;
+      const parts = chunk.split('$$');
+      const out = parts.map((part, i) => (inside !== (i % 2 === 1) ? protectBrackets(part) : part)).join('$$');
+      if (parts.length % 2 === 0) inside = !inside;
+      return out;
+    }).join('');
+  }).join('\n');
 }
 
 function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
@@ -297,7 +333,7 @@ interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
 
 /** `markdown` is the unit's text after statement numbering. */
 function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string): string {
-  const sc = scan(markdown);
+  const sc = scan(protectDisplayMathBrackets(markdown));
   const byIndex = new Map(sc.formulas.map((f) => [f.index, f]));
   const refEnv: RefEnv = { ...env, file: unit.id, chapterNumber: number };
   const out: string[] = [];
@@ -521,7 +557,7 @@ function compileQuestions(
       for (const f of lintQuestionText(src, { file, language, knownFormulaKeys: knownKeys, skipRules: ['formula-ref-unknown'] })) {
         findings.push({ ...f, message: `[${part}] ${f.message}` });
       }
-      return src
+      return protectDisplayMathBrackets(src)
         .split('\n')
         .map((line, idx) => resolveRefs(line, idx + 1, refEnv))
         .join('\n')

@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { ExamFormat, ProgramItem } from '@smartbuilder/domain';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 14;
+export const PROMPT_VERSION = 15;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -708,6 +708,9 @@ export const fixCheckSchema = z.object({
 });
 
 /** A cheap second look at an AI fix before it replaces the text. */
+/** Marks where the builder cut a long block before showing it to a model. */
+export const CUT = '[… cut here by the builder for length]';
+
 export function fixCheckPrompt(p: { language: string; issues: string; changes: string; additive?: boolean }) {
   return {
     system: `You check edits made to a university textbook written in ${languageName(p.language)}. Each edit was meant to fix a listed problem. Judge every changed block and every issue; be strict about mathematics, lenient about style.`,
@@ -716,6 +719,8 @@ ${p.issues}
 
 CHANGED BLOCKS (old text, new text and the neighbouring blocks for context):
 ${p.changes}
+
+The marker "${CUT}" is where the builder shortened a block for this check; it is not in the book, so never judge a block unfinished because of it.
 
 For each changed block give a verdict. "harmful" means the new text introduces a mathematical error or a false statement, removes content the issues did not ask to remove, changes the meaning beyond what the issues asked, or adds more than one new sentence of claims, caveats or explanations the issues did not ask for. Otherwise "good".${p.additive ? ' Issues marked [add material] ask for new material (more depth, a missing proof): adding it is what they ask, so it is good when it is correct, complete and consistent with the rest of the section.' : ''}
 For each issue say whether the edits fixed it ("fixed": true) or not; if not, give the reason in one short sentence.
