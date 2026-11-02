@@ -171,7 +171,10 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
     schema: alignSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const { coverage, findings } = validateAlignment(data, { program: program.items, outline: current.outline, texts, guides: guideFindings(ctx, projectId, current.outline) });
-  const named = [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
+  // A report that removes a whole section also depends on every other section, because a reference added later would
+  // make that section a prerequisite; the other reports only on the sections they name.
+  const removes = findings.some((f) => f.kind === 'off-program' && f.whole);
+  const named = removes ? current.outline.chapters.flatMap((c) => c.sections.map((s) => s.id)) : [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
   const heads = Object.fromEntries(named.map((id) => [id, seen.get(id) ?? null]));
   const report = insertReport(ctx, { projectId, outlineRevId: current.revId, coverage, findings, model: route.model, inputs: { program: programFingerprint(program), heads } });
   const count = (kind: AlignmentFinding['kind']) => findings.filter((f) => f.kind === kind).length;

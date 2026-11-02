@@ -858,7 +858,17 @@ describe('Align book', () => {
     const reply = answer({ coverage: [], findings: [{ kind: 'off-program', item: null, nodeId: 's2', whole: true, quote: null, message: 'Outside.', chapterId: null, afterSectionId: null, title: null, objectives: [], depth: null }] });
     fake.next(() => { seedRevision('s2', 'Riscritta mentre il planner legge.'); return reply(); });
     const r = await alignCheck(ctx, startTask('program.check', {}, 'align'));
-    assert.deepEqual(reportInputs(ctx, r.reportId).heads, { s2: read });
+    assert.equal(reportInputs(ctx, r.reportId).heads?.s2, read);
+    assert.match(applyBlocker(ctx, P, getReport(ctx, P, r.reportId))?.message ?? '', /section the report talks about changed/);
+  });
+
+  test('a report that removes a section is stale once any section changes', async () => {
+    book();
+    const reply = answer({ coverage: [], findings: [{ kind: 'off-program', item: null, nodeId: 's2', whole: true, quote: null, message: 'Outside.', chapterId: null, afterSectionId: null, title: null, objectives: [], depth: null }] });
+    fake.next(() => reply());
+    const r = await alignCheck(ctx, startTask('program.check', {}, 'align'));
+    assert.ok(Object.keys(reportInputs(ctx, r.reportId).heads ?? {}).includes('s3'));
+    seedRevision('s3', 'Derivate. Ora serve [la topologia](ref:section/s2).');
     assert.match(applyBlocker(ctx, P, getReport(ctx, P, r.reportId))?.message ?? '', /section the report talks about changed/);
   });
 
