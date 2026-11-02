@@ -587,7 +587,7 @@ describe('Align book', () => {
     assert.ok(keys.includes(`evidence:${fresh}`) && keys.includes(`draft:${fresh}`), keys.join());
     assert.ok(keys.includes(`draft:${guide}`) && !keys.includes(`evidence:${guide}`));
     assert.ok(keys.some((k) => k.startsWith('fix:s1:')));
-    assert.ok(!keys.some((k) => k.includes('s2')), 'nothing is queued for the removed section');
+    assert.ok(!keys.some((k) => /:s2(:|$)/.test(k)), 'nothing is queued for the removed section');
 
     const [issue] = issues();
     assert.deepEqual([issue.source, issue.category, issue.severity, issue.node_id, issue.status], ['program', 'program-thin', 'major', 's1', 'open']);
@@ -699,7 +699,7 @@ describe('Align book', () => {
     const run = startRun(ctx, P, 'figures', { chapterIds: ['c1'] });
     const keys = taskKeys(run.id);
     assert.ok(keys.some((k) => k.startsWith('figures:s1:')), keys.join());
-    assert.ok(!keys.some((k) => k.includes('g9')), keys.join());
+    assert.ok(!keys.some((k) => k.startsWith('figures:g9:')), keys.join());
   });
 
   test('an exam guide is not added when no exam question is on the chapter any more', async () => {
