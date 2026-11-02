@@ -404,6 +404,9 @@ test('display math is paired in order, fenced code is left alone, and optional a
   assert.equal(protectDisplayMathBrackets('$$\\begin{aligned}\na &\\xrightarrow[n\\to\\infty]{} b \\\\[4pt]\nc &= \\sqrt[3]{x} \\in ]0,1[\n\\end{aligned}$$'),
     '$$\\begin{aligned}\na &\\xrightarrow[n\\to\\infty]{} b \\\\[4pt]\nc &= \\sqrt[3]{x} \\in \\rbrack 0,1\\lbrack \n\\end{aligned}$$');
   assert.equal(protectMathBrackets('$x \\xrightarrow[a]{b} y$ in $[2,3[$'), '$x \\xrightarrow[a]{b} y$ in $\\lbrack 2,3\\lbrack $');
+  // "~~~js" inside a tilde fence is code, not its end; "$$" in inline code is not a delimiter.
+  assert.equal(protectDisplayMathBrackets('~~~\n~~~js\n$$\n[1,2]\n$$\n~~~'), '~~~\n~~~js\n$$\n[1,2]\n$$\n~~~');
+  assert.equal(protectDisplayMathBrackets('Scrivi `$$` per aprire.\nVedi [S](ref:section/s2).'), 'Scrivi `$$` per aprire.\nVedi [S](ref:section/s2).');
 });
 
 test('brackets in display math over several lines cannot be captured by a later link either', async () => {

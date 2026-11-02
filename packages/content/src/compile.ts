@@ -248,17 +248,22 @@ export function protectDisplayMathBrackets(text: string): string {
   let fence: string | null = null;
   let inside = false;
   return text.split('\n').map((line) => {
-    const f = /^ {0,3}(`{3,}|~{3,})/.exec(line);
+    const f = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
     if (fence !== null) {
-      if (f && f[1][0] === fence[0] && f[1].length >= fence.length) fence = null;
+      // Only a marker with nothing but spaces after it closes the fence ("~~~js" inside it is code).
+      if (f && f[1][0] === fence[0] && f[1].length >= fence.length && !f[2].trim()) fence = null;
       return line;
     }
     if (f && !inside) { fence = f[1]; return line; }
-    // The pieces between "$$" alternate between text and math, starting from the state the line opens in.
-    const parts = line.split('$$');
-    const out = parts.map((part, i) => (inside !== (i % 2 === 1) ? protectBrackets(part) : part)).join('$$');
-    if (parts.length % 2 === 0) inside = !inside;
-    return out;
+    // Inline code is kept as it is, and a "$$" inside it is not a delimiter. Elsewhere the pieces between "$$" alternate
+    // between text and math, starting from the state the line opens in.
+    return line.split(/(`[^`]*`)/).map((chunk, c) => {
+      if (c % 2 === 1 && !inside) return chunk;
+      const parts = chunk.split('$$');
+      const out = parts.map((part, i) => (inside !== (i % 2 === 1) ? protectBrackets(part) : part)).join('$$');
+      if (parts.length % 2 === 0) inside = !inside;
+      return out;
+    }).join('');
   }).join('\n');
 }
 
