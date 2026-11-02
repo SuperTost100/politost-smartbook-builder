@@ -792,6 +792,13 @@ describe('Align book', () => {
     assert.equal(head('s1')!.markdown, 'Limiti. Vedi la topologia e aperti.');
   });
 
+  test('a link to a section whose id starts like another one is not a reference to it', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi [altro](ref:section/s20).' WHERE node_id = 's3'`);
+    await apply(reportOf(revId, [offWhole('s2')]).id);
+    assert.equal(head('s3')!.markdown, 'Derivate. Vedi [altro](ref:section/s20).');
+  });
+
   test('a formula key that a section still in the book also defines keeps its references', async () => {
     const { revId } = book();
     ctx.db.run(`UPDATE content_revisions SET markdown = 'Limiti.\n\n:::formula{key="k-topo" label="Aperti"}\n$$B$$\n:::' WHERE node_id = 's1'`);
@@ -897,6 +904,7 @@ describe('Align book', () => {
     fake.next(() => reply());
     const r = await alignCheck(ctx, startTask('program.check', {}, 'align'));
     assert.ok(Object.keys(reportInputs(ctx, r.reportId).heads ?? {}).includes('s3'));
+    assert.ok(Object.keys(reportInputs(ctx, r.reportId).heads ?? {}).includes('c1'), 'chapter introductions count too');
     seedRevision('s3', 'Derivate. Ora serve [la topologia](ref:section/s2).');
     assert.match(applyBlocker(ctx, P, getReport(ctx, P, r.reportId))?.message ?? '', /section the report talks about changed/);
   });
