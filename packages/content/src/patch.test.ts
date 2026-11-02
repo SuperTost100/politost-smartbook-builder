@@ -113,3 +113,9 @@ test('a change that trades one serious finding for a placeholder is reverted, th
   assert.equal(r.blocks[0], 'Testo ERR.');
   assert.deepEqual(applyGuardedChanges(['Testo ERR.'], [{ block: 0, text: 'Testo.' }], findings).kept, [0], 'removing the error alone is kept');
 });
+
+test('a change that turns a major finding into a blocker of the same rule is reverted', () => {
+  const findings = (md: string) => md.includes('MAJ') ? [{ rule: 'katex', severity: 'major' as const, message: 'm', file: 's1' }]
+    : md.includes('BLK') ? [{ rule: 'katex', severity: 'blocker' as const, message: 'b', file: 's1' }] : [];
+  assert.deepEqual(applyGuardedChanges(['Vale MAJ.'], [{ block: 0, text: 'Vale BLK.' }], findings).kept, []);
+});

@@ -27,13 +27,17 @@ const fenceBalance = (s: string) => {
   }
   return n;
 };
-/** Blocker and major findings counted per rule, so trading one kind of error for another still counts as worse. */
+/** Blocker and major findings counted per rule and severity, so trading one kind of error for another still counts as worse. */
 const serious = (f: LintFinding[]) => {
   const n = new Map<string, number>();
-  for (const x of f) if (x.severity === 'blocker' || x.severity === 'major') n.set(x.rule, (n.get(x.rule) ?? 0) + 1);
+  for (const x of f) {
+    if (x.severity !== 'blocker' && x.severity !== 'major') continue;
+    const k = `${x.rule}:${x.severity}`;
+    n.set(k, (n.get(k) ?? 0) + 1);
+  }
   return n;
 };
-const worse = (after: Map<string, number>, base: Map<string, number>) => [...after].some(([rule, n]) => n > (base.get(rule) ?? 0));
+const worse = (after: Map<string, number>, base: Map<string, number>) => [...after].some(([k, n]) => n > (base.get(k) ?? 0));
 const join = (blocks: string[]) => blocks.filter((b) => b.trim()).join('\n\n');
 
 /**

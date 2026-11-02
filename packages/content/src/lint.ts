@@ -275,7 +275,8 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       continue;
     }
     // A placeholder a model wrote instead of the symbol it meant ($[?]$, ???); it is checked in math too.
-    if (/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/.test(t)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
+    // One finding per placeholder, so a fix that adds a second one on the same line still counts as worse.
+    for (const _ of t.matchAll(/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/g)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
     if (l.kind === 'math' || l.kind === 'formula-body') continue;
     if (/^\s*:{4,}\s*\w/.test(t)) add(mk('formula-malformed', file, 'Block fences use exactly three colons (:::).', l.n, t));
 

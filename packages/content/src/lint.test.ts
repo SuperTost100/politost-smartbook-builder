@@ -66,6 +66,7 @@ test('placeholder: a [?] or ??? a model left in prose or math is a blocker', () 
     assert.equal(f!.severity, 'blocker', c);
   }
   assert.equal(find('Un intervallo $[0,1]$ e una domanda: vale davvero?', 'placeholder'), undefined);
+  assert.equal(lint('Valori: $[?]$ e $[?]$, poi ???.').filter((f) => f.rule === 'placeholder').length, 3, 'one finding per placeholder, so adding one on the same line counts');
 });
 
 // ---- meta-leak (F-04) --------------------------------------------------------------------
