@@ -1073,6 +1073,14 @@ describe('fixes for program issues may add material', () => {
     assert.equal(ctx.db.get<{ s: string }>(`SELECT statement AS s FROM questions WHERE id = 'q-exam'`)!.s, 'Usa la formula di Binet.');
   });
 
+  test('a fix that leaves a placeholder instead of a symbol is reverted', async () => {
+    issue('i1', 'program-thin');
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: 'Seconda: si misura $[?]$ tramite $q_p$.' }] }), answer(checkGood([1])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
+    assert.equal(head('s1')!.markdown, 'Prima.\n\nSeconda.');
+    assert.match((r.reverted ?? []).join(' '), /formula or formatting error/);
+  });
+
   test('other fixes stay minimal: no permission to grow, editor role', async () => {
     ctx.db.run(`DELETE FROM content_revisions`);
     seedRevision('s1', 'Prima, un paragrafo abbastanza lungo perché toglierne uno corto non sia più di un quinto del testo.\n\nSeconda.');
