@@ -923,6 +923,16 @@ describe('fixes for program issues may add material', () => {
     assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'i1'`)!.status, 'fixed');
   });
 
+  test('the check sees a long added proof whole, so it never rejects it as cut off', async () => {
+    issue('i1', 'program-proof');
+    const proof = `Dimostrazione. ${'Passaggio della dimostrazione con tutti i dettagli. '.repeat(80)}Fine della dimostrazione.`;
+    fake.next(answer({ figures: [], changes: [{ block: 1, text: `Seconda.\n\n${proof}` }] }), answer(checkGood([1])));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
+    assert.ok(proof.length > 3000);
+    assert.ok(fake.calls[1].prompt.includes('Fine della dimostrazione.'), 'the end of the new text reaches the check');
+    assert.match(fake.calls[1].prompt, /it is not in the book, so never judge a block unfinished because of it/);
+  });
+
   test('other fixes stay minimal: no permission to grow, editor role', async () => {
     ctx.db.run(`DELETE FROM content_revisions`);
     seedRevision('s1', 'Prima, un paragrafo abbastanza lungo perché toglierne uno corto non sia più di un quinto del testo.\n\nSeconda.');

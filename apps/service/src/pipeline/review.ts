@@ -12,7 +12,7 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
-import { fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
+import { CUT, fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
@@ -302,14 +302,16 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     reverted = guarded.reverted;
     if (guarded.kept.length) {
       // One cheap model looks at what is left: a change that breaks the mathematics or removes more than asked is dropped.
-      const clip = (b: string | undefined) => (b === undefined ? '(none)' : b.length > 1500 ? `${b.slice(0, 1500)}\n[…]` : b);
+      // The context blocks are cut for length; the new text is what is judged, so it goes in whole (a cut proof would look
+      // unfinished and be rejected for that).
+      const clip = (b: string | undefined, max = 1500) => (b === undefined ? '(none)' : b.length > max ? `${b.slice(0, max)}\n${CUT}` : b);
       try {
         const verdict = await runRole(ctx, {
           role: 'checker',
           ...fixCheckPrompt({
             language: project.language, additive: grows,
             issues: issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}[${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`).join('\n'),
-            changes: guarded.kept.map((n) => `[B${n}]\nBLOCK BEFORE:\n${clip(blocks[n - 1])}\nOLD:\n${clip(blocks[n])}\nNEW:\n${working[n].trim() ? clip(working[n]) : '(deleted)'}\nBLOCK AFTER:\n${clip(blocks[n + 1])}`).join('\n\n'),
+            changes: guarded.kept.map((n) => `[B${n}]\nBLOCK BEFORE:\n${clip(blocks[n - 1])}\nOLD:\n${clip(blocks[n])}\nNEW:\n${working[n].trim() ? clip(working[n], 12_000) : '(deleted)'}\nBLOCK AFTER:\n${clip(blocks[n + 1])}`).join('\n\n'),
           }),
           schema: fixCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
         });
