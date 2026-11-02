@@ -792,6 +792,15 @@ describe('Align book', () => {
     assert.equal(head('s1')!.markdown, 'Limiti. Vedi la topologia e aperti.');
   });
 
+  test('Put back also drops links to a section that is out of the book and was never written', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Limiti. Vedi [il seguito](ref:section/sx).' WHERE node_id = 's1'`);
+    const report = reportOf(revId, [offWhole('s1')]);
+    await apply(report.id);
+    restoreRemoved(ctx, P, report.id, 's1');
+    assert.equal(head('s1')!.markdown, 'Limiti. Vedi il seguito.');
+  });
+
   test('a link to a section whose id starts like another one is not a reference to it', async () => {
     const { revId } = book();
     ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi [altro](ref:section/s20).' WHERE node_id = 's3'`);

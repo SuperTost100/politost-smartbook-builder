@@ -451,7 +451,12 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     const all = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
     const kept = new Set(all.filter((h) => inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
     const outside = all.filter((h) => !inBook.has(h.node_id));
-    repairHead(ctx, projectId, nodeId, (md) => outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown).filter((f) => !kept.has(f.key))), md));
+    repairHead(ctx, projectId, nodeId, (md) => {
+      const withFormulas = outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown).filter((f) => !kept.has(f.key))), md);
+      // Links to any other id outside the book too, written or not.
+      const missing = [...new Set([...withFormulas.matchAll(/\]\(ref:section\/([^)\s]+)\)/g)].map((m) => m[1]))].filter((id) => !inBook.has(id));
+      return missing.reduce((text, id) => dropReferences(text, id, []), withFormulas);
+    });
     const removed = report.removed.map((r) => (r.nodeId === nodeId ? { ...r, restoredAt: now() } : r));
     ctx.db.run('UPDATE alignment_reports SET removed = ? WHERE id = ?', JSON.stringify(removed), reportId);
     ctx.events.emit('outline.created', { revId: rev.id, origin: 'human', restore: nodeId }, { projectId });
