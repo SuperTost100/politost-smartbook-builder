@@ -816,16 +816,61 @@ describe('Align book', () => {
     assert.equal(head('s3')!.markdown, 'Derivate. Vedi {{formula:@k-topo}}.');
   });
 
-  test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
+  test('delete still marks a section that past exam questions in the book refer to, or the only section of its chapter', async () => {
     const { revId } = book();
-    ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exam', origin: 'authentic', exam_group: 'Esame', exam_date: null, number: '1', statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
     const report = reportOf(revId, [offWhole('s2'), offWhole('s3')]);
     await apply(report.id);
     assert.equal(outlineRevisions().length, 1, 'neither section was removed');
     assert.ok(head('s2')!.markdown.startsWith(MARK_IT));
     const [first, second] = getReport(ctx, P, report.id).applied;
-    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because exercises of the book refer to it/);
+    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because exam questions or exercises from the sources or the author refer to it/);
     assert.match(second, /Kept the section "Titolo s3" instead of removing it, because it is the only section of its chapter/);
+  });
+
+  test('generated exercises on a removed section leave the book with it; exercises already out of the book do not hold it', async () => {
+    const { revId } = book();
+    const q = (id: string, chapter: string | null) => ctx.db.insert('questions', { id, project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Usa {{formula:@k-topo}}.', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: chapter, status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    q('q-gen', 'c1');
+    q('q-out', null);
+    ctx.db.insert('questions', { id: 'q-exam-out', project_id: P, kind: 'exam', origin: 'authentic', exam_group: 'Esame', exam_date: null, number: '2', statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: null, status: 'issue', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    const report = reportOf(revId, [offWhole('s2')]);
+    await apply(report.id);
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1']);
+    assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-gen'`)!.c, null);
+    assert.match(getReport(ctx, P, report.id).applied[0], /1 generated exercise on it left the book/);
+  });
+
+  test('author exercises keep a section; an exercise leaves once even when two removed sections are its topic; a formula still in the book keeps it', async () => {
+    const { revId } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate.\n\n:::formula{key="k-topo" label="Aperti"}\n$$C$$\n:::' WHERE node_id = 's3'`);
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections', json(?)) WHERE id = ?`, JSON.stringify(['s1', 's2', 'sa', 'sb'].map((id) => section(id))), revId);
+    seedRevision('sa', 'A.'); seedRevision('sb', 'B.');
+    const q = (id: string, origin: string, statement: string) => ctx.db.insert('questions', { id, project_id: P, kind: 'exercise', origin, exam_group: null, exam_date: null, number: null, statement, hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    q('q-author', 'adapted', 'Vedi [qui](ref:section/s1).');
+    q('q-two', 'generated', 'Vedi [a](ref:section/sa) e [b](ref:section/sb).');
+    q('q-formula', 'generated', 'Usa {{formula:@k-topo}}.');
+    const report = reportOf(revId, [offWhole('s1'), offWhole('sa'), offWhole('sb'), offWhole('s2')]);
+    await apply(report.id);
+    const lines = getReport(ctx, P, report.id).applied;
+    assert.match(lines.find((l) => l.includes('"Titolo s1"'))!, /Kept the section/);
+    assert.equal(ctx.db.get<{ r: number }>(`SELECT rev AS r FROM questions WHERE id = 'q-two'`)!.r, 2, 'detached once');
+    assert.equal(lines.filter((l) => /generated exercise/.test(l)).length, 1);
+    assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-formula'`)!.c, 'c1', 's3 still defines k-topo');
+  });
+
+  test('an off-program cut gets its own fix task, after the other fixes of the same section', () => {
+    book();
+    const mk = (id: string, category: string) => ctx.db.insert('review_issues', { id, project_id: P, node_id: 's1', source: 'program', severity: 'minor', category, quote: '', message: id, suggestion: '', status: 'open', resolution: '', created_at: now() });
+    mk('i-off', 'program-off'); mk('i-thin', 'program-thin');
+    const run = startRun(ctx, P, 'regenerate', { issueIds: ['i-off', 'i-thin'] });
+    const rows = ctx.db.all<{ key: string; input: string }>(`SELECT key, input FROM tasks WHERE run_id = ?`, run.id);
+    const off = rows.find((r) => r.key.startsWith('fix-off:s1:'))!;
+    const other = rows.find((r) => r.key.startsWith('fix:s1:'))!;
+    assert.deepEqual(json<{ issueIds: string[] }>(off.input, { issueIds: [] }).issueIds, ['i-off']);
+    assert.deepEqual(json<{ issueIds: string[] }>(other.input, { issueIds: [] }).issueIds, ['i-thin']);
+    const deps = ctx.db.all<{ key: string }>(`SELECT dt.key FROM tasks r JOIN task_deps d ON d.task_id = r.id JOIN tasks dt ON dt.id = d.dep_id WHERE r.run_id = ? AND r.key = ?`, run.id, off.key).map((x) => x.key);
+    assert.deepEqual(deps, [other.key]);
   });
 
   test('a passage is an issue whose fix removes it (delete) or adds the note before it (mark); a repeated report reuses the open issue', async () => {
@@ -837,7 +882,7 @@ describe('Align book', () => {
     assert.deepEqual([issue.category, issue.severity, issue.quote, issue.source], ['program-off', 'minor', 'Testo del limite.', 'program']);
     assert.match(issue.suggestion, /^Remove this passage/);
     assert.equal(outlineRevisions().length, 1, 'no outline change');
-    assert.ok(taskKeys(t.task.runId).some((k) => k.startsWith('fix:s1:')));
+    assert.ok(taskKeys(t.task.runId).some((k) => k.startsWith('fix-off:s1:')));
 
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ offProgram: 'mark' }), P);
     ctx.db.run(`UPDATE review_issues SET status = 'fixed'`);
@@ -998,6 +1043,34 @@ describe('fixes for program issues may add material', () => {
     assert.ok(proof.length > 3000);
     assert.ok(fake.calls[1].prompt.includes('Fine della dimostrazione.'), 'the end of the new text reaches the check');
     assert.match(fake.calls[1].prompt, /it is not in the book, so never judge a block unfinished because of it/);
+  });
+
+  test('an off-program passage fix may delete a subsection with its formula; other sections then name the formula', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Prima.\n\n### Formula di Binet\n\n:::formula{key="binet" label="Formula di Binet"}\n$$u\'\'+u=0$$\n:::\n\nUso della formula.');
+    seedRevision('s2', 'Vedi la {{formula:@binet}}.');
+    issue('i1', 'program-off', { quote: 'Formula di Binet' });
+    fake.next(answer({ figures: [], changes: [1, 2, 3].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2, 3])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
+    assert.equal(r.status, 'current', 'not held back as a proposal for shrinking');
+    assert.equal(head('s1')!.markdown, 'Prima.');
+    assert.equal(head('s2')!.markdown, 'Vedi la formula di Binet.');
+  });
+
+  test('after a passage cut, a definition kept only out of the book does not count; exercises on the formula leave or name it', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Prima.\n\n### Formula di Binet\n\n:::formula{key="binet" label="Formula di Binet"}\n$$u\'\'+u=0$$\n:::');
+    seedRevision('s2', 'Vedi la {{formula:@binet}}.');
+    seedRevision('s-out', ':::formula{key="binet" label="Formula di Binet"}\n$$x$$\n:::');
+    const q = (id: string, origin: string) => ctx.db.insert('questions', { id, project_id: P, kind: origin === 'authentic' ? 'exam' : 'exercise', origin, exam_group: null, exam_date: null, number: null, statement: 'Usa la {{formula:@binet}}.', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    q('q-gen', 'generated');
+    q('q-exam', 'authentic');
+    issue('i1', 'program-off', { quote: 'Formula di Binet' });
+    fake.next(answer({ figures: [], changes: [1, 2].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2])));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
+    assert.equal(head('s2')!.markdown, 'Vedi la formula di Binet.');
+    assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-gen'`)!.c, null);
+    assert.equal(ctx.db.get<{ s: string }>(`SELECT statement AS s FROM questions WHERE id = 'q-exam'`)!.s, 'Usa la formula di Binet.');
   });
 
   test('other fixes stay minimal: no permission to grow, editor role', async () => {

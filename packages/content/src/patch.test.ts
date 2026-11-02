@@ -20,6 +20,15 @@ test('deleting a heading, a directive or a formula is reverted; deleting plain t
   assert.match(r.reverted[2].reason, /more than 3/);
 });
 
+test('removals may delete headings, formulas and ::: blocks, and more blocks; changed blocks keep their guards', () => {
+  const blocks = ['Testo.', '### Formula di Binet', ':::formula{key="binet" label="Formula di Binet"}\n$$u\'\'+u=0$$\n:::', 'Uno.', 'Due.', 'Tre.', 'Quattro.', '### Altro'];
+  const del = [1, 2, 3, 4, 5, 6].map((block) => ({ block, text: '' }));
+  const out = applyGuardedChanges(blocks, [...del, { block: 7, text: '### Rinominato' }], () => [], { removals: true });
+  assert.deepEqual(out.kept, [1, 2, 3, 4, 5, 6]);
+  assert.deepEqual(out.reverted.map((r) => r.block), [7], 'a heading still cannot be rewritten');
+  assert.deepEqual(applyGuardedChanges(blocks, del, () => []).kept, [3, 4, 5], 'without removals the heading and the formula stay, and at most 3 blocks go');
+});
+
 test('a fix for a figure problem may delete a block that is only that image; nothing else changes', () => {
   const IMG = ':::image{src="assets/s1-retta.svg" alt="a" caption="c"}\n:::';
   const blocks = ['### Titolo', 'Testo.', IMG, F];

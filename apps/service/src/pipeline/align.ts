@@ -6,6 +6,7 @@ import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
+import { questionsChanged } from '../repo/questions.ts';
 import { approveOutline, getReport, insertIssue, insertReport, readyProgram, repairHead, reportInputs, saveOutline } from '../repo/index.ts';
 import { programFingerprint } from './program.ts';
 import { HttpError } from '../server.ts';
@@ -245,18 +246,34 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   const inserted = new Map<string, number>();
   let changed = false;
 
-  // What still holds a section back: exercises that point at it, or being the only section of its chapter. Links from other
-  // sections and their uses of its formulas are rewritten as plain text when it goes (the check only calls a section
-  // off-program when the rest of the book does not need it).
+  // What still holds a section back: past exam questions in the book that point at it, or being the only section of its
+  // chapter. Links from other sections and their uses of its formulas are rewritten as plain text when it goes, and the
+  // generated exercises that point at it leave the book with it (the check only calls a section off-program when the rest
+  // of the book does not need it).
   const heads = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
-  const questions = ctx.db.all<{ t: string }>(`SELECT statement || ' ' || hint || ' ' || solution AS t FROM questions WHERE project_id = ?`, projectId).map((r) => r.t);
+  const questions = ctx.db.all<{ id: string; origin: string; t: string }>(`SELECT id, origin, statement || ' ' || hint || ' ' || solution AS t FROM questions WHERE project_id = ? AND chapter_id IS NOT NULL`, projectId);
   const ownFormulas = (nodeId: string) => formulaKeyLabels(heads.find((h) => h.node_id === nodeId)?.markdown ?? '');
   const refersTo = (md: string, nodeId: string) => md.includes(`ref:section/${nodeId})`) || ownFormulas(nodeId).some((f) => md.includes(`formula:@${f.key}}}`) || md.includes(`ref:formula/@${f.key})`));
+  /** A reference to the section itself, or to one of its formulas that no other section in the book defines. */
+  const pointsAt = (t: string, nodeId: string) => {
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+    const kept = new Set(heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    return t.includes(`ref:section/${nodeId})`) || ownFormulas(nodeId).filter((f) => !kept.has(f.key)).some((f) => t.includes(`formula:@${f.key}}}`) || t.includes(`ref:formula/@${f.key})`));
+  };
   const removalBlocker = (nodeId: string): string | null => {
-    if (questions.some((x) => refersTo(x, nodeId))) return 'exercises of the book refer to it';
+    if (questions.some((q) => q.origin !== 'generated' && pointsAt(q.t, nodeId))) return 'exam questions or exercises from the sources or the author refer to it';
     const chapter = chapterOf(nodeId);
     if (chapter && !chapter.sections.some((s) => s.id !== nodeId && s.role === 'content')) return 'it is the only section of its chapter';
     return null;
+  };
+  /** Takes the generated exercises that point at a removed section out of the book, once each; returns how many. */
+  const detached = new Set<string>();
+  const dropExercises = (nodeId: string) => {
+    const ids = questions.filter((q) => q.origin === 'generated' && !detached.has(q.id) && pointsAt(q.t, nodeId)).map((q) => q.id);
+    for (const id of ids) detached.add(id);
+    for (const id of ids) ctx.db.run('UPDATE questions SET chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ?', now(), id);
+    questionsChanged(ctx, projectId, ids);
+    return ids.length;
   };
   /** Rewrites the links and formula references other sections make to a removed section; returns how many sections changed. */
   const unreference = (nodeId: string) => {
@@ -354,7 +371,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
               found.chapter.sections.splice(found.sectionIndex, 1);
               changed = true;
               const rewritten = unreference(section.id);
-              lines.push(`Removed the section ${q(section.title)}: it is outside the course program and the rest of the book does not need it. Its text is kept, and Put back restores it.${rewritten ? ` Links and formula references to it in ${rewritten} other section${rewritten > 1 ? 's' : ''} became plain text.` : ''}`);
+              const exercises = dropExercises(section.id);
+              lines.push(`Removed the section ${q(section.title)}: it is outside the course program and the rest of the book does not need it. Its text is kept, and Put back restores it.${rewritten ? ` Links and formula references to it in ${rewritten} other section${rewritten > 1 ? 's' : ''} became plain text.` : ''}${exercises ? ` ${exercises} generated exercise${exercises > 1 ? 's' : ''} on it left the book.` : ''}`);
               break;
             }
             if (!head) { lines.push(`Left the section ${q(section.title)} as it is: it has no text to mark${why ? ` and ${why}` : ''}.`); break; }
