@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, quoteInBlock, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { applyGuardedChanges, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -67,4 +67,22 @@ test('a formula key defined elsewhere loses its wrapper and keeps its math', () 
   const md = `Testo.\n\n${F}\n\n:::formula{key="k2" label="M"}\n$$y=2$$\n:::\n\nFine.`;
   assert.equal(unwrapFormulaKeys(md, new Set(['k1'])), 'Testo.\n\n$$x=1$$\n\n:::formula{key="k2" label="M"}\n$$y=2$$\n:::\n\nFine.');
   assert.equal(unwrapFormulaKeys(md, new Set()), md);
+});
+
+test('section links to an unknown id are pointed at the node they mean, or become plain text', () => {
+  const nodes = [{ id: 'c1', slug: 'funzioni-reali' }, { id: 'f88aee69-291a-4ea8-bf78-0f5718dacdfc' }, { id: 'ab4a5b0e-7d31-4742-b8ee-ebcf244154f2' }, { id: 'ab4a5b0e-0000-4742-b8ee-ebcf244154f2' }];
+  const md = [
+    'Vedi [rotolamento](ref:section/f88aee69-ba1d-4bd4-a22f-8d3d1dad579c),',
+    '[il capitolo](ref:section/funzioni-reali),',
+    '[due candidati](ref:section/ab4a5b0e-9999-4742-b8ee-ebcf244154f2),',
+    '[nessuno](ref:section/4c723236-4f4a-4f4a-4f4a-4f4a4f4a4f4a)',
+    'e [giusto](ref:section/ab4a5b0e-7d31-4742-b8ee-ebcf244154f2).',
+  ].join(' ');
+  assert.equal(repairSectionRefs(md, nodes), [
+    'Vedi [rotolamento](ref:section/f88aee69-291a-4ea8-bf78-0f5718dacdfc),',
+    '[il capitolo](ref:section/c1),',
+    'due candidati,',
+    'nessuno',
+    'e [giusto](ref:section/ab4a5b0e-7d31-4742-b8ee-ebcf244154f2).',
+  ].join(' '));
 });

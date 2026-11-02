@@ -10,7 +10,7 @@ import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { getProgram, getReport, insertReport, reportInputs, saveProgramInput, saveProgramItems } from '../repo/index.ts';
 import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, checkBlocker, guideFindings, validateAlignment } from './align.ts';
-import { sectionDraft } from './draft.ts';
+import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterExamStats } from './exam.ts';
 import { outlinePlan } from './plan.ts';
 import { assignKeys, programDeps, programFingerprint, programParse, referencedProgramKeys, reserveNewKeys } from './program.ts';
@@ -329,6 +329,17 @@ describe('exam guide', () => {
     assert.deepEqual(scoped.map((s) => s.key).slice(0, 3), ['evidence:s2', 'draft:s2', 'draft:g1']);
     assert.deepEqual(scoped.find((s) => s.key === 'draft:g1')!.deps, ['draft:s2']);
     assert.deepEqual(generateSpecs(ctx, P, undefined, ['g1']).find((s) => s.key === 'draft:g1')!.deps, []);
+  });
+});
+
+describe('AI text commits', () => {
+  test('a miscopied section id points at the section it meant; an unknown one loses the link', () => {
+    const real = 'f88aee69-291a-4ea8-bf78-0f5718dacdfc';
+    seedOutline([['c1', [section('s1'), section(real)]]]);
+    const r = commitAiRevision(ctx, { projectId: P, nodeId: 's1', kind: 'section', baseRevId: null, model: 'm',
+      markdown: 'Vedi [il rotolamento](ref:section/f88aee69-ba1d-4bd4-a22f-8d3d1dad579c) e [altro](ref:section/4c723236-4f4a-4f4a-4f4a-4f4a4f4a4f4a).' });
+    assert.equal(head('s1')!.id, r.revId);
+    assert.equal(head('s1')!.markdown, `Vedi [il rotolamento](ref:section/${real}) e altro.`);
   });
 });
 
