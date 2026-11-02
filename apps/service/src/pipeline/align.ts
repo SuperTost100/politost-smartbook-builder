@@ -257,7 +257,9 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   /** Rewrites the links and formula references other sections make to a removed section; returns how many sections changed. */
   const unreference = (nodeId: string) => {
     const formulas = ownFormulas(nodeId);
-    return heads.filter((h) => h.node_id !== nodeId && refersTo(h.markdown, nodeId))
+    // Only text still in the book: a section removed earlier keeps its text as it was, for Put back.
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+    return heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id) && refersTo(h.markdown, nodeId))
       .filter((h) => repairHead(ctx, projectId, h.node_id, (md) => dropReferences(md, nodeId, formulas))).length;
   };
 

@@ -771,6 +771,14 @@ describe('Align book', () => {
     assert.match(digest, /\[s3\][\s\S]*?used by: -/);
   });
 
+  test('a section removed earlier keeps its text when a section it links to is removed', async () => {
+    const { revId } = book();
+    // s9 left the outline in an earlier apply; its text still links to s2.
+    seedRevision('s9', 'Vedi [la topologia](ref:section/s2).');
+    await apply(reportOf(revId, [offWhole('s2')]).id);
+    assert.equal(head('s9')!.markdown, 'Vedi [la topologia](ref:section/s2).');
+  });
+
   test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
     const { revId } = book();
     ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
