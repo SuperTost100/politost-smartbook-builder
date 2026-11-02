@@ -102,3 +102,14 @@ test('references to a removed section become plain text: its links keep the labe
   assert.equal(dropReferences(md, 's2', [{ key: 'decadimento', label: 'Legge del decadimento radioattivo' }]),
     'Vedi la sezione, la legge del decadimento radioattivo e questa legge. Resta [altro](ref:section/s9) e {{formula:@altra}}.');
 });
+
+test('a change that trades one serious finding for a placeholder is reverted, though the total stays the same', () => {
+  const findings = (md: string) => [
+    ...(md.includes('ERR') ? [{ rule: 'katex', severity: 'blocker' as const, message: 'e', file: 's1' }] : []),
+    ...(md.includes('[?]') ? [{ rule: 'placeholder', severity: 'blocker' as const, message: 'p', file: 's1' }] : []),
+  ];
+  const r = applyGuardedChanges(['Testo ERR.', 'Altro.'], [{ block: 0, text: 'Testo $[?]$.' }], findings);
+  assert.deepEqual(r.kept, []);
+  assert.equal(r.blocks[0], 'Testo ERR.');
+  assert.deepEqual(applyGuardedChanges(['Testo ERR.'], [{ block: 0, text: 'Testo.' }], findings).kept, [0], 'removing the error alone is kept');
+});
