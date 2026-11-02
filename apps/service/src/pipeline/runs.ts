@@ -261,7 +261,7 @@ export function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunSc
     }
     for (const [nodeId, ids] of byNode) specs.push({ kind: 'section.revise', key: `fix:${nodeId}:${stamp}`, label: `Fix ${ids.length} issue${ids.length > 1 ? 's' : ''}`, input: { nodeId, issueIds: ids }, pool: 'editor' });
     for (const [nodeId, ids] of offByNode) {
-      specs.push({ kind: 'section.revise', key: `fix-off:${nodeId}:${stamp}`, label: `Cut ${ids.length} off-program passage${ids.length > 1 ? 's' : ''}`, input: { nodeId, issueIds: ids }, pool: 'editor', deps: byNode.has(nodeId) ? [`fix:${nodeId}:${stamp}`] : [] });
+      specs.push({ kind: 'section.revise', key: `fix-off:${nodeId}:${stamp}`, label: `Handle ${ids.length} off-program passage${ids.length > 1 ? 's' : ''}`, input: { nodeId, issueIds: ids }, pool: 'editor', deps: byNode.has(nodeId) ? [`fix:${nodeId}:${stamp}`] : [] });
     }
     for (const [questionId, ids] of byQuestion) {
       specs.push({ kind: 'question.revise', key: `qfix:${questionId}:${stamp}`, label: 'Fix an exercise', input: { questionId, issueIds: ids }, pool: 'editor' });
