@@ -231,6 +231,14 @@ export function protectMathBrackets(line: string): string {
       .replace(/\u0000/g, '[').replace(/\u0001/g, ']'));
 }
 
+/**
+ * The same for display math written over several lines ("$$", the formula, "$$", formula blocks too), which the
+ * line-by-line pass misses because its inner lines carry no "$". Line breaks are kept, so line numbers don't move.
+ */
+export function protectDisplayMathBrackets(text: string): string {
+  return text.replace(/\$\$[^$]*\n[^$]*\$\$/g, (math) => (math.includes('```') ? math : protectMathBrackets(math)));
+}
+
 function resolveRefs(line: string, lineNo: number, env: RefEnv): string {
   line = protectMathBrackets(line);
   return line.replace(REF_TOKEN, (full, hoverAt: string | undefined, hoverKey: string | undefined, label: string | undefined, kind: string | undefined, target: string | undefined, offset: number) => {
@@ -297,7 +305,7 @@ interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
 
 /** `markdown` is the unit's text after statement numbering. */
 function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string): string {
-  const sc = scan(markdown);
+  const sc = scan(protectDisplayMathBrackets(markdown));
   const byIndex = new Map(sc.formulas.map((f) => [f.index, f]));
   const refEnv: RefEnv = { ...env, file: unit.id, chapterNumber: number };
   const out: string[] = [];
@@ -521,7 +529,7 @@ function compileQuestions(
       for (const f of lintQuestionText(src, { file, language, knownFormulaKeys: knownKeys, skipRules: ['formula-ref-unknown'] })) {
         findings.push({ ...f, message: `[${part}] ${f.message}` });
       }
-      return src
+      return protectDisplayMathBrackets(src)
         .split('\n')
         .map((line, idx) => resolveRefs(line, idx + 1, refEnv))
         .join('\n')
