@@ -763,6 +763,14 @@ describe('Align book', () => {
     assert.match(getReport(ctx, P, report.id).applied[0], /Links and formula references to it in 1 other section became plain text/);
   });
 
+  test('the digest tells the checker which sections rely on each section', () => {
+    const { outline } = book();
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi {{formula:@k-topo}} e [la topologia](ref:section/s2).' WHERE node_id = 's3'`);
+    const digest = bookDigest(ctx, P, outlineSchema.parse(outline), 0);
+    assert.match(digest, /\[s2\][\s\S]*?used by: Titolo s3 \(link, formula k-topo\)/);
+    assert.match(digest, /\[s3\][\s\S]*?used by: -/);
+  });
+
   test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
     const { revId } = book();
     ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });

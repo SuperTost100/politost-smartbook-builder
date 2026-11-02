@@ -28,6 +28,17 @@ const hasProof = (md: string) => /^\s*(\*\*)?\s*(Dimostrazione|Dim\.|Proof)\b/im
 /** One compact description of every section: enough to judge coverage, nowhere near the section texts. */
 export function bookDigest(ctx: AppContext, projectId: string, outline: Outline, total: number): string {
   const topics = new Map(loadTopics(ctx, projectId).map((t) => [t.id, t]));
+  // Which other sections rely on each section (a link to it, or a formula it defines), so the checker can tell a
+  // prerequisite from material nothing needs.
+  const texts = new Map(outline.chapters.flatMap((c) => c.sections).map((s) => [s.id, headRevision(ctx, projectId, s.id)?.markdown]));
+  const titles = new Map(outline.chapters.flatMap((c) => c.sections).map((s) => [s.id, s.title]));
+  const usedBy = (id: string) => {
+    const keys = formulaKeyLabels(texts.get(id) ?? '').map((f) => f.key);
+    return [...texts].filter(([other, md]) => other !== id && md).flatMap(([other, md]) => {
+      const how = [md!.includes(`ref:section/${id}`) ? 'link' : '', ...keys.filter((k) => md!.includes(`formula:@${k}}}`) || md!.includes(`ref:formula/@${k})`)).map((k) => `formula ${k}`)].filter(Boolean);
+      return how.length ? [`${titles.get(other)} (${how.join(', ')})`] : [];
+    });
+  };
   return outline.chapters.map((c, ci) => {
     const lines = c.sections.map((s) => {
       if (s.role === 'exam-guide') return `  [${s.id}] ${s.title} | exam guide (closing section of the chapter)`;
@@ -38,6 +49,7 @@ export function bookDigest(ctx: AppContext, projectId: string, outline: Outline,
         `      objectives: ${s.objectives.join('; ').slice(0, 300) || '-'}`,
         md === undefined ? '' : `      headings: ${headingLines(md).slice(0, DIGEST_LINES).join(' ; ') || '-'}`,
         md === undefined ? '' : `      statements: ${labelLines(md).slice(0, DIGEST_LINES * 2).join(' ; ') || '-'}`,
+        md === undefined ? '' : `      used by: ${usedBy(s.id).slice(0, DIGEST_LINES).join(' ; ') || '-'}`,
       ].filter(Boolean);
       return [head, ...more].join('\n');
     });
