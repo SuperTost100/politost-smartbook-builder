@@ -75,7 +75,9 @@ test('formulas are numbered per chapter in order of appearance and refs are rewr
 
 test('a hover reference to another chapter becomes a link (the reader validates hovers per chapter)', () => {
   const book = compileBook(fixtureBook());
-  assert.ok(text(book, 'chapters/01-cinematica.md').includes('La [formula (2.1)](ref:formula/2.1) ne è'));
+  // The link reads "(2.1)", like the reader's chip for a formula in the same chapter, so "la formula {{formula:@k}}"
+  // reads right wherever the formula is.
+  assert.ok(text(book, 'chapters/01-cinematica.md').includes('La [(2.1)](ref:formula/2.1) ne è'));
   assert.ok(!text(book, 'chapters/01-cinematica.md').includes('{{formula:2.1}}'));
 });
 
