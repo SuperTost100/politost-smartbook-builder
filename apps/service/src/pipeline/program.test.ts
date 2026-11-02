@@ -859,6 +859,20 @@ describe('Align book', () => {
     assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-formula'`)!.c, 'c1', 's3 still defines k-topo');
   });
 
+  test('an off-program cut gets its own fix task, after the other fixes of the same section', () => {
+    book();
+    const mk = (id: string, category: string) => ctx.db.insert('review_issues', { id, project_id: P, node_id: 's1', source: 'program', severity: 'minor', category, quote: '', message: id, suggestion: '', status: 'open', resolution: '', created_at: now() });
+    mk('i-off', 'program-off'); mk('i-thin', 'program-thin');
+    const run = startRun(ctx, P, 'regenerate', { issueIds: ['i-off', 'i-thin'] });
+    const rows = ctx.db.all<{ key: string; input: string }>(`SELECT key, input FROM tasks WHERE run_id = ?`, run.id);
+    const off = rows.find((r) => r.key.startsWith('fix-off:s1:'))!;
+    const other = rows.find((r) => r.key.startsWith('fix:s1:'))!;
+    assert.deepEqual(json<{ issueIds: string[] }>(off.input, { issueIds: [] }).issueIds, ['i-off']);
+    assert.deepEqual(json<{ issueIds: string[] }>(other.input, { issueIds: [] }).issueIds, ['i-thin']);
+    const deps = ctx.db.all<{ key: string }>(`SELECT dt.key FROM tasks r JOIN task_deps d ON d.task_id = r.id JOIN tasks dt ON dt.id = d.dep_id WHERE r.run_id = ? AND r.key = ?`, run.id, off.key).map((x) => x.key);
+    assert.deepEqual(deps, [other.key]);
+  });
+
   test('a passage is an issue whose fix removes it (delete) or adds the note before it (mark); a repeated report reuses the open issue', async () => {
     const { revId } = book();
     const passage: AlignmentFinding = { kind: 'off-program', nodeId: 's1', whole: false, message: 'The second paragraph is outside the program.', quote: 'Testo del limite.' };
@@ -868,7 +882,7 @@ describe('Align book', () => {
     assert.deepEqual([issue.category, issue.severity, issue.quote, issue.source], ['program-off', 'minor', 'Testo del limite.', 'program']);
     assert.match(issue.suggestion, /^Remove this passage/);
     assert.equal(outlineRevisions().length, 1, 'no outline change');
-    assert.ok(taskKeys(t.task.runId).some((k) => k.startsWith('fix:s1:')));
+    assert.ok(taskKeys(t.task.runId).some((k) => k.startsWith('fix-off:s1:')));
 
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ offProgram: 'mark' }), P);
     ctx.db.run(`UPDATE review_issues SET status = 'fixed'`);
