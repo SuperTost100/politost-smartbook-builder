@@ -30,8 +30,9 @@ export function bookDigest(ctx: AppContext, projectId: string, outline: Outline,
   const topics = new Map(loadTopics(ctx, projectId).map((t) => [t.id, t]));
   // Which other sections rely on each section (a link to it, or a formula it defines), so the checker can tell a
   // prerequisite from material nothing needs.
-  const texts = new Map(outline.chapters.flatMap((c) => c.sections).map((s) => [s.id, headRevision(ctx, projectId, s.id)?.markdown]));
-  const titles = new Map(outline.chapters.flatMap((c) => c.sections).map((s) => [s.id, s.title]));
+  const nodes = outline.chapters.flatMap((c) => [{ id: c.id, title: `${c.title} (chapter introduction)` }, ...c.sections.map((s) => ({ id: s.id, title: s.title }))]);
+  const texts = new Map(nodes.map((n) => [n.id, headRevision(ctx, projectId, n.id)?.markdown]));
+  const titles = new Map(nodes.map((n) => [n.id, n.title]));
   const usedBy = (id: string) => {
     const keys = formulaKeyLabels(texts.get(id) ?? '').map((f) => f.key);
     return [...texts].filter(([other, md]) => other !== id && md).flatMap(([other, md]) => {
@@ -49,7 +50,7 @@ export function bookDigest(ctx: AppContext, projectId: string, outline: Outline,
         `      objectives: ${s.objectives.join('; ').slice(0, 300) || '-'}`,
         md === undefined ? '' : `      headings: ${headingLines(md).slice(0, DIGEST_LINES).join(' ; ') || '-'}`,
         md === undefined ? '' : `      statements: ${labelLines(md).slice(0, DIGEST_LINES * 2).join(' ; ') || '-'}`,
-        md === undefined ? '' : `      used by: ${usedBy(s.id).slice(0, DIGEST_LINES).join(' ; ') || '-'}`,
+        md === undefined ? '' : `      used by: ${usedBy(s.id).join(' ; ') || '-'}`,
       ].filter(Boolean);
       return [head, ...more].join('\n');
     });

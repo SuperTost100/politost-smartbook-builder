@@ -769,6 +769,8 @@ describe('Align book', () => {
     const digest = bookDigest(ctx, P, outlineSchema.parse(outline), 0);
     assert.match(digest, /\[s2\][\s\S]*?used by: Titolo s3 \(link, formula k-topo\)/);
     assert.match(digest, /\[s3\][\s\S]*?used by: -/);
+    seedRevision('c1', 'Introduzione: si parte da [la topologia](ref:section/s2).');
+    assert.match(bookDigest(ctx, P, outlineSchema.parse(outline), 0), /\[s2\][\s\S]*?used by: Capitolo 1 \(chapter introduction\) \(link\) ; Titolo s3/);
   });
 
   test('a section removed earlier keeps its text when a section it links to is removed', async () => {
