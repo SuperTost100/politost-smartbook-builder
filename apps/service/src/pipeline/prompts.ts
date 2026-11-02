@@ -4,7 +4,7 @@ import { z } from 'zod';
 import type { ExamFormat, ProgramItem } from '@smartbuilder/domain';
 import { figureSchema } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 15;
+export const PROMPT_VERSION = 16;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -435,7 +435,7 @@ FINDINGS (be selective: a few solid findings beat a long list of doubtful ones; 
 - missing: a program item that no section teaches. Give item, chapterId, afterSectionId (the section it should follow so prerequisites come first; null for the start of the chapter), title, 1-4 objectives and depth, all in ${lang} for title and objectives. Never suggest a position after an exam-guide section.
 - thin: a section teaches a program item but too briefly for what the exam asks (many sessions test it, yet the section is brief or short and has few statements). Give item and nodeId.
 - proof: the program or the exam format asks for a proof ("proofs asked", or the exam format says proofs are asked) that the section does not contain (its digest shows no proof or no matching statement). Give item and nodeId.
-- off-program: material outside the program. whole=true when the section's whole subject is not in the program (nodeId only). whole=false for a passage inside an otherwise fine section: give the verbatim heading or statement line from the digest as quote. Short recaps of prerequisites are not off-program. Sections whose title is an exam guide are never off-program.
+- off-program: material that is not in the program and that no in-program part of the book needs to be understood. The book should be as short as the program allows, so report every such section or passage, also when it is already marked as beyond the program. "used by" lists the sections that link to it or use its formulas: a section that in-program sections need in order to be understood is a prerequisite and stays, even when the program does not list it, while a link that only mentions it in passing does not make it needed. whole=true when the section's whole subject is not needed (nodeId only). whole=false for a passage inside an otherwise needed section, such as a digression, a curiosity or an extension the program does not ask for, that starts at one of the headings or statement lines the digest shows: give that line verbatim as quote. Passages the digest does not show are left to the chapter review. Sections whose title is an exam guide are never off-program.
 - order: a section relies on something that a later section teaches. Give nodeId.
 - Do not report exam guides (missing chapter closers); the builder checks those itself.
 - message: English, one or two sentences, naming the item or section by its title.`,

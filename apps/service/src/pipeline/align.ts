@@ -1,5 +1,5 @@
 // Alignment of a written book with the course program: a report (Check) and its deterministic application (Align book).
-import { quoteInBlock, splitBlocks } from '@smartbuilder/content';
+import { dropReferences, quoteInBlock, splitBlocks } from '@smartbuilder/content';
 import type { z } from 'zod';
 import { outlineSchema, type AlignmentFinding, type AlignmentReport, type Outline, type OutlineSection, type ProgramItem } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
@@ -12,7 +12,7 @@ import { HttpError } from '../server.ts';
 import { chapterExamStats, chaptersMissingGuide, examGuideSection, examSessionTotal } from './exam.ts';
 import { alignPrompt, alignSchema, examFormatText, programItemsText } from './prompts.ts';
 import { generateSpecs, regenerateSpecs } from './runs.ts';
-import { findSection, formulaKeys, headRevision, loadOutline, loadProject, loadTopics } from './util.ts';
+import { findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics } from './util.ts';
 
 type Raw = z.infer<typeof alignSchema>;
 
@@ -28,6 +28,18 @@ const hasProof = (md: string) => /^\s*(\*\*)?\s*(Dimostrazione|Dim\.|Proof)\b/im
 /** One compact description of every section: enough to judge coverage, nowhere near the section texts. */
 export function bookDigest(ctx: AppContext, projectId: string, outline: Outline, total: number): string {
   const topics = new Map(loadTopics(ctx, projectId).map((t) => [t.id, t]));
+  // Which other sections rely on each section (a link to it, or a formula it defines), so the checker can tell a
+  // prerequisite from material nothing needs.
+  const nodes = outline.chapters.flatMap((c) => [{ id: c.id, title: `${c.title} (chapter introduction)` }, ...c.sections.map((s) => ({ id: s.id, title: s.title }))]);
+  const texts = new Map(nodes.map((n) => [n.id, headRevision(ctx, projectId, n.id)?.markdown]));
+  const titles = new Map(nodes.map((n) => [n.id, n.title]));
+  const usedBy = (id: string) => {
+    const keys = formulaKeyLabels(texts.get(id) ?? '').map((f) => f.key);
+    return [...texts].filter(([other, md]) => other !== id && md).flatMap(([other, md]) => {
+      const how = [md!.includes(`ref:section/${id})`) ? 'link' : '', ...keys.filter((k) => md!.includes(`formula:@${k}}}`) || md!.includes(`ref:formula/@${k})`)).map((k) => `formula ${k}`)].filter(Boolean);
+      return how.length ? [`${titles.get(other)} (${how.join(', ')})`] : [];
+    });
+  };
   return outline.chapters.map((c, ci) => {
     const lines = c.sections.map((s) => {
       if (s.role === 'exam-guide') return `  [${s.id}] ${s.title} | exam guide (closing section of the chapter)`;
@@ -38,6 +50,7 @@ export function bookDigest(ctx: AppContext, projectId: string, outline: Outline,
         `      objectives: ${s.objectives.join('; ').slice(0, 300) || '-'}`,
         md === undefined ? '' : `      headings: ${headingLines(md).slice(0, DIGEST_LINES).join(' ; ') || '-'}`,
         md === undefined ? '' : `      statements: ${labelLines(md).slice(0, DIGEST_LINES * 2).join(' ; ') || '-'}`,
+        md === undefined ? '' : `      used by: ${usedBy(s.id).join(' ; ') || '-'}`,
       ].filter(Boolean);
       return [head, ...more].join('\n');
     });
@@ -151,7 +164,10 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
   // edits made while the planner works.
   const texts = new Map<string, string>();
   const seen = new Map<string, string>();
-  for (const c of current.outline.chapters) for (const s of c.sections) { const h = headRevision(ctx, projectId, s.id); if (h) { texts.set(s.id, h.markdown); seen.set(s.id, h.id); } }
+  for (const c of current.outline.chapters) for (const id of [c.id, ...c.sections.map((s) => s.id)]) {
+    const h = headRevision(ctx, projectId, id);
+    if (h) { texts.set(id, h.markdown); seen.set(id, h.id); }
+  }
   t.progress('Reading the book against the program');
   const { data, route } = await runRole(ctx, {
     role: 'planner',
@@ -159,7 +175,10 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
     schema: alignSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const { coverage, findings } = validateAlignment(data, { program: program.items, outline: current.outline, texts, guides: guideFindings(ctx, projectId, current.outline) });
-  const named = [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
+  // A report that removes a whole section also depends on every other section, because a reference added later would
+  // make that section a prerequisite; the other reports only on the sections they name.
+  const removes = findings.some((f) => f.kind === 'off-program' && f.whole);
+  const named = removes ? current.outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]) : [...new Set(findings.flatMap((f) => ('nodeId' in f ? [f.nodeId] : [])))];
   const heads = Object.fromEntries(named.map((id) => [id, seen.get(id) ?? null]));
   const report = insertReport(ctx, { projectId, outlineRevId: current.revId, coverage, findings, model: route.model, inputs: { program: programFingerprint(program), heads } });
   const count = (kind: AlignmentFinding['kind']) => findings.filter((f) => f.kind === kind).length;
@@ -226,18 +245,29 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   const inserted = new Map<string, number>();
   let changed = false;
 
-  // Text that other parts of the book rely on: the formulas a section defines, links to it.
+  // What still holds a section back: exercises that point at it, or being the only section of its chapter. Links from other
+  // sections and their uses of its formulas are rewritten as plain text when it goes (the check only calls a section
+  // off-program when the rest of the book does not need it).
   const heads = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
   const questions = ctx.db.all<{ t: string }>(`SELECT statement || ' ' || hint || ' ' || solution AS t FROM questions WHERE project_id = ?`, projectId).map((r) => r.t);
+  const ownFormulas = (nodeId: string) => formulaKeyLabels(heads.find((h) => h.node_id === nodeId)?.markdown ?? '');
+  const refersTo = (md: string, nodeId: string) => md.includes(`ref:section/${nodeId})`) || ownFormulas(nodeId).some((f) => md.includes(`formula:@${f.key}}}`) || md.includes(`ref:formula/@${f.key})`));
   const removalBlocker = (nodeId: string): string | null => {
-    const others = [...heads.filter((h) => h.node_id !== nodeId).map((h) => h.markdown), ...questions];
-    if (others.some((x) => x.includes(`ref:section/${nodeId}`))) return 'other parts of the book link to it';
-    const own = heads.find((h) => h.node_id === nodeId)?.markdown ?? '';
-    const used = formulaKeys(own).find((k) => others.some((x) => x.includes(`formula:@${k}}}`)));
-    if (used) return `other parts of the book use its formula "${used}"`;
+    if (questions.some((x) => refersTo(x, nodeId))) return 'exercises of the book refer to it';
     const chapter = chapterOf(nodeId);
     if (chapter && !chapter.sections.some((s) => s.id !== nodeId && s.role === 'content')) return 'it is the only section of its chapter';
     return null;
+  };
+  /** Rewrites the links and formula references other sections make to a removed section; returns how many sections changed. */
+  const unreference = (nodeId: string) => {
+    const formulas = ownFormulas(nodeId);
+    // Only text still in the book: a section removed earlier keeps its text as it was, for Put back.
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+    // A formula key that a section still in the book also defines keeps its references.
+    const kept = new Set(heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    const gone = formulas.filter((f) => !kept.has(f.key));
+    return heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id) && refersTo(h.markdown, nodeId))
+      .filter((h) => repairHead(ctx, projectId, h.node_id, (md) => dropReferences(md, nodeId, gone))).length;
   };
 
   /** An open program issue on a written section, reused when a repeat asks the same; the suggestion names the item, so two items never share one. */
@@ -323,7 +353,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
               removed.push({ nodeId: section.id, title: section.title, chapterId: found.chapter.id, afterSectionId: found.chapter.sections[found.sectionIndex - 1]?.id ?? null, restoredAt: null });
               found.chapter.sections.splice(found.sectionIndex, 1);
               changed = true;
-              lines.push(`Removed the section ${q(section.title)}: it is outside the course program. Its text is kept, and Put back restores it.`);
+              const rewritten = unreference(section.id);
+              lines.push(`Removed the section ${q(section.title)}: it is outside the course program and the rest of the book does not need it. Its text is kept, and Put back restores it.${rewritten ? ` Links and formula references to it in ${rewritten} other section${rewritten > 1 ? 's' : ''} became plain text.` : ''}`);
               break;
             }
             if (!head) { lines.push(`Left the section ${q(section.title)} as it is: it has no text to mark${why ? ` and ${why}` : ''}.`); break; }
@@ -414,6 +445,18 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     chapter.sections.splice(at, 0, section);
     const rev = saveOutline(ctx, projectId, { outline, baseRevId: null, origin: 'human', note: `restore:${reportId}:${nodeId}`, check: false });
     approveOutline(ctx, projectId, rev.id);
+    // The restored text may point at sections that are still out of the book (removed with it, or later): those links and
+    // formula references become plain text in a new revision; the stored one stays in the history.
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((x) => x.id)]));
+    const all = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
+    const kept = new Set(all.filter((h) => inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    const outside = all.filter((h) => !inBook.has(h.node_id));
+    repairHead(ctx, projectId, nodeId, (md) => {
+      const withFormulas = outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown).filter((f) => !kept.has(f.key))), md);
+      // Links to any other id outside the book too, written or not.
+      const missing = [...new Set([...withFormulas.matchAll(/\]\(ref:section\/([^)\s]+)\)/g)].map((m) => m[1]))].filter((id) => !inBook.has(id));
+      return missing.reduce((text, id) => dropReferences(text, id, []), withFormulas);
+    });
     const removed = report.removed.map((r) => (r.nodeId === nodeId ? { ...r, restoredAt: now() } : r));
     ctx.db.run('UPDATE alignment_reports SET removed = ? WHERE id = ?', JSON.stringify(removed), reportId);
     ctx.events.emit('outline.created', { revId: rev.id, origin: 'human', restore: nodeId }, { projectId });

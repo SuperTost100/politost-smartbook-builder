@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { applyGuardedChanges, dropReferences, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -86,4 +86,10 @@ test('section links to an unknown id are pointed at the node they mean, or becom
     'e [giusto](ref:section/ab4a5b0e-7d31-4742-b8ee-ebcf244154f2).',
   ].join(' '));
   assert.equal(repairSectionRefs('$]a,b[$; vedi [teorema](ref:section/missing)', nodes), '$]a,b[$; vedi teorema');
+});
+
+test('references to a removed section become plain text: its links keep the label, its formulas become their name', () => {
+  const md = 'Vedi [la sezione](ref:section/s2), la {{formula:@decadimento}} e [questa legge](ref:formula/@decadimento). Resta [altro](ref:section/s9) e {{formula:@altra}}.';
+  assert.equal(dropReferences(md, 's2', [{ key: 'decadimento', label: 'Legge del decadimento radioattivo' }]),
+    'Vedi la sezione, la legge del decadimento radioattivo e questa legge. Resta [altro](ref:section/s9) e {{formula:@altra}}.');
 });

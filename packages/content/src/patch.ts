@@ -125,3 +125,18 @@ export function repairSectionRefs(markdown: string, nodes: { id: string; slug?: 
     return target ? `[${label}](ref:section/${target})` : label;
   });
 }
+
+/**
+ * Removes the references a removed section leaves behind: links to it keep their label as plain text, and references to
+ * the formulas it defined become the formula's name (first letter lower case, as it sits inside a sentence).
+ */
+export function dropReferences(markdown: string, nodeId: string, formulas: { key: string; label: string }[]): string {
+  const name = (key: string) => {
+    const label = formulas.find((f) => f.key === key)?.label;
+    return label ? label.charAt(0).toLowerCase() + label.slice(1) : null;
+  };
+  return markdown
+    .replace(/\[([^[\]]*)\]\(ref:section\/([^)\s]+)\)/g, (full, label: string, id: string) => (id === nodeId ? label : full))
+    .replace(/\[([^[\]]*)\]\(ref:formula\/@([^)\s]+)\)/g, (full, label: string, key: string) => (name(key) ? label : full))
+    .replace(/\{\{formula:@([^}\s]+)\}\}/g, (full, key: string) => name(key) ?? full);
+}
