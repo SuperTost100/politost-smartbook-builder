@@ -598,7 +598,7 @@ describe('Align book', () => {
     const after = getReport(ctx, P, report.id);
     assert.ok(after.appliedAt);
     assert.deepEqual(after.applied, [
-      'Removed the section "Cenni di topologia": it is outside the course program. Its text is kept, and Put back restores it.',
+      'Removed the section "Cenni di topologia": it is outside the course program and the rest of the book does not need it. Its text is kept, and Put back restores it.',
       'Added the section "Serie numeriche" to chapter "Capitolo 2" for the program item "Serie".',
       'Added the exam guide "Come viene chiesto all\'esame" to the end of chapter "Capitolo 1".',
       'Asked the fixer to teach "Limiti" in more depth in "Titolo s1".',
@@ -751,25 +751,28 @@ describe('Align book', () => {
     assert.ok(head('s2')!.markdown.startsWith('*This section goes beyond the course program: it is not asked at the exam.*\n\n'));
   });
 
-  test('delete falls back to marking when another section uses its formula, links to it, or it is the only section of its chapter', async () => {
+  test('delete removes a section that others link to or take formulas from, rewriting those references as plain text', async () => {
     const { revId } = book();
-    // s3 uses the formula k-topo that s2 defines.
-    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi {{formula:@k-topo}}.' WHERE node_id = 's3'`);
+    // s3 uses the formula k-topo that s2 defines, and links to s2.
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Derivate. Vedi {{formula:@k-topo}} e [la topologia](ref:section/s2).' WHERE node_id = 's3'`);
+    const report = reportOf(revId, [offWhole('s2')]);
+    await apply(report.id);
+    assert.deepEqual(approved().chapters[0].sections.map((s) => s.id).filter((id) => id.startsWith('s')), ['s1']);
+    assert.equal(head('s3')!.markdown, 'Derivate. Vedi aperti e la topologia.');
+    assert.equal(head('s3')!.origin, 'repair');
+    assert.match(getReport(ctx, P, report.id).applied[0], /Links and formula references to it in 1 other section became plain text/);
+  });
+
+  test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
+    const { revId } = book();
+    ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });
     const report = reportOf(revId, [offWhole('s2'), offWhole('s3')]);
     await apply(report.id);
     assert.equal(outlineRevisions().length, 1, 'neither section was removed');
     assert.ok(head('s2')!.markdown.startsWith(MARK_IT));
     const [first, second] = getReport(ctx, P, report.id).applied;
-    assert.equal(first, 'Kept the section "Cenni di topologia" instead of removing it, because other parts of the book use its formula "k-topo". Marked "Cenni di topologia" as beyond the program.');
+    assert.match(first, /Kept the section "Cenni di topologia" instead of removing it, because exercises of the book refer to it/);
     assert.match(second, /Kept the section "Titolo s3" instead of removing it, because it is the only section of its chapter/);
-
-    // A link to the section is enough too.
-    const link = reportOf(revId, [offWhole('s1')]);
-    ctx.db.run(`UPDATE content_revisions SET markdown = 'Vedi [i limiti](ref:section/s1).' WHERE node_id = 's3' AND status = 'current'`);
-    const t = startTask('program.apply', { reportId: link.id, findings: [] }, 'align');
-    await alignApply(ctx, t);
-    assert.match(getReport(ctx, P, link.id).applied[0], /because other parts of the book link to it/);
-    assert.equal(outlineRevisions().length, 1);
   });
 
   test('a passage is an issue whose fix removes it (delete) or adds the note before it (mark); a repeated report reuses the open issue', async () => {

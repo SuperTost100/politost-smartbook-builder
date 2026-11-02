@@ -261,7 +261,7 @@ export function AlignmentPanel({ pid }: { pid: string }) {
               {wholeOff > 0 && <li>{offProgram === 'delete' ? <><strong>Removes {plural(wholeOff, 'section')}</strong> from the outline.</> : <>Keeps {plural(wholeOff, 'off-program section')} and puts a note at the top of {wholeOff === 1 ? 'it' : 'each'}.</>}</li>}
               {partOff > 0 && <li>{offProgram === 'delete' ? `Cuts ${plural(partOff, 'off-program passage')} from the text.` : `Adds a note before ${plural(partOff, 'off-program passage')}.`}</li>}
             </ul>
-            <p>The new outline is saved and approved as a new revision. {offProgram === 'delete' && wholeOff > 0 ? 'Removed sections keep their text, and Put back returns each one to where it was. A section that other sections link to or take formulas from is kept with a note instead, and the result says so.' : 'The earlier outline stays in the history.'}</p>
+            <p>The new outline is saved and approved as a new revision. {offProgram === 'delete' && wholeOff > 0 ? 'Removed sections keep their text, and Put back returns each one to where it was. Links and formula references to them in other sections become plain text. A section that exercises refer to, or the only section of a chapter, is kept with a note instead, and the result says so.' : 'The earlier outline stays in the history.'}</p>
           </div>
         }
         confirmLabel="Align book"

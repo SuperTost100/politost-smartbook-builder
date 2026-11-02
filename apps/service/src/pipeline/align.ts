@@ -1,5 +1,5 @@
 // Alignment of a written book with the course program: a report (Check) and its deterministic application (Align book).
-import { quoteInBlock, splitBlocks } from '@smartbuilder/content';
+import { dropReferences, quoteInBlock, splitBlocks } from '@smartbuilder/content';
 import type { z } from 'zod';
 import { outlineSchema, type AlignmentFinding, type AlignmentReport, type Outline, type OutlineSection, type ProgramItem } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
@@ -12,7 +12,7 @@ import { HttpError } from '../server.ts';
 import { chapterExamStats, chaptersMissingGuide, examGuideSection, examSessionTotal } from './exam.ts';
 import { alignPrompt, alignSchema, examFormatText, programItemsText } from './prompts.ts';
 import { generateSpecs, regenerateSpecs } from './runs.ts';
-import { findSection, formulaKeys, headRevision, loadOutline, loadProject, loadTopics } from './util.ts';
+import { findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics } from './util.ts';
 
 type Raw = z.infer<typeof alignSchema>;
 
@@ -226,18 +226,24 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   const inserted = new Map<string, number>();
   let changed = false;
 
-  // Text that other parts of the book rely on: the formulas a section defines, links to it.
+  // What still holds a section back: exercises that point at it, or being the only section of its chapter. Links from other
+  // sections and their uses of its formulas are rewritten as plain text when it goes (the check only calls a section
+  // off-program when the rest of the book does not need it).
   const heads = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
   const questions = ctx.db.all<{ t: string }>(`SELECT statement || ' ' || hint || ' ' || solution AS t FROM questions WHERE project_id = ?`, projectId).map((r) => r.t);
+  const ownFormulas = (nodeId: string) => formulaKeyLabels(heads.find((h) => h.node_id === nodeId)?.markdown ?? '');
+  const refersTo = (md: string, nodeId: string) => md.includes(`ref:section/${nodeId}`) || ownFormulas(nodeId).some((f) => md.includes(`formula:@${f.key}}}`) || md.includes(`ref:formula/@${f.key})`));
   const removalBlocker = (nodeId: string): string | null => {
-    const others = [...heads.filter((h) => h.node_id !== nodeId).map((h) => h.markdown), ...questions];
-    if (others.some((x) => x.includes(`ref:section/${nodeId}`))) return 'other parts of the book link to it';
-    const own = heads.find((h) => h.node_id === nodeId)?.markdown ?? '';
-    const used = formulaKeys(own).find((k) => others.some((x) => x.includes(`formula:@${k}}}`)));
-    if (used) return `other parts of the book use its formula "${used}"`;
+    if (questions.some((x) => refersTo(x, nodeId))) return 'exercises of the book refer to it';
     const chapter = chapterOf(nodeId);
     if (chapter && !chapter.sections.some((s) => s.id !== nodeId && s.role === 'content')) return 'it is the only section of its chapter';
     return null;
+  };
+  /** Rewrites the links and formula references other sections make to a removed section; returns how many sections changed. */
+  const unreference = (nodeId: string) => {
+    const formulas = ownFormulas(nodeId);
+    return heads.filter((h) => h.node_id !== nodeId && refersTo(h.markdown, nodeId))
+      .filter((h) => repairHead(ctx, projectId, h.node_id, (md) => dropReferences(md, nodeId, formulas))).length;
   };
 
   /** An open program issue on a written section, reused when a repeat asks the same; the suggestion names the item, so two items never share one. */
@@ -323,7 +329,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
               removed.push({ nodeId: section.id, title: section.title, chapterId: found.chapter.id, afterSectionId: found.chapter.sections[found.sectionIndex - 1]?.id ?? null, restoredAt: null });
               found.chapter.sections.splice(found.sectionIndex, 1);
               changed = true;
-              lines.push(`Removed the section ${q(section.title)}: it is outside the course program. Its text is kept, and Put back restores it.`);
+              const rewritten = unreference(section.id);
+              lines.push(`Removed the section ${q(section.title)}: it is outside the course program and the rest of the book does not need it. Its text is kept, and Put back restores it.${rewritten ? ` Links and formula references to it in ${rewritten} other section${rewritten > 1 ? 's' : ''} became plain text.` : ''}`);
               break;
             }
             if (!head) { lines.push(`Left the section ${q(section.title)} as it is: it has no text to mark${why ? ` and ${why}` : ''}.`); break; }
