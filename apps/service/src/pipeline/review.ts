@@ -3,6 +3,7 @@ import { applyGuardedChanges, compileChapter, dropReferences, lintSection, quote
 import { outlineSchema } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
 import { issuesChanged } from '../repo/issues.ts';
+import { questionsChanged } from '../repo/questions.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -364,10 +365,22 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       if (applied && issues.some((i) => i.category === 'program-off')) {
         const left = new Set(formulaKeyLabels(text).map((f) => f.key));
         const gone = formulaKeyLabels(head.markdown).filter((f) => !left.has(f.key));
-        const elsewhere = new Set(bookFormulaKeys(ctx, projectId, nodeId).map((k) => k.key));
-        const lost = gone.filter((f) => !elsewhere.has(f.key));
+        // Only definitions still in the book count: a section Align book removed keeps its text for Put back.
         const inBook = new Set((loadOutline(ctx, projectId)?.outline.chapters ?? []).flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
-        if (lost.length) for (const other of inBook) if (other !== nodeId) repairHead(ctx, projectId, other, (md) => dropReferences(md, '', lost));
+        const elsewhere = new Set([...currentHeads(ctx, projectId)].filter(([id]) => id !== nodeId && inBook.has(id)).flatMap(([, h]) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+        const lost = gone.filter((f) => !elsewhere.has(f.key));
+        if (lost.length) {
+          for (const other of inBook) if (other !== nodeId) repairHead(ctx, projectId, other, (md) => dropReferences(md, '', lost));
+          // Generated exercises on a removed formula leave the book; other questions name it instead.
+          const uses = (t: string) => lost.some((f) => t.includes(`formula:@${f.key}}}`) || t.includes(`ref:formula/@${f.key})`));
+          const qs = ctx.db.all<{ id: string; origin: string; statement: string; hint: string; solution: string }>(`SELECT id, origin, statement, hint, solution FROM questions WHERE project_id = ? AND chapter_id IS NOT NULL`, projectId)
+            .filter((x) => uses(x.statement + x.hint + x.solution));
+          for (const x of qs) {
+            if (x.origin === 'generated') ctx.db.run('UPDATE questions SET chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ?', now(), x.id);
+            else ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, rev = rev + 1, updated_at = ? WHERE id = ?', dropReferences(x.statement, '', lost), dropReferences(x.hint, '', lost), dropReferences(x.solution, '', lost), now(), x.id);
+          }
+          if (qs.length) questionsChanged(ctx, projectId, qs.map((x) => x.id));
+        }
       }
       const done = new Set(answered.map((i) => i.id));
       if (answered.length) ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE id IN (${answered.map(() => '?').join(',')})`, applied ? 'fixed' : 'proposed', applied ? `Fixed by AI in revision ${committed.revId}` : `Proposal ${committed.revId}`, ...answered.map((i) => i.id));

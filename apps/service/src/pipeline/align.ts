@@ -254,8 +254,14 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   const questions = ctx.db.all<{ id: string; origin: string; t: string }>(`SELECT id, origin, statement || ' ' || hint || ' ' || solution AS t FROM questions WHERE project_id = ? AND chapter_id IS NOT NULL`, projectId);
   const ownFormulas = (nodeId: string) => formulaKeyLabels(heads.find((h) => h.node_id === nodeId)?.markdown ?? '');
   const refersTo = (md: string, nodeId: string) => md.includes(`ref:section/${nodeId})`) || ownFormulas(nodeId).some((f) => md.includes(`formula:@${f.key}}}`) || md.includes(`ref:formula/@${f.key})`));
+  /** A reference to the section itself, or to one of its formulas that no other section in the book defines. */
+  const pointsAt = (t: string, nodeId: string) => {
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+    const kept = new Set(heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
+    return t.includes(`ref:section/${nodeId})`) || ownFormulas(nodeId).filter((f) => !kept.has(f.key)).some((f) => t.includes(`formula:@${f.key}}}`) || t.includes(`ref:formula/@${f.key})`));
+  };
   const removalBlocker = (nodeId: string): string | null => {
-    if (questions.some((q) => q.origin !== 'generated' && refersTo(q.t, nodeId))) return 'exam questions or exercises from the sources or the author refer to it';
+    if (questions.some((q) => q.origin !== 'generated' && pointsAt(q.t, nodeId))) return 'exam questions or exercises from the sources or the author refer to it';
     const chapter = chapterOf(nodeId);
     if (chapter && !chapter.sections.some((s) => s.id !== nodeId && s.role === 'content')) return 'it is the only section of its chapter';
     return null;
@@ -263,12 +269,7 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
   /** Takes the generated exercises that point at a removed section out of the book, once each; returns how many. */
   const detached = new Set<string>();
   const dropExercises = (nodeId: string) => {
-    // A formula key another section in the book still defines is not a reference to this one.
-    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
-    const kept = new Set(heads.filter((h) => h.node_id !== nodeId && inBook.has(h.node_id)).flatMap((h) => formulaKeyLabels(h.markdown).map((f) => f.key)));
-    const own = ownFormulas(nodeId).filter((f) => !kept.has(f.key));
-    const points = (t: string) => t.includes(`ref:section/${nodeId})`) || own.some((f) => t.includes(`formula:@${f.key}}}`) || t.includes(`ref:formula/@${f.key})`));
-    const ids = questions.filter((q) => q.origin === 'generated' && !detached.has(q.id) && points(q.t)).map((q) => q.id);
+    const ids = questions.filter((q) => q.origin === 'generated' && !detached.has(q.id) && pointsAt(q.t, nodeId)).map((q) => q.id);
     for (const id of ids) detached.add(id);
     for (const id of ids) ctx.db.run('UPDATE questions SET chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ?', now(), id);
     questionsChanged(ctx, projectId, ids);
