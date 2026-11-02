@@ -396,6 +396,16 @@ test('brackets in math cannot be captured by a later link', async () => {
   assert.ok(!/\$[^$]*\[[^$]*\$/.test(ch.split('\n').find((l) => l.startsWith('Ad esempio'))!), ch);
 });
 
+test('display math is paired in order, fenced code is left alone, and optional arguments keep their brackets', async () => {
+  const { protectDisplayMathBrackets, protectMathBrackets } = await import('./compile.ts');
+  // A one-line block before a link must not pair its closing $$ with the next block's opening one.
+  assert.equal(protectDisplayMathBrackets('$$a$$\nVedi [S](ref:section/s2)\n$$\n[0,1[\n$$'), '$$a$$\nVedi [S](ref:section/s2)\n$$\n\\lbrack 0,1\\lbrack \n$$');
+  assert.equal(protectDisplayMathBrackets('```\n$$\n[1,2]\n$$\n```\n$$\n]0,1[\n$$'), '```\n$$\n[1,2]\n$$\n```\n$$\n\\rbrack 0,1\\lbrack \n$$');
+  assert.equal(protectDisplayMathBrackets('$$\\begin{aligned}\na &\\xrightarrow[n\\to\\infty]{} b \\\\[4pt]\nc &= \\sqrt[3]{x} \\in ]0,1[\n\\end{aligned}$$'),
+    '$$\\begin{aligned}\na &\\xrightarrow[n\\to\\infty]{} b \\\\[4pt]\nc &= \\sqrt[3]{x} \\in \\rbrack 0,1\\lbrack \n\\end{aligned}$$');
+  assert.equal(protectMathBrackets('$x \\xrightarrow[a]{b} y$ in $[2,3[$'), '$x \\xrightarrow[a]{b} y$ in $\\lbrack 2,3\\lbrack $');
+});
+
 test('brackets in display math over several lines cannot be captured by a later link either', async () => {
   const { compileBook } = await import('./compile.ts');
   const display = '$$\n\\{x \\in \\,]0,+\\infty[ \\, : \\log x \\ge 1\\} = [e, +\\infty[.\n$$';
