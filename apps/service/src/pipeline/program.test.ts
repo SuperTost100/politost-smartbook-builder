@@ -779,6 +779,17 @@ describe('Align book', () => {
     assert.equal(head('s9')!.markdown, 'Vedi [la topologia](ref:section/s2).');
   });
 
+  test('Put back turns links to sections that are still out of the book into plain text', async () => {
+    const { revId } = book();
+    // s1 links to s2 and uses its formula; both are removed, then only s1 comes back.
+    ctx.db.run(`UPDATE content_revisions SET markdown = 'Limiti. Vedi [la topologia](ref:section/s2) e {{formula:@k-topo}}.' WHERE node_id = 's1'`);
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections', json(?)) WHERE id = ?`, JSON.stringify(['s1', 's2', 'sc'].map((id) => section(id))), revId);
+    const report = reportOf(revId, [offWhole('s1'), offWhole('s2')]);
+    await apply(report.id);
+    restoreRemoved(ctx, P, report.id, 's1');
+    assert.equal(head('s1')!.markdown, 'Limiti. Vedi la topologia e aperti.');
+  });
+
   test('delete still marks a section that exercises refer to, or the only section of its chapter', async () => {
     const { revId } = book();
     ctx.db.insert('questions', { id: 'q-link', project_id: P, kind: 'exercise', origin: 'generated', exam_group: null, exam_date: null, number: null, statement: 'Vedi [qui](ref:section/s2).', hint: '', solution: 'x', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now() });

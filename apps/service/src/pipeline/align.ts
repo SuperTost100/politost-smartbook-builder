@@ -438,6 +438,12 @@ export function restoreRemoved(ctx: AppContext, projectId: string, reportId: str
     chapter.sections.splice(at, 0, section);
     const rev = saveOutline(ctx, projectId, { outline, baseRevId: null, origin: 'human', note: `restore:${reportId}:${nodeId}`, check: false });
     approveOutline(ctx, projectId, rev.id);
+    // The restored text may point at sections that are still out of the book (removed with it, or later): those links and
+    // formula references become plain text in a new revision; the stored one stays in the history.
+    const inBook = new Set(outline.chapters.flatMap((c) => [c.id, ...c.sections.map((x) => x.id)]));
+    const outside = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId)
+      .filter((h) => !inBook.has(h.node_id));
+    repairHead(ctx, projectId, nodeId, (md) => outside.reduce((text, h) => dropReferences(text, h.node_id, formulaKeyLabels(h.markdown)), md));
     const removed = report.removed.map((r) => (r.nodeId === nodeId ? { ...r, restoredAt: now() } : r));
     ctx.db.run('UPDATE alignment_reports SET removed = ? WHERE id = ?', JSON.stringify(removed), reportId);
     ctx.events.emit('outline.created', { revId: rev.id, origin: 'human', restore: nodeId }, { projectId });
