@@ -43,7 +43,7 @@ The Review tab lists lint findings, failed checks and reviewer issues, each poin
 **Fix** applies the fix to the text. Earlier versions stay in the section's history, so you can restore any of them. Before a fix is applied it passes these checks:
 
 - a change that would delete a heading, a formula or another special block, drop a formula key, leave a `:::` fence open, or break a formula is left out, and its issue stays open with the reason;
-- a change that adds a blocker or a major lint finding of any kind is reverted, even if it removes others;
+- a change that raises the count of blocker or major lint findings for any one rule is reverted, even if it lowers others (a change that swaps one finding for another of the same rule and severity passes this guard);
 - a cheap second model reads each change against the issue and drops any that adds an error or removes more than asked;
 - a fix that would remove more than a fifth of the text is not applied; it waits as a proposal in the Manuscript, and so does a fix for a section you edited while it ran.
 
@@ -57,7 +57,7 @@ Before this, every review re-read the whole chapter and reported a different han
 
 **Full review** reviews every section on its own call instead of the whole chapter at once, so fewer problems are missed. It costs about as much as 3 to 5 normal reviews; use it once, before the final export. It replaces the open review issues with what it finds.
 
-Fixes for review issues make the smallest edit that corrects the sentence. The check that decides whether a fix is applied rejects one that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with. Program issues (step 6) are the exception: a fix for a thin section or a missing proof may add the material it needs, and a fix for an off-program passage may delete whole subsections, formulas and boxes. When such a fix is applied directly, a formula it deletes becomes a plain name wherever other sections referred to it. Accepting the same fix as a proposal doesn't do this, so check those references yourself.
+Fixes for review issues make the smallest edit that corrects the sentence. The check that decides whether a fix is applied rejects one that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with. When that check can't run, the other guards decide alone and the limit isn't enforced. Program issues (step 6) are the exception: a fix for a thin section or a missing proof may add the material it needs, and a fix for an off-program passage may delete whole subsections, formulas and boxes. When such a fix is applied directly, a formula it deletes becomes a plain name wherever other sections referred to it. Accepting the same fix as a proposal doesn't do this, so check those references yourself.
 
 ## 6. Alignment with the program
 
