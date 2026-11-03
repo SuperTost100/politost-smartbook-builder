@@ -18,11 +18,11 @@ Once the book exists, open **Book setup**, paste the program from the PoliTo cou
 
 Under *What goes in the book*, *Sections outside the course program* sets what happens to material the program doesn't ask for when you align the book (step 6): **Remove off-program sections** (the default) or **Keep them with a note**.
 
-A book without a program works as before, with the exams alone deciding what to cover.
+A book without a program works as before: it covers the topics of its sources, and the exams decide how deep each one goes.
 
 ## 3. Outline
 
-**Generate outline** asks the planning model for a common index: chapters, sections, objectives, depth and the topics each section covers. With a program, every item goes in the section that teaches it or is listed as left out with a reason, and source topics outside the program are excluded. The exams then decide only the depth: topics in many sessions get *deep* sections and more exercises. Without a program, topics in no session keep a section and the baseline exercises unless you exclude them with a reason. Edit anything, then **Approve outline**. Drafting always uses the approved version.
+**Generate outline** asks the planning model for a common index: chapters, sections, objectives, depth and the topics each section covers. With a program, every item goes in the section that teaches it or is listed as left out with a reason, and source topics outside the program are excluded with a reason. A topic the program or the exams need as a prerequisite can stay as a short recap inside a related section, without a section of its own. The exams then decide only the depth: topics in many sessions get *deep* sections and more exercises. Without a program, topics in no session keep a section and the baseline exercises unless you exclude them with a reason. Edit anything, then **Approve outline**. Drafting always uses the approved version.
 
 ## 4. Drafting
 
@@ -67,10 +67,10 @@ This step is for books that already exist, including ones written before they ha
 
 | Group | What it lists | What **Align book** does |
 | --- | --- | --- |
-| Missing from the book | Program items no section teaches | Adds a section where the check suggests and writes it |
+| Missing from the book | Program items no section teaches | If a written section is planned for the item, opens a review issue and the fix teaches it there. If the planned section isn't written yet, writes it. Otherwise adds a section where the check suggests and writes it |
 | Too thin for the exam | Items taught more briefly than the exam needs | Opens a review issue, and the fix expands the section |
 | Proofs the exam asks | Proofs the exam asks that the section doesn't give | Opens a review issue, and the fix adds the proof |
-| Outside the program | Sections and passages the exam doesn't ask and the rest of the book doesn't need | Removes a section, or keeps it with a note, as Book setup says. A passage becomes a review issue, and its fix cuts it |
+| Outside the program | Sections and passages the exam doesn't ask and the rest of the book doesn't need | Removes a section, or keeps it with a note, as Book setup says. A passage becomes a review issue whose fix cuts it, or puts the note before it in keep mode |
 | Order | A section placed before one it depends on | Nothing: move the section in the outline yourself |
 | Exam guides | Chapters without "Come viene chiesto all'esame" | Adds the guide and writes it from the exam questions |
 
@@ -78,7 +78,7 @@ Ids, keys and quotes in the report that don't match the book are dropped. A new 
 
 A section needed to understand the in-program parts counts as needed, even when it is outside the program. When a removed section was linked from other sections or they used its formulas, those links become their plain label and the formula references become the formula's name. Generated exercises about a removed section leave the book with it. A past exam question still in the book keeps its section, which is then kept with a note, and so is a chapter's only section.
 
-Removing a section only writes a new outline revision, so its text stays in the database. The report lists every removed section with a **Put back** button that returns it to where it was. The links that became plain text don't come back with it.
+Removing a section writes a new outline revision, rewrites the links and formula references in other sections and takes the generated exercises out of the book, as described above. The section's own text stays in the database, and the report lists every removed section with a **Put back** button that returns it to where it was. The links that became plain text and the detached exercises don't come back with it.
 
 ## 7. Export
 
