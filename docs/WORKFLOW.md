@@ -14,7 +14,7 @@ Add notes, textbooks, exercise collections and past exams, and mark each as Theo
 
 ## 2. Course program
 
-Once the book exists, open **Book setup**, paste the program from the PoliTo course guide or give the guide's address, then press **Read program**. The planning model turns it into a list of items, each with its title, the program's own wording and whether the exam asks its proof, plus the exam format (written, oral, which proofs). Include the "Modalità d'esame" part when the guide has it, because it decides how much weight proofs get. You can edit every item, and reading the program again keeps the item keys, so the outline's references to them still work.
+Once the book exists, open **Book setup**, paste the program from the PoliTo course guide or give the guide's address, then press **Read program**. The planning model turns it into a list of items, each with its title, the program's own wording and whether the exam asks its proof, plus the exam format (written, oral, which proofs). Include the "Modalità d'esame" part when the guide has it, because it decides how much weight proofs get. You can edit every item, and reading the program again keeps the key of every item whose title stays the same, so the outline's references to it still work. An item whose title changes gets a new key.
 
 Under *What goes in the book*, *Sections outside the course program* sets what happens to material the program doesn't ask for when you align the book (step 6): **Remove off-program sections** (the default) or **Keep them with a note**.
 
@@ -22,7 +22,7 @@ A book without a program works as before: it covers the topics of its sources, a
 
 ## 3. Outline
 
-**Generate outline** asks the planning model for a common index: chapters, sections, objectives, depth and the topics each section covers. With a program, every item goes in the section that teaches it or is listed as left out with a reason, and source topics outside the program are excluded with a reason. A topic the program or the exams need as a prerequisite can stay as a short recap inside a related section, without a section of its own. The exams then decide only the depth: topics in many sessions get *deep* sections and more exercises. Without a program, topics in no session keep a section and the baseline exercises unless you exclude them with a reason. Edit anything, then **Approve outline**. Drafting always uses the approved version.
+**Generate outline** asks the planning model for a common index: chapters, sections, objectives, depth and the topics each section covers. With a program, every item goes in the section or sections that teach it or is listed as left out with a reason, and source topics outside the program are excluded with a reason. A topic the program or the exams need as a prerequisite can stay as a short recap inside a related section, without a section of its own. The exams then decide only the depth: topics in many sessions get *deep* sections and more exercises. Without a program, topics in no session keep a section and the baseline exercises unless you exclude them with a reason. Edit anything, then **Approve outline**. Drafting always uses the approved version.
 
 ## 4. Drafting
 
@@ -57,7 +57,7 @@ Before this, every review re-read the whole chapter and reported a different han
 
 **Full review** reviews every section on its own call instead of the whole chapter at once, so fewer problems are missed. It costs about as much as 3 to 5 normal reviews; use it once, before the final export. It replaces the open review issues with what it finds.
 
-Fixes for review issues make the smallest edit that corrects the sentence. The check that decides whether a fix is applied rejects one that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with. Program issues (step 6) are the exception: a fix for a thin section or a missing proof may add the material it needs, and a fix for an off-program passage may delete whole subsections, formulas and boxes. A formula it deletes becomes a plain name wherever other sections referred to it.
+Fixes for review issues make the smallest edit that corrects the sentence. The check that decides whether a fix is applied rejects one that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with. Program issues (step 6) are the exception: a fix for a thin section or a missing proof may add the material it needs, and a fix for an off-program passage may delete whole subsections, formulas and boxes. When such a fix is applied directly, a formula it deletes becomes a plain name wherever other sections referred to it. Accepting the same fix as a proposal doesn't do this, so check those references yourself.
 
 ## 6. Alignment with the program
 
