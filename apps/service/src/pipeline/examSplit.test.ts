@@ -9,6 +9,7 @@ import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } fro
 import type { TaskContext } from '../queue/queue.ts';
 import { listResources, updateResource } from '../repo/index.ts';
 import { installFakes, projectBody, startApp, type TestApp } from '../routes/testkit.ts';
+import { splitExams } from '../extract/segment.ts';
 import { buildAiSplit, resourceSplit, splitMessage, type ExamSplitAnswer } from './examSplit.ts';
 import { resourceQuestions } from './prepare.ts';
 import { startRun } from './runs.ts';
@@ -273,5 +274,104 @@ describe('API', () => {
     t.ctx.db.insert('questions', { id: newId(), project_id: projectId, kind: 'exam', origin: 'authentic', resource_id: 'r-exams', exam_group: 'S', number: '1', statement: 'x', topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
     assert.equal((await t.req('POST', '/api/resources/r-exams/split')).body.error.code, 'questions_in_use');
     assert.equal(fakes.calls.startRun.length, 0);
+  });
+});
+
+describe('review findings on the AI split', () => {
+  const one = (title = 'Sessione') => ({ sessions: [{ title, date: null, page: 1, start: 'Sessione', exercises: [{ number: '1', page: 1, start: 'Esercizio 1' }, { number: '2', page: 1, start: 'Esercizio 2' }] }] }) as ExamSplitAnswer;
+
+  test('1. a question the author edits while the model call is pending is not replaced', async () => {
+    resource('ex1', 'exams', ['Sessione\nEsercizio 1\nUno.\nEsercizio 2\nDue.']);
+    await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'ex1' }));
+    const ids = questionRows('ex1').map((q) => q.id);
+    fake.next(() => {
+      ctx.db.run(`UPDATE questions SET statement = 'Testo scritto dall''autore', edited_at = ? WHERE resource_id = 'ex1' AND number = '1'`, now());
+      return { structured: one() as never, text: '', usage: usageOf(10, 10) };
+    });
+    const out = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' })) as Record<string, unknown>;
+    assert.equal(out.applied, false);
+    assert.match(String(out.reason), /edited or checked already/);
+    const after = questionRows('ex1');
+    assert.deepEqual(after.map((q) => q.id), ids, 'the same rows, none replaced');
+    assert.equal(after[0].statement, 'Testo scritto dall\'autore');
+  });
+
+  test('2. the model sees every exercise line of a layout the rules do not know, and the page cap is stated', async () => {
+    const ten = Array.from({ length: 10 }, (_, i) => `Es. ${i + 1} Calcolare la grandezza numero ${i + 1} del circuito in figura.\nSi usi il metodo dei nodi.`);
+    const many = Array.from({ length: 40 }, (_, i) => `Problema ${i + 1}`);
+    resource('ex1', 'exams', [['Prova di Circuiti', 'Gruppo 1', 'Corso 2024', ...ten].join('\n'), many.join('\n')]);
+    fake.next(answer({ sessions: [] }));
+    await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' }));
+    const prompt = String(fake.calls[0].prompt);
+    for (let i = 1; i <= 10; i++) assert.ok(prompt.includes(`Es. ${i} Calcolare`), `Es. ${i} is shown`);
+    const page2 = prompt.slice(prompt.indexOf('page 2:')).split('\n').filter((l) => l.startsWith('  '));
+    assert.ok(page2.length > 20 && page2.length <= 25, `page 2 shows ${page2.length} lines`);
+    assert.match(prompt, /at most 25 lines per page/);
+  });
+
+  test('4. a copy split by the AI path is stored once next to the same paper split by the rules', async () => {
+    resource('a', 'exams', ['Appello del 12/02/2024\nProblema 1\nUno.\nProblema 2\nDue.'], { filename: 'a.pdf' });
+    resource('b', 'exams', ['Appello del 12 febbraio 2024\nEs. 1 Uno.\nEs. 2 Due.'], { filename: 'b.pdf' });
+    await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'a' }));
+    fake.next(answer({ sessions: [{ title: 'Appello del 12 febbraio 2024', date: '2024-02-12', page: 1, start: 'Appello del 12 febbraio 2024', exercises: [
+      { number: '1', page: 1, start: 'Es. 1 Uno' }, { number: '2', page: 1, start: 'Es. 2 Due' }] }] }));
+    const out = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'b' })) as Record<string, unknown>;
+    assert.equal(out.questions, 0);
+    assert.equal(out.duplicates, 2);
+    assert.equal(ctx.db.get<{ n: number }>(`SELECT COUNT(DISTINCT exam_group) AS n FROM questions WHERE project_id = ?`, P)!.n, 1);
+  });
+
+  test('4. the name keeps the word of the heading and the turn printed after the date', () => {
+    const pages = [{ idx: 0, text: 'Esame del 12 febbraio 2024 - Turno A\nEsercizio 1 Uno' }, { idx: 1, text: 'Compito del 3 marzo 2024\nEsercizio 1 Due' }, { idx: 2, text: 'Prova di Fisica\nEsercizio 1 Tre' }];
+    const out = buildAiSplit('r', pages, { sessions: [
+      { title: 'Esame del 12 febbraio 2024 - Turno A', date: '2024-02-12', page: 1, start: 'Esame del 12 febbraio 2024', exercises: [{ number: '1', page: 1, start: 'Esercizio 1 Uno' }] },
+      { title: 'Compito del 3 marzo 2024', date: '2024-03-03', page: 2, start: 'Compito del 3 marzo 2024', exercises: [{ number: '1', page: 2, start: 'Esercizio 1 Due' }] },
+      { title: 'Prova di Fisica', date: '2024-04-05', page: 3, start: 'Prova di Fisica', exercises: [{ number: '1', page: 3, start: 'Esercizio 1 Tre' }] },
+    ] }, 'file');
+    assert.ok('rows' in out);
+    assert.deepEqual(out.rows.map((r) => r.examGroup), ['Esame del 12 febbraio 2024 - Turno A', 'Compito del 3 marzo 2024', 'Esame del 5 aprile 2024']);
+    // The rules read the first heading to the same name.
+    const rules = splitExams('r', pages, {}).rows;
+    assert.equal(rules[0].examGroup, 'Esame del 12 febbraio 2024 - Turno A');
+    assert.equal(rules[1].examGroup, 'Compito del 3 marzo 2024');
+  });
+
+  test('6. the official solutions printed after the exercises reach every exercise of the session', async () => {
+    resource('ex1', 'exams', [
+      'Prova di Circuiti\nEs. 1 Un resistore.\nCalcolare I.\nEs. 2 Un condensatore.\nCalcolare tau.',
+      'Soluzioni\nEs. 1 I = 1 A.\nSi applica la legge di Ohm.\nEs. 2 tau = RC.',
+    ], { filename: 'esami-2024.pdf' });
+    const good = { sessions: [{ title: 'Prova di Circuiti', date: null, page: 1, start: 'Prova di Circuiti', exercises: [
+      { number: '1', page: 1, start: 'Es. 1 Un resistore', solution: { page: 2, start: 'Es. 1 I = 1 A' } },
+      { number: '2', page: 1, start: 'Es. 2 Un condensatore', solution: { page: 2, start: 'Es. 2 tau = RC' } }] }] };
+    fake.next(answer(good));
+    const out = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' })) as Record<string, unknown>;
+    assert.equal(out.applied, true);
+    const rows = ctx.db.all<Record<string, any>>(`SELECT number, statement, solution, page_from, page_to FROM questions WHERE resource_id = 'ex1' ORDER BY rowid`);
+    assert.deepEqual(rows.map((r) => [r.number, r.page_from, r.page_to]), [['1', 0, 1], ['2', 0, 1]], 'both ranges reach the solution page');
+    assert.equal(rows[0].statement, 'Es. 1 Un resistore.\nCalcolare I.');
+    assert.equal(rows[1].statement, 'Es. 2 Un condensatore.\nCalcolare tau.', 'the "Soluzioni" line is not part of the statement');
+    assert.equal(rows[0].solution, 'Es. 1 I = 1 A.\nSi applica la legge di Ohm.');
+    assert.equal(rows[1].solution, 'Es. 2 tau = RC.');
+    // A solution quoted from a line that is not on its page is refused like any other boundary.
+    const bad = structuredClone(good);
+    bad.sessions[0].exercises[0].solution = { page: 2, start: 'Es. 9 inventato' };
+    fake.next(answer(bad));
+    const refused = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' })) as Record<string, unknown>;
+    assert.equal(refused.applied, false);
+    assert.match(String(refused.reason), /solution/i);
+  });
+});
+
+describe('a split asked for while Prepare runs', () => {
+  test('3. it is refused with a clear message, and a Prepare run without it still starts', async () => {
+    resource('ex1', 'exams', ES_LAYOUT);
+    const run = startRun(ctx, P, 'prepare');
+    assert.throws(() => startRun(ctx, P, 'prepare', { splitResourceId: 'ex1' }), (e: any) => e.status === 409 && e.code === 'prepare_running' && /Prepare is running\. Split this file when it has finished\./.test(e.message));
+    assert.equal(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM tasks WHERE run_id = ? AND kind = 'resource.split'`, run.id)!.n, 0);
+    ctx.db.run(`UPDATE runs SET status = 'cancelled'`);
+    assert.doesNotThrow(() => startRun(ctx, P, 'prepare', { splitResourceId: 'ex1' }));
+    ctx.db.run(`UPDATE runs SET status = 'cancelled'`);
+    await new Promise((r) => setImmediate(r));
   });
 });

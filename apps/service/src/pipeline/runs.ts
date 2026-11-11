@@ -124,6 +124,8 @@ function prepareRun(ctx: AppContext, projectId: string, splitResourceId?: string
   const resources = ctx.db.all<{ id: string; filename: string; role: string }>(`SELECT id, filename, role FROM resources WHERE project_id = ? AND included = 1 ORDER BY created_at`, projectId);
   if (!resources.length) throw new HttpError(409, 'no_sources', 'This book has no sources yet.', 'Add sources first.');
   if (splitResourceId && !resources.some((r) => r.id === splitResourceId && r.role === 'exams')) throw new HttpError(409, 'not_an_exam', 'Only an included source marked as Exams can be split this way.', 'Mark the source as Exams and include it in the book, then try again.');
+  // The topic map of a running Prepare keeps its key, so it would not wait for a split added now and could classify the old questions.
+  if (splitResourceId && activeRun(ctx, projectId, 'prepare')) throw new HttpError(409, 'prepare_running', 'Prepare is running. Split this file when it has finished.', 'Wait for the run to finish, or open it from the Run panel.');
   const specs: TaskSpec[] = [];
   for (const r of resources) {
     specs.push({ kind: 'resource.extract', key: `extract:${r.id}`, label: `Read ${r.filename}`, input: { resourceId: r.id } });

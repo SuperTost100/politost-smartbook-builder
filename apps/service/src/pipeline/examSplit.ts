@@ -3,7 +3,7 @@ import { z } from 'zod';
 import type { SplitWarning } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { findDate, joinLines, sessionKey, type QuestionRow } from '../extract/segment.ts';
+import { findDate, isSolutionMarker, joinLines, sessionName, type QuestionRow } from '../extract/segment.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { questionsChanged } from '../repo/questions.ts';
@@ -58,12 +58,16 @@ export function splitResult(ctx: AppContext, resourceId: string): Record<string,
 /**
  * Replaces the authentic questions of a file with `rows`. A session already stored from another file is not stored twice
  * (the same session can appear in two yearly files). The regex splitter and the AI split both store through here.
+ * With `keepWorkedOn` nothing is replaced when a question of the file was edited or checked, which is tested inside the
+ * same transaction as the replacement so an edit made while a model call was pending is not lost.
  */
-export function storeAuthenticQuestions(ctx: AppContext, projectId: string, resourceId: string, rows: QuestionRow[]) {
+export function storeAuthenticQuestions(ctx: AppContext, projectId: string, resourceId: string, rows: QuestionRow[], opts: { keepWorkedOn?: boolean } = {}) {
   let inserted = 0;
   let duplicates = 0;
+  let refused = false;
   const insertedIds: string[] = [];
   ctx.db.tx(() => {
+    if (opts.keepWorkedOn && workedOnQuestions(ctx, resourceId)) { refused = true; return; }
     ctx.db.run(`DELETE FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
     for (const q of rows) {
       const dup = q.kind === 'exam' && q.examDate && q.number
@@ -82,7 +86,7 @@ export function storeAuthenticQuestions(ctx: AppContext, projectId: string, reso
     }
   });
   questionsChanged(ctx, projectId, insertedIds);
-  return { inserted, duplicates };
+  return { inserted, duplicates, refused };
 }
 
 /** Questions of a file that the author or a later step already worked on: replacing them would lose that work. */
@@ -92,6 +96,8 @@ export function workedOnQuestions(ctx: AppContext, resourceId: string): number {
 }
 
 // ---------- split with AI ----------
+
+const WORKED_ON = 'Some of its questions were edited or checked already, and the new split would replace them.';
 
 /** One call reads the whole file, so a longer one has to be cut into smaller files first. */
 export const AI_SPLIT_MAX_PAGES = 300;
@@ -106,6 +112,10 @@ export const examSplitSchema = z.object({
       number: z.string().describe('the number or letter as printed, for example "1" or "A"'),
       page: z.number().int().min(1).describe('1-based page where the exercise starts'),
       start: z.string().describe('the first line of the exercise, copied exactly from the text'),
+      solution: z.object({
+        page: z.number().int().min(1).describe('1-based page where the official solution of this exercise starts'),
+        start: z.string().describe('the first line of that solution, copied exactly from the text'),
+      }).nullable().optional().describe('where the official solution of this exercise is printed, null when the paper has none'),
     })),
   })),
 });
@@ -115,31 +125,40 @@ export function examSplitPrompt(p: { filename: string; heads: string }) {
   return {
     system: 'You find where each exam paper and each exercise starts in a document made of past exam papers. Copy the starting lines exactly as they appear in the text you are given.',
     prompt: `Document: ${p.filename}
-A selection of the lines of each page: the first lines and the lines that look like headings ("page N:" is 1-based).
+A selection of the lines of each page ("page N:" is 1-based): the first ${PAGE_HEAD_FIRST} lines, then the lines that start with a word and a number or a letter ("Es. 2", "Problema 3", "Parte B"), start with a number, or contain a date, at most ${PAGE_HEAD_MAX} lines per page.
 ${p.heads}
 
 A session is one exam paper, the exam of one day. A paper with versions A and B of the same day is one session. List the sessions in page order. For each session give its title, its date as YYYY-MM-DD when the paper prints one, the page where it starts, the line where it starts, and its exercises in order.
 An exercise is an exercise, problem or question ("Esercizio", "Problema", "Quesito", "Domanda", "Parte"). Give its number or letter as printed, the page where it starts and its first line.
-Sub-questions a), b), c) belong to their exercise: do not list them. Solutions that follow a paper are not exercises: do not list them. Quote only lines that appear in the text above.`,
+Sub-questions a), b), c) belong to their exercise: do not list them. Solutions that follow a paper are not exercises: do not list them as exercises. When the paper prints official solutions (a section headed "Soluzione", "Soluzioni", "Svolgimento"), give for each exercise the page and the first line of its solution, and null when it has none. Quote only lines that appear in the text above.`,
   };
 }
 
 interface Line { page: number; text: string }
 
+/** Lines of a page shown to the model: the first ones, then heading-like lines, at most `PAGE_HEAD_MAX` in all. */
+const PAGE_HEAD_FIRST = 3;
+const PAGE_HEAD_MAX = 25;
+
 const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
-/** The lines of a page the model is shown: the first three, and up to six more that look like headings ("Problema 2", "Parte B"). */
+/**
+ * The lines of a page the model is shown: the first ones, and the lines that look like a heading in any course's style:
+ * a word, with or without a full stop, then a number, roman numeral or letter ("Es. 2", "Problema 3", "Parte B"); a line that
+ * starts with a number; or a line with a date. Sub-questions "a)" do not match, so they do not use up the cap.
+ * shortcut: a heading that starts with none of these shapes is not shown, upgrade when a real paper needs another shape.
+ */
 function pageHeads(text: string): string[] {
   const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
-  const heading = (l: string) => l.length <= 80 && /^(?:[\p{L}'’]+\s+){1,3}(?:\d{1,2}|[A-Za-z])\s*[.):–-]?(?:\s|$)/u.test(l);
-  return [...lines.slice(0, 3), ...lines.slice(3).filter(heading).slice(0, 6)].map((l) => l.slice(0, 120));
+  const heading = (l: string) => /^(?:\p{L}[\p{L}'’.]*\s+){1,3}(?:\d{1,2}|[IVX]{1,4}|\p{L})(?![\p{L}\p{N}])/u.test(l) || /^\d{1,2}(?:\s*[.):–-]|\s+\p{L})/u.test(l) || (l.length <= 100 && !!findDate(l));
+  return [...lines.slice(0, PAGE_HEAD_FIRST), ...lines.slice(PAGE_HEAD_FIRST).filter(heading)].slice(0, PAGE_HEAD_MAX).map((l) => l.slice(0, 120));
 }
 
 /**
  * Turns the model's answer into question rows, or says why it cannot be used. Every boundary must be a line quoted from
  * the page the model names, in page order, and every exercise must start inside its session. The text of an exercise runs
- * from its first line to the next exercise or session, so two exercises on one page do not share text.
- * shortcut: solutions printed after a paper stay in the last exercise's statement, the question import step reads them later.
+ * from its first line to the next exercise, solution or session, so two exercises on one page do not share text. The
+ * solution the model locates for an exercise is stored as the question's solution, as the text rules do.
  */
 export function buildAiSplit(resourceId: string, pages: { idx: number; text: string }[], answer: ExamSplitAnswer, label: string): { rows: QuestionRow[] } | { reason: string } {
   const lines: Line[] = pages.flatMap((p) => p.text.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ page: p.idx, text })));
@@ -153,19 +172,22 @@ export function buildAiSplit(resourceId: string, pages: { idx: number; text: str
     }
     return -1;
   };
-  const sessions: { title: string; date: string | null; start: number; exercises: { number: string; start: number }[] }[] = [];
+  const sessions: { title: string; date: string | null; start: number; exercises: { number: string; start: number; solution: number | null }[] }[] = [];
   let at = 0;
   for (const s of answer.sessions) {
     if (s.page > pages.length) return { reason: `A session starts on page ${s.page}, but the file has ${pages.length} pages.` };
     const start = locate(s.page, s.start, at);
     if (start < 0) return { reason: `The session "${s.title}" does not start with the line the model quoted on page ${s.page}, or it is out of page order.` };
-    const exercises: { number: string; start: number }[] = [];
+    const exercises: { number: string; start: number; solution: number | null }[] = [];
     at = start;
     for (const e of s.exercises) {
       if (e.page > pages.length) return { reason: `An exercise starts on page ${e.page}, but the file has ${pages.length} pages.` };
       const first = locate(e.page, e.start, exercises.length ? at + 1 : at);
       if (first < 0) return { reason: `Exercise ${e.number} of "${s.title}" does not start with the line the model quoted on page ${e.page}, or it is out of order or outside its session.` };
-      exercises.push({ number: e.number.trim() || String(exercises.length + 1), start: first });
+      // The solution is printed after the exercise, on its own page when the solutions follow the paper.
+      const solution = e.solution ? locate(e.solution.page, e.solution.start, first + 1) : null;
+      if (e.solution && solution! < 0) return { reason: `The solution of exercise ${e.number} of "${s.title}" does not start with the line the model quoted on page ${e.solution.page}, or it comes before the exercise.` };
+      exercises.push({ number: e.number.trim() || String(exercises.length + 1), start: first, solution });
       at = first;
     }
     sessions.push({ title: s.title.trim(), date: s.date, start, exercises });
@@ -175,10 +197,13 @@ export function buildAiSplit(resourceId: string, pages: { idx: number; text: str
   const seen = new Map<string, number>();
   const keys = sessions.map((s, i) => {
     const d = s.date ? findDate(s.date) : null;
-    return d ? sessionKey(d) : s.title.slice(0, 80) || `${label} - sessione ${i + 1}`;
+    return d ? sessionName(s.title, d) : s.title.slice(0, 80) || `${label} - sessione ${i + 1}`;
   });
   for (const k of keys) seen.set(k, (seen.get(k) ?? 0) + 1);
   const counter = new Map<string, number>();
+  // Every place where a session, an exercise or a solution starts. A text runs to the next one.
+  const starts = [...new Set(sessions.flatMap((s) => [s.start, ...s.exercises.flatMap((e) => (e.solution === null ? [e.start] : [e.start, e.solution]))]))].sort((a, b) => a - b);
+  const nextStart = (from: number) => starts.find((x) => x > from) ?? lines.length;
   sessions.forEach((s, i) => {
     const d = s.date ? findDate(s.date) : null;
     let examGroup = keys[i];
@@ -187,14 +212,17 @@ export function buildAiSplit(resourceId: string, pages: { idx: number; text: str
       counter.set(examGroup, n);
       examGroup = `${examGroup} - versione ${n}`;
     }
-    const sessionEnd = i + 1 < sessions.length ? sessions[i + 1].start : lines.length;
-    s.exercises.forEach((e, j) => {
-      const end = j + 1 < s.exercises.length ? s.exercises[j + 1].start : sessionEnd;
-      const own = lines.slice(e.start, Math.max(end, e.start + 1));
+    s.exercises.forEach((e) => {
+      const own = lines.slice(e.start, nextStart(e.start));
+      // The line that opens a section of solutions ("Soluzioni") sits after the last exercise but is not part of it.
+      while (own.length > 1 && isSolutionMarker(own[own.length - 1].text)) own.pop();
+      const sol = e.solution === null ? [] : lines.slice(e.solution, nextStart(e.solution));
       rows.push({
-        kind: 'exam', origin: 'authentic', resourceId, pageFrom: own[0].page, pageTo: own[own.length - 1].page,
+        kind: 'exam', origin: 'authentic', resourceId, pageFrom: own[0].page,
+        // As in the text rules, the range covers statement and solution, so both can be re-read from the page images.
+        pageTo: Math.max(own[own.length - 1].page, sol.length ? sol[sol.length - 1].page : 0),
         examGroup, examDate: d ? `${String(d.y).padStart(4, '0')}-${String(d.m).padStart(2, '0')}-${String(d.d).padStart(2, '0')}` : null,
-        number: e.number, statement: joinLines(own.map((l) => l.text)), hint: '', solution: '', difficulty: 'medio', topicIds: [], chapterId: null, status: 'draft', checks: [],
+        number: e.number, statement: joinLines(own.map((l) => l.text)), hint: '', solution: joinLines(sol.map((l) => l.text)), difficulty: 'medio', topicIds: [], chapterId: null, status: 'draft', checks: [],
       });
     });
   });
@@ -216,7 +244,7 @@ export async function resourceSplit(ctx: AppContext, t: TaskContext) {
     .map((p) => ({ idx: p.idx, text: p.transcript || p.text }));
   if (!pages.length) throw new TaskError('This source has no readable pages yet.', 'input', 'Run Prepare so the file is read, then split it again.');
   if (pages.length > AI_SPLIT_MAX_PAGES) return notApplied(`The file has ${pages.length} pages and one call reads at most ${AI_SPLIT_MAX_PAGES}. Split the file into smaller ones.`);
-  if (workedOnQuestions(ctx, resourceId)) return notApplied('Some of its questions were edited or checked already, and the new split would replace them.');
+  if (workedOnQuestions(ctx, resourceId)) return notApplied(WORKED_ON);
   const heads = pages.map((p) => `page ${p.idx + 1}:\n${pageHeads(p.text).map((l) => `  ${l}`).join('\n')}`).join('\n');
   const { data } = await runRole(ctx, {
     role: 'bulk', ...examSplitPrompt({ filename: res.filename, heads }), schema: examSplitSchema,
@@ -224,7 +252,8 @@ export async function resourceSplit(ctx: AppContext, t: TaskContext) {
   });
   const built = buildAiSplit(resourceId, pages, data, res.filename.replace(/\.[^.]+$/, '').trim());
   if ('reason' in built) return notApplied(built.reason);
-  const stored = storeAuthenticQuestions(ctx, res.project_id, resourceId, built.rows);
+  const stored = storeAuthenticQuestions(ctx, res.project_id, resourceId, built.rows, { keepWorkedOn: true });
+  if (stored.refused) return notApplied(WORKED_ON);
   recordSplit(ctx, resourceId, res.role, summarizeSplit(built.rows, false), 'ai');
   return { applied: true, questions: stored.inserted, duplicates: stored.duplicates, ...splitResult(ctx, resourceId) };
 }

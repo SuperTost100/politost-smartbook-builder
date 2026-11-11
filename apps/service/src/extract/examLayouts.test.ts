@@ -191,3 +191,11 @@ test('real Analisi papers: questions and sessions per file, none of them flagged
   }
   assert.deepEqual(got, REAL);
 });
+
+test('a dated session heading at the top of a new page starts a new session, however short the page before it', () => {
+  const rows = segmentExams('r', pages(
+    ['Appello del 12 febbraio 2024', 'Esercizio 1', 'Uno.'],
+    ['Appello del 5 luglio 2024', 'Esercizio 1', 'Due.'],
+  ));
+  assert.deepEqual(summary(rows), ['Appello del 12 febbraio 2024 #1 2024-02-12 p0-0', 'Appello del 5 luglio 2024 #1 2024-07-05 p1-1']);
+});

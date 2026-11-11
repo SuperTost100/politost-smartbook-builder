@@ -45,7 +45,7 @@ const EXERCISE = /^(?:(Soluzione|Svolgimento|Risoluzione)\s+(?:(?:dell['’]\s*)
 /** "Soluzione 2", "Svolgimento 2": a solution that names only the number. */
 const SOLUTION_NUMBER = /^(?:Soluzione|Svolgimento|Risoluzione|SOLUZIONE|SVOLGIMENTO|RISOLUZIONE)\s+(\d{1,2})\b(.*)$/u;
 /** A section marker on its own line. "svolgimento" is a marker in any case; the other words only capitalised, because a bare "soluzione" can be a wrapped line of prose. */
-const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || /^(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])\s*[.:]?$/.test(t);
+export const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || /^(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])\s*[.:]?$/.test(t);
 
 interface ExHead { solution: boolean; word: string; id: string; rest: string }
 
@@ -79,10 +79,28 @@ export function findDate(text: string): { y: number; m: number; d: number } | nu
 
 const isoOf = (d: { y: number; m: number; d: number }) => iso(d.y, d.m, d.d);
 
-/** Session name for a dated paper, shared by the text splitter and the AI split so the same session in two files matches. */
-export const sessionKey = (d: { y: number; m: number; d: number }, word = 'Esame') => `${word} del ${d.d} ${MONTH_NAMES[d.m - 1]} ${d.y}`;
+/**
+ * Session name for a dated paper, shared by the text splitter and the AI split so the same session in two files matches.
+ * `turn` is the text printed after the date ("Turno A"), which tells two papers of one day apart.
+ */
+export const sessionKey = (d: { y: number; m: number; d: number }, word = 'Esame', turn = '') => `${word} del ${d.d} ${MONTH_NAMES[d.m - 1]} ${d.y}${turn ? ` - ${turn}` : ''}`;
 
 const SESSION_WORD = /^(Esame|Appello|Compito|Tema\s+d['’]?\s*esame)\b(.*)$/i;
+const canonicalWord = (raw: string) => (/^tema/i.test(raw) ? "Tema d'esame" : raw[0].toUpperCase() + raw.slice(1).toLowerCase());
+/** What follows the year of a heading, without its separators: "Esame del 12 febbraio 2024 - Turno A" gives "Turno A". */
+const turnAfterYear = (rest: string) => rest.replace(/^[\s\-–—:,]+/, '').replace(/[\s.]+$/, '').replace(/\s+/g, ' ').trim();
+
+/**
+ * The name of a session from the title the AI split read and its date, built by the same `sessionKey` as the text rules,
+ * so the same paper read by either path is stored once. The word is the one the title starts with, "Esame" when it has none.
+ * shortcut: a turn is read only after a four-digit year, so a title with a two-digit year carries no turn, upgrade when a paper needs it.
+ */
+export function sessionName(title: string, d: { y: number; m: number; d: number }): string {
+  const m = /^(Esame|Appello|Compito|Tema\s+d['’]?\s*esame|Prova\s+scritta)\b/i.exec(title.trim());
+  const word = m ? (/^prova/i.test(m[1]) ? 'Prova scritta' : canonicalWord(m[1])) : 'Esame';
+  const year = m ? /\b(?:19|20)\d{2}\b(.*)$/.exec(title) : null;
+  return sessionKey(d, word, year ? turnAfterYear(year[1]) : '');
+}
 
 /** The date of a paper whose heading is on `l`: on the same line, in the header lines after it (a table of name, matricola, date), or just before it. */
 function dateAround(l: string, following: string[], before: string[]) {
@@ -102,7 +120,7 @@ function dateAround(l: string, following: string[], before: string[]) {
 function parseGenericHeading(l: string, following: string[], before: string[], label: string): Heading | null {
   const m = SESSION_WORD.exec(l);
   if (!m || l.length > 90 || LEADERS.test(l) || /^(?:\.\s?){4,}/.test(following[0] ?? '')) return null;
-  const word = /^tema/i.test(m[1]) ? "Tema d'esame" : m[1][0].toUpperCase() + m[1].slice(1).toLowerCase();
+  const word = canonicalWord(m[1]);
   const rest = m[2];
   if (!/^\s*(?:$|[-–—:,(]|\d|(?:di|del|della|dello|dell['’]|d['’]|scritto|fila|[A-Z]\b))/i.test(rest)) return null;
   // "Compito A", "Compito FILA A": the letter names the version of the paper.
@@ -133,10 +151,9 @@ function parseHeading(l: string, following: string[], page: number, label: strin
     if (!month) return null;
     const rest = old[5];
     if (LEADERS.test(rest) || (next && /^(?:\.\s?){4,}/.test(next))) return null;
-    const turn = rest.replace(/^[\s\-–—:,]+/, '').replace(/[\s.]+$/, '').replace(/\s+/g, ' ').trim();
     const d = Number(old[2]);
     return {
-      key: `Esame del ${d} ${MONTH_NAMES[month - 1]} ${old[4]}${turn ? ` - ${turn}` : ''}`,
+      key: sessionKey({ y: Number(old[4]), m: month, d }, 'Esame', turnAfterYear(rest)),
       date: iso(Number(old[4]), month, d),
       numbered: old[1] !== undefined,
     };
@@ -146,7 +163,7 @@ function parseHeading(l: string, following: string[], page: number, label: strin
     const [d, m, y] = [Number(nw[1]), Number(nw[2]), Number(nw[3])];
     if (m < 1 || m > 12) return null;
     const turn = nw[4].replace(/^[\s\-–—:,]+/, '').replace(/\s+/g, ' ').trim();
-    return { key: `Esame del ${d} ${MONTH_NAMES[m - 1]} ${y}${turn ? ` - ${turn}` : ''}`, date: iso(y, m, d), numbered: false };
+    return { key: sessionKey({ y, m, d }, 'Esame', turn), date: iso(y, m, d), numbered: false };
   }
   const paper = parsePaper(l, following, label);
   if (paper || !allowGeneric || /^Esame\s+di\s+ANALISI\s+MATEMATICA\s+I\b/i.test(l)) return paper;
@@ -222,7 +239,9 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
   lines.forEach((x, i) => {
     // A heading for another course is not looked for right under a heading: "Compito FILA A" under "Prova scritta ..." names a version.
     const before = texts.slice(Math.max(0, i - 3), i).filter((_, k) => lines[Math.max(0, i - 3) + k].page === x.page);
-    heads.push(parseHeading(x.text, texts.slice(i + 1, i + 9), x.page, label, before, !heads.slice(-3).some(Boolean)));
+    // A version label right under a session heading of the same page is not a new session. A heading on a new page always is.
+    const nearHeading = heads.slice(-3).some((h, k) => h && lines[Math.max(0, i - 3) + k].page === x.page);
+    heads.push(parseHeading(x.text, texts.slice(i + 1, i + 9), x.page, label, before, !nearHeading));
   });
   const noHeading = !heads.some(Boolean);
   // Position of each line among the kept lines of its page.
