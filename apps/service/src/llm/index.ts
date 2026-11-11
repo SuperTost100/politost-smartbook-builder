@@ -193,8 +193,10 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
   }
 
   // A provider that reported its limit gets no call until its reset. The role goes on with its other routes, and with none left the task waits.
+  // The wait is counted over every route of the role: one that is cooling now may be back before the one tried first.
+  const eligible = candidates;
   const ready = candidates.filter(isReady);
-  if (!ready.length) throw limitWait(candidates);
+  if (!ready.length) throw limitWait(eligible);
   candidates = ready;
 
   let firstQuota: Failure | undefined;
@@ -209,7 +211,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
       // A call that waited for its slot may find that another call reported the provider's limit meanwhile, and a fallback may be on the provider that just did.
       if (!isReady(route)) {
         if (candidates.slice(i + 1).some(isReady)) continue;
-        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait(candidates);
+        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait(eligible);
       }
       return await attemptRoute(ctx, funnel, opts, route, { calls, fallback: route === fallback });
     } catch (err) {

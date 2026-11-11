@@ -277,6 +277,26 @@ describe('error mapping and fallback', () => {
       assert.equal(fake.calls.length, 2, 'the waiting task made no call');
     });
 
+    test('a fallback that was already at its limit when the call started still counts for the wait', async () => {
+      setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, vision: { primary: route('claude') } }, { codex: 1 });
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      fake.next(() => ({ text: 'd', limit: limit(600_000) }), async () => { await held; return { text: 'a', limit: limit(2 * 3600_000) }; });
+      const tick = () => new Promise((r) => setTimeout(r, 30));
+      // Claude, the fallback, reports its limit first: ten minutes.
+      await runRole(kit.ctx, { ...base, role: 'vision' });
+      const a = runRole(kit.ctx, { ...base, role: 'bulk' });
+      await tick();
+      // This call starts with only Codex ready and waits for its slot. Codex then reports a two-hour limit.
+      const b = outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      await tick();
+      release();
+      await a;
+      const wait = waits(await b);
+      assert.ok(wait > 0 && wait <= 600_000, `waits ${wait} ms, for the Claude reset and not the Codex one`);
+      assert.equal(fake.calls.length, 2, 'the waiting task made no call');
+    });
+
     test('a provider with a limit does not stop a role from using its fallback on another provider', async () => {
       useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
       fake.next(full, () => ({ text: 'one' }), () => ({ text: 'two' }));
