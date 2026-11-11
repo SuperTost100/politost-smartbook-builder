@@ -18,6 +18,8 @@ import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
 const MAX_TRANSCRIBED_PAGES = 4;
+/** The writer gets the clean text of at most this many cited pages. The quotes already carry the rest. */
+const MAX_PAGE_TEXTS = 2;
 const MAX_GUIDE_QUESTIONS = 80;
 
 export async function sectionEvidence(ctx: AppContext, t: TaskContext) {
@@ -82,11 +84,14 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
     return `[${n.id}] (${where}) "${truncate(n.quote.replace(/\s+/g, ' '), 700)}"${n.claim ? `\n    supports: ${truncate(n.claim, 300)}` : ''}`;
   }).join('\n');
-  const pageTexts = topCitedPages(packet).slice(0, MAX_TRANSCRIBED_PAGES).map((p) => {
-    const row = ctx.db.get<{ text: string; transcript: string | null; label: string }>('SELECT text, transcript, label FROM pages WHERE resource_id = ? AND idx = ?', p.resourceId, p.idx);
-    if (!row) return '';
-    return `--- ${files.get(p.resourceId)}, page ${row.label} ---\n${truncate(row.transcript || row.text, 6000)}`;
-  }).filter(Boolean).join('\n\n');
+  // The quotes come from these pages, so a page is sent whole only when the vision model transcribed it: its text layer was garbled and the clean formulas matter.
+  const transcribed: string[] = [];
+  for (const p of topCitedPages(packet)) {
+    if (transcribed.length >= MAX_PAGE_TEXTS) break;
+    const row = ctx.db.get<{ transcript: string | null; label: string }>('SELECT transcript, label FROM pages WHERE resource_id = ? AND idx = ?', p.resourceId, p.idx);
+    if (row?.transcript) transcribed.push(`--- ${files.get(p.resourceId)}, page ${row.label} ---\n${truncate(row.transcript, 6000)}`);
+  }
+  const pageTexts = transcribed.join('\n\n');
   // The evidence reader's own answer often has the formulas in clean LaTeX, while quotes from the text layer do not.
   const summary = truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
   return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars), summary };

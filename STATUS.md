@@ -98,6 +98,7 @@ What a fresh book will still produce: on the first review, some real content err
 - The section text, its repair and the lab example's code are no longer JSON strings. The answer is the text, a `<<<META>>>` line and a small JSON object. This removes the guessing that turned a line break before `u` or `i` into `\nu` or `\ni` (the case that remained open was a first row `i_1 &= …` after `\begin{aligned}`).
 - After a section is drafted, its writer checks it once more in the same conversation (hypotheses, derivation steps, computations with units and signs, formula keys) and may return a corrected version, which is used only when it loses no heading, formula key, block or figure. It is the book option `selfCheck`, on by default, with no screen yet.
 - The writer is asked for a worked example and a typical-mistake box only when the section teaches a method or a computation, and is told never to pad a section to reach a length. The word ranges per depth are unchanged.
+- The writer no longer gets the same evidence three times: page text is sent only for pages that have a vision transcript, at most two, besides the verified quotes and the evidence reader's answer.
 
 ## Independent reviews
 

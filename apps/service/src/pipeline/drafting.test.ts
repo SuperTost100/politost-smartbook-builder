@@ -5,10 +5,10 @@ import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
 import { META_SEPARATOR } from '../llm/body.ts';
-import { FakeFunnel, makeCtx, seedProject, usageOf, written } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf, written } from '../llm/testkit.ts';
 import { Queue, TaskError, type TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
-import { sectionDraft } from './draft.ts';
+import { evidenceText, sectionDraft } from './draft.ts';
 import { draftPrompt } from './prompts.ts';
 import { generateSpecs } from './runs.ts';
 
@@ -327,5 +327,33 @@ describe('no padding, and examples only where they teach', () => {
 
   test('the length ranges are the same as before', () => {
     for (const [depth, range] of [['brief', '400-800'], ['standard', '800-1500'], ['deep', '1200-2200']]) assert.match(draftPrompt(input(depth)).prompt, new RegExp(`Depth: ${depth} \\(about ${range} words\\)`));
+  });
+});
+
+describe('the writer gets page text only where the quotes are not enough', () => {
+  const note = (id: string, page: number) => ({ id, quote: `Citazione ${id}`, resourceId: 'r1', page, verified: true, claim: '' });
+  const packet = (notes: ReturnType<typeof note>[]) => ({ id: 'e1', projectId: P, nodeId: 's1', provider: 'local' as const, query: '', answer: 'Sintesi.', notes, createdAt: '' });
+
+  test('a page with a good text layer is not sent whole, and at most two transcribed pages are', () => {
+    seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
+    seedPage(ctx, 'r1', 0, 'Testo buono della pagina 1.');
+    seedPage(ctx, 'r1', 1, 'testo illeggibile', 'Trascrizione pulita della pagina 2.');
+    seedPage(ctx, 'r1', 2, 'testo illeggibile', 'Trascrizione pulita della pagina 3.');
+    seedPage(ctx, 'r1', 3, 'testo illeggibile', 'Trascrizione pulita della pagina 4.');
+    // Page 1 is cited most, then 2, 3 and 4.
+    const notes = [note('n1', 0), note('n2', 0), note('n3', 0), note('n4', 1), note('n5', 1), note('n6', 2), note('n7', 2), note('n8', 3)];
+    const ev = evidenceText(ctx, packet(notes));
+    assert.doesNotMatch(ev.pages, /Testo buono/);
+    assert.match(ev.pages, /appunti\.pdf, page 2 ---\nTrascrizione pulita della pagina 2\./);
+    assert.match(ev.pages, /page 3 ---\nTrascrizione pulita della pagina 3\./);
+    assert.doesNotMatch(ev.pages, /pagina 4/);
+    assert.match(ev.notes, /\[n1\] \(appunti\.pdf, p\. 1\) "Citazione n1"/, 'every verified quote is still sent');
+    assert.equal(ev.summary, 'Sintesi.');
+  });
+
+  test('a packet whose pages have no transcript sends no page text', () => {
+    seedResource(ctx, { id: 'r1', projectId: P });
+    seedPage(ctx, 'r1', 0, 'Testo buono.');
+    assert.equal(evidenceText(ctx, packet([note('n1', 0)])).pages, '');
   });
 });
