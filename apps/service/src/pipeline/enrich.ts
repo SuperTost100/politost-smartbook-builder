@@ -93,15 +93,32 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const replaceId = t.task.input.replaceId as string | undefined;
   const before = replaceId ? enrichmentState(ctx, replaceId) : undefined;
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-  const sampled = sampleFunctionGraph({
-    id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
-    functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
+  const main = g.data;
+  const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
+    id, title, xDomain: main.xDomain, yDomain, xScale: main.xScale, yScale, xLabel: main.xLabel, yLabel,
+    functions: functions.map((f) => ({ expr: f.fn, label: f.label })),
   });
-  const checks = [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }];
+  const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.functions), description: main.description }];
+  // A pair (the phase under a Bode magnitude) shares the first graph's x axis, so the two line up when read one after the other.
+  if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.functions), description: main.pair.description });
+  const built = graphs.map(({ spec, description }) => {
+    const sampled = sampleFunctionGraph(spec);
+    return { sampled, checks: [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }] };
+  });
   // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
   // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
   if (issueIds.length) {
+    // A redraw answers the issues of one graph row. Its replacement is the graph of the answer with that row's id, or the only
+    // graph of the answer when none has the id. A pair has two rows, and each gets its own redraw.
+    const wanted = before ? json<{ id?: string }>(before.payload, {}).id : undefined;
+    const pick = built.find((_, k) => graphs[k]!.spec.id === wanted) ?? (built.length === 1 ? built[0] : undefined);
+    if (!pick) {
+      const reason = `The redrawn answer has no graph with the id "${wanted ?? ''}" and holds ${built.length} graphs, so none of them is taken for this one.`;
+      setIssuesStatus(ctx, projectId, issueIds, 'open', reason);
+      return { made: 0, skipped: reason };
+    }
+    const { sampled, checks } = pick;
     if (!sampled.ok) {
       setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
       return { made: 0, failed: sampled.detail };
@@ -125,8 +142,8 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
     return { made: 1, replaced: false };
   }
-  saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
-  return { made: 1 };
+  for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+  return { made: built.length };
 }
 
 /** One lab example (Python or MATLAB) for one section, run in its sandbox. Idempotent: skipped when the section already has one. */

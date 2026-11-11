@@ -6,7 +6,7 @@ import { bookOptionsSchema, FIGURE_KINDS, inferSubjectArea, SUBJECT_AREAS, SUBJE
 import { figureSchema, figureSchemaFor } from '../figures/materialize.ts';
 import { toProviderSchema } from '../llm/schema.ts';
 import { figurePlaces } from './figureCheck.ts';
-import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchParser, patchPrompt, reviewPrompt, verifyPrompt } from './prompts.ts';
+import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, graphPrompt, figureSetupOf, outlinePrompt, patchParser, patchPrompt, reviewPrompt, verifyPrompt } from './prompts.ts';
 
 const book = (subject: string, title: string, options: Record<string, unknown> = {}) => ({ subject, title, options: bookOptionsSchema.parse(options) });
 const setupOf = (area: SubjectArea, o: { photos?: boolean; policy?: 'helpful' | 'generous' } = {}) =>
@@ -70,6 +70,21 @@ describe('figure rules per subject', () => {
     assert.doesNotMatch(rules, MOLECULE);
     assert.doesNotMatch(rules, /- (structure|levels|orbitals|cell|periodic|photo):/);
     assert.doesNotMatch(rules, /titration|heating curve/);
+  });
+
+  test('the plot block explains log axes, the Bode pair and gives the low-pass example', () => {
+    const rules = figureRules(setupOf('electronics'));
+    assert.match(rules, /"xScale" or "yScale" set to "log"/);
+    assert.match(rules, /needs a positive range/);
+    assert.match(rules, /A Bode plot is two plot figures, magnitude and then phase, with the same xScale "log" and xRange/);
+    assert.match(rules, /-10\*log10\(1\+\(x\/1000\)\^2\)/);
+  });
+
+  test('the graph prompt offers log axes and a pair for a Bode plot', () => {
+    const { system, prompt } = graphPrompt({ language: 'it', purpose: 'Bode', section: 'testo' });
+    assert.match(system, /"xScale" or "yScale" set to "log"/);
+    assert.match(system, /A Bode plot is two graphs that share one log frequency axis/);
+    assert.match(prompt, /xScale, yScale, xLabel, yLabel, pair/);
   });
 
   test('a chemistry book gets every chemistry kind, and photos only when they can be searched', () => {

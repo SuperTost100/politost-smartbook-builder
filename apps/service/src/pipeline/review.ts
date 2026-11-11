@@ -10,7 +10,7 @@ import { json, newId, now } from '../db/db.ts';
 import { buildFigures, commitFigures, discardUnstored, existingAssetNames, rewriteImageRefs } from '../figures/materialize.ts';
 import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
-import { TaskError, type TaskContext } from '../queue/queue.ts';
+import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
@@ -318,15 +318,27 @@ function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title
     out.figures = p.figures.length;
   }
   if (p.graphs.length) {
-    const failing = ctx.db.get<{ id: string }>(`SELECT id FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph' AND status = 'issue' ORDER BY rowid DESC LIMIT 1`, projectId, p.nodeId);
-    if (failing) {
-      const purpose = `Redraw the interactive graph "${p.graphs[0].quote}" of this section. The old one failed its check, so choose expressions and domains that pass. ${p.graphs.map((g) => g.message).join(' ')}`;
-      t.enqueue([{ kind: 'enrich.graph', key: `fixgraph:${t.task.id}`, label: `Redraw the graph of "${p.title}"`, input: { nodeId: p.nodeId, purpose, force: true, replaceId: failing.id, issueIds: p.graphs.map((g) => g.id) }, pool: 'editor', deps: [t.task.id] }]);
-      out.graphs = p.graphs.length;
-    } else {
-      const passes = ctx.db.get(`SELECT 1 FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph'`, projectId, p.nodeId);
-      setIssuesStatus(ctx, projectId, p.graphs.map((g) => g.id), 'fixed', passes ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.');
+    // A Bode pair is two graph rows, and each can fail. Every failing row is redrawn for the issues about that row. An issue
+    // belongs to the row whose title it quotes (saveEnrichment writes the title as the quote). One that matches no row goes to
+    // the last failing row, and one whose row passes now, or is gone, closes with no model call.
+    const rows = ctx.db.all<{ id: string; status: string; payload: string }>(`SELECT id, status, payload FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph' ORDER BY rowid`, projectId, p.nodeId)
+      .map((r) => ({ id: r.id, failing: r.status === 'issue', title: json<{ title?: string }>(r.payload, {}).title ?? '', graphId: json<{ id?: string }>(r.payload, {}).id ?? '' }));
+    const failing = rows.filter((r) => r.failing);
+    const byRow = new Map<string, typeof p.graphs>();
+    const closed: typeof p.graphs = [];
+    for (const g of p.graphs) {
+      const row = rows.find((r) => r.failing && r.title === g.quote) ?? rows.find((r) => r.title === g.quote) ?? failing.at(-1);
+      if (!row?.failing) { closed.push(g); continue; }
+      byRow.set(row.id, [...(byRow.get(row.id) ?? []), g]);
     }
+    if (closed.length) setIssuesStatus(ctx, projectId, closed.map((g) => g.id), 'fixed', rows.length ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.');
+    const specs: TaskSpec[] = [...byRow].map(([rowId, graphs]) => {
+      const row = failing.find((r) => r.id === rowId)!;
+      const purpose = `Redraw the interactive graph "${row.title}" of this section. The old one failed its check, so choose expressions and domains that pass${row.graphId ? `, and give the graph the id "${row.graphId}"` : ''}. ${graphs.map((g) => g.message).join(' ')}`;
+      return { kind: 'enrich.graph', key: `fixgraph:${t.task.id}:${rowId}`, label: `Redraw the graph "${row.title}" of "${p.title}"`, input: { nodeId: p.nodeId, purpose, force: true, replaceId: rowId, issueIds: graphs.map((g) => g.id) }, pool: 'editor', deps: [t.task.id] };
+    });
+    if (specs.length) t.enqueue(specs);
+    out.graphs = [...byRow.values()].reduce((n, g) => n + g.length, 0) || undefined;
   }
   return out.figures || out.graphs ? out : undefined;
 }
