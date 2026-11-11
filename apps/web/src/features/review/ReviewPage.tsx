@@ -3,7 +3,7 @@ import { Link } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Asset, IssueSeverity, IssueSource, IssueStatus, ReviewIssue } from '@smartbuilder/domain';
 import { api, apiUrl, errorText } from '../../lib/api';
-import { qk, useAssets, useIssues, useManuscript, useProject, useQuestions, useRuns } from '../../lib/queries';
+import { qk, useAssets, useIssues, useManuscript, useProject, useQuestions } from '../../lib/queries';
 import { figureOfIssue } from '../../lib/figureIssue';
 import { plural, timeAgo } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
@@ -31,7 +31,6 @@ export default function ReviewPage() {
   const questions = useQuestions(pid);
   const project = useProject(pid);
   const assets = useAssets(pid);
-  const runs = useRuns(pid);
   const qc = useQueryClient();
   const toast = useToast();
 
@@ -68,12 +67,9 @@ export default function ReviewPage() {
   const minorPicked = minorOpenShown.filter(picked).length;
   const serious = open.filter((i) => i.severity !== 'minor');
   const runActive = project.data?.activeRun?.kind === 'review' && !['completed', 'failed', 'cancelled'].includes(project.data.activeRun.status);
-  // The service says whether the book was reviewed at its current text with nothing serious open (`review` in the project summary).
-  // shortcut: a service that does not send it yet gets "the last review run completed and no serious issue is open", which also counts a run that only checked questions, upgrade when every service sends `review`.
-  const lastReview = [...(runs.data ?? [])].filter((r) => r.kind === 'review').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const standing = project.data?.review;
-  // Never "ready to export" before the issues are known, or while a review is running.
-  const reviewedClear = !!issuesQ.data && !runActive && (standing !== undefined ? standing?.clean === true : lastReview?.status === 'completed' && serious.length === 0);
+  // The service says whether every chapter was reviewed at its current text with nothing serious open (`review` in the project summary).
+  // Never "ready to export" before the issues and that standing are known, or while a review is running.
+  const reviewedClear = !!issuesQ.data && !runActive && project.data?.review?.clean === true;
 
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.issues(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); void qc.invalidateQueries({ queryKey: ['section', pid] }); };
   const fixMany = useMutation({

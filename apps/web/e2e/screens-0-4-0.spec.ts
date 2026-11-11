@@ -388,6 +388,10 @@ async function reviewData(page: Page, issues: unknown[], opts: { review?: 'compl
   await page.route(/\/api\/assets\/\w+\/file$/, (route) => route.fulfill({ status: 200, contentType: 'image/svg+xml', body: svg }));
   const reviewRun = { id: 'r5', projectId: 'p1', kind: 'review', status: 'completed', createdAt: ago(4), finishedAt: ago(3), counts: { succeeded: 2 }, waiting: null, warnings: [] };
   await page.route(/\/api\/projects\/p1\/runs$/, (route) => answer(route, opts.review === 'none' ? [] : [reviewRun]));
+  // The service says where the review stands: clean when every chapter was reviewed and nothing serious is open.
+  const serious = (issues as { severity?: string; status?: string }[]).filter((i) => i.severity !== 'minor' && i.status === 'open').length;
+  const standing = opts.review === 'none' ? null : { clean: serious === 0, openSerious: serious, reviewedAt: ago(3) };
+  await page.route(/\/api\/projects\/p1$/, (route) => answer(route, { ...mockData().projects[0], activeRun: null, review: standing }));
 }
 
 test.describe('Review: minor notes', () => {
