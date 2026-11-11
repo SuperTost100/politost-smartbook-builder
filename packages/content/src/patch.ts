@@ -117,7 +117,7 @@ export function lostStructure(before: string, after: string): string | null {
 
 /** Prose only: display and inline math and the opening line of a ::: block hold LaTeX commands and attributes, which are no vocabulary. */
 const withoutMath = (s: string) => s.replace(/\$\$[\s\S]*?\$\$/g, ' ').replace(/\$[^$\n]*\$/g, ' ').replace(/^[ \t]*:::.*$/gm, ' ');
-const paragraphWords = (s: string | undefined) => withoutMath(s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+export const paragraphWords = (s: string | undefined) => withoutMath(s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
 const paragraphsOf = (md: string) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 
 /**

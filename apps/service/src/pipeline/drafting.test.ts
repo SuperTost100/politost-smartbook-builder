@@ -284,6 +284,41 @@ describe('the writer checks its own draft', () => {
     assert.equal(current('s1'), first);
   });
 
+  test('a correction that loses a citation marker of the draft is not used, and the reason is recorded', async () => {
+    const cited = first.replace('Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.', 'Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$. [[n1]]').replace('si ha $V = 5\\,\\mathrm{V}$.', 'si ha $V = 5\\,\\mathrm{V}$. [[n2,n3]]');
+    const citedFixed = cited.replace('$V = 5\\,\\mathrm{V}$', '$V = 6\\,\\mathrm{V}$');
+    const withoutMarkers = citedFixed.replace(/ \[\[[^\]]+\]\]/g, '');
+    seed();
+    fake.next(live('w1', written({ markdown: cited })), written({ markdown: withoutMarkers }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'kept');
+    assert.match(String(r.selfCheckNote), /citation/);
+    assert.equal(current('s1'), first);
+    const stored = ctx.db.get<{ citations: string }>(`SELECT citations FROM content_revisions WHERE node_id = 's1' AND status = 'current'`)!.citations;
+    assert.deepEqual(JSON.parse(stored), { '0': ['n1'], '3': ['n2', 'n3'] });
+
+    // The same correction with every marker kept is used, and so is one that rewrites a whole cited paragraph.
+    ctx.db.run('DELETE FROM content_revisions');
+    seed();
+    fake.next(live('w2', written({ markdown: cited })), written({ markdown: citedFixed }));
+    const kept = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(kept.selfCheck, 'corrected');
+    assert.equal(current('s1'), fixed);
+
+    ctx.db.run('DELETE FROM content_revisions');
+    seed();
+    const middle = (body: string) => `Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n${body}\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$.`;
+    const old = middle('Il rapporto tra tensione e corrente è costante per un conduttore ohmico, [[n4]]');
+    const rewritten = middle('Un componente passivo oppone una resistenza costante al passaggio della corrente, misurata in ohm.');
+    fake.next(live('w3', written({ markdown: old })), written({ markdown: rewritten }));
+    const whole = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(whole.selfCheck, 'corrected', 'a paragraph rewritten whole may lose its marker');
+  });
+
+  test('the follow-up tells the writer to keep every citation marker where it is', () => {
+    assert.match(selfCheckPrompt(), /Keep every \[\[n…\]\] marker where it is/);
+  });
+
   test('the follow-up says that its answer goes into the book as it is', () => {
     assert.match(selfCheckPrompt(), /do not say what you checked or changed: no sentence before the section or after it/);
   });

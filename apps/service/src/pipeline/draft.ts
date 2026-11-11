@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { addsCommentary, sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { addsCommentary, applyGuardedChanges, paragraphWords, sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -209,11 +209,11 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   t.progress(`Writing "${section.title}"`);
   // The writer checks its own draft in the conversation that wrote it. The exam guide is built from the exam questions and gets no such turn.
   const parse = draftParser(figures);
-  const { data, route, selfCheck } = await withRole(ctx, { role: 'writer', ...prompt, parse, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal }, async (talk) => {
+  const { data, route, selfCheck, note: selfCheckNote } = await withRole(ctx, { role: 'writer', ...prompt, parse, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal }, async (talk) => {
     const { data: first, route } = talk.result;
-    if (guide || !project.options.selfCheck) return { data: first, route, selfCheck: 'skipped' as const };
+    if (guide || !project.options.selfCheck) return { data: first, route, selfCheck: 'skipped' as const, note: undefined };
     t.progress(`Checking "${section.title}"`);
-    return { route, ...(await checkOwnDraft(talk, parse)) };
+    return { route, ...(await checkOwnDraft(talk, parse, (md) => lintSection(md, { sectionId: nodeId, language: project.language }))) };
   });
   t.setProvider(route.provider);
 
@@ -278,30 +278,61 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   discardUnstored(built, stored);
   for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
   if (stored.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
-  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, selfCheck, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
+  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, selfCheck, selfCheckNote, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
 }
 
 export type SelfCheck = 'ok' | 'corrected' | 'kept' | 'skipped';
 
 /**
- * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
- * parses in the same format, drops no heading, formula key, ::: block or figure of the first draft, and does not open or close
- * with a note about the correction (a real run did that). A failed follow-up (a limit, a timeout) or any other answer keeps the first draft; the author loses nothing.
+ * Why a correction must not replace the draft because it loses a citation marker, or null. A marker ties a paragraph to its
+ * evidence note, and checking the mathematics must not remove that tie. Like a guarded fix, which keeps the markers of the
+ * text it leaves alone, a paragraph of the draft keeps its markers in the same place. Only a paragraph that is rewritten
+ * whole (less than half of its words are left) may lose them, and only when the fix guard would accept that rewrite.
  */
-async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnType<typeof draftParser>): Promise<{ data: DraftAnswer; selfCheck: SelfCheck }> {
+function lostCitation(before: string, after: string, lint: (markdown: string) => LintFinding[]): string | null {
+  const old = extractCitations(before, splitBlocks);
+  const next = extractCitations(after, splitBlocks);
+  const oldBlocks = splitBlocks(old.markdown).map((b) => b.text);
+  const nextBlocks = splitBlocks(next.markdown).map((b) => b.text);
+  for (const [at, ids] of Object.entries(old.citations)) {
+    const i = Number(at);
+    const same = nextBlocks.indexOf(oldBlocks[i]);
+    const j = same >= 0 ? same : nextBlocks.length === oldBlocks.length ? i : -1;
+    const lost = ids.filter((id) => !(j >= 0 && next.citations[String(j)]?.includes(id)));
+    if (!lost.length) continue;
+    const words = paragraphWords(oldBlocks[i]);
+    const left = new Set(paragraphWords(nextBlocks[j]));
+    const rewritten = j === i && words.length > 0 && words.filter((w) => left.has(w)).length / words.length < 0.5;
+    if (rewritten && applyGuardedChanges(oldBlocks, [{ block: i, text: nextBlocks[i] }], lint).kept.includes(i)) continue;
+    return `it loses the citation ${lost.map((id) => `[[${id}]]`).join(', ')} of paragraph ${i + 1}`;
+  }
+  return null;
+}
+
+/**
+ * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
+ * parses in the same format, drops no heading, formula key, ::: block, figure or citation marker of the first draft, and does
+ * not open or close with a note about the correction (a real run did that). A failed follow-up (a limit, a timeout) or any
+ * other answer keeps the first draft; the author loses nothing. `note` says why a correction was not used.
+ */
+async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnType<typeof draftParser>, lint: (markdown: string) => LintFinding[]): Promise<{ data: DraftAnswer; selfCheck: SelfCheck; note?: string }> {
   const first = talk.result.data;
   let reply: string;
   try {
     reply = (await talk.send(selfCheckPrompt())).text;
   } catch (err) {
-    if (err instanceof FollowUpError) return { data: first, selfCheck: 'kept' };
+    if (err instanceof FollowUpError) return { data: first, selfCheck: 'kept', note: 'the follow-up failed' };
     throw err;
   }
   if (/^\W*ok\W*$/i.test(reply.trim())) return { data: first, selfCheck: 'ok' };
   const corrected = parse(sanitizeModelCode(reply));
-  if (!corrected.ok) return { data: first, selfCheck: 'kept' };
+  if (!corrected.ok) return { data: first, selfCheck: 'kept', note: `the correction could not be read: ${corrected.problem}` };
   const keys = new Set(corrected.data.figures.map((f) => f.key));
-  if (lostStructure(first.markdown, corrected.data.markdown) || addsCommentary(first.markdown, corrected.data.markdown) || first.figures.some((f) => !keys.has(f.key))) return { data: first, selfCheck: 'kept' };
+  const reason = lostStructure(first.markdown, corrected.data.markdown)
+    ?? (addsCommentary(first.markdown, corrected.data.markdown) ? 'it opens or closes with a note about the correction' : null)
+    ?? (first.figures.some((f) => !keys.has(f.key)) ? 'it drops a figure' : null)
+    ?? lostCitation(first.markdown, corrected.data.markdown, lint);
+  if (reason) return { data: first, selfCheck: 'kept', note: reason };
   return { data: corrected.data, selfCheck: 'corrected' };
 }
 

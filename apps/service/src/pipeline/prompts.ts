@@ -549,7 +549,7 @@ ${p.findings}`,
  */
 export function selfCheckPrompt() {
   return `Check the section you just wrote once more, as a strict reviewer would. Look at every statement for a missing hypothesis, every derivation step, every computation and numeric result with its unit and sign, and every reference to a formula key (the key must be defined in your text or be one of the known keys). Where a result could differ, recompute it.
-If everything is right, answer exactly OK and nothing else. If something is wrong, answer with the full corrected answer in the same format as before (the section, the line ${META_SEPARATOR}, then the JSON object), changing only what is wrong and keeping every heading, formula key and ::: block. The answer goes into the book as it is, so do not say what you checked or changed: no sentence before the section or after it, and the first line of your answer is the first line of the section.`;
+If everything is right, answer exactly OK and nothing else. If something is wrong, answer with the full corrected answer in the same format as before (the section, the line ${META_SEPARATOR}, then the JSON object), changing only what is wrong and keeping every heading, formula key and ::: block. Keep every [[n…]] marker where it is. The answer goes into the book as it is, so do not say what you checked or changed: no sentence before the section or after it, and the first line of your answer is the first line of the section.`;
 }
 
 /** The corrected section as plain text. */
