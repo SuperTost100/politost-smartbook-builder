@@ -157,6 +157,16 @@ test('a patch answer is read part by part, and the new text reaches the caller e
   assert.ok(crlf.ok && crlf.data.changes[0].text === 'Uno\nDue');
 });
 
+test('a fix body gets the function names KaTeX lacks rewritten and no guess at backslashes', () => {
+  const r = parsePatchAnswer('@@@ block 0 | issues 1\nVale $\\cotan x$.\n$$\\begin{aligned}\ni_1 &= 2 \\\\\nu_1 &= 3\n\\end{aligned}$$', { blocks: 1, issues: 1 });
+  assert.ok(r.ok);
+  const text = r.data.changes[0].text;
+  assert.match(text, /\$\\operatorname\{cotan\} x\$/);
+  assert.ok(text.includes('\\begin{aligned}\ni_1 &= 2'), 'the line break before i_1 stays');
+  assert.ok(text.includes('\\\\\nu_1 &= 3'), 'the line break before u_1 stays');
+  assert.doesNotMatch(text, /\\ni_1|\\nu_1/);
+});
+
 test('a malformed patch answer is refused with a problem the model can act on', () => {
   const problem = (text: string, limits = { blocks: 3, issues: 2 }) => {
     const r = parsePatchAnswer(text, limits);

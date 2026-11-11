@@ -1,4 +1,5 @@
 // Guards for model patches: block changes are applied one at a time and a change that would damage the section is dropped. Pure.
+import { rewriteLatexNames } from './sanitize.ts';
 import type { LintFinding } from './types.ts';
 
 export interface BlockChange { block: number; text: string }
@@ -137,9 +138,9 @@ export interface ParsedPatch {
 /**
  * Reads the answer described at PATCH_MARK. `blocks` is the number of numbered blocks, `issues` the number of numbered
  * problems (0 for an author's instruction, which names none). A problem returns a message the model can act on in a repair turn.
- * The bodies get no cleaning here: the caller passes text whose terminal codes and control characters are already removed.
- * TODO(sanitize split): apply the operator-name rewriting (\cotan to \operatorname{cotan}) to the bodies once sanitize.ts
- * offers it apart from the backslash guessing. The guessing must not run on these bodies, which never were JSON strings.
+ * The caller passes text whose terminal codes and control characters are already removed. A new text gets the function
+ * names KaTeX lacks rewritten (\cotan), like a drafted section, and nothing else: these bodies never were JSON strings,
+ * so no backslash is guessed at.
  */
 export function parsePatchAnswer(text: string, limits: { blocks: number; issues: number }): { ok: true; data: ParsedPatch } | { ok: false; problem: string } {
   const fail = (problem: string) => ({ ok: false as const, problem });
@@ -191,7 +192,7 @@ export function parsePatchAnswer(text: string, limits: { blocks: number; issues:
     if (seen.has(block)) return fail(`Block ${block} appears twice. Give each block once, with its full new text.`);
     seen.add(block);
     if (p.kind === 'block' && !body) return fail(`Block ${block} has no text. To remove a block, write "${PATCH_MARK} delete ${block}".`);
-    changes.push({ block, text: p.kind === 'delete' ? '' : body, issues });
+    changes.push({ block, text: p.kind === 'delete' ? '' : rewriteLatexNames(body), issues });
   }
   return { ok: true, data: { changes, resolved, figures } };
 }
