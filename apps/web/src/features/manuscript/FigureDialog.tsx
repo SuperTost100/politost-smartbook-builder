@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { splitBlocks } from '@smartbuilder/content/blocks';
 import type { FigureDetails, FigureKindName, SectionView } from '@smartbuilder/domain';
 import { api, apiUrl, ApiRequestError, errorText } from '../../lib/api';
@@ -94,12 +94,15 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
     queryKey: ['figure', pid, nodeId, asset?.id ?? '', headId ?? ''],
     queryFn: () => api('GET /api/projects/:id/sections/:nodeId/figures/:assetId', { params: { id: pid, nodeId, assetId: asset!.id } }),
     enabled: open && !!asset && !!headId,
-    placeholderData: keepPreviousData,
   });
+  // While the dialog stays open, the figure it showed stays on screen when a Render or a save gives the figure a new asset, so the editor is not blanked. It is held (`stale`) because it names an asset and a head the book has left.
+  // A dialog that was closed keeps nothing: the figure it last showed may have been replaced, so it opens on the loading state until the current one is read.
+  const lastShown = useRef<FigureDetails | null>(null);
+  const shown = open ? details.data ?? lastShown.current : null;
+  lastShown.current = shown;
   const title = `Figure${number ? ` ${number}` : ''}`;
   if (!open) return null;
-  // While the details of the figure the text shows now are on their way, `details.data` is the previous figure's: it names an asset and a head the book has left, so nothing is sent from it.
-  if (details.data) return <FigureEditor key={nodeId} details={details.data} stale={details.isPlaceholderData} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
+  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
   // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
   const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
   const failed = details.error ?? assets.error;

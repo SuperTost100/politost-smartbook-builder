@@ -834,6 +834,22 @@ test.describe('review findings of the figure dialog', () => {
     expect(fm.notFound).toEqual([]);
   });
 
+  test('a dialog opened again after a save does not show the figure it replaced while the new one loads', async ({ page }) => {
+    const fm = await open(page);
+    let dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia nuova.');
+    fm.readMs = 900; // the new figure's details are still on their way when the dialog closes
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    await figureBlock(page).click();
+    await page.locator('.ms-actions').getByRole('button', { name: 'Edit figure' }).click();
+    dialog = page.getByRole('dialog', { name: /^Figure/ });
+    await expect(dialog.getByRole('status', { name: 'Loading the figure' })).toBeVisible();
+    await expect(dialog.getByLabel('Caption')).toHaveCount(0);
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia nuova.');
+    expect(fm.notFound).toEqual([]);
+  });
+
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
     const fm = await open(page);
     const dialog = await openDialog(page);
