@@ -7,7 +7,7 @@ import { runPython, type PythonResult } from './python.ts';
 export interface StatedValue { name: string; value: string }
 
 /** A number as written in the solution: its value in SI base units, the unit, and how many significant figures it shows. */
-interface Quantity { base: number; asWritten: number; unit: string; digits: number; exponent: number; alt?: Quantity }
+interface Quantity { base: number; asWritten: number; factor: number; unit: string; digits: number; exponent: number; alt?: Quantity }
 interface Printed { name: string; value: number; unit: string | null; text: string }
 
 export interface Comparison { name: string; stated: string; computed: string }
@@ -37,6 +37,8 @@ const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^
 /** Splits a unit into a prefix factor and a base unit. A unit this does not recognise (m/s, mol/L, kg·m²) stays whole with factor 1. */
 function splitUnit(raw: string): { factor: number; unit: string } {
   const unit = raw.replace(/\s+/g, '').replace(/\.$/, '');
+  // A percentage is a plain number written a hundred times larger: 50% and 0.5 are the same value.
+  if (unit === '%') return { factor: 0.01, unit: '' };
   if (BASE_UNITS.has(unit)) return { factor: 1, unit };
   const factor = PREFIXES[unit[0] ?? ''];
   if (factor !== undefined && BASE_UNITS.has(unit.slice(1))) return { factor, unit: unit.slice(1) };
@@ -55,7 +57,9 @@ function sigFigs(mantissa: string): { digits: number; exponent: number } {
   const all = `${whole}${fraction ?? ''}`.replace(/^0+/, '');
   const digits = Math.max(1, fraction === undefined ? all.replace(/0+$/, '').length : all.length);
   const value = Number(mantissa.replace(',', '.'));
-  return { digits, exponent: value === 0 ? 0 : Math.floor(Math.log10(Math.abs(value))) };
+  // Zero has no leading digit, so its precision is its decimal places: 0.00 is known to a hundredth.
+  if (value === 0) return { digits: (fraction?.length ?? 0) + 1, exponent: 0 };
+  return { digits, exponent: Math.floor(Math.log10(Math.abs(value))) };
 }
 
 export function parseQuantity(text: string): Quantity | null {
@@ -68,7 +72,7 @@ export function parseQuantity(text: string): Quantity | null {
   const { factor, unit } = splitUnit(rest ?? '');
   if (!knownUnit(unit)) return null;
   const { digits, exponent } = sigFigs(mantissa!);
-  const quantity: Quantity = { base: asWritten * factor, asWritten, unit, digits, exponent: exponent + shift };
+  const quantity: Quantity = { base: asWritten * factor, asWritten, factor, unit, digits, exponent: exponent + shift };
   // 1,500 and 1.500 are one and a half or fifteen hundred, depending on the language. Both readings are kept.
   if (/^[1-9]\d{0,2}[.,]\d{3}$/.test(mantissa!)) quantity.alt = parseQuantity(text.replace(/(\d)[.,](\d{3})(?!\d)/, '$1$2')) ?? undefined;
   return quantity;
@@ -105,12 +109,12 @@ function compare(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'sk
 }
 
 function compareReading(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'skip' {
-  const scale = stated.asWritten === 0 ? 1 : stated.base / stated.asWritten;
+  const scale = stated.factor;
   if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : differs(stated, printed.value, scale) ? 'mismatch' : 'match';
   // The program was told to print SI base units, so an unmarked value is read as one.
   if (!differs(stated, printed.value, scale)) return 'match';
-  if (stated.unit === '' || scale === 1) return 'mismatch';
-  return differs({ ...stated, base: stated.asWritten }, printed.value, 1) ? 'mismatch' : 'skip';
+  if (scale === 1) return 'mismatch';
+  return differs({ ...stated, base: stated.asWritten, factor: 1 }, printed.value, 1) ? 'mismatch' : 'skip';
 }
 
 function pair(stated: StatedValue[], printed: Printed[]): [StatedValue, Printed][] {

@@ -60,6 +60,19 @@ describe('comparing recomputed values with the stated ones', () => {
     assert.equal(compareValues([{ name: 'F', value: '1,500 N' }], 'F = 2000 N')!.mismatches.length, 1);
   });
 
+  test('a stated zero keeps its decimal places and its prefix', () => {
+    assert.equal(compareValues([{ name: 'I', value: '0.00 mA' }], 'I = 0.9 A')!.mismatches.length, 1, '0.00 mA is zero to a hundredth of a milliamp');
+    assert.equal(compareValues([{ name: 'I', value: '0.00 mA' }], 'I = 0.000004 A')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'V', value: '0,0 V' }], 'V = 0.3 V')!.mismatches.length, 1);
+  });
+
+  test('a percentage and the same value as a fraction agree', () => {
+    assert.equal(compareValues([{ name: 'p', value: '50%' }], 'p = 0.5')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'p', value: '50 %' }], 'p = 50 %')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'p', value: '50%' }], 'p = 0.8')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'p', value: '50%' }], 'p = 50'), null, 'an unmarked 50 fits only the number as written');
+  });
+
   test('a number without a unit is compared as it is', () => {
     assert.equal(compareValues([{ name: 'n', value: '0.25' }], 'n = 0.25')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'n', value: '0.25' }], 'n = 0.5')!.mismatches.length, 1);
