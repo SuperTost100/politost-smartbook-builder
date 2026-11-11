@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, dropReferences, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { applyGuardedChanges, dropReferences, guardRules, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -118,4 +118,24 @@ test('a change that turns a major finding into a blocker of the same rule is rev
   const findings = (md: string) => md.includes('MAJ') ? [{ rule: 'katex', severity: 'major' as const, message: 'm', file: 's1' }]
     : md.includes('BLK') ? [{ rule: 'katex', severity: 'blocker' as const, message: 'b', file: 's1' }] : [];
   assert.deepEqual(applyGuardedChanges(['Vale MAJ.'], [{ block: 0, text: 'Vale BLK.' }], findings).kept, []);
+});
+
+test('the rules told to the fix model are the limits the guard enforces', () => {
+  const plain = guardRules();
+  const limit = Number(/Delete at most (\d+) blocks/.exec(plain)?.[1]);
+  assert.equal(limit, MAX_DELETED_BLOCKS);
+  const blocks = Array.from({ length: limit + 2 }, (_, i) => `Blocco ${i}.`);
+  const del = (n: number) => applyGuardedChanges(blocks, blocks.slice(0, n).map((_, block) => ({ block, text: '' })), lint);
+  assert.equal(del(limit).reverted.length, 0, 'deleting as many as the rules allow is accepted');
+  assert.equal(del(limit + 1).reverted.length, 1, 'one more is reverted');
+  assert.match(plain, /Never delete a block that holds a heading, a formula or another ::: block/);
+  assert.match(plain, /Never delete a figure block/);
+  assert.match(plain, new RegExp(`less than ${Math.round(MIN_KEPT_SHARE * 100)}%`));
+  // A fix about a figure may delete a figure block; a fix for off-program material may delete much more.
+  assert.match(guardRules({ figures: true }), /may be deleted because a problem is about that figure/);
+  const cut = Number(/up to (\d+) blocks/.exec(guardRules({ removals: true }))?.[1]);
+  const many = Array.from({ length: cut + 1 }, (_, i) => `Blocco ${i}.`);
+  const removed = (n: number) => applyGuardedChanges(many, many.slice(0, n).map((_, block) => ({ block, text: '' })), lint, { removals: true });
+  assert.equal(removed(cut).reverted.length, 0);
+  assert.equal(removed(cut + 1).reverted.length, 1);
 });

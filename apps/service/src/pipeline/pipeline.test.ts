@@ -2,6 +2,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
+import { MAX_DELETED_BLOCKS } from '@smartbuilder/content';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
@@ -1191,6 +1192,36 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     assert.equal(issues(`id = 'lint-old'`).length, 0, 'the section lints were run again');
     assert.deepEqual(events('content.saved').at(-1), { nodeId: 's1', revId: r.revId, origin: 'repair', status: 'current' });
     assert.ok(events('issue.updated').some((e) => e.issueIds.includes('i1')));
+  });
+
+  test('a fix for issues is told the guard rules and gets only the evidence notes its blocks cite; an instruction gets neither', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const notes = ['n1', 'n2', 'n3'].map((id) => ({ id, quote: `Citazione ${id}`, resourceId: null, page: null, url: 'https://x.example', verified: true, claim: '' }));
+    ctx.db.insert('evidence_packets', { id: newId(), project_id: P, node_id: 's1', provider: 'local', query: 'q', answer: '', notes, created_at: now() });
+    seedRevision('s1', 'Prima frase.\n\nSeconda frase.\n\nTerza frase.', { citations: { '0': ['n1'], '1': ['n2', 'n3'] } });
+    issue('i1', { quote: 'Prima frase.' });
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima corretta.' }] }), answer(checkGood([0])));
+    await fix(['i1']);
+    const [system, prompt] = [fake.calls[0].system ?? '', fake.calls[0].prompt];
+    assert.match(system, /Rules the builder enforces on every change/);
+    assert.match(system, new RegExp(`Delete at most ${MAX_DELETED_BLOCKS} blocks`));
+    assert.match(prompt, /Citazione n1/);
+    assert.doesNotMatch(prompt, /Citazione n2|Citazione n3/);
+
+    // A passage that is not found, or blocks that cite nothing, send the whole packet.
+    issue('i2', { quote: 'Frase che non esiste.' });
+    fake.next(answer({ figures: [], changes: [] }));
+    await fix(['i2']);
+    assert.match(fake.calls[2].prompt, /Citazione n1[\s\S]*Citazione n2[\s\S]*Citazione n3/);
+    issue('i3', { quote: 'Terza frase.' });
+    fake.next(answer({ figures: [], changes: [] }));
+    await fix(['i3']);
+    assert.match(fake.calls[3].prompt, /Citazione n1[\s\S]*Citazione n3/);
+
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Con istruzione.' }] }));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'riscrivi' }));
+    assert.doesNotMatch(fake.calls.at(-1)!.system ?? '', /Rules the builder enforces/);
+    assert.match(fake.calls.at(-1)!.prompt, /Citazione n2/);
   });
 
   test('the head changed while the model ran: the fix stays a proposal and the issue is proposed', async () => {

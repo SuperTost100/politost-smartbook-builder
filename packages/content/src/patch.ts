@@ -13,6 +13,10 @@ export interface GuardedPatch {
 
 /** A fix may delete this many blocks at most; a model that wants more is rewriting, not fixing. */
 export const MAX_DELETED_BLOCKS = 3;
+/** A fix for off-program material may delete this many times as many blocks. */
+export const REMOVAL_FACTOR = 5;
+/** A fix that leaves less than this share of the section's text is not applied; it waits as a proposal. */
+export const MIN_KEPT_SHARE = 0.8;
 
 const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
@@ -66,7 +70,7 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
       if (!old.trim()) continue;
       const image = opts.figures && onlyImage(old);
       if (!image && !opts.removals && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
-      const limit = opts.removals ? MAX_DELETED_BLOCKS * 5 : MAX_DELETED_BLOCKS;
+      const limit = opts.removals ? MAX_DELETED_BLOCKS * REMOVAL_FACTOR : MAX_DELETED_BLOCKS;
       if (deleted >= limit) { drop(`it would delete more than ${limit} blocks`); continue; }
     } else {
       const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));
@@ -86,6 +90,28 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     if (!text) deleted++;
   }
   return { blocks: out, kept: [...kept].sort((a, b) => a - b), reverted };
+}
+
+/**
+ * The guard rules as text for the fix model, built from the constants above so that the prompt and the guard cannot drift.
+ * Without them the model deleted headings, formulas and blocks the guard then reverted, and one fix in five changed nothing.
+ */
+export function guardRules(opts: { figures?: boolean; removals?: boolean } = {}): string {
+  const rules = opts.removals
+    ? [`This fix removes off-program material, so you may delete whole blocks, headings, formulas and ::: blocks, up to ${MAX_DELETED_BLOCKS * REMOVAL_FACTOR} blocks. A block you rewrite instead of deleting keeps its heading and its formula keys.`]
+    : [
+      `Never delete a block that holds a heading, a formula or another ::: block, and never drop a heading or a formula key from a block you rewrite. Keep the heading line and the key="..." of every formula as they are.`,
+      `Delete at most ${MAX_DELETED_BLOCKS} blocks. Correct the sentence at fault instead of deleting its paragraph.`,
+    ];
+  rules.push(opts.figures
+    ? 'A figure block (:::image) may be deleted because a problem is about that figure.'
+    : 'Never delete a figure block (:::image): it may go only when a problem is about that figure.');
+  rules.push(
+    'Every ::: block you write opens and closes.',
+    'Write no formula or formatting error: a change that adds a KaTeX error, a placeholder or another blocker or major lint finding is dropped.',
+    `A fix that leaves less than ${Math.round(MIN_KEPT_SHARE * 100)}% of the section's text is not applied; it waits for the author.`,
+  );
+  return `Rules the builder enforces on every change. A change that breaks one is dropped and its problem stays open:\n${rules.map((r) => `- ${r}`).join('\n')}`;
 }
 
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();

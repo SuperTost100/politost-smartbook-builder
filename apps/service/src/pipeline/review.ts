@@ -1,6 +1,6 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
-import { applyGuardedChanges, compileChapter, dropReferences, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
-import { outlineSchema, subjectProfileOf } from '@smartbuilder/domain';
+import { applyGuardedChanges, compileChapter, dropReferences, lintSection, MIN_KEPT_SHARE, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
+import { outlineSchema, subjectProfileOf, type EvidenceNote } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
 import { countOpenSerious, issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
@@ -269,6 +269,20 @@ export interface ReviseResult { revId?: string; status?: string; reused?: boolea
 /** Program issues about thin coverage or a missing proof ask the fix to add material; every other fix stays minimal. */
 const adds = (i: { category: string }) => i.category === 'program-thin' || i.category === 'program-proof';
 
+/**
+ * The ids of the evidence notes cited by the blocks that hold the issues' quotes. Empty when it cannot be told which blocks
+ * the fix touches (an issue without a quote or whose quote is in no block) or when those blocks cite nothing.
+ */
+function citedNotes(blocks: string[], issues: { quote: string }[]): Set<string> {
+  const ids = new Set<string>();
+  for (const i of issues) {
+    const holding = blocks.filter((b) => quoteInBlock(i.quote, b));
+    if (!holding.length) return new Set();
+    for (const b of holding) for (const m of b.matchAll(/\[\[([^\]]+)\]\]/g)) for (const id of m[1].split(/[,\s]+/)) if (id) ids.add(id);
+  }
+  return ids;
+}
+
 export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<ReviseResult> {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
@@ -287,21 +301,25 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     ...issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`),
   ].filter(Boolean).join('\n');
   if (!requests) return { skipped: 'nothing requested' };
-  const p = ctx.db.get('SELECT * FROM evidence_packets WHERE project_id = ? AND node_id = ? ORDER BY created_at DESC LIMIT 1', projectId, nodeId);
-  const ev = p ? evidenceText(ctx, { id: p.id as string, projectId, nodeId, provider: 'local', query: '', answer: '', notes: json(p.notes, []), createdAt: '' }).notes : '';
-  const known = bookFormulaKeys(ctx, projectId, nodeId).map((k) => `${k.key}: ${k.label}`).join('\n');
-  const sectionIds = outline ? outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n') : '';
   // Stored text has no citation markers; put the base revision's back so the model can keep them.
   const baseCitations = json<Record<string, string[]>>(ctx.db.get<{ citations: string }>('SELECT citations FROM content_revisions WHERE id = ?', head.id)?.citations, {});
   const blocks = splitBlocks(withMarkers(head.markdown, baseCitations)).map((b) => b.text);
   // Blockers and the author's own instructions get the strongest writer; everything else the cheaper editor.
   const instructed = !!t.task.input.instruction;
   const grows = issues.some(adds);
+  const p = ctx.db.get('SELECT * FROM evidence_packets WHERE project_id = ? AND node_id = ? ORDER BY created_at DESC LIMIT 1', projectId, nodeId);
+  const notes = json<EvidenceNote[]>(p?.notes, []);
+  // A fix for issues reads the notes its blocks cite. The whole packet goes only when that cannot be told: an instruction,
+  // material to add, an issue whose passage is not found, or blocks that cite nothing.
+  const cited = instructed || grows ? new Set<string>() : citedNotes(blocks, issues);
+  const ev = p ? evidenceText(ctx, { id: p.id as string, projectId, nodeId, provider: 'local', query: '', answer: '', notes: cited.size ? notes.filter((n) => cited.has(n.id)) : notes, createdAt: '' }).notes : '';
+  const known = bookFormulaKeys(ctx, projectId, nodeId).map((k) => `${k.key}: ${k.label}`).join('\n');
+  const sectionIds = outline ? outline.outline.chapters.flatMap((c) => c.sections.map((s) => `${s.id}: ${s.title}`)).join('\n') : '';
   const role = instructed || grows || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
   // The figure rules and specs go to the model only when the fix may add a figure: a figure problem, or the author's instruction.
   const figures = project.options.figures && (instructed || issues.some((i) => i.category === 'figure')) ? figureSetupOf(project, photosAvailable(ctx)) : null;
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures }),
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures, guards: !instructed && issues.length > 0 ? { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') } : null }),
     schema: patchSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix may add figures. The check that drops decorative ones runs first; image blocks pointing at neither a new figure
@@ -386,7 +404,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   // Losing more than a fifth of the text is the author's call, unless the fix was about repetition.
   // Image blocks are not text: removing a useless figure does not shrink the section.
   const prose = (md: string) => md.replace(/:::image\{[^}]*\}\s*\n\s*:::/g, '').length;
-  const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * 0.8 && !issues.some((i) => i.category === 'repetition' || i.category === 'program-off');
+  const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * MIN_KEPT_SHARE && !issues.some((i) => i.category === 'repetition' || i.category === 'program-off');
   const answered = issues.filter((i) => !dropped(i) && !unresolved.has(issues.indexOf(i)));
   let committed!: ReturnType<typeof commitAiRevision>;
   let stored: string[] = [];

@@ -1,7 +1,7 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { codeString } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
@@ -860,13 +860,13 @@ export function patchSchemaFor(figures: FigureSetup | null): z.ZodType<PatchAnsw
 }
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.${p.guards ? `\n\n${guardRules(p.guards)}` : ''}\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
