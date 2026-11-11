@@ -865,6 +865,26 @@ describe('a conversation that continues after the first answer', () => {
     assert.equal((await other).text, 'last');
     talk.close();
   });
+
+  test('a follow-up that was waiting for its slot when the handle was closed makes no call', async () => {
+    setRoutes({ writer: { primary: route('codex') } }, { codex: 1 });
+    let release!: () => void;
+    fake.next(
+      live('s1', 'draft'),
+      () => new Promise<{ text: string }>((r) => { release = () => r({ text: 'other' }); }),
+      live('s2', 'late'),
+    );
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    const other = runRole(kit.ctx, { ...base, role: 'writer' });
+    await new Promise((r) => setTimeout(r, 10));
+    const follow = talk.send('check');
+    await new Promise((r) => setTimeout(r, 10));
+    talk.close();
+    release();
+    await other;
+    await assert.rejects(follow, (e: unknown) => e instanceof FollowUpError && /closed/.test(e.message));
+    assert.equal(fake.calls.length, 2, 'the follow-up never reached the model');
+  });
 });
 
 describe('a parse function instead of a schema', () => {

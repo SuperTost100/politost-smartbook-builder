@@ -348,6 +348,8 @@ class Conversation {
     if (out.sessionId) {
       this.sessionId = out.sessionId;
       this.sessionIds.add(out.sessionId);
+      // A call that was running when the handle was closed must not leave its session behind.
+      if (this.closed) this.funnel.closeSession(out.sessionId, this.route.provider as never);
     }
     this.lastText = out.text;
     return out;
@@ -359,6 +361,8 @@ class Conversation {
     if (images?.length && !routeReadsImages(this.funnel, this.route)) throw new FollowUpError(`${this.route.provider}/${this.route.model} cannot read images.`, 'input');
     const release = await slotsFor(this.ctx).acquire(this.route.provider, this.opts.signal);
     try {
+      // The handle may have been closed while this call waited for its slot.
+      if (this.closed) throw new FollowUpError('The conversation is closed.', 'input');
       const out = await this.next(prompt, { images });
       return { text: out.text, usage: out.usage };
     } catch (err) {
