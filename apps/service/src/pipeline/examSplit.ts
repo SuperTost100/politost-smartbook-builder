@@ -193,6 +193,17 @@ export function buildAiSplit(resourceId: string, pages: { idx: number; text: str
     sessions.push({ title: s.title.trim(), date: s.date, start, exercises });
     at += 1;
   }
+  // A solution belongs to the session of its exercise and to that exercise alone, whatever the model points at.
+  const taken = new Set<number>();
+  for (const [i, s] of sessions.entries()) {
+    const end = sessions[i + 1]?.start ?? lines.length;
+    for (const e of s.exercises) {
+      if (e.solution === null) continue;
+      if (e.solution >= end) return { reason: `The solution of exercise ${e.number} of "${s.title}" is printed in a later session.` };
+      if (taken.has(e.solution)) return { reason: `Two exercises are given the same solution, and one of them is exercise ${e.number} of "${s.title}".` };
+      taken.add(e.solution);
+    }
+  }
   const rows: QuestionRow[] = [];
   const seen = new Map<string, number>();
   const keys = sessions.map((s, i) => {

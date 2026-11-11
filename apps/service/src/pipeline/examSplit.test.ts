@@ -209,6 +209,32 @@ describe('Split with AI', () => {
     assert.ok('rows' in out);
     assert.deepEqual(out.rows.map((r) => [r.examGroup, r.examDate, r.statement]), [['Prova A', null, 'Es. 1 Uno'], ['Prova B', null, 'Es. 1 Due']]);
   });
+
+  test('buildAiSplit: a solution from another session, or one solution for two exercises, is refused', () => {
+    const pages = [
+      { idx: 0, text: 'Appello del 12 febbraio 2024\nEsercizio 1 Uno\nEsercizio 2 Due' },
+      { idx: 1, text: 'Appello del 5 luglio 2024\nEsercizio 1 Tre\nSoluzione 1 Tre\nSoluzione 2 Quattro' },
+    ];
+    const answer = (a1: ExamSplitAnswer['sessions'][number]['exercises'], b1: ExamSplitAnswer['sessions'][number]['exercises']): ExamSplitAnswer => ({ sessions: [
+      { title: 'Appello del 12 febbraio 2024', date: '2024-02-12', page: 1, start: 'Appello del 12 febbraio 2024', exercises: a1 },
+      { title: 'Appello del 5 luglio 2024', date: '2024-07-05', page: 2, start: 'Appello del 5 luglio 2024', exercises: b1 },
+    ] });
+    const ex = (n: string, page: number, start: string, solution?: { page: number; start: string }) => ({ number: n, page, start, solution });
+    // Both sessions point at the second paper's "Soluzione 1".
+    const shared = buildAiSplit('r', pages, answer([ex('1', 1, 'Esercizio 1 Uno', { page: 2, start: 'Soluzione 1' })], [ex('1', 2, 'Esercizio 1 Tre', { page: 2, start: 'Soluzione 1' })]), 'f');
+    assert.ok('reason' in shared);
+    // The first paper alone points into the second paper.
+    const later = buildAiSplit('r', pages, answer([ex('1', 1, 'Esercizio 1 Uno', { page: 2, start: 'Soluzione 1' })], [ex('1', 2, 'Esercizio 1 Tre')]), 'f');
+    assert.ok('reason' in later);
+    assert.match(later.reason, /later session/);
+    // Two exercises of one session share a solution.
+    const twice = buildAiSplit('r', pages, answer([ex('1', 1, 'Esercizio 1 Uno'), ex('2', 1, 'Esercizio 2 Due')], [ex('1', 2, 'Esercizio 1 Tre', { page: 2, start: 'Soluzione 1' }), ex('2', 2, 'Esercizio 1 Tre', { page: 2, start: 'Soluzione 1' })]), 'f');
+    assert.ok('reason' in twice);
+    // Each solution inside its own session is stored.
+    const ok = buildAiSplit('r', pages, answer([ex('1', 1, 'Esercizio 1 Uno'), ex('2', 1, 'Esercizio 2 Due')], [ex('1', 2, 'Esercizio 1 Tre', { page: 2, start: 'Soluzione 1' })]), 'f');
+    assert.ok('rows' in ok);
+    assert.deepEqual(ok.rows.map((r) => r.solution.split('\n')[0]), ['', '', 'Soluzione 1 Tre']);
+  });
 });
 
 describe('the author asks for the AI split', () => {
