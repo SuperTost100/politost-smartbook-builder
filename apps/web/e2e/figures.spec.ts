@@ -957,7 +957,7 @@ test.describe('review findings of the figure dialog', () => {
     await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
     fm.readMs = 600;
     await dialog.getByRole('button', { name: 'Render' }).click();
-    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
+    await expect.poll(() => fm.figures().length).toBe(2); // the render is done on the service, the page has not read the new figure yet
     // The new figure's details are on their way: the old ones still on screen belong to a head the book has left.
     await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeDisabled();
     await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
