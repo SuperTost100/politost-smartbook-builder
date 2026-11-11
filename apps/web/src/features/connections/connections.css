@@ -40,6 +40,7 @@
 .cn-key .ui-input { flex: 1; min-width: 0; }
 
 /* Usage per provider (marker 6a of the 0.4.0 mockup). */
+.cn-usage .ui-table-wrap { position: relative; } /* keeps the screen-reader text of a cell inside the scrolling box */
 .cn-usage .ui-table td, .cn-usage .ui-table th { white-space: nowrap; }
 .cn-usage .ui-table th.cn-prov { white-space: normal; text-align: left; font: inherit; letter-spacing: 0; text-transform: none; color: var(--ink); background: none; border-bottom: 1px solid var(--border); padding: 8px 12px; min-width: 150px; }
 .cn-models-line { font-size: 12px; font-weight: 400; }

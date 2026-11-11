@@ -449,12 +449,14 @@ test.describe('Connections: usage and routing', () => {
   });
 
   test('a share that cannot be computed shows a dash, and no calls shows a sentence', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
     await page.route(/\/api\/usage$/, (route) => answer(route, { days: 30, providers: [{ provider: 'claude', models: ['claude-sonnet-5'], calls: 40, inputTokens: 90_000, outputTokens: 4_000, cachedShare: null, failed: 0, timeouts: 0 }], total: { provider: '', models: [], calls: 40, inputTokens: 90_000, outputTokens: 4_000, cachedShare: null, failed: 0, timeouts: 0 } }));
     await page.goto('/connections');
     const row = page.getByRole('region', { name: 'Model calls per provider' }).getByRole('row').filter({ hasText: 'Claude' });
     await expect(row.getByRole('cell').nth(2)).toHaveText(/–\s*Not recorded/);
     await expect(row).toContainText('90K');
     await expect(row.locator('.cn-bar')).toHaveCount(0);
+    await noOverflow(page); // the hidden "Not recorded" text must not widen the page
 
     await page.unroute(/\/api\/usage$/);
     await page.route(/\/api\/usage$/, (route) => answer(route, { days: 30, providers: [], total: { provider: '', models: [], calls: 0, inputTokens: 0, outputTokens: 0, cachedShare: null, failed: 0, timeouts: 0 } }));
