@@ -28,6 +28,8 @@ export interface FigureMock {
   runError: string;
   /** Every write answers 409, as when the text moved on. */
   stale: boolean;
+  /** How long the asset list and a figure's details take to answer, so the moment before the page has them can be looked at. */
+  readMs: number;
   /** How long a save of the section text (PUT) takes to answer. The text is written when the request arrives, as in the service. */
   putMs: number;
   head: () => string;
@@ -52,7 +54,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const fm: FigureMock = {
-    writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, head: () => headId, figures: () => [...figs.values()],
+    writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, readMs: 0, head: () => headId, figures: () => [...figs.values()],
     elsewhere: (change, opts) => {
       const id = [...figs.keys()].find((k) => blocks.includes(`fig:${k}`))!;
       swap(id, change);
@@ -115,6 +117,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       const head = sectionView().current;
       return json([{ ...head, figureNote: fm.writes.length ? 'Figure "Amplificatore invertente": caption changed to "Nuova didascalia"' : null }, { ...head, id: 'rvf0', status: 'superseded', createdAt: ago(30), figureNote: null }]);
     }
+    if (method === 'GET' && fm.readMs && (path === '/api/projects/p1/assets' || /\/figures\/[^/]+$/.test(path))) await new Promise((r) => setTimeout(r, fm.readMs));
     if (method === 'GET' && path === '/api/projects/p1/assets') return o.assetsFail ? json({ error: { code: 'internal', message: 'The asset list could not be read.' } }, 500) : json(assetRows());
     if (method === 'GET' && path === '/api/projects/p1/chapters/c1/preview') return json({ markdown: compiled(), number: 1, assets: Object.fromEntries([...figs.values()].flatMap((f) => [[`assets/${f.filename}`, `/api/assets/${f.id}/file`], [f.filename, `/api/assets/${f.id}/file`]])) });
     if (method === 'GET' && /^\/api\/assets\/[^/]+\/file$/.test(path)) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: DRAWING_SVG });

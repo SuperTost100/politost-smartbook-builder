@@ -782,6 +782,58 @@ test.describe('review findings of the figure dialog', () => {
     await expect(dialog.getByText('Not rendered yet. The figure still shows the last render.')).toBeVisible();
   });
 
+  test('after a Render the next request names the new figure and the new head, so a redraw starts from the rendered source', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    const first = fm.figures()[0].id;
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // R_1');
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(dialog.getByText('Rendered just now')).toBeVisible();
+    const rendered = fm.figures().find((f) => f.id !== first)!;
+    await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    const redraw = fm.writes.find((w) => w.call.endsWith('/redraw'))!;
+    expect(redraw.call).toBe(`POST /api/projects/p1/sections/s1/figures/${rendered.id}/redraw`);
+    expect(redraw.body).toEqual({ baseRevId: fm.head(), instruction: 'Make the capacitor label C bigger' });
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('a dialog opened again after a save shows the figure as the book has it now, and never asks for the figure it replaced', async ({ page }) => {
+    const fm = await open(page);
+    let dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia nuova.');
+    await dialog.getByLabel('Alt text').fill('Alt nuovo.');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    dialog = await openDialog(page);
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia nuova.');
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Alt nuovo.');
+    await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('while the page fetches the figure a Render made, the dialog holds its buttons instead of asking for the old figure', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    const first = fm.figures()[0].id;
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // R_1');
+    await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
+    fm.readMs = 600;
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+    // The new figure's details are on their way: the old ones still on screen belong to a head the book has left.
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    const rendered = fm.figures().find((f) => f.id !== first)!;
+    expect(fm.writes.filter((w) => w.call.endsWith('/redraw')).map((w) => w.call)).toEqual([`POST /api/projects/p1/sections/s1/figures/${rendered.id}/redraw`]);
+    expect(fm.notFound).toEqual([]);
+  });
+
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
     const fm = await open(page);
     const dialog = await openDialog(page);

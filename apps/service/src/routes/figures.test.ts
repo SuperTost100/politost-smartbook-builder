@@ -8,6 +8,11 @@ import { commitAiRevision } from '../pipeline/draft.ts';
 import { compileBook } from '@smartbuilder/content';
 import { loadBookInput } from '../repo/index.ts';
 import { fakeRun, installFakes, multipart, projectWithOutline, startApp, type TestApp } from './testkit.ts';
+import { DEFAULT_ROUTES } from '@smartbuilder/domain';
+import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
+import { FakeFunnel, usageOf } from '../llm/testkit.ts';
+import { newId, now } from '../db/db.ts';
+import { figureRedraw } from '../pipeline/figureEdit.ts';
 
 let t: TestApp;
 let restore: () => void;
@@ -268,6 +273,51 @@ describe('redraw', () => {
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: 'old', instruction: 'x' })).status, 409);
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: s.headId, instruction: '  ' })).status, 400);
     assert.equal(calls.redraw.length, 1);
+  });
+
+  it('after a Render, a redraw sent the way the dialog sends it starts from the rendered source, and a request for the figure it replaced is refused with 409', async () => {
+    const s = await seed();
+    const EDITED = '#rect(width: 20pt, height: 10pt) // R_1';
+    const rendered = await t.req('POST', url(s, `/${s.drawn}/render`), { baseRevId: s.headId, source: EDITED });
+    assert.equal(rendered.status, 200);
+    // The dialog finds the figure the new text shows in the asset list, reads its details, and sends what they name.
+    const filename = /src="assets\/([^"]+)"/.exec(rendered.body.current.markdown)![1];
+    const shown = listAssets(t.ctx, s.projectId).find((a) => a.filename === filename)!;
+    assert.notEqual(shown.id, s.drawn, 'a render gives the figure a new asset');
+    const details = (await t.req('GET', url(s, `/${shown.id}`))).body;
+    assert.equal(details.drawing.source, EDITED);
+    // The old id is refused, never run: 409, as for a stale head.
+    const old = await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: details.headRevId, instruction: 'Make C bigger' });
+    assert.equal(old.status, 409);
+    assert.equal(calls.redraw.length, 0);
+    for (const call of ['render', 'remove']) assert.equal((await t.req('POST', url(s, `/${s.drawn}/${call}`), { baseRevId: details.headRevId, source: EDITED })).status, 409, call);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: details.headRevId, caption: 'x' })).status, 409);
+    assert.equal(headOf(s).id, details.headRevId, 'nothing was written');
+    // The id the dialog sends starts the task, and the model is given the rendered source.
+    assert.equal((await t.req('POST', url(s, `/${shown.id}/redraw`), { baseRevId: details.headRevId, instruction: 'Make C bigger' })).status, 200);
+    const input = calls.redraw[0] as { nodeId: string; assetId: string; instruction: string };
+    assert.equal(input.assetId, shown.id);
+    const fake = new FakeFunnel();
+    setFunnel(fake);
+    resetLlmState();
+    resetConnectionsCache();
+    t.ctx.saveSettings({ routes: DEFAULT_ROUTES });
+    try {
+      const runId = newId();
+      t.ctx.db.insert('runs', { id: runId, project_id: s.projectId, kind: 'figure', status: 'running', snapshot: {}, created_at: now() });
+      const id = newId();
+      t.ctx.db.insert('tasks', { id, run_id: runId, project_id: s.projectId, kind: 'figure.redraw', label: 'x', key: `figure.redraw:${id}`, input, state: 'running', pool: 'illustrator', attempts: 1, max_attempts: 2, created_at: now() });
+      const say = (text: string) => () => ({ text, usage: usageOf(10, 10) });
+      fake.next(say('#circle(radius: 8pt) // R_1 bigger C'), say('OK'));
+      await figureRedraw(t.ctx, {
+        task: { id, runId, projectId: s.projectId, kind: 'figure.redraw', key: `figure.redraw:${id}`, label: 'x', input, attempts: 1 }, signal: new AbortController().signal,
+        deps: {}, enqueue: () => [], progress: () => undefined, setProvider: () => undefined,
+      });
+      assert.ok(fake.calls[0].prompt.includes(`The figure is drawn by this source now:\n${EDITED}\n`), 'the model is given the rendered source');
+      assert.ok(!fake.calls[0].prompt.includes(SOURCE), 'and not the source the figure had before');
+    } finally {
+      setFunnel(null);
+    }
   });
 
   it('passes an edited description on to the task, and nothing when it is unchanged', async () => {

@@ -13,7 +13,7 @@
 import type { DrawingFamily } from '@smartbuilder/domain';
 import type { AppContext } from '../../context.ts';
 import { FollowUpError, withRole, type ParseResult, type RoleConversation } from '../../llm/index.ts';
-import { illustratorPrompt, illustratorSystem, LOOK_MESSAGE, repairMessage } from './prompt.ts';
+import { illustratorPrompt, illustratorSystem, lookMessage, repairMessage } from './prompt.ts';
 import { rasterizeDrawing, renderDrawing } from './index.ts';
 import type { CircuitSymbols, DrawingEngine } from './types.ts';
 
@@ -149,7 +149,7 @@ export async function illustrate(ctx: AppContext, o: IllustrateInput): Promise<I
       let best = first;
       let look: LookOutcome = 'skipped';
       try {
-        const reply = await talk.send(LOOK_MESSAGE, { images: [rasterizeDrawing(first.svg, 1000)] });
+        const reply = await talk.send(lookMessage(!!o.redraw), { images: [rasterizeDrawing(first.svg, 1000)] });
         add(reply.usage);
         if (saysOk(reply.text)) {
           look = 'ok';

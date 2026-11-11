@@ -9,7 +9,7 @@ import type { AppContext } from '../context.ts';
 import { newId } from '../db/db.ts';
 import { bookFigures, cleanCaption, removeImageBlock } from '../figures/materialize.ts';
 import {
-  copyAsset, discardAsset, figureDetails, figureOfSection, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, saveFigureDetails, storeUpload, swapSrc, writeFigureRevision,
+  copyAsset, discardAsset, figureDetails, figureOfSection, figureToChange, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, saveFigureDetails, storeUpload, swapSrc, writeFigureRevision,
 } from '../figures/author.ts';
 import { drawingSpec } from '../figures/drawing/edit.ts';
 import { loadProject } from '../pipeline/util.ts';
@@ -94,7 +94,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const nodeId = idParam(req, 'nodeId');
     const body = parse(z.object({ baseRevId: baseRev, caption: captionText.optional(), alt: altText.optional(), shows: z.string().trim().min(1).max(4000).optional() }), req.body);
     const head = headOf(ctx, projectId, nodeId, body.baseRevId);
-    const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
+    const asset = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
     const drawing = drawingSpec(asset);
     if (body.shows !== undefined && !drawing) throw badInput('Only a drawn figure has a description to save.', undefined, 'shows');
     // The caption, the alt text and the description are read by every revision that names the asset, so the change is made on a copy (figures/author.ts).
@@ -108,7 +108,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const nodeId = idParam(req, 'nodeId');
     const body = parse(z.object({ baseRevId: baseRev, source: z.string().min(1).max(200_000) }), req.body);
     const head = headOf(ctx, projectId, nodeId, body.baseRevId);
-    const old = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
+    const old = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
     if (!drawingSpec(old)) throw badInput('This figure was not drawn from source code, so it has no source to render.');
     // The edit is made on a copy: when the source does not compile the figure is untouched, and when it does the old asset stays for History.
     const copy = copyAsset(ctx, old);
@@ -137,7 +137,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const nodeId = idParam(req, 'nodeId');
     const body = parse(z.object({ baseRevId: baseRev, instruction: z.string().trim().min(1, 'Say what the drawing should change').max(1000), shows: z.string().trim().min(1).max(4000).optional() }), req.body);
     const head = headOf(ctx, projectId, nodeId, body.baseRevId);
-    const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
+    const asset = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
     const drawing = drawingSpec(asset);
     if (!drawing) throw badInput('This figure was not drawn from source code, so it cannot be redrawn.');
     // A description the author edited goes with the redraw, which saves it on the new drawing.
@@ -150,7 +150,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const nodeId = idParam(req, 'nodeId');
     const { file, fields } = await readUpload(req);
     const head = headOf(ctx, projectId, nodeId, parse(z.object({ baseRevId: baseRev }), fields).baseRevId);
-    const old = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
+    const old = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
     const fresh = storeUpload(ctx, projectId, nodeId, file, { caption: old.caption, alt: old.alt });
     try {
       writeFigureRevision(ctx, projectId, nodeId, (md) => swapSrc(md, old.filename, fresh.filename), { expectedHeadId: head.id });
@@ -166,7 +166,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const nodeId = idParam(req, 'nodeId');
     const { baseRevId } = parse(z.object({ baseRevId: baseRev }), req.body);
     const head = headOf(ctx, projectId, nodeId, baseRevId);
-    const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
+    const asset = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
     // The asset stays: older revisions of the section still show it.
     writeFigureRevision(ctx, projectId, nodeId, (md) => removeImageBlock(md, asset.filename), { expectedHeadId: head.id });
     return view(projectId, nodeId);

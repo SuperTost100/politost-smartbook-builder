@@ -96,6 +96,24 @@ describe('redraw task', () => {
     assert.match(prompt, /Everything the instruction does not mention stays exactly as in the current source: the same elements, positions, labels and values\./);
   });
 
+  test('a redraw tells the model that the source is the author\'s truth where the description is older, in the first prompt and in the look turn', async () => {
+    const { assetId } = await sectionWithDrawing();
+    fake.next(say(GOOD_2), say('OK'));
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Make it bigger.' }));
+    const [first, look] = fake.calls.map((c) => c.prompt);
+    const rule = /where the description and the source disagree, the source is what the author wants/;
+    assert.match(first, rule);
+    assert.match(look, rule);
+    assert.match(look, /Check it against the brief/);
+  });
+
+  test('the look turn of a new drawing has no such rule, because there is no author source to keep', async () => {
+    fake.next(say(GOOD), say('OK'));
+    const figure = { key: 'cerchio', kind: 'drawing', caption: 'Un cerchio', alt: 'Un cerchio', drawing: { shows: 'A circle.', family: 'sketch' } } as unknown as FigureRequest;
+    await buildFigures(ctx(), { projectId: P, nodeId: N, language: 'it', figures: [figure], photos: false });
+    assert.ok(!fake.calls.some((c) => /the source is what the author wants/.test(c.prompt)));
+  });
+
   test('the usage rows of a redraw carry its run and task', async () => {
     const { assetId } = await sectionWithDrawing();
     ctx().db.run('DELETE FROM usage'); // the setup drew the first figure outside any run

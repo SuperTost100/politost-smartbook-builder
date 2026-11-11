@@ -98,7 +98,8 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   });
   const title = `Figure${number ? ` ${number}` : ''}`;
   if (!open) return null;
-  if (details.data) return <FigureEditor key={nodeId} details={details.data} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
+  // While the details of the figure the text shows now are on their way, `details.data` is the previous figure's: it names an asset and a head the book has left, so nothing is sent from it.
+  if (details.data) return <FigureEditor key={nodeId} details={details.data} stale={details.isPlaceholderData} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
   // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
   const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
   const failed = details.error ?? assets.error;
@@ -114,7 +115,7 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   );
 }
 
-function FigureEditor({ details, pid, nodeId, title, number, onClose }: { details: FigureDetails; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
+function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const drawing = details.drawing;
@@ -209,7 +210,7 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   });
 
   const rendering = render.isPending;
-  const busy = rendering || redrawing || save.isPending || replace.isPending || remove.isPending;
+  const busy = rendering || redrawing || stale || save.isPending || replace.isPending || remove.isPending;
   const dirty = caption !== details.caption || alt !== details.alt || (!!drawing && shows !== drawing.shows);
   // The lint blocks an image without alt text, so an empty one is not saved.
   const altMissing = !alt.trim();

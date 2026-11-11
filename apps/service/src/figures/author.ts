@@ -11,7 +11,7 @@ import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { rewriteHead } from '../repo/content.ts';
 import { assertSafeSvg, assetPath, getAsset, mapAsset, storeAsset } from '../repo/assets.ts';
-import { badInput, notFound } from '../repo/errors.ts';
+import { badInput, conflict, notFound } from '../repo/errors.ts';
 import type { Rec } from '../repo/util.ts';
 import { relint } from '../routes/views.ts';
 import { IMAGE_ATTRS } from './materialize.ts';
@@ -31,6 +31,17 @@ export function figureOfSection(ctx: AppContext, projectId: string, assetId: str
   const asset = getAsset(ctx, assetId);
   if (asset.projectId !== projectId || !head || !showsFigure(head.markdown, asset.filename)) throw notFound('This figure');
   return asset;
+}
+
+/**
+ * The asset a write names. A figure of this project that the text does not show any more is one a change has replaced (a render,
+ * a save, a redraw each give the figure a new asset), so the dialog that names it is out of date: 409 like a stale head, and
+ * nothing runs on the older version. An asset that is not in this project is a 404 as for a read.
+ */
+export function figureToChange(ctx: AppContext, projectId: string, assetId: string, head: ContentRevision | null, nodeId: string): Asset {
+  const asset = getAsset(ctx, assetId);
+  if (asset.projectId === projectId && head && !showsFigure(head.markdown, asset.filename)) throw conflict('This figure changed since you opened it.', undefined, nodeId);
+  return figureOfSection(ctx, projectId, assetId, head);
 }
 
 export function figureKind(asset: Asset): FigureKindName {
