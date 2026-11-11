@@ -6,7 +6,7 @@ import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { ExtractError } from '../extract/errors.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, seedProject, seedResource, usageOf, written } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { getProgram, getReport, insertReport, reportInputs, saveProgramInput, saveProgramItems } from '../repo/index.ts';
 import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, checkBlocker, guideFindings, validateAlignment } from './align.ts';
@@ -313,10 +313,11 @@ describe('exam guide', () => {
     seedExam('Esame del 25 gennaio 2023', ['limiti'], { number: '2', exam_date: '2023-01-25', statement: 'Calcolare il limite $\\lim_{x\\to 0} \\frac{\\sin x}{x}$.' });
     seedExam('Esame del 3 giugno 2023', ['serie'], { number: '1' });
     seedExam('Esame del 5 luglio 2023', ['limiti'], { number: '4', exam_date: '2023-07-05' });
-    fake.next(answer({ markdown: 'Il capitolo è uscito in 2 appelli su 3.\n\n### Limiti notevoli\n\nVedi [i limiti](ref:section/s1).', figures: [{ key: 'inutile', kind: 'plot', caption: 'c', alt: 'a', plot: { xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr: 'x^2', label: null, domain: null, style: null }], points: null, asymptotes: null }, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null }], noFigureReason: null, summary: 'Guida.' }));
+    fake.next(written({ markdown: 'Il capitolo è uscito in 2 appelli su 3.\n\n### Limiti notevoli\n\nVedi [i limiti](ref:section/s1).', figures: [{ key: 'inutile', kind: 'plot', caption: 'c', alt: 'a', plot: { xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr: 'x^2', label: null, domain: null, style: null }], points: null, asymptotes: null }, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null }], noFigureReason: null, summary: 'Guida.' }));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 'g1' }));
     assert.equal(r.status, 'current');
-    assert.equal(fake.calls.length, 1, 'no evidence call and no repair');
+    assert.equal(fake.calls.length, 1, 'no evidence call, no repair and no self-check turn');
+    assert.equal(r.selfCheck, 'skipped');
     const { prompt, system } = fake.calls[0];
     assert.match(prompt, /2 of the 3 past exam sessions/);
     assert.match(prompt, /Esame del 25 gennaio 2023 \| 2023-01-25 \| n\. 2 \| Limiti \| Calcolare il limite/);
@@ -367,7 +368,7 @@ describe('AI text commits', () => {
 
 describe('the writer gets the program items and the exam format', () => {
   const draftOf = (id: string) => {
-    fake.next(answer({ markdown: 'Testo.', figures: [], noFigureReason: 'x', summary: 's' }));
+    fake.next(written({ markdown: 'Testo.', figures: [], noFigureReason: 'x', summary: 's' }));
     return sectionDraft(ctx, startTask('section.draft', { nodeId: id }));
   };
   const outlineWith = () => seedOutline([['c1', [section('s1', { programItems: ['fermat', 'limiti'] }), section('s2', { programItems: ['derivate'] })]]]);

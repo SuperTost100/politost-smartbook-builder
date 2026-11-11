@@ -338,3 +338,23 @@ test("retry ignores task ids from another run", async () => {
   await queue.stop();
   assert.equal(queue.tasks(b)[0].state, 'succeeded');
 });
+
+test('a stopped queue does not tick again, so a wake-up scheduled before stop() never touches a closed database', async () => {
+  const { db, queue, projectId } = setup();
+  queue.register('a', async () => ({}));
+  queue.start();
+  queue.createRun(projectId, 'generate', [{ kind: 'a', key: 'one', label: 'one' }]);
+  const late: unknown[] = [];
+  const catcher = (e: unknown) => late.push(e);
+  process.on('unhandledRejection', catcher);
+  try {
+    await queue.stop();
+    db.close();
+    queue.wake();
+    await new Promise((r) => setImmediate(r));
+    await new Promise((r) => setTimeout(r, 30));
+  } finally {
+    process.off('unhandledRejection', catcher);
+  }
+  assert.deepEqual(late, []);
+});

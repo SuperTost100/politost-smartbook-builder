@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { dropUnpairedBold, lintSection, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { addsCommentary, applyGuardedChanges, paragraphWords, sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -8,16 +8,18 @@ import { json, newId, now } from '../db/db.ts';
 import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
 import { photosAvailable } from '../figures/stock.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
-import { runRole } from '../llm/index.ts';
+import { FollowUpError, runRole, withRole, type RoleConversation } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
 import { chapterExamStats, examSessionTotal } from './exam.ts';
-import { draftPrompt, draftSchemaFor, examGuidePrompt, figureSetupOf, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
+import { draftParser, draftPrompt, type DraftAnswer, examGuidePrompt, figureSetupOf, introPrompt, repairParser, repairPrompt, repairSchema, selfCheckPrompt } from './prompts.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
 const MAX_TRANSCRIBED_PAGES = 4;
+/** The writer gets the clean text of at most this many cited pages. The quotes already carry the rest. */
+const MAX_PAGE_TEXTS = 2;
 const MAX_GUIDE_QUESTIONS = 80;
 
 export async function sectionEvidence(ctx: AppContext, t: TaskContext) {
@@ -82,11 +84,14 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
     return `[${n.id}] (${where}) "${truncate(n.quote.replace(/\s+/g, ' '), 700)}"${n.claim ? `\n    supports: ${truncate(n.claim, 300)}` : ''}`;
   }).join('\n');
-  const pageTexts = topCitedPages(packet).slice(0, MAX_TRANSCRIBED_PAGES).map((p) => {
-    const row = ctx.db.get<{ text: string; transcript: string | null; label: string }>('SELECT text, transcript, label FROM pages WHERE resource_id = ? AND idx = ?', p.resourceId, p.idx);
-    if (!row) return '';
-    return `--- ${files.get(p.resourceId)}, page ${row.label} ---\n${truncate(row.transcript || row.text, 6000)}`;
-  }).filter(Boolean).join('\n\n');
+  // The quotes come from these pages, so a page is sent whole only when the vision model transcribed it: its text layer was garbled and the clean formulas matter.
+  const transcribed: string[] = [];
+  for (const p of topCitedPages(packet)) {
+    if (transcribed.length >= MAX_PAGE_TEXTS) break;
+    const row = ctx.db.get<{ transcript: string | null; label: string }>('SELECT transcript, label FROM pages WHERE resource_id = ? AND idx = ?', p.resourceId, p.idx);
+    if (row?.transcript) transcribed.push(`--- ${files.get(p.resourceId)}, page ${row.label} ---\n${truncate(row.transcript, 6000)}`);
+  }
+  const pageTexts = transcribed.join('\n\n');
   // The evidence reader's own answer often has the formulas in clean LaTeX, while quotes from the text layer do not.
   const summary = truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
   return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars), summary };
@@ -191,7 +196,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   } else {
     prompt = draftPrompt({
       language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
-      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),
+      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter),
       section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
       topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
       earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
@@ -202,7 +207,14 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     });
   }
   t.progress(`Writing "${section.title}"`);
-  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  // The writer checks its own draft in the conversation that wrote it. The exam guide is built from the exam questions and gets no such turn.
+  const parse = draftParser(figures);
+  const { data, route, selfCheck, note: selfCheckNote } = await withRole(ctx, { role: 'writer', ...prompt, parse, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal }, async (talk) => {
+    const { data: first, route } = talk.result;
+    if (guide || !project.options.selfCheck) return { data: first, route, selfCheck: 'skipped' as const, note: undefined };
+    t.progress(`Checking "${section.title}"`);
+    return { route, ...(await checkOwnDraft(talk, parse, (md) => lintSection(md, { sectionId: nodeId, language: project.language }))) };
+  });
   t.setProvider(route.provider);
 
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
@@ -234,7 +246,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     t.progress(`Fixing ${serious.length} formatting problems`);
     const listing = serious.map((f) => `${f.rule}: ${f.message}${f.line ? ` (line ${f.line})` : ''}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`).join('\n');
     try {
-      const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+      const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), parse: repairParser, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
       const repaired = extractCitations(fix.data.markdown, splitBlocks);
       const after = lintSection(repaired.markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: new Set([...known.map((k) => k.key), ...formulaKeyLabels(repaired.markdown).map((k) => k.key)]) });
       if (after.filter((f) => f.severity !== 'minor').length < serious.length) {
@@ -266,7 +278,62 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   discardUnstored(built, stored);
   for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
   if (stored.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
-  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
+  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, selfCheck, selfCheckNote, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
+}
+
+export type SelfCheck = 'ok' | 'corrected' | 'kept' | 'skipped';
+
+/**
+ * Why a correction must not replace the draft because it loses a citation marker, or null. A marker ties a paragraph to its
+ * evidence note, and checking the mathematics must not remove that tie. Like a guarded fix, which keeps the markers of the
+ * text it leaves alone, a paragraph of the draft keeps its markers in the same place. Only a paragraph that is rewritten
+ * whole (less than half of its words are left) may lose them, and only when the fix guard would accept that rewrite.
+ */
+function lostCitation(before: string, after: string, lint: (markdown: string) => LintFinding[]): string | null {
+  const old = extractCitations(before, splitBlocks);
+  const next = extractCitations(after, splitBlocks);
+  const oldBlocks = splitBlocks(old.markdown).map((b) => b.text);
+  const nextBlocks = splitBlocks(next.markdown).map((b) => b.text);
+  for (const [at, ids] of Object.entries(old.citations)) {
+    const i = Number(at);
+    const same = nextBlocks.indexOf(oldBlocks[i]);
+    const j = same >= 0 ? same : nextBlocks.length === oldBlocks.length ? i : -1;
+    const lost = ids.filter((id) => !(j >= 0 && next.citations[String(j)]?.includes(id)));
+    if (!lost.length) continue;
+    const words = paragraphWords(oldBlocks[i]);
+    const left = new Set(paragraphWords(nextBlocks[j]));
+    const rewritten = j === i && words.length > 0 && words.filter((w) => left.has(w)).length / words.length < 0.5;
+    if (rewritten && applyGuardedChanges(oldBlocks, [{ block: i, text: nextBlocks[i] }], lint).kept.includes(i)) continue;
+    return `it loses the citation ${lost.map((id) => `[[${id}]]`).join(', ')} of paragraph ${i + 1}`;
+  }
+  return null;
+}
+
+/**
+ * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
+ * parses in the same format, drops no heading, formula key, ::: block, figure or citation marker of the first draft, and does
+ * not open or close with a note about the correction (a real run did that). A failed follow-up (a limit, a timeout) or any
+ * other answer keeps the first draft; the author loses nothing. `note` says why a correction was not used.
+ */
+async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnType<typeof draftParser>, lint: (markdown: string) => LintFinding[]): Promise<{ data: DraftAnswer; selfCheck: SelfCheck; note?: string }> {
+  const first = talk.result.data;
+  let reply: string;
+  try {
+    reply = (await talk.send(selfCheckPrompt())).text;
+  } catch (err) {
+    if (err instanceof FollowUpError) return { data: first, selfCheck: 'kept', note: 'the follow-up failed' };
+    throw err;
+  }
+  if (/^\W*ok\W*$/i.test(reply.trim())) return { data: first, selfCheck: 'ok' };
+  const corrected = parse(sanitizeModelCode(reply));
+  if (!corrected.ok) return { data: first, selfCheck: 'kept', note: `the correction could not be read: ${corrected.problem}` };
+  const keys = new Set(corrected.data.figures.map((f) => f.key));
+  const reason = lostStructure(first.markdown, corrected.data.markdown)
+    ?? (addsCommentary(first.markdown, corrected.data.markdown) ? 'it opens or closes with a note about the correction' : null)
+    ?? (first.figures.some((f) => !keys.has(f.key)) ? 'it drops a figure' : null)
+    ?? lostCitation(first.markdown, corrected.data.markdown, lint);
+  if (reason) return { data: first, selfCheck: 'kept', note: reason };
+  return { data: corrected.data, selfCheck: 'corrected' };
 }
 
 /** Puts [[nX]] citation markers back after their blocks (inverse of extractCitations). */

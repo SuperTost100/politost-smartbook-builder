@@ -27,7 +27,16 @@ export function stripGeneratorMarkup(s: string): string {
  * Tool-call markup the model wrapped its answer in is removed.
  */
 export function sanitizeModelText(s: string): string {
-  return stripLatexRepairs(cleanTerminal(s));
+  return rewriteLatexNames(restoreEatenBackslashes(cleanTerminal(s)));
+}
+
+/**
+ * The clean-up for Markdown that never was a JSON string, so a line break in it is a line break and a tab is a tab: terminal
+ * codes, tool-call markup and stray control bytes go, and function names KaTeX lacks are rewritten. Nothing guesses at a
+ * backslash, which keeps "\nu" and a row that starts with "i_1" as the model wrote them.
+ */
+export function sanitizeModelMarkdown(s: string): string {
+  return rewriteLatexNames(sanitizeModelCode(s));
 }
 
 /** Code (lab programs, expressions, SMILES) keeps its backslashes and whitespace: only markup, terminal codes and control bytes go. */
@@ -42,7 +51,8 @@ function cleanTerminal(s: string): string {
     .replace(/\[\?\d+[hl]/g, '');
 }
 
-function stripLatexRepairs(s: string): string {
+/** Guesses at backslashes that a JSON string ate: a tab or a form feed that was "\t" or "\f". Only for text that was a JSON string. */
+function restoreEatenBackslashes(s: string): string {
   return s
     .replace(/\t(?=[a-z])/g, (c, at: number, all: string) => (TAB_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\t' : c))
     .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) && !ROW_END.test(all.slice(Math.max(0, at - 6), at)) ? '\\n' : c))
@@ -52,7 +62,12 @@ function stripLatexRepairs(s: string): string {
       if (c === '\r' && /[A-Za-z]/.test(all[at + 1] ?? '')) return '\\r';
       if (/[A-Za-z]/.test(all[at + 1] ?? '')) return '\\';
       return '';
-    })
+    });
+}
+
+/** Function names KaTeX lacks become \operatorname{...}, and \Q and \C become \mathbb{Q} and \mathbb{C}. No guessing about line breaks. */
+export function rewriteLatexNames(s: string): string {
+  return s
     .replace(UNKNOWN_OPERATORS, '\\operatorname{$1}')
     .replace(/\\([QC])(?![A-Za-z])/g, '\\mathbb{$1}');
 }

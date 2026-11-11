@@ -84,6 +84,8 @@ export class Queue {
   private timer: NodeJS.Timeout | null = null;
   private heartbeat: NodeJS.Timeout | null = null;
   private ticking = false;
+  /** Set by stop(): a wake-up already scheduled must not run a tick on a database that is about to close. */
+  private stopped = false;
 
   constructor(
     private db: Db,
@@ -96,12 +98,14 @@ export class Queue {
   }
 
   start() {
+    this.stopped = false;
     this.recover();
     this.timer = setInterval(() => void this.tick(), TICK_MS);
     this.heartbeat = setInterval(() => this.renewLeases(), HEARTBEAT_MS);
   }
 
   async stop() {
+    this.stopped = true;
     if (this.timer) clearInterval(this.timer);
     if (this.heartbeat) clearInterval(this.heartbeat);
     for (const r of this.running.values()) r.abort.abort(new Error('service stopping'));
@@ -197,7 +201,7 @@ export class Queue {
   }
 
   wake() {
-    setImmediate(() => void this.tick());
+    if (!this.stopped) setImmediate(() => { if (!this.stopped) void this.tick(); });
   }
 
   // ---------- read models ----------
