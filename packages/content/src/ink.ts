@@ -1,6 +1,6 @@
-// The ink of the figure drawers and the marker that tells a reader a figure is "transparent, dark ink".
-// A figure is shown through <img>, so the page theme cannot reach its colours. A reader that sees the marker
-// lights the picture up in dark mode (see docs/ARCHITECTURE.md, "Dark mode").
+// The ink of the figure drawers and the marker that says a figure is "transparent, dark ink".
+// A figure is shown through <img>, so the page theme cannot reach its colours. The reader puts every figure on a light
+// plate in both themes, so dark ink stays readable (see docs/ARCHITECTURE.md, "Dark mode").
 
 /** The ink of every drawn figure (plots, chemistry diagrams, structures, drawings). */
 export const INK = '#111827';

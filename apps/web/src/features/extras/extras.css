@@ -1,7 +1,8 @@
 .ex-grid { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 .ex-card { overflow: hidden; display: flex; flex-direction: column; height: 100%; }
-.ex-fig { background: #fff; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: center; min-height: 140px; max-height: 220px; overflow: hidden; }
-.ex-fig img { max-width: 100%; max-height: 220px; object-fit: contain; }
+/* The figure card uses the reader's plate (.sb-figure-frame in reader.css) and only changes its shape to fit the top of a card. */
+.sb-figure-frame.ex-fig { align-items: center; padding: 12px; border-radius: 0; box-shadow: none; border-bottom: 1px solid var(--border); min-height: 140px; max-height: 220px; overflow: hidden; }
+.ex-fig img { max-width: 100%; max-height: 196px; object-fit: contain; }
 .ex-card__body { padding: 14px; display: flex; flex-direction: column; gap: 10px; }
 .ex-fname { font-size: 12.5px; flex: 1; }
 .ex-checks { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
@@ -19,6 +20,3 @@
 .ex-code { max-height: 260px; }
 .ex-bad { color: var(--danger); font-size: 13px; }
 @media (max-width: 900px) { .ex-enr__cols { grid-template-columns: minmax(0, 1fr); } }
-/* A figure with dark ink on a transparent background follows the page theme (see reader.css), so its mat is the card surface. */
-[data-theme='dark'] .ex-fig:has(img[data-ink]) { background: var(--surface); }
-[data-theme='dark'] .ex-fig img[data-ink] { filter: invert(1) hue-rotate(180deg); }

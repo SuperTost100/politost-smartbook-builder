@@ -3,14 +3,18 @@ import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { mockApi } from './mocks';
 
-// Drawn figures are transparent with dark ink and carry data-sb-ink="dark". The preview lights them up on a dark page.
-// The fixtures are real drawer output (plot, structure, chemistry diagram, drawing). The "old" variant is the same figure
-// as the drawers wrote it before 0.4.0: a white rectangle behind it and no marker. It has to stay as it was.
+// Every book figure sits on the reader's plate (--figure-plate), which is light in both themes, so dark ink stays readable and an
+// old white rectangle takes the plate's colour. The fixtures are real drawer output (plot, structure, chemistry diagram, drawing).
+// The "old" variant is the same figure as the drawers wrote it before 0.4.0: a white rectangle behind it and no marker.
 const NAMES = ['plot', 'structure', 'diagram', 'drawing'] as const;
 const read = (n: string) => readFileSync(join(import.meta.dirname, 'fixtures', `${n}.svg`), 'utf8');
 const NEW: Record<string, string> = Object.fromEntries(NAMES.map((n) => [n, read(n)]));
 const OLD: Record<string, string> = Object.fromEntries(NAMES.map((n) => [n, NEW[n].replace(' data-sb-ink="dark"', '').replace(/(<title>.*?<\/title>)/, '$1<rect width="100%" height="100%" fill="#FFFFFF"/>')]));
-const FILTER = 'invert(1) hue-rotate(180deg)';
+const PLATE = { light: [251, 248, 242], dark: [221, 211, 196] } as const;
+const INK_RGB = [0x11, 0x18, 0x27] as const;
+const luminance = (c: readonly number[]) => { const [r, g, b] = c.map((v) => { const x = v / 255; return x <= 0.03928 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4; }); return 0.2126 * r + 0.7152 * g + 0.0722 * b; };
+const contrast = (a: readonly number[], b: readonly number[]) => { const [hi, lo] = [luminance(a), luminance(b)].sort((x, y) => y - x); return (hi + 0.05) / (lo + 0.05); };
+const rgb = (c: readonly number[]) => `rgb(${c.join(', ')})`;
 
 const compiled = `## p1 | Figure di prova
 
@@ -31,7 +35,17 @@ async function open(page: Page, variant: 'new' | 'old', theme: 'light' | 'dark')
   await page.route('**/api/projects/p1/assets', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify(NAMES.map((n) => ({ id: n, projectId: 'p1', nodeId: null, filename: `${n}.svg`, mime: 'image/svg+xml', origin: n === 'drawing' ? 'generated-svg' : n === 'diagram' ? 'diagram' : n, spec: null, caption: `Disegno ${n}`, alt: `Figure ${n}`, checks: [], createdAt: '2026-11-11T10:00:00Z' }))) }));
 }
 
-const filterOf = (page: Page, name: string, within: string) => page.locator(`${within} img[alt="Figure ${name}"]`).evaluate((el) => getComputedStyle(el).filter);
+/** Every figure image sits in a frame with the plate colour, with no filter, multiplied onto the plate. */
+async function expectPlate(page: Page, frame: string, theme: 'light' | 'dark') {
+  const plate = PLATE[theme];
+  await expect(page.locator(frame).first()).toHaveCSS('background-color', rgb(plate));
+  for (const n of NAMES) {
+    const img = page.locator(`${frame} img[alt="Figure ${n}"]`);
+    await expect(img).toHaveCSS('filter', 'none');
+    await expect(img).toHaveCSS('mix-blend-mode', 'multiply');
+  }
+  expect(contrast(INK_RGB, plate), 'ink on the plate').toBeGreaterThanOrEqual(7);
+}
 
 for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const) {
   test.describe(`${width} px`, () => {
@@ -40,11 +54,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
       await open(page, variant, theme);
       await page.goto('/books/p1/preview/c1');
       await expect(page.locator('.sb-figure-frame img')).toHaveCount(4);
-      const lit = theme === 'dark' && variant === 'new';
-      await expect(page.locator('.sb-figure-frame img[data-ink="dark"]')).toHaveCount(variant === 'new' ? 4 : 0);
-      for (const n of NAMES) {
-        await expect.poll(() => filterOf(page, n, '.sb-figure-frame'), { message: `${n} filter` }).toBe(lit ? FILTER : 'none');
-      }
+      await expectPlate(page, '.sb-figure-frame', theme);
       await expect(page.locator('.sb-figure-frame img').first()).toHaveJSProperty('complete', true);
       await page.waitForTimeout(300);
       const dir = process.env.FIGURE_SHOTS;
@@ -53,20 +63,11 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
   });
 }
 
-test('extras figures tab shows a marked figure light on a dark page', async ({ page }) => {
-  await open(page, 'new', 'dark');
-  await page.goto('/books/p1/extras');
-  await expect(page.locator('.ex-fig img[data-ink="dark"]')).toHaveCount(4);
-  await expect.poll(() => filterOf(page, 'plot', '.ex-fig')).toBe(FILTER);
-  await expect(page.locator('.ex-fig').first()).toHaveCSS('background-color', 'rgb(23, 27, 34)');
-  const dir = process.env.FIGURE_SHOTS;
-  if (dir) await page.screenshot({ path: join(dir, `extras-new-dark-${page.viewportSize()!.width}.png`), fullPage: true });
-});
-
-test('extras figures tab keeps an older figure on its white mat in dark mode', async ({ page }) => {
-  await open(page, 'old', 'dark');
+for (const theme of ['light', 'dark'] as const) test(`extras figure cards use the plate, ${theme} theme`, async ({ page }) => {
+  await open(page, 'new', theme);
   await page.goto('/books/p1/extras');
   await expect(page.locator('.ex-fig img')).toHaveCount(4);
-  await expect(page.locator('.ex-fig img[data-ink]')).toHaveCount(0);
-  await expect(page.locator('.ex-fig').first()).toHaveCSS('background-color', 'rgb(255, 255, 255)');
+  await expectPlate(page, '.ex-fig', theme);
+  const dir = process.env.FIGURE_SHOTS;
+  if (dir) await page.screenshot({ path: join(dir, `extras-new-${theme}-${page.viewportSize()!.width}.png`), fullPage: true });
 });

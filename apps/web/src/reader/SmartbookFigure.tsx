@@ -1,6 +1,5 @@
 // Adapted from politost-smartbook (AGPL-3.0)
 import { ImageOff } from 'lucide-react';
-import { useInkFigure } from '../lib/inkFigure';
 
 interface SmartbookFigureProps {
   src: string;
@@ -15,14 +14,13 @@ const CAPTION_NUMBER = /^(Fig(?:ura)?\.?\s*\d+(?:\.\d+)*)\s*[—–:-]\s*([\s\S]
 /** An image with a numbered caption; a missing asset shows its path, never a broken image. */
 export function SmartbookFigure({ src, alt, caption, resolveAsset }: SmartbookFigureProps) {
   const url = resolveAsset?.(src);
-  const ink = useInkFigure(src, url);
   const m = caption?.match(CAPTION_NUMBER);
 
   return (
     <figure className="sb-figure">
-      <div className="sb-figure-frame">
+      <div className={url ? 'sb-figure-frame' : 'sb-figure-frame is-missing'}>
         {url ? (
-          <img src={url} alt={alt} loading="lazy" decoding="async" data-ink={ink ? 'dark' : undefined} />
+          <img src={url} alt={alt} loading="lazy" decoding="async" />
         ) : (
           <div className="sb-figure-missing" role="img" aria-label={alt}>
             <ImageOff size={16} strokeWidth={1.75} aria-hidden />

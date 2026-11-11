@@ -20,8 +20,8 @@
 //
 // What the caller can rely on in `r.svg`
 //   - no <text>, <image>, <script>, external reference or font dependence, and it passed `assertSafeSvg`
-//   - no background: the ink is `INK` (#111827) and the page behind it shows through. `isInkDrawing(svg)` is true. A reader
-//     that shows figures in <img> cannot recolour them by itself and has to act on that marker (see docs/ARCHITECTURE.md)
+//   - no background: the ink is `INK` (#111827) and the page behind it shows through. `isInkDrawing(svg)` is true. The reader
+//     shows it on a light plate in both themes, so dark ink stays readable (see docs/ARCHITECTURE.md, "Dark mode")
 //   - 12 px text and 1.5 to 2 px lines at its natural width, which is the weight of the existing figure drawers
 //   - `r.warnings` lists soft limits, for example a file above 300 KB
 //

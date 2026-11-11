@@ -48,8 +48,12 @@ button.sb-link, .smartbook-ref.sb-link { display: inline; padding: 0; border: 0;
 
 /* Figure */
 .sb-figure { margin: 0 0 var(--space-6); }
-.sb-figure-frame { display: flex; justify-content: center; padding: var(--space-4); background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-md); }
-.sb-figure-frame img, .sb-figure-frame svg { display: block; max-width: 100%; height: auto; }
+/* Book figures are drawn on white or transparent with dark ink. The frame is a plate that is light in both themes (--figure-plate), and
+   multiplying the image onto it turns a white background into the plate, so a dark page shows a cream plate and not a white box.
+   Same rules as the reader's ds.css. Every figure in the builder sits in a .sb-figure-frame. */
+.sb-figure-frame { display: flex; justify-content: center; padding: 20px; background: var(--figure-plate); border-radius: var(--radius-lg); box-shadow: 0 0 0 1px var(--border); isolation: isolate; }
+.sb-figure-frame img, .sb-figure-frame svg { display: block; max-width: 100%; height: auto; mix-blend-mode: multiply; }
+.sb-figure-frame.is-missing { background: var(--page); }
 .sb-figure figcaption { margin-top: var(--space-2); font: italic 400 14px/20px var(--font-serif); font-variation-settings: 'opsz' 14; color: var(--ink-muted); }
 .sb-figure figcaption b { font: normal 400 12px/20px var(--font-mono); color: var(--ink-subtle); margin-right: var(--space-2); }
 .sb-figure-missing { display: flex; align-items: center; gap: var(--space-2); color: var(--ink-muted); font: 400 13px/18px var(--font-sans); }
@@ -112,8 +116,3 @@ button.sb-link, .smartbook-ref.sb-link { display: inline; padding: 0; border: 0;
   .reader-preview { padding: var(--space-6) var(--space-4); }
   .sb-chhead h1 { font-size: 26px; line-height: 32px; }
 }
-
-/* A drawn figure is transparent with dark ink and says so (data-sb-ink="dark" on its root, read as data-ink on the <img>).
-   The page theme cannot reach inside an <img>, so on a dark page the picture is inverted: dark ink turns light and the hue
-   rotation brings the colours back to roughly where they were. Figures without the marker (photos, older books) are untouched. */
-[data-theme='dark'] .sb-figure-frame img[data-ink] { filter: invert(1) hue-rotate(180deg); }
