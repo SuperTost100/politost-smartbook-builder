@@ -8,7 +8,8 @@ import { currentHead } from '../repo/content.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { relint } from '../routes/views.ts';
 import { commitAiRevision } from './draft.ts';
-import { figureCheckPrompt, figureCheckSchema, figuresPassPrompt, figuresPassSchema } from './prompts.ts';
+import { dropDecorative } from './figureCheck.ts';
+import { figureSetupOf, figuresPassPrompt, figuresPassSchemaFor } from './prompts.ts';
 import { findSection, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 /** Same limits as drafting: at most 3 figures in a section, at most 1 of them a photo. */
@@ -36,6 +37,7 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
     ? ctx.db.all<{ filename: string; origin: string; caption: string }>(`SELECT filename, origin, caption FROM assets WHERE project_id = ? AND filename IN (${images.map(() => '?').join(',')})`, projectId, ...images)
     : [];
   const photos = photosAvailable(ctx) && !assets.some((a) => a.origin === 'stock');
+  const setup = figureSetupOf(project, photos);
 
   t.progress(`Looking for places for figures in "${found.section.title}"`);
   const { data, route } = await runRole(ctx, {
@@ -43,9 +45,9 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
     ...figuresPassPrompt({
       language: project.language, bookTitle: project.title, chapterTitle: found.chapter.title, sectionTitle: found.section.title,
       blocks: truncate(blocks.map((b, i) => `[${i + 1}] ${b.text}`).join('\n\n'), 60_000),
-      existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, photos, elsewhere: bookFigureList(bookFigures(ctx, projectId, nodeId)),
+      existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, figures: setup, elsewhere: bookFigureList(bookFigures(ctx, projectId, nodeId)),
     }),
-    schema: figuresPassSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    schema: figuresPassSchemaFor(setup), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   t.setProvider(route.provider);
   const notes: string[] = [];
@@ -57,22 +59,10 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   if (!proposed.length) return { added: 0, figureProblems: notes, noFigureReason: data.noFigureReason ?? undefined, model: route.model };
 
   // A second model drops figures that decorate or do not match their passage, before any photo is searched or file drawn.
-  t.progress(`Checking ${proposed.length} proposed figure${proposed.length === 1 ? '' : 's'}`);
-  const items = proposed.map((f, i) => {
-    // lonePairs only switches lone pairs on; the builder draws the ones the species has, so the check need not judge it.
-    const raw = (f as Record<string, unknown>)[f.kind] ?? null;
-    const spec = f.kind === 'structure' && raw ? { ...(raw as Record<string, unknown>), lonePairs: undefined } : raw;
-    // The paragraph before the figure, with the one before it and the one after it: a figure often sums up several.
-    const around = [blocks[f.afterBlock - 2]?.text, blocks[f.afterBlock - 1].text].filter((b): b is string => !!b).map((b) => truncate(b, 1200)).join('\n\n');
-    const next = blocks[f.afterBlock]?.text;
-    return `${i + 1}. kind: ${f.kind}\ncaption: ${f.caption}\nspec: ${truncate(JSON.stringify(spec), 1500)}\npassage: ${around}${next ? `\nafter the figure: ${truncate(next, 800)}` : ''}`;
-  }).join('\n\n');
-  const verdict = await runRole(ctx, { role: 'checker', ...figureCheckPrompt({ language: project.language, items }), schema: figureCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-  const kept = proposed.filter((f, i) => {
-    const v = verdict.data.figures.find((x) => x.index === i + 1);
-    if (!v?.keep) notes.push(`${f.key}: dropped by the check (${v?.reason.trim() || 'no verdict'})`);
-    return !!v?.keep;
+  const { kept, notes: dropped } = await dropDecorative(ctx, t, {
+    projectId, language: project.language, figures: setup, proposed, blocks: blocks.map((b) => b.text), afterBlock: (f) => f.afterBlock,
   });
+  notes.push(...dropped);
   if (!kept.length) return { added: 0, figureProblems: notes, model: route.model };
 
   const built = await buildFigures(ctx, {

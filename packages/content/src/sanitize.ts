@@ -4,6 +4,8 @@
 const TAB_COMMANDS = /^(?:heta|ext(?:bf|it|rm)?|au|imes|anh?|o(?![a-z])|op|riangle(?:left|right)?|ilde|frac|ag)/;
 // Function names KaTeX does not define (Italian conventions among them), written as if they were commands.
 const UNKNOWN_OPERATORS = /\\(cotan|arcsen|arccotg|arcsinh|arccosh|arctanh|settsinh|settcosh|setttgh|settth|sen|sgn|sign|Log|Arg|dom|rank|Ker|grad|rot|diag)(?![A-Za-z])/g;
+// A line break right after "\\\\" or \hline ends a row of an array or an aligned block: the next row may start with "u" or "i" and is not an eaten "\nu" or "\ni".
+const ROW_END = /(?:\\\\|\\hline)$/;
 const NEWLINE_COMMANDS = /^(?:abla|eq(?![a-z])|ot(?![a-z])|exists|i(?![a-z])|u(?![a-z])|leq|geq|mid|parallel|subseteq|supseteq)/;
 
 /** Tool-call wrapper tags that models leave in text (</markdown>, </invoke>). Same pattern content-core 0.3.0 rejects. */
@@ -43,7 +45,7 @@ function cleanTerminal(s: string): string {
 function stripLatexRepairs(s: string): string {
   return s
     .replace(/\t(?=[a-z])/g, (c, at: number, all: string) => (TAB_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\t' : c))
-    .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\n' : c))
+    .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) && !ROW_END.test(all.slice(Math.max(0, at - 6), at)) ? '\\n' : c))
     .replace(/[\x00-\x08\x0b-\x1f]/g, (c, at: number, all: string) => {
       if (c === '\x0c') return '\\f';
       if (c === '\x08') return '\\b';

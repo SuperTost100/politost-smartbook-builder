@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { dropUnpairedBold, lintCompiled, lintQuestionText, lintSection, stripDifficultyDecoration } from './lint.ts';
+import { dropUnpairedBold, katexError, lintCompiled, lintQuestionText, lintSection, stripDifficultyDecoration } from './lint.ts';
 import type { LintFinding } from './types.ts';
 
 const lint = (md: string, opts: { language?: string; keys?: string[] } = {}): LintFinding[] =>
@@ -450,4 +450,29 @@ test('katex: an unclosed $$ is a blocker that names the line it opens on', () =>
   assert.equal(f.line, 3);
   assert.match(f.message, /\$\$/);
   assert.ok(!has('Prima.\n\n$$\nx^2\n$$\n\nDopo.', 'katex'), 'a paired multi-line $$ is fine');
+});
+
+// ---- tables as KaTeX arrays, matrices and units -------------------------------------------------
+
+const TRUTH_TABLE = '$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\n0 & 0 & 0 \\\\\n0 & 1 & 0 \\\\\n1 & 0 & 0 \\\\\n1 & 1 & 1\n\\end{array}\n$$';
+
+test('a truth table written as a KaTeX array passes lint and compiles in KaTeX; a Markdown table is still reported', () => {
+  assert.deepEqual(lint(`La porta AND ha questa tabella di verità:\n\n${TRUTH_TABLE}\n\nL'uscita vale 1 solo se entrambi gli ingressi valgono 1.`), []);
+  assert.equal(katexError(TRUTH_TABLE.replace(/^\$\$\n|\n\$\$$/g, ''), true), null);
+  assert.ok(has('| A | B |\n|---|---|\n| 0 | 1 |', 'table'));
+});
+
+test('pmatrix, bmatrix and a small table of values pass lint', () => {
+  const md = [
+    '$$\n\\begin{pmatrix} 1 & 2 \\\\ 3 & 4 \\end{pmatrix}\n$$',
+    '$$\n\\begin{bmatrix} a & b \\\\ c & d \\end{bmatrix}\n$$',
+    '$$\n\\begin{array}{c|ccc}\nx & 0 & 1 & 2 \\\\\n\\hline\nf(x) & 1 & 2 & 5\n\\end{array}\n$$',
+  ].join('\n\n');
+  assert.deepEqual(lint(md), []);
+});
+
+test('units: a symbol after a number, with or without an SI prefix, is fine in prose; a bare symbol is not', () => {
+  for (const ok of ['Una resistenza di 10 Ω.', 'Una resistenza di 4,7 kΩ e 2 mΩ.', 'Una di 10kΩ e 3 MΩ.', 'Un ritardo di 5 μs e 3 µF.']) assert.ok(!has(ok, 'unicode-math'), ok);
+  for (const bad of ['La resistenza si misura in kΩ.', 'La pulsazione ω vale 2.', 'Vale 5 nF con ω = 2.']) assert.ok(has(bad, 'unicode-math'), bad);
+  for (const ok of ['Vale $10\\,\\mathrm{k\\Omega}$.', 'Vale $5\\,\\mathrm{m/s}$ e $2\\,\\mu\\mathrm{F}$.']) assert.deepEqual(lint(ok), [], ok);
 });

@@ -79,3 +79,12 @@ test('code still loses terminal codes, markup and stray control characters, and 
 test('without a schema every string is repaired as before', () => {
   assert.equal(sanitizeModelValue({ code: '$\\C$' }).code, '$\\mathbb{C}$');
 });
+
+test('rows of an array or an aligned block keep their line breaks, also when a row starts with u or i', () => {
+  const table = 'Tabella:\n\n$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\nu & 0 & 0 \\\\\ni & 1 & 1\n\\end{array}\n$$\n';
+  assert.equal(sanitizeModelText(table), table);
+  const aligned = '$$\n\\begin{aligned}\nR &= 1 \\\\\nu_1 &= R i_1 \\\\\ni_2 &= u_2 / R\n\\end{aligned}\n$$';
+  assert.equal(sanitizeModelText(aligned), aligned);
+  // An eaten \n right after a space is still restored.
+  assert.equal(sanitizeModelText('$$a \\\\ \nabla f$$'), '$$a \\\\ \\nabla f$$');
+});
