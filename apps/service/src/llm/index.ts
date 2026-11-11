@@ -328,6 +328,9 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
     if (f.kind === 'aborted') throw opts.signal?.reason ?? abortError();
     throw new RouteFailure(f);
   } finally {
+    // A CLI that refreshed its token may have replaced the login link with a file. Putting that login back now, and not
+    // only before the next call, keeps the time in which the owner's own CLI holds a stale token to this one call.
+    if (env) callEnv(ctx, route, opts.web);
     ctx.db.insert('usage', {
       project_id: opts.projectId ?? null,
       run_id: opts.runId ?? null,

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { readlinkSync } from 'node:fs';
+import { readFileSync, readlinkSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { FunnelError } from 'cli-funnel';
@@ -475,6 +475,26 @@ describe('lean homes for the CLIs', () => {
     assert.equal(readlinkSync(join(home, 'auth.json')), join(process.env.CODEX_HOME!, 'auth.json'));
     // accountUsage runs when a role has a fallback: it reads the usage windows through the same home.
     assert.deepEqual(fake.rateLimitOptions[0], { env: { CODEX_HOME: home } });
+  });
+
+  test('a login that Codex rewrote during a call is back in the real place as soon as the call ends', async () => {
+    setRoutes({ bulk: { primary: route('codex') } });
+    const link = join(kit.ctx.config.dataDir, 'codex-home', 'auth.json');
+    const real = join(process.env.CODEX_HOME!, 'auth.json');
+    const before = readFileSync(real, 'utf8');
+    try {
+      fake.next(() => {
+        rmSync(link);
+        writeFileSync(link, '{"refreshed":true}');
+        utimesSync(link, new Date(Date.now() + 5_000), new Date(Date.now() + 5_000));
+        return { text: 'a' };
+      });
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+      assert.equal(readFileSync(real, 'utf8'), '{"refreshed":true}');
+      assert.equal(readlinkSync(link), real);
+    } finally {
+      writeFileSync(real, before);
+    }
   });
 
   test('a web call runs Claude Code in a home with only the login, and offers it only the two web tools', async () => {
