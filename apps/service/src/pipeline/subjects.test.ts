@@ -5,6 +5,7 @@ import { ALLOWED_FUNCTIONS, validatePlotSpec } from '@smartbuilder/content';
 import { bookOptionsSchema, FIGURE_KINDS, inferSubjectArea, SUBJECT_AREAS, SUBJECT_PROFILES, subjectAreaOf, type SubjectArea } from '@smartbuilder/domain';
 import { figureSchema, figureSchemaFor } from '../figures/materialize.ts';
 import { toProviderSchema } from '../llm/schema.ts';
+import { figurePlaces } from './figureCheck.ts';
 import { draftPrompt, draftSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchPrompt, patchSchemaFor, reviewPrompt, verifyPrompt } from './prompts.ts';
 
 const book = (subject: string, title: string, options: Record<string, unknown> = {}) => ({ subject, title, options: bookOptionsSchema.parse(options) });
@@ -176,6 +177,13 @@ describe('prompts that name the subject', () => {
     assert.match(outline(SUBJECT_PROFILES.electronics), /sign conventions for voltage and current/);
     assert.doesNotMatch(outline(SUBJECT_PROFILES.electronics), /intervals, derivatives, limits/);
     assert.match(outline(SUBJECT_PROFILES.mathematics), /domain, intervals, derivatives, limits/);
+  });
+
+  test('an indented image block still gives its figure a place, so the figure is checked', () => {
+    const fig = { key: 'retta', kind: 'plot', caption: 'c' } as never;
+    const { text, afterBlock } = figurePlaces(['Testo prima.', '  :::image{src="assets/retta.svg" alt="a"}\n  c\n  :::', 'Testo dopo.'], [fig]);
+    assert.equal(afterBlock.get(fig), 1);
+    assert.deepEqual(text, ['Testo prima.', 'Testo dopo.']);
   });
 
   test('the figure check names the kinds of the book', () => {

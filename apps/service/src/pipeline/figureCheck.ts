@@ -8,7 +8,8 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { figureCheckPrompt, figureCheckSchema, type FigureSetup } from './prompts.ts';
 import { truncate } from './util.ts';
 
-const IMAGE_SRC = /^:::image\{[^}]*src="assets\/([^"]+)"/;
+// Lint accepts an indented image block, so leading spaces are allowed here too.
+const IMAGE_SRC = /^\s*:::image\{[^}]*src="assets\/([^"]+)"/;
 
 /**
  * Where the figures a writer proposed sit in its text: the text without those image blocks, and for each figure the
