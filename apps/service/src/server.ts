@@ -6,6 +6,7 @@ import multipart from '@fastify/multipart';
 import fastifyStatic from '@fastify/static';
 import { paths } from './config.ts';
 import type { AppContext } from './context.ts';
+import { ExtractError } from './extract/errors.ts';
 import { registerRoutes } from './routes/index.ts';
 
 export class HttpError extends Error {
@@ -69,6 +70,10 @@ export async function buildServer(ctx: AppContext): Promise<FastifyInstance> {
   app.setErrorHandler((err: unknown, _req: FastifyRequest, reply: FastifyReply) => {
     if (err instanceof HttpError) {
       return reply.status(err.status).send({ error: { code: err.code, message: err.message, action: err.action, item: err.item } });
+    }
+    // A source problem the extractor described for the author (no page images, a page that does not exist) keeps its own status.
+    if (err instanceof ExtractError) {
+      return reply.status(err.status).send({ error: { code: err.code, message: err.message, action: err.action } });
     }
     const e = err as { statusCode?: number; validation?: unknown; message?: string; issues?: unknown };
     if (e.issues) return reply.status(400).send({ error: { code: 'invalid', message: 'The request is invalid.', item: JSON.stringify(e.issues).slice(0, 500) } });

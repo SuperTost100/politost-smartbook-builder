@@ -7,6 +7,7 @@ import { json } from '../db/db.ts';
 import { paths, resolveDataPath } from '../config.ts';
 import { deps, overrideDeps } from './deps.ts';
 import { HttpError } from '../server.ts';
+import { extractResource, renderPageImage, storeResource } from '../extract/index.ts';
 import { cleanBook, installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -152,6 +153,24 @@ describe('resources', () => {
     assert.equal(res.status, 400);
     assert.equal((await t.req('GET', `/api/projects/${p.id}/resources`)).body.length, 1);
     assert.equal(fakes.calls.startRun.length, before + 1);
+  });
+
+  it('answers 404, not 500, when a source has no page images (Markdown)', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('md-page-image'));
+    const restore = overrideDeps({ storeResource, renderPageImage }); // the fakes would store a PDF and draw a picture for any source
+    try {
+      const up = multipart({}, [{ name: 'file', filename: 'note.md', type: 'text/markdown', data: '# Titolo\n\nUn paragrafo.' }]);
+      const res = await t.req('POST', `/api/projects/${p.id}/resources`, up.payload, up.headers);
+      assert.equal(res.status, 200);
+      const rid = res.body[0].id as string;
+      assert.equal(res.body[0].kind, 'md');
+      await extractResource(t.ctx, rid, new AbortController().signal);
+      assert.ok((await t.req('GET', `/api/resources/${rid}/pages`)).body.length > 0);
+      const img = await t.req('GET', `/api/resources/${rid}/pages/0/image?scale=1.5&highlight=Un%20paragrafo`);
+      assert.equal(img.status, 404);
+      assert.equal(img.body.error.code, 'not_found');
+      assert.match(img.body.error.message, /no page images/);
+    } finally { restore(); }
   });
 
   it('rejects unsupported types with a plain message', async () => {

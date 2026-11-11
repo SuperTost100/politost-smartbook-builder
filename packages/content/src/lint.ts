@@ -1,6 +1,7 @@
 import katex from 'katex';
 import { isValidAssetPath, parseChapterMarkdown } from '@politost/content-core';
 import type { LintFinding } from './types.ts';
+import { splitBlocks } from './blocks.ts';
 import { GENERATOR_MARKUP } from './sanitize.ts';
 import { extractMath, isTableSeparator, parseAttrs, scan, type LineKind, type Scan, type ScannedLine } from './scan.ts';
 
@@ -438,7 +439,15 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     }
   }
   if (sc.openDisplayLine !== null) {
-    add(mk('katex', file, `Unclosed "$$": the display math opened on line ${sc.openDisplayLine} never ends, so the rest of the section reads as math. Add the closing "$$".`, sc.openDisplayLine, lines[sc.openDisplayLine - 1].raw, 'blocker'));
+    const open = sc.openDisplayLine;
+    let where = `opened on line ${open}`;
+    if (o.mode === 'source') {
+      // The author sees blocks, not the lines of the whole section: name the block, and the line inside it when it has more than one.
+      const blocks = splitBlocks(lines.slice(0, open).map((l) => l.raw).join('\n'));
+      const inBlock = blocks.length ? blocks[blocks.length - 1].text.split('\n').length : 1;
+      where = `that opens in block ${Math.max(1, blocks.length)}${inBlock > 1 ? `, on line ${inBlock} of that block,` : ''}`;
+    }
+    add(mk('katex', file, `Unclosed "$$": the display math ${where} never ends, so the rest of the section reads as math. Add the closing "$$".`, open, lines[open - 1].raw, 'blocker'));
   }
   for (const l of lines) {
     if (!prose(l.kind)) continue;

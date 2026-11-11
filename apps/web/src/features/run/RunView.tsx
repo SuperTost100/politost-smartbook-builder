@@ -261,6 +261,7 @@ export function RunView({ projectId }: { projectId: string }) {
         title="Cancel this run"
         message="Queued tasks are dropped and running tasks are asked to stop. Text already written is kept. You can start a new run afterwards."
         confirmLabel="Cancel run"
+        cancelLabel="Keep running"
         danger
         onClose={() => setConfirmCancel(false)}
         onConfirm={() => { setConfirmCancel(false); control.mutate('cancel'); }}

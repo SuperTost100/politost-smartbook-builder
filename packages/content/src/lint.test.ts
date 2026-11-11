@@ -529,7 +529,7 @@ test('katex: a stray $$ before a formula block is the one reported, whatever the
     const f = find(block(body), 'katex')!;
     assert.ok(f, body);
     assert.equal(f.line, 1, `the stray $$ is on line 1 (${JSON.stringify(body)})`);
-    assert.match(f.message, /line 1 never ends/);
+    assert.match(f.message, /opens in block 1 never ends/);
   }
   const last = find(':::formula{key="zz" label="Z"}\n$$\nz = 1\n$$\n:::\n\nUltima riga $$ x', 'katex')!;
   assert.equal(last.line, 7);
@@ -559,4 +559,21 @@ test('units: a symbol after a number, with or without an SI prefix, is fine in p
   for (const ok of ['Una resistenza di 10 Ω.', 'Una resistenza di 4,7 kΩ e 2 mΩ.', 'Una di 10kΩ e 3 MΩ.', 'Un ritardo di 5 μs e 3 µF.']) assert.ok(!has(ok, 'unicode-math'), ok);
   for (const bad of ['La resistenza si misura in kΩ.', 'La pulsazione ω vale 2.', 'Vale 5 nF con ω = 2.']) assert.ok(has(bad, 'unicode-math'), bad);
   for (const ok of ['Vale $10\\,\\mathrm{k\\Omega}$.', 'Vale $5\\,\\mathrm{m/s}$ e $2\\,\\mu\\mathrm{F}$.']) assert.deepEqual(lint(ok), [], ok);
+});
+
+// ---- unclosed $$ names the block, not a line of the whole section ---------------------------
+
+test('unclosed $$ in a section names its block, and the line inside it only when the block has several', () => {
+  const one = find('Primo paragrafo.\n\nSegue $$ x^2 + y\n\nTerzo paragrafo.', 'katex')!;
+  assert.match(one.message, /^Unclosed "\$\$": the display math that opens in block 2 never ends/);
+  assert.doesNotMatch(one.message, /line/);
+  assert.equal(one.line, 3, 'the finding still points at the line, for the editor to locate the block');
+
+  const several = find('Primo paragrafo.\n\nSecondo paragrafo\ncon $$ x^2 + y\nancora testo.', 'katex')!;
+  assert.match(several.message, /opens in block 2, on line 2 of that block,/);
+});
+
+test('unclosed $$ in a question keeps naming the line of its text', () => {
+  const f = lintQuestionText('Calcolare\n$$ x^2 + y', { file: 'q1', language: 'it' }).find((x) => x.rule === 'katex' && /Unclosed/.test(x.message))!;
+  assert.match(f.message, /opened on line 2/);
 });
