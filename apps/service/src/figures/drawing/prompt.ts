@@ -61,4 +61,5 @@ export const LOOK_MESSAGE = `This is your drawing as the reader sees it, at the 
 2. The connections are correct.
 3. Nothing overlaps or is cut off.
 4. It is readable at book width.
-Answer exactly OK if all four hold. Otherwise answer with the full corrected source and nothing else.`;
+5. Every label is written as the book writes the quantity: a symbol with a subscript has its argument, such as (t) or (jω), after the subscript, not inside it.
+Answer exactly OK if all five hold. Otherwise answer with the full corrected source and nothing else.`;

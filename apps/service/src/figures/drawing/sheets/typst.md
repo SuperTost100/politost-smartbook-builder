@@ -6,6 +6,11 @@ Pick by figure: circuits zap, block diagrams and state machines fletcher, plots 
 
 ## Text
 - Math is `$...$`. A single letter stands alone (`$V$`, `$R_1$`). A name of two or more letters is quoted, or it fails as an unknown variable: `$V_"out"$`, `$"CLK"$`, `$"AB"$`, `$10 "kHz"$`. Greek letters go by name: `$omega$`, `$phi$`, `$theta$`. Write `\/` for a slash in math.
+- A quantity of time or frequency has its argument after the subscript, outside it, and a space does that: `$v_C (t)$`, `$v_"out" (t)$`, `$X_C (j omega)$`. Written `$v_C(t)$`, the whole `C(t)` becomes the subscript. `$v_(C)(t)$` is the same as the space. Label a quantity as the book writes it in its formulas.
+```typ
+#import "@preview/cetz:0.5.2": canvas, draw
+#canvas({ draw.content((0, 0), $v_C (t) = V_0 e^(-t \/ tau)$); draw.content((0, -1), $|H (j omega)|$) })
+```
 - Words are content (`[Ingresso]`) or a string (`"Ingresso"`), in the book's language. Never put a label on a line or on another label: leave a gap or move it.
 
 ## cetz (coordinates in cm, y up)
