@@ -1,5 +1,7 @@
 // Fixes from the 0.4.0 release check. Each test builds its own book through the API so it does not depend on another spec.
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test';
+import { mockApi } from './mocks';
+import { mockFigureApi } from './figures-mocks';
 
 const H = { 'x-smartbuilder': '1' };
 
@@ -109,3 +111,33 @@ test.describe('on a phone', () => {
   });
 });
 
+test.describe('a figure block', () => {
+  async function openFigureBlock(page: Page) {
+    await mockApi(page);
+    await mockFigureApi(page, {});
+    await page.goto('/books/p1/manuscript/s1');
+    const block = page.locator('.ms-block', { has: page.locator('.sb-figure') });
+    await expect(block).toBeVisible();
+    return block;
+  }
+
+  test('Enter opens the figure dialog and Escape returns to the block', async ({ page }) => {
+    const block = await openFigureBlock(page);
+    await block.focus();
+    await page.keyboard.press('Enter');
+    await expect(page.getByRole('dialog', { name: /^Figure/ })).toBeVisible();
+    await expect(page.locator('.ms-edit')).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: /^Figure/ })).toHaveCount(0);
+    await expect(block).toBeFocused();
+  });
+
+  test('the raw markup has its own button, named for what it is', async ({ page }) => {
+    const block = await openFigureBlock(page);
+    await block.click();
+    const actions = page.locator('.ms-actions');
+    await expect(actions.getByRole('button', { name: 'Edit', exact: true })).toHaveCount(0);
+    await actions.getByRole('button', { name: 'Edit markup' }).click();
+    await expect(page.locator('.ms-edit .cm-content')).toContainText(':::image');
+  });
+});
