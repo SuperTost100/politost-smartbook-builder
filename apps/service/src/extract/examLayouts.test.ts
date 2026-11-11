@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { buildAiSplit, summarizeSplit } from '../pipeline/examSplit.ts';
 import { extractResource, segmentQuestions, splitQuestions, storeResource } from './index.ts';
 import { splitMarkdown } from './markdown.ts';
-import { findDate, segmentExams, splitExams } from './segment.ts';
+import { findDate, isSolutionMarker, segmentExams, splitExams } from './segment.ts';
 import { makeCtx } from './testkit.ts';
 import { seedPage, seedResource } from '../llm/testkit.ts';
 
@@ -251,6 +251,51 @@ test('Markdown marks: heading marks, bold, italics and a pipe table are read as 
   assert.deepEqual(summary(rows), ['Appello del 5 luglio 2024 #1 2024-07-05 p0-0', 'Appello del 5 luglio 2024 #2 2024-07-05 p0-0', 'Appello del 5 luglio 2024 #3 2024-07-05 p0-0']);
   assert.deepEqual(rows.map((r) => r.statement.split('\n')[0]), ['Esercizio 1', 'Esercizio 2 (8 punti)', 'Quesito 3']);
   assert.ok(rows[0].statement.includes('$10\\ \\Omega$'), 'math keeps its characters');
+});
+
+// ---------- "Soluzioni (Appello del …)": a solutions heading with a qualifier ----------
+
+// The text layer of the PDF that the acceptance run uploaded second: a header table (one cell per line), two problems, then "Soluzioni (Appello del …)".
+const header = (day: string) => ['Corso', 'Elettrotecnica (ING-IND/31)', 'Corso di Laurea', 'Ingegneria Elettronica, primo anno', 'Prova', `Prova scritta, Appello del ${day}`, 'Durata', '90 minuti, calcolatrice consentita, nessun appunto', 'Nome e cognome', '______________________________', 'Matricola', '______________'];
+const PAPER_1 = [...header('12 febbraio 2024'), 'Problema 1 (12 punti)', 'Un generatore di tensione continua V₀ = 12 V è collegato a un resistore R = 4,7 kΩ.', 'a) Calcolare la costante di tempo τ del circuito.', 'Problema 2 (12 punti)', 'Un filtro passa-basso RC del primo ordine ha R = 1 kΩ e C = 47 nF.', 'a) Calcolare la frequenza di taglio f_c del filtro.'];
+const SOLUTIONS_1 = ['Soluzioni (Appello del 12 febbraio 2024)', 'Problema 1.', 'a) τ = RC = 103,4 µs.', 'Problema 2.', 'a) f_c = 1/(RC) = 21,28 kHz.'];
+const PAPER_2 = [...header('3 luglio 2024'), 'Problema 1 (12 punti)', 'Un amplificatore invertente con amplificatore operazionale ideale ha R₁ = 3,3 kΩ.', 'a) Calcolare il guadagno G = v_out/v_in.', 'Problema 2 (12 punti)', 'Un condensatore C = 1 µF è carico alla tensione V₀ = 9 V.', 'a) Calcolare la costante di tempo τ.'];
+const SOLUTIONS_2 = ['Soluzioni (Appello del 3 luglio 2024)', 'Problema 1.', 'a) G = −R₂/R₁ = −10.', 'Problema 2.', 'a) τ = RC = 22 ms.'];
+const solved = (rows: ReturnType<typeof segmentExams>) => rows.map((r) => `${r.examGroup} #${r.number} ${/^Problema \d\.\n/.test(r.solution) ? r.solution.split('\n')[0] : 'no solution'}`);
+
+test('"Soluzioni (Appello del …)" after each paper is a solutions heading: four questions, each with its solution', () => {
+  const rows = segmentExams('r', pages([...PAPER_1, ...SOLUTIONS_1], [...PAPER_2, ...SOLUTIONS_2]), { label: 'appelli', untitled: true });
+  assert.deepEqual(solved(rows), [
+    'Prova scritta del 12 febbraio 2024 #1 Problema 1.', 'Prova scritta del 12 febbraio 2024 #2 Problema 2.',
+    'Prova scritta del 3 luglio 2024 #1 Problema 1.', 'Prova scritta del 3 luglio 2024 #2 Problema 2.',
+  ]);
+  assert.match(rows[1].solution, /21,28 kHz/);
+  assert.doesNotMatch(rows[0].statement, /Soluzioni/);
+});
+
+test('the same in the Markdown file of the acceptance run', () => {
+  const rows = segmentExams('r', markdownPages(), { label: 'appelli-elettrotecnica-2024', untitled: true });
+  assert.equal(rows.length, 4);
+  assert.deepEqual(solved(rows), ['Prova scritta del 12 febbraio 2024 #1 Problema 1.', 'Prova scritta del 12 febbraio 2024 #2 Problema 2.', 'Prova scritta del 3 luglio 2024 #1 Problema 1.', 'Prova scritta del 3 luglio 2024 #2 Problema 2.']);
+});
+
+test('solutions printed after all the papers go to the session their heading names', () => {
+  // Both papers first, then the solutions of the first paper, then those of the second: the heading, not the position, says which is which.
+  const rows = segmentExams('r', pages([...PAPER_1, ...PAPER_2, ...SOLUTIONS_1, ...SOLUTIONS_2]), { label: 'appelli', untitled: true });
+  assert.deepEqual(solved(rows), [
+    'Prova scritta del 12 febbraio 2024 #1 Problema 1.', 'Prova scritta del 12 febbraio 2024 #2 Problema 2.',
+    'Prova scritta del 3 luglio 2024 #1 Problema 1.', 'Prova scritta del 3 luglio 2024 #2 Problema 2.',
+  ]);
+  assert.match(rows[0].solution, /103,4 µs/);
+  assert.match(rows[2].solution, /−10/);
+  // A qualifier that names no session of the file leaves the solutions with the session they follow.
+  const other = segmentExams('r', pages([...PAPER_1, 'Soluzioni (versione A)', 'Problema 1.', 'a) τ = RC.']), { label: 'appelli', untitled: true });
+  assert.match(other[0].solution, /τ = RC\./);
+});
+
+test('isSolutionMarker: a bare word or a qualified heading, never a sentence', () => {
+  for (const t of ['Soluzioni', 'SOLUZIONI.', 'Svolgimento:', 'Soluzioni (Appello del 12 febbraio 2024)', 'Soluzioni - Appello del 3 luglio 2024', "Soluzioni dell'appello del 3 luglio 2024", 'Soluzione: (versione A)', 'Risoluzioni (Esame del 5 luglio 2024)']) assert.ok(isSolutionMarker(t), t);
+  for (const t of ['Soluzione di questo circuito si ottiene con la regola del partitore', 'Soluzioni numeriche (si usi la calcolatrice) del circuito di prima, riportate in tabella qui sotto per intero', 'Soluzione Esercizio 1', 'La soluzione (Appello)', 'soluzioni']) assert.ok(!isSolutionMarker(t), t);
 });
 
 // ---------- the real Analisi papers ----------

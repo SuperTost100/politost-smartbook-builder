@@ -69,8 +69,16 @@ interface Heading { key: string; date: string | null; numbered: boolean; variant
 const EXERCISE = /^(?:(Soluzione|Svolgimento|Risoluzione)\s+(?:(?:dell['’]\s*)|(?:(?:del|della|dello|di)\s+))?)?(Esercizio|Problema|Quesito|Domanda|Parte)\s+(\d{1,2}|[A-Za-z]|[IVX]{2,4})\b(.*)$/iu;
 /** "Soluzione 2", "Svolgimento 2": a solution that names only the number. */
 const SOLUTION_NUMBER = /^(?:Soluzione|Svolgimento|Risoluzione|SOLUZIONE|SVOLGIMENTO|RISOLUZIONE)\s+(\d{1,2})\b(.*)$/u;
-/** A section marker on its own line. "svolgimento" is a marker in any case; the other words only capitalised, because a bare "soluzione" can be a wrapped line of prose. */
-export const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || /^(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])\s*[.:]?$/.test(t);
+const SOLUTION_WORD = String.raw`(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])`;
+/** What may follow the word on the same line: text in brackets "(Appello del 12 febbraio 2024)", or the name of the session "- Appello del …", "dell'appello del …". */
+const SOLUTION_QUALIFIER = String.raw`(?:\([^()]{1,80}\)|(?:(?:dell['’]\s*|del(?:l[aeo])?\s+|di\s+)?(?:[Aa]ppello|[Ee]same|[Pp]rova|[Cc]ompito|[Tt]ema|[Tt]urno|[Ff]ila|[Vv]ersione)\b.{0,80}))`;
+const SOLUTION_HEADING = new RegExp(String.raw`^${SOLUTION_WORD}\s*(?:[.:]?$|[.:\-–—]?\s*${SOLUTION_QUALIFIER}\s*[.:]?$)`);
+/**
+ * A section marker on its own line, alone or with a qualifier ("Soluzioni (Appello del 12 febbraio 2024)"). "svolgimento" is a
+ * marker in any case; the other words only capitalised, because a bare "soluzione" can be a wrapped line of prose, and with a
+ * qualifier only the qualifiers of a session or a version, so a sentence that starts with "Soluzione di …" is no marker.
+ */
+export const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || SOLUTION_HEADING.test(t);
 
 interface ExHead { solution: boolean; word: string; id: string; rest: string }
 
@@ -325,7 +333,15 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
       startGroup({ key: label, date: null, numbered: false });
     }
     const g = group!;
-    if (isSolutionMarker(text)) { mode = 'solution'; cur = null; continue; }
+    if (isSolutionMarker(text)) {
+      mode = 'solution';
+      cur = null;
+      // "Soluzioni (Appello del 3 luglio 2024)" names its session: solutions printed after all the papers still reach their own.
+      const named = findDate(text);
+      const target = named ? groups.findLast((x) => x.date === isoOf(named) && x.statements.length > 0) : undefined;
+      if (target) group = target;
+      continue;
+    }
     if (ex) {
       // "Soluzione Esercizio 1" and "Esercizio 1 _soluzione" open a solution even without a SOLUZIONI line.
       if (ex.solution || /^\s*[_\-–:.]?\s*soluzion[ei]\b/i.test(ex.rest)) mode = 'solution';
