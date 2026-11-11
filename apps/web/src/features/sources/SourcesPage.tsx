@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Resource, ResourceRole } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
-import { qk, useResources, useTopics } from '../../lib/queries';
+import { qk, useResources, useSettings, useTopics } from '../../lib/queries';
 import { bytes, plural } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
@@ -28,6 +28,13 @@ const STATUS: Record<Resource['status'], { label: string; tone: string }> = {
   failed: { label: 'Failed', tone: 'danger' },
 };
 
+/** Where the selected material goes, which depends on the book's evidence setting: NotebookLM only when evidence is read there. */
+function destinationText(mode: 'notebooklm' | 'local' | undefined) {
+  if (mode === 'notebooklm') return 'Selected material is sent to the configured AI providers and NotebookLM.';
+  if (mode === 'local') return 'Selected material is sent to the configured AI providers. Evidence is searched on this computer, so nothing goes to NotebookLM.';
+  return 'Selected material is sent to the configured AI providers.';
+}
+
 /** What the toast says after a delete: how many questions read from the source went, and how many stayed as the author's own. */
 function deletedText(d: { removedQuestions: number; keptQuestions: number }) {
   const parts = [d.removedQuestions && `${plural(d.removedQuestions, 'question')} read from it removed`, d.keptQuestions && `${plural(d.keptQuestions, 'question')} you edited or that a chapter uses kept`].filter(Boolean);
@@ -43,6 +50,7 @@ export default function SourcesPage() {
   const toast = useToast();
   const resources = useResources(pid);
   const topics = useTopics(pid);
+  const evidenceMode = useSettings().data?.evidenceMode;
   const [role, setRole] = useState<ResourceRole>('theory');
   const [dragging, setDragging] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -104,7 +112,7 @@ export default function SourcesPage() {
         </div>
       </div>
 
-      <p className="ui-banner ui-banner--info so-notice"><Icon name="info" />Selected material is sent to the configured AI providers and NotebookLM.</p>
+      <p className="ui-banner ui-banner--info so-notice"><Icon name="info" />{destinationText(evidenceMode)}</p>
 
       <div className={`so-grid${selected ? ' has-inspector' : ''}`}>
         <div className="so-left">
