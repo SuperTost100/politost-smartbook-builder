@@ -1,6 +1,6 @@
 # Status
 
-Last updated 27 October 2026.
+Last updated 11 November 2026.
 
 ## What works
 
@@ -34,6 +34,7 @@ About 80% of the Luna bulk tokens went to classifying exam questions once for th
 
 - **Antigravity became a fallback.** Gemini through Antigravity took 4–5 minutes and about 90k input tokens per call, because the CLI runs a full agent each time. Batch roles (bulk, local evidence) now default to GPT-6-Luna low, at about 20 seconds per call.
 - **Graphs ship as Plotly data.** The reader's `function` graphs only understand `x`, digits and `+ - * / ^`, so `sin(x)` draws an empty curve. The reader's own example book has this bug too. The builder samples curves with a whitelisted evaluator and ships them as `plotly` graphs, which the reader renders.
+- **Logarithmic axes.** A `plot` spec and a graph take `xScale` and `yScale`, `linear` (the default) or `log`. A log axis needs a positive range, so the spec is refused with `xRange: must be positive on a log axis` otherwise, and the figure is dropped with that note like any other bad spec. The curve is sampled evenly in the exponent, the grid has labelled powers of ten written as 10 with a raised exponent and lighter lines at 2 to 9 where a decade is at least 50 px wide, and points, asymptotes and labels go through the same transform. A graph is shipped with the Plotly axis `type: "log"` and its range as exponents. The reader's sanitiser (`src/lib/plotlySanitize.ts`) keeps both keys, so no switch is needed. A Bode plot is two figures or two graphs on the same log frequency axis: for graphs the answer carries the second one as `pair`, which takes the first graph's x axis and is saved as a second graph of the section.
 - **Function graphs are plotted, not drawn by the model.** The writer returns a plot spec, and the builder renders the SVG, so the curve matches the formula. Other figures (circuits, logic networks, free-body diagrams) are drawn by the illustrator model from the writer's description, see below. Captions are plain text, because the reader prints them as text, and they are numbered `Fig. 6.1`.
 - **Exports contain only chapters with text.** The chapters keep their outline numbers, so formulas stay `6.x` as more chapters are written. Links into chapters not yet written become plain text, with a minor warning.
 - **Missing official solutions are written and checked.** Two 2024 sessions were published without solutions; the writer solves them and the reviewer checks the result.
@@ -54,6 +55,17 @@ What changed:
 On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
 
 On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors and 0 warnings. The last 80 warnings were for exam questions without hints, and exams now have no hints by design. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+
+## Review and fix loop (changed 11 November)
+
+On the four books built so far, reviews and fixes used 75M of 132M input tokens, one fix in five changed nothing, and late review rounds found little. What changed:
+- A review of changed text reports only blockers and majors and sends the changed sections in full, the others as their stored summaries, and the evidence of the changed sections only. The first review and the full review still report everything, with minor defined as a wrong word, symbol, unit or reference that could mislead. The reviewer can no longer raise the `clarity` and `repetition` categories. Stored issues of those categories still load.
+- A review round says when it left no open blocker or major (`clean` in the task result, `review` in the project summary). The web app does not show it yet.
+- The fix model is told the guard rules from the guard's own constants and gets only the evidence its blocks cite. It answers in plain text parts instead of JSON.
+- When the fix model says the text already resolves an issue and the cheap checker agrees, the issue closes as fixed. A missing-figure issue goes to the figures pass and a failed graph is redrawn.
+- A formula block with a citation no longer merges the rest of the section into one block in the fix prompt. That bug hit 30 of 243 live sections.
+
+Prompt version 20.
 
 ## Open issues on the Analisi book
 

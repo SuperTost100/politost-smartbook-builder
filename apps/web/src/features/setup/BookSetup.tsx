@@ -1,7 +1,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
-import type { BookOptions, ProjectInput } from '@smartbuilder/domain';
+import { SUBJECT_AREAS, SUBJECT_PROFILES, inferSubjectArea, type BookOptions, type FigureKind, type ProjectInput, type SubjectArea } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
 import { qk, useProject } from '../../lib/queries';
 import { slugify } from '../../lib/format';
@@ -16,6 +16,25 @@ const DEFAULT_OPTIONS: BookOptions = {
 };
 
 type LangChoice = 'it' | 'en' | 'other';
+
+const AREA_LABEL: Record<SubjectArea, string> = {
+  mathematics: 'Mathematics', physics: 'Physics', chemistry: 'Chemistry', electronics: 'Electronics', 'computer-science': 'Computer science', mechanics: 'Mechanics', other: 'Other',
+};
+// A Record over FigureKind, so a kind added to the domain table cannot be shown without a name here.
+const KIND_LABEL: Record<FigureKind, string> = {
+  plot: 'function plots', structure: 'molecule structures', levels: 'energy-level diagrams', orbitals: 'orbital boxes', cell: 'electrochemical cells', periodic: 'periodic table highlights', drawing: 'drawings (circuits, diagrams, sketches)', photo: 'photos',
+};
+// shortcut: the domain profile does not say which subjects have circuits, so the two that do are listed here. Move it into the profile when the figure drawing agent adds circuit figures.
+const CIRCUIT_AREAS: readonly SubjectArea[] = ['electronics', 'physics'];
+const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+function Resistor({ kind }: { kind: 'american' | 'european' }) {
+  return (
+    <svg width="64" height="22" viewBox="0 0 64 22" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+      {kind === 'american' ? <path d="M2 11h10l3-7 6 14 6-14 6 14 6-14 3 7h18" /> : <><path d="M2 11h14M46 11h16" /><rect x="16" y="4" width="30" height="14" /></>}
+    </svg>
+  );
+}
 
 function Toggle({ label, hint, checked, onChange }: { label: string; hint?: string; checked: boolean; onChange: (v: boolean) => void }) {
   return (
@@ -67,6 +86,9 @@ export default function BookSetup() {
   const onTitle = (v: string) => { setTitle(v); if (!slugTouched) setSlug(slugify(v)); };
   const set = <K extends keyof BookOptions>(k: K, v: BookOptions[K]) => setOpts((o) => ({ ...o, [k]: v }));
 
+  const inferred = inferSubjectArea(subject, title);
+  const area: SubjectArea = opts.subjectArea ?? inferred;
+  const profile = SUBJECT_PROFILES[area];
   const language = lang === 'other' ? otherLang.trim() : lang;
   const authorList = authors.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
   const slugValid = /^[a-z0-9-]+$/.test(slug) && slug.length > 0;
@@ -75,7 +97,8 @@ export default function BookSetup() {
   const save = useMutation({
     mutationFn: async () => {
       const body: ProjectInput = { title: title.trim(), subject: subject.trim(), slug, authors: authorList, language, audience, goals, options: opts };
-      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body });
+      // A saved book keeps the area it has unless the patch says null, so Automatic has to be sent as null.
+      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: { ...body, options: { ...opts, subjectArea: opts.subjectArea ?? null } } });
       return api('POST /api/projects', { body });
     },
     onSuccess: (p) => {
@@ -115,6 +138,19 @@ export default function BookSetup() {
             <span id="su-slug-hint" className={`ui-field__hint${slug && !slugValid ? ' su-bad' : ''}`}>Lowercase letters, digits and hyphens. It names the exported file.</span>
           </div>
         </div>
+        <div className="ui-field">
+          <label className="ui-field__label" htmlFor="su-area">Subject area</label>
+          <select id="su-area" className="ui-select su-area" value={opts.subjectArea ?? ''} onChange={(e) => set('subjectArea', e.target.value ? e.target.value as SubjectArea : undefined)} aria-describedby="su-area-hint">
+            <option value="">Automatic ({AREA_LABEL[inferred]})</option>
+            {SUBJECT_AREAS.map((a) => <option key={a} value={a}>{AREA_LABEL[a]}</option>)}
+          </select>
+          <span id="su-area-hint" className="ui-field__hint">{opts.subjectArea ? 'Sets which figures the writer may draw and which notation the outline settles. You can still change every option below.' : `Automatic follows the subject and the title, so editing either can change the area. Choosing an area fixes it. It sets which figures the writer may draw and which notation the outline settles.`}</span>
+          <dl className="su-area-effects" aria-label={`What ${AREA_LABEL[area]} sets`}>
+            <dt>Figure kinds</dt><dd>{upper(profile.figureKinds.map((k) => KIND_LABEL[k]).join(', '))}</dd>
+            <dt>Notation hints</dt><dd>{upper(profile.notation)}</dd>
+          </dl>
+        </div>
+
         <div className="ui-field">
           <label className="ui-field__label" htmlFor="su-authors">Authors</label>
           <input id="su-authors" className="ui-input" value={authors} onChange={(e) => setAuthors(e.target.value)} placeholder="Separate names with commas" />
@@ -166,6 +202,30 @@ export default function BookSetup() {
         )}
         <Toggle label="Graphs" checked={opts.graphs} onChange={(v) => set('graphs', v)} />
         <Toggle label="Figures" checked={opts.figures} onChange={(v) => set('figures', v)} />
+        <div className="su-sub">
+          <fieldset className="su-fieldset" disabled={!opts.figures}>
+            <legend className="ui-field__label">How many figures</legend>
+            <div className="ui-stack su-stack" role="radiogroup" aria-label="How many figures">
+              {([
+                ['helpful', 'Where they help', 'A figure when the text is hard to follow without one. Usually one or two per section.'],
+                ['generous', 'Generous', 'Also for definitions and worked examples that a picture would make quicker to read. Up to 3 per section.'],
+              ] as const).map(([v, l, d]) => (
+                <label key={v} className="su-radio"><input type="radio" name="su-amount" checked={opts.figurePolicy === v} onChange={() => set('figurePolicy', v)} /><span><strong>{l}</strong><br /><span className="ui-muted">{d}</span></span></label>
+              ))}
+            </div>
+          </fieldset>
+          {CIRCUIT_AREAS.includes(area) && (
+            <fieldset className="su-fieldset" disabled={!opts.figures}>
+              <legend className="ui-field__label">Circuit symbols</legend>
+              <div className="su-symbols" role="radiogroup" aria-label="Circuit symbols">
+                {([['american', 'American', 'Zigzag resistor'], ['european', 'European', 'Rectangle resistor']] as const).map(([v, l, d]) => (
+                  <label key={v} className="su-sym"><input type="radio" name="su-sym" checked={opts.circuitSymbols === v} onChange={() => set('circuitSymbols', v)} /><Resistor kind={v} /><span><strong>{l}</strong><small>{d}</small></span></label>
+                ))}
+              </div>
+              <p className="ui-field__hint">Applies to resistors, and to the other parts that have two symbol families. The course notes you uploaded are not redrawn.</p>
+            </fieldset>
+          )}
+        </div>
         <fieldset className="su-fieldset">
           <legend className="ui-field__label">Sections outside the course program</legend>
           <div className="ui-row" role="radiogroup" aria-label="Sections outside the course program">
@@ -191,6 +251,22 @@ export default function BookSetup() {
             <input id="su-eph" type="number" min={0} max={30} className="ui-input" value={opts.exercisesPerHotTopic} onChange={(e) => set('exercisesPerHotTopic', clamp(e.target.value, 0, 30))} />
           </div>
         </div>
+      </section>
+
+      <section className="ui-card ui-card--pad su-section" aria-labelledby="su-gen">
+        <h2 id="su-gen" className="ui-panel-title">Generation</h2>
+        <fieldset className="su-fieldset">
+          <legend className="ui-field__label">When Claude usage runs out</legend>
+          <div className="ui-stack su-stack" role="radiogroup" aria-label="When Claude usage runs out">
+            {([
+              [false, 'Continue on the fallback model', 'The work goes on with the fallback model of each job, as set in Connections. The wording can change from one section to the next.'],
+              [true, 'Pause until it resets', 'A usage limit stops the run, and it starts again by itself when the Claude window resets. Choose this when the book must keep one voice.'],
+            ] as const).map(([v, l, d]) => (
+              <label key={l} className="su-radio"><input type="radio" name="su-quota" checked={opts.noClaudeFallback === v} onChange={() => set('noClaudeFallback', v)} /><span><strong>{l}</strong><br /><span className="ui-muted">{d}</span></span></label>
+            ))}
+          </div>
+          <p className="ui-field__hint">With this choice, the jobs that start on Claude never use their fallback for this book, whatever the fallbacks in Connections say. A usage limit pauses the run until it resets, and the Run panel says when. Any other failure, such as a timeout, is retried and then stops the task.</p>
+        </fieldset>
       </section>
 
       {error && <div className="ui-banner ui-banner--danger" role="alert"><div className="ui-banner__body"><span className="ui-banner__title">The book was not saved</span><span>{error}</span></div></div>}

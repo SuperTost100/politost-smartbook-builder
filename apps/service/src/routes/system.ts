@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { ROLES, roleRouteSchema, settingsSchema, type Settings } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
+import { usageSummary } from '../repo/index.ts';
 import { saveStockKeys } from '../figures/stock.ts';
 import { deps } from './deps.ts';
 import { parse } from './util.ts';
@@ -36,6 +37,8 @@ export function registerSystemRoutes(app: FastifyInstance, ctx: AppContext) {
   });
 
   app.get('/api/connections', async () => deps.getConnections(ctx));
+
+  app.get('/api/usage', async (req) => usageSummary(ctx, parse(z.object({ days: z.coerce.number().int().min(1).max(365).default(30) }), req.query).days));
 
   // Keys are write-only: the response says which are set, never what they are.
   app.put('/api/stock-keys', async (req) => {

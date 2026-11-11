@@ -23,6 +23,10 @@ const STATUS_TONE: Record<RunSummary['status'], string> = {
   running: 'primary', pausing: 'warning', paused: 'warning', cancelling: 'warning', cancelled: '', completed: 'success', failed: 'danger', waiting: 'warning',
 };
 
+/** A finished run whose tasks report trouble is complete but not a plain success, wherever its status is shown. */
+const statusLabel = (r: RunSummary) => (r.status === 'completed' && r.warnings.length ? 'Completed with warnings' : STATUS_LABEL[r.status]);
+const statusTone = (r: RunSummary) => (r.status === 'completed' && r.warnings.length ? 'warning' : STATUS_TONE[r.status]);
+
 /** "Waiting for <provider> quota — resumes at <local time>" */
 function quotaTitle(waiting: NonNullable<RunSummary['waiting']>, tasks: TaskRow[] | undefined): string {
   const provider = tasks?.find((t) => t.id === waiting.taskId)?.provider ?? 'provider';
@@ -48,6 +52,8 @@ export function RunView({ projectId }: { projectId: string }) {
   const run = detail.data ?? summary;
 
   useEffect(() => { if (picked && !list.some((r) => r.id === picked)) setPicked(null); }, [list, picked]);
+  // The list can show a run as finished while the open detail was fetched earlier. Polling stops with the list, so fetch the detail once more to get the final warnings.
+  useEffect(() => { if (summary && TERMINAL_RUN.has(summary.status) && detail.data && detail.data.status !== summary.status) void detail.refetch(); }, [summary?.status, detail.data?.status]);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: qk.runs(projectId) });
@@ -128,7 +134,7 @@ export function RunView({ projectId }: { projectId: string }) {
             <div className="ui-meta">{run.id.slice(0, 8)} · started {timeAgo(run.createdAt)}</div>
             <h2 className="ui-panel-title">{RUN_KIND_LABEL[run.kind]}</h2>
           </div>
-          <span className={`ui-badge ui-badge--${STATUS_TONE[run.status] || 'neutral'}`}>{run.status === 'waiting' && run.waiting?.kind === 'quota' ? 'Waiting for quota' : STATUS_LABEL[run.status]}</span>
+          <span className={`ui-badge ui-badge--${statusTone(run) || 'neutral'}`}>{run.status === 'waiting' && run.waiting?.kind === 'quota' ? 'Waiting for quota' : statusLabel(run)}</span>
         </div>
         <div className="rn-bar" role="progressbar" aria-valuemin={0} aria-valuemax={c.total} aria-valuenow={c.done} aria-label="Tasks finished">
           <span style={{ width: `${pct}%` }} />
@@ -148,6 +154,15 @@ export function RunView({ projectId }: { projectId: string }) {
         {run.status === 'paused' && <p className="rn-note">Paused. Resume continues with the queued tasks; finished work is kept.</p>}
         {run.status === 'running' && <p className="rn-note">Pause lets running tasks finish and starts nothing new. Cancel drops queued tasks and keeps finished work.</p>}
       </section>
+
+      {run.warnings.length > 0 && (
+        <section className="rn-warnings" aria-label="Warnings">
+          <h3 className="ui-panel-title"><Icon name="alert" />{plural(run.warnings.length, 'warning')} from this run</h3>
+          <ul>
+            {run.warnings.map((w) => <li key={w.taskId}><strong className="ui-wrap">{w.label}</strong><span className="ui-wrap">{w.message}</span></li>)}
+          </ul>
+        </section>
+      )}
 
       {waiting && waiting.kind === 'author' && (
         <section className="rn-waiting" aria-label="Waiting for you">
@@ -233,7 +248,7 @@ export function RunView({ projectId }: { projectId: string }) {
             <li key={r.id}>
               <button type="button" className="rn-run" aria-current={r.id === selectedId} onClick={() => setPicked(r.id)}>
                 <span>{RUN_KIND_LABEL[r.kind]}</span>
-                <span className={`ui-badge ui-badge--${STATUS_TONE[r.status] || 'neutral'}`}>{STATUS_LABEL[r.status]}</span>
+                <span className={`ui-badge ui-badge--${statusTone(r) || 'neutral'}`}>{statusLabel(r)}</span>
                 <span className="ui-muted rn-run__time">{dateTime(r.createdAt)}</span>
               </button>
             </li>

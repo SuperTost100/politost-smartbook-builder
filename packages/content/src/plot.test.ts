@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { isInkDrawing } from './ink.ts';
-import { renderPlotSvg, validatePlotSpec, type PlotSpec } from './plot.ts';
+import { axisSamples, logTicks, renderPlotSvg, validatePlotSpec, type PlotSpec } from './plot.ts';
 
 /** Minimal well-formedness check: balanced tags, no stray "<" or "&" in text or attributes. */
 function assertWellFormed(svg: string): void {
@@ -172,4 +172,108 @@ test('renderPlotSvg: the legend is as wide as its longest label and avoids the c
   const [x, , w] = rect.slice(1).map(Number);
   assert.ok(w >= long.length * 12 * 0.56 + 36, 'wide enough for the longest label');
   assert.ok(x < 300, 'placed away from the top-right corner the curves cross');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Logarithmic axes
+// ---------------------------------------------------------------------------------------------
+
+/** A first-order low-pass magnitude in dB against frequency: the plot of the writer's rule block. */
+const BODE: PlotSpec = {
+  title: 'Low-pass magnitude',
+  xScale: 'log',
+  xRange: [10, 100000],
+  yRange: [-40, 5],
+  xLabel: 'f (Hz)',
+  yLabel: '|H| (dB)',
+  functions: [{ expr: '-10*log10(1+(x/1000)^2)', label: '|H(f)|' }],
+  points: [{ x: 1000, y: -3.01, label: 'fc = 1 kHz' }],
+  asymptotes: [{ kind: 'vertical', value: 1000 }],
+};
+
+test('axisSamples: linear is even in x, log is even in the exponent and keeps the ends', () => {
+  assert.deepEqual(axisSamples(0, 10, 5, 'linear'), [0, 2, 4, 6, 8, 10]);
+  const xs = axisSamples(10, 100000, 4, 'log');
+  assert.equal(xs.length, 5);
+  assert.equal(xs[0], 10);
+  assert.equal(xs[4], 100000);
+  for (const [i, want] of [100, 1000, 10000].entries()) assert.ok(Math.abs(Math.log10(xs[i + 1]) - Math.log10(want)) < 1e-12, `sample ${i + 1}`);
+  const gaps = xs.slice(1).map((x, i) => Math.log10(x) - Math.log10(xs[i]));
+  assert.ok(gaps.every((g) => Math.abs(g - 1) < 1e-12), 'equal gaps in the exponent');
+});
+
+test('logTicks: powers of ten are labelled, 2 to 9 are minor ticks when a decade is wide', () => {
+  const t = logTicks(1, 1000, 8, 150);
+  assert.deepEqual(t.filter((x) => x.labelled).map((x) => x.value), [1, 10, 100, 1000]);
+  assert.deepEqual(t.filter((x) => !x.labelled).map((x) => x.value), [2, 3, 4, 5, 6, 7, 8, 9, 20, 30, 40, 50, 60, 70, 80, 90, 200, 300, 400, 500, 600, 700, 800, 900]);
+});
+
+test('logTicks: no minor ticks when a decade is narrow, and labels thin out over many decades', () => {
+  assert.ok(logTicks(1, 1e6, 8, 40).every((x) => x.labelled), 'a narrow decade has no minor ticks');
+  const wide = logTicks(1e-12, 1e12, 8, 20);
+  assert.deepEqual(wide.filter((x) => x.labelled).map((x) => x.exp), [-12, -8, -4, 0, 4, 8, 12], '25 powers, one label in 4');
+});
+
+test('logTicks: a range inside one decade still gets labels', () => {
+  const t = logTicks(20, 800, 8, 200);
+  assert.deepEqual(t.filter((x) => x.labelled).map((x) => x.value), [20, 50, 100, 200, 500]);
+  assert.equal(logTicks(1.5, 1.8, 8, 200).filter((x) => x.labelled).length, 0, 'nothing to label between 1.5 and 1.8 is allowed, the grid is empty');
+});
+
+test('validatePlotSpec: a log axis needs a positive range, and the error names the axis', () => {
+  const x = validatePlotSpec({ ...BODE, xRange: [0, 1000] });
+  assert.equal(x.ok, false);
+  assert.ok(!x.ok && x.errors.some((e) => /^xRange: must be positive on a log axis/.test(e)), JSON.stringify(x));
+  const y = validatePlotSpec({ ...BODE, yScale: 'log', yRange: [-1, 10] });
+  assert.ok(!y.ok && y.errors.some((e) => /^yRange: must be positive on a log axis/.test(e)));
+  assert.equal(validatePlotSpec({ ...BODE, xRange: [0, 1000], xScale: 'linear' }).ok, true);
+  assert.equal(validatePlotSpec({ ...BODE, xScale: 'ln' }).ok, false);
+  assert.throws(() => renderPlotSvg({ ...BODE, xRange: [-1, 100] }), /xRange: must be positive on a log axis/);
+});
+
+test('renderPlotSvg: a log x axis puts powers of ten on the grid with a raised exponent', () => {
+  const svg = renderPlotSvg(BODE);
+  assertWellFormed(svg);
+  for (const e of [1, 2, 3, 4, 5]) assert.ok(svg.includes(`>10<tspan dy="-4" font-size="8.5">${e}</tspan><`), `10^${e}`);
+  assert.ok(!svg.includes('>10<tspan dy="-4" font-size="8.5">6</tspan>'), 'only powers inside the range');
+  // The plot area is x 58..616 (558 wide): 4 decades, so each power of ten is 139.5 further right than the last.
+  const at = (e: number) => Number(new RegExp(`<text x="([0-9.]+)" y="[0-9.]+" text-anchor="middle">10<tspan dy="-4" font-size="8.5">${e}</tspan>`).exec(svg)![1]);
+  for (const e of [1, 2, 3, 4, 5]) assert.ok(Math.abs(at(e) - (58 + (e - 1) * 139.5)) < 0.02, `10^${e} at ${at(e)}`);
+  // Minor ticks at 2 to 9 are lighter grid lines: 4 decades of 8, the 4 below 10^5 and none above it.
+  const minor = /<g stroke="#E5E7EB"[^>]*>\n((?:<line[^\n]*\n)*)<\/g>/.exec(svg)![1];
+  assert.equal((minor.match(/<line /g) ?? []).length, 4 * 8 + 0);
+  assert.ok(svg.includes('<path '), 'the curve is drawn');
+});
+
+test('renderPlotSvg: points and asymptotes follow the same transform as the axis', () => {
+  const svg = renderPlotSvg(BODE);
+  const cx = Number(/<circle cx="([0-9.]+)"/.exec(svg)![1]);
+  const vline = Number(/<g clip-path="url\(#plot-area\)" stroke="#6B7280"[^>]*>\n<line x1="([0-9.]+)"/.exec(svg)![1]);
+  const expected = 58 + (2 / 4) * (616 - 58); // 1000 is the 3rd power: 2 decades up from 10 of 4 in all
+  assert.ok(Math.abs(cx - expected) < 0.02, `point at ${cx}, expected ${expected}`);
+  assert.ok(Math.abs(vline - expected) < 0.02, `asymptote at ${vline}, expected ${expected}`);
+  assert.ok(svg.includes('>fc = 1 kHz<'));
+});
+
+test('renderPlotSvg: a log curve is sampled in the exponent, so every decade gets the same number of points', () => {
+  const svg = renderPlotSvg({ xScale: 'log', xRange: [1, 10000], yRange: [0, 5], functions: [{ expr: 'log10(x)' }] });
+  const d = /<path d="([^"]+)"/.exec(svg)![1];
+  const xs = d.replace(/^M/, '').split('L').map((p) => Number(p.split(' ')[0]));
+  assert.equal(xs.length, 801);
+  const inFirstDecade = xs.filter((x) => x <= 58 + (558 / 4) + 0.01).length;
+  assert.ok(Math.abs(inFirstDecade - 201) <= 1, `first decade holds ${inFirstDecade} of 801 points`);
+});
+
+test('renderPlotSvg: a log y axis breaks the curve where y is not positive', () => {
+  const svg = renderPlotSvg({ yScale: 'log', xRange: [-2, 2], yRange: [0.01, 100], functions: [{ expr: 'x' }, { expr: '10^x' }] });
+  assertWellFormed(svg);
+  const paths = [...svg.matchAll(/<path d="([^"]+)"/g)].map((m) => m[1]);
+  assert.equal(paths.length, 2);
+  assert.ok(!/NaN|Infinity/.test(svg));
+  assert.ok(paths[0].split('L').length <= 400, 'x is drawn only where it is positive (the right half of the samples)');
+  assert.ok(svg.includes('>10<tspan dy="-4" font-size="8.5">−2</tspan>'), 'a negative exponent uses a real minus sign');
+});
+
+test('renderPlotSvg: a linear plot is unchanged by the scale options', () => {
+  assert.equal(renderPlotSvg({ ...BASIC, xScale: 'linear', yScale: 'linear' }), renderPlotSvg(BASIC));
 });

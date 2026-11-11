@@ -54,7 +54,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   electronics: {
     figureKinds: ['plot', 'drawing', 'photo'],
-    plotExamples: 'a characteristic curve (diode, transistor), a transfer function, a response against time or frequency, a waveform, a load line',
+    plotExamples: 'a characteristic curve (diode, transistor), a transfer function, a response against time, a Bode magnitude and phase against frequency on a log axis, a waveform, a load line',
     photoExamples: 'a component, a board, a measuring instrument, a laboratory setup',
     notation: 'units written in upright type with SI prefixes, the sign conventions for voltage and current, how phasors, small-signal quantities and logic levels are written',
     hypotheses: 'the operating region, the sign convention, linearity, ideal components, steady state, the logic family',

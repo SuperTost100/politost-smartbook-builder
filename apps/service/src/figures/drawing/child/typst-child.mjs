@@ -9,7 +9,8 @@ const input = JSON.parse(await new Promise((resolve) => {
   process.stdin.on('data', (d) => { s += d; });
   process.stdin.on('end', () => resolve(s));
 }));
-const reply = (o) => process.stdout.write(`${JSON.stringify(o)}\n`);
+let sent = Promise.resolve();
+const reply = (o) => { sent = new Promise((done) => process.stdout.write(`${JSON.stringify(o)}\n`, () => done())); };
 try {
   const { NodeCompiler } = createRequire(compilerEntry)(compilerEntry);
   const compiler = NodeCompiler.create({ workspace });
@@ -19,4 +20,7 @@ try {
 } catch (e) {
   reply({ ok: false, diagnostics: [{ severity: 1, message: String((e && e.message) || e).slice(0, 1000), package: '', path: '', range: null }] });
 }
+// A write to a pipe is not finished when write() returns, and process.exit() drops what is still waiting, so the answer was
+// lost whenever the parent read late (a busy machine). The exit waits for the write.
+await sent;
 process.exit(0);

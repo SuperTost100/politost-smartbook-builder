@@ -6,6 +6,11 @@
 .rn-note { font-size: 13px; color: var(--ink-muted); max-width: 64ch; }
 .rn-waiting { display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: var(--radius-md); border: 0; background: var(--warning-soft); }
 .rn-waiting .ui-meta { color: var(--warning); }
+.rn-warnings { display: flex; flex-direction: column; gap: 8px; padding: 16px; border-radius: var(--radius-md); background: var(--warning-soft); }
+.rn-warnings h3 { display: flex; align-items: center; gap: 8px; }
+.rn-warnings h3 svg { color: var(--warning); flex: none; }
+.rn-warnings ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
+.rn-warnings li { display: flex; flex-direction: column; gap: 2px; font-size: 14px; }
 .rn-section { display: flex; flex-direction: column; gap: 10px; }
 .rn-group { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface); }
 .rn-group > summary { display: flex; align-items: center; gap: 8px; padding: 8px 12px; cursor: pointer; list-style: none; }

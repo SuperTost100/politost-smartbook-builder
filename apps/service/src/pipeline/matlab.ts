@@ -30,7 +30,8 @@ const CHILD = `
 const [lib] = process.argv.slice(1);
 const input = JSON.parse(await new Promise((resolve) => { let s = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => resolve(s)); }));
 let out = '';
-const reply = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+let sent = Promise.resolve();
+const reply = (o) => { sent = new Promise((done) => process.stdout.write(JSON.stringify(o) + '\\n', () => done())); };
 // numbl logs which linear algebra backend it picked; that is not the program's output.
 console.error = () => {};
 try {
@@ -59,6 +60,9 @@ try {
 } catch (e) {
   reply({ ok: false, stdout: '', error: 'numbl could not start: ' + String(e?.message ?? e).slice(0, 500), figures: 0 });
 }
+// A write to a pipe is not finished when write() returns, and process.exit() drops what is still waiting, so the answer was
+// lost whenever the parent read late (a busy machine). The exit waits for the write.
+await sent;
 process.exit(0);
 `;
 

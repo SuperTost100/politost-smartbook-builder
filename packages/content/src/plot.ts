@@ -2,8 +2,11 @@ import { z } from 'zod';
 import { compileExpr } from './expr.ts';
 import { INK_MARKER } from './ink.ts';
 
+/** An axis is linear unless it is logarithmic: then ticks, samples and positions follow the exponent. */
+export type AxisScale = 'linear' | 'log';
+
 /** Declarative function plot rendered to SVG deterministically. */
-export interface PlotSpec { title?: string; xRange: [number, number]; yRange: [number, number]; xLabel?: string; yLabel?: string;
+export interface PlotSpec { title?: string; xRange: [number, number]; yRange: [number, number]; xScale?: AxisScale; yScale?: AxisScale; xLabel?: string; yLabel?: string;
   functions: { expr: string; label?: string; domain?: [number, number]; style?: 'solid' | 'dashed' }[];
   points?: { x: number; y: number; label?: string; open?: boolean }[];
   asymptotes?: { kind: 'vertical' | 'horizontal'; value: number; label?: string }[];
@@ -17,6 +20,8 @@ const plotSpecSchema = z.object({
   title: text.optional(),
   xRange: range,
   yRange: range,
+  xScale: z.enum(['linear', 'log']).optional(),
+  yScale: z.enum(['linear', 'log']).optional(),
   xLabel: text.optional(),
   yLabel: text.optional(),
   functions: z
@@ -41,6 +46,9 @@ export function validatePlotSpec(spec: unknown): { ok: true; spec: PlotSpec } | 
   }
   const value = parsed.data as PlotSpec;
   const errors: string[] = [];
+  for (const [axis, scale, [lo, hi]] of [['xRange', value.xScale, value.xRange], ['yRange', value.yScale, value.yRange]] as const) {
+    if (scale === 'log' && lo <= 0) errors.push(`${axis}: must be positive on a log axis, got [${lo}, ${hi}]; use a range such as [1, 1000] or set the scale to "linear"`);
+  }
   if (!value.functions.length && !value.points?.length) errors.push('functions: at least one function or point is required');
   value.functions.forEach((f, i) => {
     const c = compileExpr(f.expr, ['x']);
@@ -103,27 +111,87 @@ function fmtTick(v: number, step: number): string {
   return v.toFixed(Math.min(decimals, 8)).replace(/\.?0+$/, (m) => (m.startsWith('.') ? '' : m));
 }
 
+/** The value an axis maps a number through before it is laid out: the number itself, or its exponent. */
+const axisTransform = (scale: AxisScale | undefined) => (scale === 'log' ? Math.log10 : (v: number) => v);
+
+/** `n + 1` sample positions from lo to hi: evenly spaced on a linear axis, evenly in the exponent on a log axis. */
+export function axisSamples(lo: number, hi: number, n: number, scale: AxisScale | undefined): number[] {
+  if (scale !== 'log') return Array.from({ length: n + 1 }, (_, k) => lo + ((hi - lo) * k) / n);
+  const a = Math.log10(lo);
+  const b = Math.log10(hi);
+  return Array.from({ length: n + 1 }, (_, k) => (k === 0 ? lo : k === n ? hi : 10 ** (a + ((b - a) * k) / n)));
+}
+
+/** A tick on a log axis at mantissa * 10^exp; `labelled` ticks get a number, the others are light grid lines. */
+export interface LogTick { value: number; mantissa: number; exp: number; labelled: boolean }
+
+/** Below this many pixels per decade the minor ticks at 2 to 9 crowd each other, so they are left out. */
+const MIN_MINOR_PX = 50;
+
+/**
+ * Ticks of a log axis between min and max (both positive). Every power of ten is a labelled tick, thinned to every
+ * k-th power when there would be more than `target` labels. Minor ticks at 2 to 9 times a power of ten are added when a
+ * decade is at least `MIN_MINOR_PX` wide and no power is skipped. A range that holds fewer than two powers of ten also
+ * labels the 2 and 5 positions, so the axis is never a single number.
+ */
+export function logTicks(min: number, max: number, target: number, pxPerDecade: number): LogTick[] {
+  const lo = Math.log10(min);
+  const hi = Math.log10(max);
+  const e0 = Math.ceil(lo - 1e-9);
+  const e1 = Math.floor(hi + 1e-9);
+  const every = Math.max(1, Math.ceil((e1 - e0 + 1) / target));
+  const sparse = e1 - e0 + 1 < 2;
+  const out: LogTick[] = [];
+  for (let exp = Math.floor(lo); exp <= Math.ceil(hi); exp++) {
+    for (let mantissa = 1; mantissa <= 9; mantissa++) {
+      const value = Number((mantissa * 10 ** exp).toPrecision(12));
+      if (value < min * (1 - 1e-9) || value > max * (1 + 1e-9)) continue;
+      const labelled = (mantissa === 1 && ((exp % every) + every) % every === 0) || (sparse && (mantissa === 2 || mantissa === 5));
+      if (labelled || (every === 1 && pxPerDecade >= MIN_MINOR_PX && mantissa > 1)) out.push({ value, mantissa, exp, labelled });
+    }
+  }
+  return out;
+}
+
+/** "10" or "2×10" followed by a raised exponent, as SVG text content. A raised tspan works in every renderer, unlike baseline-shift. */
+function powerLabel(mantissa: number, exp: number): string {
+  return `${mantissa === 1 ? '10' : `${mantissa}×10`}<tspan dy="-4" font-size="8.5">${String(exp).replace('-', '−')}</tspan>`;
+}
+
 export function renderPlotSvg(spec: PlotSpec): string {
   const checked = validatePlotSpec(spec);
   if (!checked.ok) throw new Error(`Invalid plot spec: ${checked.errors.join('; ')}`);
   const s = checked.spec;
   const [xmin, xmax] = s.xRange;
   const [ymin, ymax] = s.yRange;
-  const px = (x: number) => X0 + ((x - xmin) / (xmax - xmin)) * (X1 - X0);
-  const py = (y: number) => Y1 - ((y - ymin) / (ymax - ymin)) * (Y1 - Y0);
+  // Every position goes through these, so points, asymptotes, labels and curves share one transform on a log axis.
+  const tx = axisTransform(s.xScale);
+  const ty = axisTransform(s.yScale);
+  const px = (x: number) => X0 + ((tx(x) - tx(xmin)) / (tx(xmax) - tx(xmin))) * (X1 - X0);
+  const py = (y: number) => Y1 - ((ty(y) - ty(ymin)) / (ty(ymax) - ty(ymin))) * (Y1 - Y0);
 
   const out: string[] = [];
   out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(s.title ?? 'Plot')}" font-family="${FONT}" ${INK_MARKER}>`);
   out.push(`<title>${esc(s.title ?? 'Plot')}</title>`);
   out.push(`<defs><clipPath id="plot-area"><rect x="${X0}" y="${Y0}" width="${X1 - X0}" height="${Y1 - Y0}"/></clipPath></defs>`);
 
-  // grid + tick labels
-  const tx = ticks(xmin, xmax, 8);
-  const ty = ticks(ymin, ymax, 6);
-  out.push('<g stroke="#D1D5DB" stroke-width="1" shape-rendering="crispEdges">');
-  for (const v of tx.values) out.push(`<line x1="${f2(px(v))}" y1="${Y0}" x2="${f2(px(v))}" y2="${Y1}"/>`);
-  for (const v of ty.values) out.push(`<line x1="${X0}" y1="${f2(py(v))}" x2="${X1}" y2="${f2(py(v))}"/>`);
-  out.push('</g>');
+  // grid + tick labels: a tick is a position, its label as SVG text, and whether it is a major (labelled) line
+  const axisTicks = (scale: AxisScale | undefined, min: number, max: number, target: number, length: number) => {
+    if (scale === 'log') {
+      return logTicks(min, max, target, length / (Math.log10(max) - Math.log10(min)))
+        .map((t) => ({ value: t.value, label: t.labelled ? powerLabel(t.mantissa, t.exp) : null }));
+    }
+    const t = ticks(min, max, target);
+    return t.values.map((value) => ({ value, label: esc(fmtTick(value, t.step)) }));
+  };
+  const xTicks = axisTicks(s.xScale, xmin, xmax, 8, X1 - X0);
+  const yTicks = axisTicks(s.yScale, ymin, ymax, 6, Y1 - Y0);
+  for (const [stroke, major] of [['#E5E7EB', false], ['#D1D5DB', true]] as const) {
+    out.push(`<g stroke="${stroke}" stroke-width="1" shape-rendering="crispEdges">`);
+    for (const t of xTicks) if ((t.label !== null) === major) out.push(`<line x1="${f2(px(t.value))}" y1="${Y0}" x2="${f2(px(t.value))}" y2="${Y1}"/>`);
+    for (const t of yTicks) if ((t.label !== null) === major) out.push(`<line x1="${X0}" y1="${f2(py(t.value))}" x2="${X1}" y2="${f2(py(t.value))}"/>`);
+    out.push('</g>');
+  }
   out.push(`<rect x="${X0}" y="${Y0}" width="${X1 - X0}" height="${Y1 - Y0}" fill="none" stroke="#9CA3AF" stroke-width="1" shape-rendering="crispEdges"/>`);
 
   // axes through zero when visible
@@ -133,8 +201,8 @@ export function renderPlotSvg(spec: PlotSpec): string {
   out.push('</g>');
 
   out.push(`<g font-size="11" fill="#4B5563">`);
-  for (const v of tx.values) out.push(`<text x="${f2(px(v))}" y="${Y1 + 16}" text-anchor="middle">${esc(fmtTick(v, tx.step))}</text>`);
-  for (const v of ty.values) out.push(`<text x="${X0 - 8}" y="${f2(py(v) + 4)}" text-anchor="end">${esc(fmtTick(v, ty.step))}</text>`);
+  for (const t of xTicks) if (t.label !== null) out.push(`<text x="${f2(px(t.value))}" y="${Y1 + 16}" text-anchor="middle">${t.label}</text>`);
+  for (const t of yTicks) if (t.label !== null) out.push(`<text x="${X0 - 8}" y="${f2(py(t.value) + 4)}" text-anchor="end">${t.label}</text>`);
   out.push('</g>');
 
   // labels
@@ -164,7 +232,7 @@ export function renderPlotSvg(spec: PlotSpec): string {
   }
 
   // curves
-  const yspan = ymax - ymin;
+  const yspan = ty(ymax) - ty(ymin);
   const drawn: [number, number][] = [];
   out.push('<g clip-path="url(#plot-area)" fill="none" stroke-width="2.25" stroke-linejoin="round" stroke-linecap="round">');
   s.functions.forEach((f, i) => {
@@ -180,15 +248,14 @@ export function renderPlotSvg(spec: PlotSpec): string {
       if (cur.length > 1) segs.push(`M${cur.join('L')}`);
       cur = [];
     };
-    for (let k = 0; k <= SAMPLES; k++) {
-      const x = lo + ((hi - lo) * k) / SAMPLES;
+    for (const x of axisSamples(lo, hi, SAMPLES, s.xScale)) {
       const y = c.evaluate({ x });
-      if (!Number.isFinite(y)) {
+      if (!Number.isFinite(y) || (s.yScale === 'log' && y <= 0)) {
         flush();
         prevY = null;
         continue;
       }
-      if (prevY !== null && Math.abs(y - prevY) > yspan) flush(); // jump across the asymptote
+      if (prevY !== null && Math.abs(ty(y) - ty(prevY)) > yspan) flush(); // jump across the asymptote
       cur.push(`${f2(px(x))} ${f2(Math.max(-1e5, Math.min(1e5, py(y))))}`);
       drawn.push([px(x), py(y)]);
       prevY = y;

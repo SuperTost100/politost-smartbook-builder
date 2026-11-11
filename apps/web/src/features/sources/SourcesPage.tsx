@@ -10,6 +10,7 @@ import { Icon } from '../../components/Icon';
 import { Dialog, ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
 import { Inspector } from './Inspector';
+import { ExamSplit, SplitFound } from './ExamSplit';
 import './sources.css';
 
 const ROLES: { value: ResourceRole; label: string }[] = [
@@ -129,7 +130,7 @@ export default function SourcesPage() {
 
           <ul className="so-list" aria-label="Sources">
             {list.map((r) => (
-              <li key={r.id} className={`so-row${r.id === rid ? ' is-selected' : ''}${r.included ? '' : ' is-excluded'}`}>
+              <li key={r.id} className={`so-row${r.id === rid ? ' is-selected' : ''}${r.included ? '' : ' is-excluded'}${r.splitWarning ? ' so-row--warn' : ''}`}>
                 <div className="so-row__top">
                   <Link className="so-row__name ui-wrap" to={`/books/${pid}/sources/${r.id}`} aria-current={r.id === rid ? 'true' : undefined}>
                     <Icon name={r.kind === 'url' ? 'link' : 'file'} size={16} />{r.filename}
@@ -145,8 +146,10 @@ export default function SourcesPage() {
                       {r.pagesNeedingVision} {r.pagesNeedingVision === 1 ? 'page needs' : 'pages need'} reading{r.pagesTranscribed > 0 ? ` (${r.pagesTranscribed} done)` : ''}
                     </Link>
                   )}
+                  <SplitFound r={r} />
                 </div>
                 {r.error && <p className="so-row__error">{r.error}</p>}
+                <ExamSplit r={r} pid={pid} />
                 <div className="so-row__controls">
                   <label className="so-role-inline">
                     <span className="ui-sr">Role of {r.filename}</span>

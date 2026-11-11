@@ -1,5 +1,6 @@
 import { evalExprAtX } from './safeMathExpr.ts';
 import { compileExpr } from './expr.ts';
+import { axisSamples, type AxisScale } from './plot.ts';
 
 const SAMPLES = 400;
 const READER_CHARS = /^[0-9x+\-*/().^ \t]+$/;
@@ -23,8 +24,12 @@ const nonEmpty = (v: unknown): boolean => Array.isArray(v) && v.length > 0;
 function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: string } {
   const data = cfg.data;
   if (!Array.isArray(data) || data.length === 0) return { ok: false, detail: 'config.data must hold at least one curve' };
-  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { yaxis?: { range?: unknown } };
-  const view = isRange(layout.yaxis?.range) ? layout.yaxis.range : null;
+  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { xaxis?: { type?: unknown }; yaxis?: { range?: unknown; type?: unknown } };
+  const xLog = layout.xaxis?.type === 'log';
+  const yLog = layout.yaxis?.type === 'log';
+  // On a log axis Plotly reads the range as exponents, so the visible range in data units is 10^range.
+  const viewRange = isRange(layout.yaxis?.range) ? layout.yaxis.range : null;
+  const view: [number, number] | null = viewRange && yLog ? [10 ** viewRange[0], 10 ** viewRange[1]] : viewRange;
   const problems: string[] = [];
   let curves = 0;
   for (const [i, raw] of data.entries()) {
@@ -40,9 +45,12 @@ function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: 
     if (type !== 'scatter' || !/lines|markers/.test(mode)) continue;
     // A function curve: its y values must be mostly numbers, and some must fall in the visible range.
     curves++;
+    // A point a log axis cannot show (zero or negative on that axis) is as good as undefined.
     const ys = t.y as unknown[];
-    const finite = ys.filter((y): y is number => typeof y === 'number' && Number.isFinite(y));
-    if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain`);
+    // Without an x array Plotly uses 0, 1, 2, ... as the coordinates. (A scatter needs a y array, so y is never implicit here.)
+    const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => k);
+    const finite = ys.filter((y, k): y is number => typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof xsOf[k] === 'number' && xsOf[k] > 0)));
+    if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain${xLog || yLog ? ' (a log axis shows only positive values)' : ''}`);
     else if (view && !finite.some((y) => y >= view[0] && y <= view[1])) problems.push(`${name}: never enters the visible range [${view[0]}, ${view[1]}]`);
   }
   if (problems.length) return { ok: false, detail: problems.join('; ') };
@@ -151,6 +159,9 @@ export interface FunctionGraphSpec {
   yDomain: [number, number];
   xLabel: string;
   yLabel: string;
+  /** A log axis takes its domain in data units (positive) and is sampled evenly in the exponent. */
+  xScale?: AxisScale;
+  yScale?: AxisScale;
 }
 
 /**
@@ -162,6 +173,16 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
   const [x0, x1] = spec.xDomain;
   const [y0, y1] = spec.yDomain;
   const problems: string[] = [];
+  // A log axis with a non-positive domain cannot be drawn: report it, and sample the graph on a linear axis so the payload stays coherent.
+  const logOk = (scale: AxisScale | undefined, lo: number, hi: number, axis: 'x' | 'y'): AxisScale => {
+    if (scale !== 'log') return 'linear';
+    if (lo > 0 && hi > lo) return 'log';
+    if (hi > lo) problems.push(`The ${axis} domain [${lo}, ${hi}] must be positive on a log axis.`);
+    return 'linear';
+  };
+  const xScale = logOk(spec.xScale, x0, x1, 'x');
+  const yScale = logOk(spec.yScale, y0, y1, 'y');
+  const ty = yScale === 'log' ? Math.log10 : (v: number) => v;
   const colors = ['#C2410C', '#1D4ED8', '#15803D', '#7C3AED'];
   const data = spec.functions.map((f, i) => {
     const fn = compileExpr(f.expr);
@@ -174,17 +195,17 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
     let finite = 0;
     let inView = 0;
     let prev: number | null = null;
-    const span = y1 - y0;
-    for (let k = 0; k <= samples; k++) {
-      const x = x0 + ((x1 - x0) * k) / samples;
+    const span = ty(y1) - ty(y0);
+    for (const x of axisSamples(x0, x1, samples, xScale)) {
       let y: number | null = fn.evaluate({ x });
       if (Number.isNaN(y)) y = null;
-      if (y === null || !Number.isFinite(y)) y = null;
+      // Plotly shows nothing at or below zero on a log axis.
+      if (y === null || !Number.isFinite(y) || (yScale === 'log' && y <= 0)) y = null;
       else {
         finite++;
         if (y >= y0 && y <= y1) inView++;
         // A jump larger than the visible range is a discontinuity, not a steep slope.
-        if (prev !== null && Math.abs(y - prev) > span) { xs.push(x); ys.push(null); }
+        if (prev !== null && Math.abs(ty(y) - ty(prev)) > span) { xs.push(x); ys.push(null); }
       }
       prev = y;
       xs.push(Number(x.toPrecision(8)));
@@ -195,15 +216,17 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
     return { type: 'scatter', mode: 'lines', name: f.label, x: xs, y: ys, line: { color: colors[i % colors.length], width: 2.5 } };
   }).filter(Boolean);
   if (x1 <= x0 || y1 <= y0) problems.push('The domain or range is empty.');
+  // The reader keeps an axis "type" and "range" (its sanitiser lists both). Plotly reads the range of a log axis as exponents.
+  const axis = (title: string, scale: AxisScale, lo: number, hi: number) => (scale === 'log' ? { title, type: 'log', range: [Math.log10(lo), Math.log10(hi)] } : { title, range: [lo, hi] });
   const layout = {
     title: spec.title,
-    xaxis: { title: spec.xLabel, range: [x0, x1] },
-    yaxis: { title: spec.yLabel, range: [y0, y1] },
+    xaxis: axis(spec.xLabel, xScale, x0, x1),
+    yaxis: axis(spec.yLabel, yScale, y0, y1),
     showlegend: spec.functions.length > 1,
   };
   return {
     payload: { id: spec.id, title: spec.title, type: 'plotly', config: { data, layout } },
     ok: problems.length === 0 && data.length > 0,
-    detail: problems.length ? problems.join(' ') : `Sampled ${data.length} function(s) at ${samples + 1} points each; all defined and visible.`,
+    detail: problems.length ? problems.join(' ') : `Sampled ${data.length} function(s) at ${samples + 1} points each${xScale === 'log' ? ' (evenly in the exponent of x)' : ''}; all defined and visible.`,
   };
 }

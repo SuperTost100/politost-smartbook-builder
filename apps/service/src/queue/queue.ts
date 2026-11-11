@@ -227,11 +227,16 @@ export class Queue {
   }
 
   tasks(runId: string): TaskRow[] {
-    return this.db.all('SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, rowid', runId).map((t) => ({
-      id: t.id as string, runId, kind: t.kind as string, label: t.label as string, state: t.state as TaskState,
-      attempts: Number(t.attempts), provider: (t.provider as string) ?? null, error: json(t.error, null),
-      waitReason: (t.wait_reason as string) ?? null, startedAt: (t.started_at as string) ?? null, finishedAt: (t.finished_at as string) ?? null,
-    }));
+    return this.db.all('SELECT * FROM tasks WHERE run_id = ? ORDER BY created_at, rowid', runId).map((t) => {
+      const resourceId = json<{ resourceId?: unknown }>(t.input, {}).resourceId;
+      const applied = json<{ applied?: unknown }>(t.result, {}).applied;
+      return {
+        id: t.id as string, runId, kind: t.kind as string, label: t.label as string, state: t.state as TaskState,
+        attempts: Number(t.attempts), provider: (t.provider as string) ?? null, error: json(t.error, null),
+        waitReason: (t.wait_reason as string) ?? null, resourceId: typeof resourceId === 'string' ? resourceId : null, applied: typeof applied === 'boolean' ? applied : null,
+        startedAt: (t.started_at as string) ?? null, finishedAt: (t.finished_at as string) ?? null,
+      };
+    });
   }
 
   // ---------- engine ----------

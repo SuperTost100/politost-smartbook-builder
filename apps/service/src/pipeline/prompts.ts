@@ -1,13 +1,13 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
-import { codeString, toProviderSchema } from '../llm/schema.ts';
+import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 18;
+export const PROMPT_VERSION = 20;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -319,13 +319,13 @@ const KIND_SEEING: Record<FigureKind, string> = {
 
 /** One block per kind. A new kind adds its block here and its name to the subject profiles (domain). */
 const KIND_BLOCKS: Record<FigureKind, (f: FigureSetup) => string> = {
-  plot: (f) => `  - plot: a function graph. Expressions use x, the constants e and pi, + - * / ^, and the functions ${[...ALLOWED_FUNCTIONS].join(' ')}; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write powers with Unicode superscripts ("x²"). Examples: ${f.profile.plotExamples}.`,
+  plot: (f) => `  - plot: a function graph. Expressions use x, the constants e and pi, + - * / ^, and the functions ${[...ALLOWED_FUNCTIONS].join(' ')}; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write powers with Unicode superscripts ("x²"). A log axis ("xScale" or "yScale" set to "log", null otherwise) needs a positive range, has its ticks at the powers of ten and fits frequency, decay and quantities that span orders of magnitude; values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB. A Bode plot is two plot figures, magnitude and then phase, with the same xScale "log" and xRange, and their image blocks follow one another. Example, the magnitude of a first-order low-pass: xScale "log", xRange [10, 100000], yRange [-40, 5], the function -10*log10(1+(x/1000)^2) and a point at x 1000, y -3.01 labelled "fc = 1 kHz". Other examples: ${f.profile.plotExamples}.`,
   structure: () => `  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.`,
   levels: () => `  - levels: an energy-level diagram: a molecular orbital diagram, the enthalpy of reactants and products with a ΔH arrow, a Hess cycle, the energy order of orbitals. The vertical axis is an energy (or enthalpy, entropy), named in "yLabel"; never use it for a flow chart, a conversion scheme or a classification. "columns" are the vertical groups from left to right (an MO diagram has three: atom, molecule, atom). Each level has a unique key, its column (from 0), an energy (only order and spacing matter), a label, "boxes" for degenerate orbitals (π2p has 2) and "electrons" (null to draw no arrows). "links" join levels by key: "dashed" for MO correlation lines, "arrow" for an energy change, labelled like "ΔH = −286 kJ".`,
   orbitals: () => `  - orbitals: orbital boxes for the electron configuration of one atom or ion. "species" as the text writes it ("O", "Fe3+"), "core" a noble-gas core like "[Ar]" or null, "subshells" in the order the text writes them, each with its electrons ("3d" with 5). The builder checks that the electrons add up to the species and drops the figure if they do not.`,
   cell: () => `  - cell: an electrochemical cell. "galvanic": two half-cells, a salt bridge (its electrolyte, e.g. "KNO3") and a voltmeter reading or null. "electrolytic": a generator; with saltBridge null both electrodes share one vessel (a lead-acid battery, molten NaCl), whose solution or melt is left.solution. Each side has its electrode, solution ("ZnSO4 1 M"), role (anode or cathode) and half-reaction or null. Do not draw a fuel cell or a dry cell as beakers.`,
   periodic: () => `  - periodic: the periodic table with up to 5 groups of elements highlighted, each with its label ("Metalli alcalini"), and up to two trend arrows: "right" or "left" across a period, "up" or "down" along a group, labelled with what increases that way.`,
-  drawing: (f) => `  - drawing: a drawn figure of anything that is not ${f.kinds.includes('structure') ? 'a function graph, a molecule or one of the chemistry diagrams above' : 'a function graph (that is the plot kind)'}: a circuit, a logic network, a timing diagram, a Karnaugh map, a state machine, a free-body diagram, a beam with loads, a thermodynamic cycle, a data structure or a tree, a block diagram, or a plot with a logarithmic axis such as a Bode plot (the plot kind samples linear axes only). You do not write drawing code: an illustrator draws from your description, so the figure is only as good as "shows". "shows" is two to five sentences in English: every element, how they are connected or arranged, every label and value that must appear (with the units as the text writes them), and what the reader should notice. "family" is one of circuit, logic, timing, karnaugh, state-machine, block-diagram, plot, sketch, tree-graph, other. A drawing that cannot be made is dropped, and so is one whose "shows" repeats another figure of the book. To change a drawing in a fix, return a new figure with a new key and a new "shows". Examples of "shows": (electronics) "Inverting amplifier with an ideal op-amp. The input voltage Vin goes through R1 to the inverting input (marked -). R2 runs from the output back to the inverting input. The non-inverting input (+) is connected to ground. The output is labelled Vout. The gain is -R2/R1." (mechanics) "A simply supported horizontal beam of length L on a pin support at the left end A and a roller support at the right end B. A point load F acts downward at the middle. A uniformly distributed load q acts downward on the right half. The reactions RA and RB point upward at the supports. The span L is dimensioned below the beam."`,
+  drawing: (f) => `  - drawing: a drawn figure of anything that is not ${f.kinds.includes('structure') ? 'a function graph, a molecule or one of the chemistry diagrams above' : 'a function graph (that is the plot kind)'}: a circuit, a logic network, a timing diagram, a Karnaugh map, a state machine, a free-body diagram, a beam with loads, a thermodynamic cycle, a data structure or a tree, a block diagram, or a plot of data that no formula gives (a curve that follows from a formula is a plot figure, a Bode plot included: the builder samples it exactly, on a log axis too). You do not write drawing code: an illustrator draws from your description, so the figure is only as good as "shows". "shows" is two to five sentences in English: every element, how they are connected or arranged, every label and value that must appear (with the units as the text writes them), and what the reader should notice. "family" is one of circuit, logic, timing, karnaugh, state-machine, block-diagram, plot, sketch, tree-graph, other. A drawing that cannot be made is dropped, and so is one whose "shows" repeats another figure of the book. To change a drawing in a fix, return a new figure with a new key and a new "shows". Examples of "shows": (electronics) "Inverting amplifier with an ideal op-amp. The input voltage Vin goes through R1 to the inverting input (marked -). R2 runs from the output back to the inverting input. The non-inverting input (+) is connected to ground. The output is labelled Vout. The gain is -R2/R1." (mechanics) "A simply supported horizontal beam of length L on a pin support at the left end A and a roller support at the right end B. A point load F acts downward at the middle. A uniformly distributed load q acts downward on the right half. The reactions RA and RB point upward at the supports. The span L is dimensioned below the beam."`,
   photo: (f) => `  - photo: a real photo from Wikimedia Commons, Pixabay or Pexels: ${f.profile.photoExamples}. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.`,
 };
 
@@ -698,25 +698,42 @@ Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no gra
   };
 }
 
+const graphScale = z.enum(['linear', 'log']).optional().describe('"log" for a logarithmic axis (its domain must be positive); default linear');
+const graphFunctions = z.array(z.object({ fn: codeString(), label: z.string() }));
+
+/** The second graph of a pair, such as the phase under a Bode magnitude. It shares the first graph's x axis. */
+export const graphPairSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  functions: graphFunctions,
+  yDomain: z.tuple([z.number(), z.number()]),
+  yScale: graphScale,
+  yLabel: z.string(),
+});
+
 export const graphSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  functions: z.array(z.object({ fn: codeString(), label: z.string() })),
+  functions: graphFunctions,
   xDomain: z.tuple([z.number(), z.number()]),
   yDomain: z.tuple([z.number(), z.number()]),
+  xScale: graphScale,
+  yScale: graphScale,
   xLabel: z.string(),
   yLabel: z.string(),
+  pair: graphPairSchema.optional().describe('a second graph on the same x axis, or null'),
 });
 
 export function graphPrompt(p: { language: string; purpose: string; section: string }) {
   return {
-    system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses.`,
+    system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
     prompt: `Purpose: ${p.purpose}
 Section text:
 ${p.section}
 
-Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xLabel, yLabel.`,
+Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,
   };
 }
 
@@ -754,7 +771,8 @@ export const reviewSchema = z.object({
     sectionId: z.string(),
     quote: z.string().describe('verbatim text from the chapter that the issue points at, max 200 chars'),
     severity: z.enum(['blocker', 'major', 'minor']),
-    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'clarity', 'repetition', 'figure', 'language']),
+    // Style categories ("clarity", "repetition") are not offered any more. Issues stored with them still load and show: the stored category is a plain string.
+    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'figure', 'language']),
     message: z.string(),
     suggestion: z.string(),
   })),
@@ -764,15 +782,17 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   const lang = languageName(p.language);
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
-    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
+    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, explanations that mislead, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
-Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that shows something wrong and a figure that adds nothing the text does not already say plainly. Use category "figure" and severity minor, or major for a figure that shows something wrong. Never report a missing figure: whether the section needs one is the writer's choice.
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text and a figure that shows something wrong. Use category "figure", severity major for a figure that shows something wrong and minor for a caption or label that is off. Never report a missing figure and never report a figure because it adds little: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Do not report those. Prefer fewer, solid issues to a long list of doubtful ones.
+
+Style is not your job. Do not report wording, tone, length, order of presentation, repetition or "could be clearer", at any severity.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -780,13 +800,13 @@ ${p.objectives}
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
 
-${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue, category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
+${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue (the one minor that is not about a wrong word), category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
-Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
+Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: only a wrong word, symbol, unit or reference that could mislead a student (a symbol that differs from the one in the statement, a wrong unit, a link to the wrong formula); anything that is only style or could be said better is not an issue. Return an empty list if the chapter is correct.`,
   };
 }
 
@@ -863,6 +883,30 @@ Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reaso
   };
 }
 
+// ---------- check of a claim that the text already fixes a problem ----------
+
+export const resolutionCheckSchema = z.object({
+  issues: z.array(z.object({
+    index: z.number().int().min(1).describe('the number of the problem in the list'),
+    resolved: z.boolean(),
+    reason: z.string().describe('one short sentence: where the text fixes it, or what is still wrong'),
+  })),
+});
+
+/** A fix model said the section already fixes a problem and changed nothing for it. A cheap model looks at the text as it stands. */
+export function resolutionCheckPrompt(p: { language: string; issues: string; text: string }) {
+  return {
+    system: `You check whether a university textbook section written in ${languageName(p.language)} already fixes problems that a reviewer reported earlier. Another model claims that it does. Judge from the section as it stands now, never from the claim. A problem is resolved only when the text now says what the problem asked for, correctly: the hypothesis is stated, the statement is true, the symbol or reference is right. If the passage the problem quoted is no longer in the section, the problem is resolved only when what is there instead does not have the problem. Be strict about mathematics.`,
+    prompt: `PROBLEMS, each with the claim that the text already fixes it:
+${p.issues}
+
+SECTION AS IT STANDS (the blocks the problems point at, with their neighbours; "[…]" marks blocks left out):
+${p.text}
+
+Return JSON {"issues": [{"index": <number>, "resolved": <boolean>, "reason": "..."}]} with one entry per problem, the reason in ${languageName(p.language)}.`,
+  };
+}
+
 // ---------- revision ----------
 
 export function revisePrompt(p: { language: string; markdown: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string }) {
@@ -886,28 +930,33 @@ Return JSON {"markdown": "..."} with the full revised section.`,
 
 // ---------- targeted revision ----------
 
-const patchChanges = z.array(z.object({
-  block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
-  text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
-}));
+export interface PatchAnswer extends ParsedPatch { figures: z.infer<ReturnType<typeof figureSchemaFor>>[] }
 
-export interface PatchAnswer { changes: z.infer<typeof patchChanges>; figures?: z.infer<ReturnType<typeof figureSchemaFor>>[] }
-
-/** The figure specs are in the schema only when the fix may add a figure (a figure problem or an instruction), so most fixes do not carry them. */
-export function patchSchemaFor(figures: FigureSetup | null): z.ZodType<PatchAnswer> {
-  return figures
-    ? z.object({ changes: patchChanges, figures: z.array(figureSchemaFor(schemaKinds(figures))).describe('figures the new text adds with :::image blocks; usually empty') })
-    : z.object({ changes: patchChanges });
+/**
+ * Reads the plain-text patch answer (see PATCH_MARK). Figure specs are JSON and are checked against the figure schema,
+ * which is built only when the fix may add a figure (a figure problem or an instruction). Without that, a figures part is ignored.
+ * A malformed answer gets the standard repair turn of runRole, with the problem named.
+ */
+export function patchParser(figures: FigureSetup | null, limits: { blocks: number; issues: number }): (text: string) => { ok: true; data: PatchAnswer } | { ok: false; problem: string } {
+  const specs = z.array(figureSchemaFor(schemaKinds(figures)));
+  const raw = rawJsonSchema(specs);
+  return (text) => {
+    const read = parsePatchAnswer(text, limits);
+    if (!read.ok) return read;
+    if (!figures || !read.data.figures) return { ok: true, data: { ...read.data, figures: [] } };
+    const parsed = specs.safeParse(sanitizeModelValue(fillAbsentNulls(dropOptionalNulls(read.data.figures, raw), raw), raw));
+    return parsed.success ? { ok: true, data: { ...read.data, figures: parsed.data } } : { ok: false, problem: `The figures part does not match the figure format: ${describeIssues(parsed.error)}` };
+  };
 }
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; issues?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.${p.guards ? `\n\n${guardRules(p.guards)}` : ''}\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put its spec in the "${PATCH_MARK} figures" part and an :::image block in the block it belongs to. Otherwise write no figures part.\n${figureRules(p.figures)}` : ''}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
@@ -920,7 +969,16 @@ Section ids you may link to: ${p.sectionIds}
 SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
-Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]${p.figures ? ', "figures": []' : ''}}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+Answer in plain text, not JSON, in parts. Each part starts with a line that begins with ${PATCH_MARK}:
+${PATCH_MARK} block <number> | issues <numbers of the problems it answers, like 1, 3>
+<the full new text of that block, exactly as it goes in the book: write backslashes, $ and every other character as they are, with no escaping>
+${PATCH_MARK} delete <number> | issues <numbers>
+(no text: the block is removed)${p.issues ? `
+${PATCH_MARK} resolved | issues <numbers>
+<one sentence: where the section as it stands already fixes these problems. Use it only when no change is needed for them.>` : ''}${p.figures ? `
+${PATCH_MARK} figures
+<a JSON array with the specs of the figures the new text adds>` : ''}
+Give each block once. To add a paragraph, include it in the text of the block it follows. When nothing needs to change and no problem is resolved, answer only: ${PATCH_MARK} none`,
   };
 }
 
@@ -929,12 +987,13 @@ Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that
 export const figuresPassSchemaFor = (figures: FigureSetup) => z.object({
   figures: z.array(figureSchemaFor(schemaKinds(figures)).extend({
     afterBlock: z.number().int().min(1).describe('number of the block the figure illustrates, from the [n] labels; the figure goes right after it'),
+    issue: z.number().int().min(1).nullable().optional().describe('when the task lists numbered review problems, the number of the one problem this figure answers; otherwise leave null'),
   })),
   noFigureReason: z.string().nullable().optional().describe('leave null'),
 });
 
 /** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
-export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string }) {
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string; brief?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
@@ -948,11 +1007,11 @@ Figures the section already has: ${p.existing || '(none)'}
 ${p.elsewhere ? `Figures other sections already show (the book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption):\n${p.elsewhere}\n` : ''}
 TEXT, numbered by block:
 ${p.blocks}
-
+${p.brief ? `\nA REVIEW FOUND A FIGURE MISSING. What it asks for:\n${p.brief}\nDesign the figures that answer it, and give each figure the number of the problem it answers in "issue". When no figure fits the text, return none and say why in one sentence.\n` : ''}
 INSTRUCTIONS
 - Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
 - Every number, species, label and direction in a figure must match the text exactly.
-- Return JSON: figures, noFigureReason (leave null).`,
+- Return JSON: figures, noFigureReason (${p.brief ? 'null, or why you propose no figure' : 'leave null'}).`,
   };
 }
 

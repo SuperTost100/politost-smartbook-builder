@@ -13,7 +13,8 @@ const TASK_SUCCEEDED_KEYS = ['questions', 'assets', 'enrichments', 'issues'];
 
 /** Query keys touched by each event type. A key is the first element of the query key. */
 const INVALIDATE: Record<string, string[]> = {
-  'task.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment'],
+  // `resources` is here because a split with AI replaces a file's questions and its counts while the run is still going.
+  'task.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment', 'resources'],
   'task.progress': ['run'],
   'run.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment'],
   'content.saved': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects', 'figure'],

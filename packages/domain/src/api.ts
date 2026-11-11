@@ -3,9 +3,9 @@
 // Mutations require the header `x-smartbuilder: 1` (CSRF guard).
 import type {
   AlignmentReport, DrawingFamily, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
-  Asset, BookOptions, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
+  Asset, BookOptions, BookOptionsPatch, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
   ProjectInput, ProjectSummary, Question, Resource, ResourceRole, ReviewIssue, RunSummary, Settings,
-  SourceIndex, TaskRow, Topic, UsageRow, Role,
+  SourceIndex, TaskRow, Topic, UsageRow, UsageSummary, Role,
 } from './index.ts';
 
 export interface ProviderStatus {
@@ -102,13 +102,15 @@ export interface Api {
   'GET /api/settings': { res: Settings };
   'PUT /api/settings': { body: Partial<Settings>; res: Settings };
   'GET /api/connections': { res: ConnectionsResponse };
+  /** Model calls of the last `days` days (default 30) per provider, from the usage the builder recorded. */
+  'GET /api/usage': { res: UsageSummary };
   'POST /api/connections/probe': { body: { role: Role }; res: ProbeResult };
   'PUT /api/stock-keys': { body: { pixabay?: string | null; pexels?: string | null }; res: { pixabay: boolean; pexels: boolean } };
 
   'GET /api/projects': { res: ProjectSummary[] };
   'POST /api/projects': { body: ProjectInput; res: Project };
   'GET /api/projects/:id': { res: ProjectSummary };
-  'PATCH /api/projects/:id': { body: Partial<ProjectInput> & { options?: Partial<BookOptions> }; res: Project };
+  'PATCH /api/projects/:id': { body: Partial<Omit<ProjectInput, 'options'>> & { options?: BookOptionsPatch }; res: Project };
   'POST /api/projects/:id/archive': { res: Project };
   'DELETE /api/projects/:id': { res: { ok: true } };
 
