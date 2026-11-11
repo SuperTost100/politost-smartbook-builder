@@ -270,6 +270,21 @@ test.describe('Sources: exam split warning', () => {
     await expect(alert).toContainText('The file keeps the split it had.');
   });
 
+  test('the split actions wait until the row knows whether a split is running', async ({ page }) => {
+    await keepResources(page, [examBad()]);
+    let release!: () => void;
+    const held = new Promise<void>((r) => { release = r; });
+    await page.route(/\/api\/projects\/p1\/runs$/, async (route) => { await held; return answer(route, [aiRun('running')]); });
+    await page.route(/\/api\/runs\/r7$/, (route) => answer(route, { ...aiRun('running'), tasks: [splitTask()], usage: [] }));
+    await page.goto('/books/p1/sources');
+    // The runs have not arrived yet, so a split may already be under way: the actions are there but cannot be used.
+    await expect(page.getByRole('button', { name: 'Split with AI' })).toBeDisabled();
+    await expect(page.getByRole('button', { name: 'Mark as not an exam' })).toBeDisabled();
+    release();
+    await expect(page.getByRole('status').filter({ hasText: 'Splitting esami-2024.pdf with AI' })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Split with AI' })).toHaveCount(0);
+  });
+
   test('a run that fails after a split that was applied says so, and does not say the old split was kept', async ({ page }) => {
     // The split task replaced the questions and left no warning, then the topic map failed.
     await keepResources(page, [examOk, examBad({ splitSessions: 9, splitQuestions: 41, splitWarning: null })]);

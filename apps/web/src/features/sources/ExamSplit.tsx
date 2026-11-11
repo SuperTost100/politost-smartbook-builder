@@ -38,6 +38,8 @@ export function ExamSplit({ r, pid }: { r: Resource; pid: string }) {
   const run = useRun(latest?.id, !!latest && !TERMINAL_RUN.has(latest.status)).data;
   const task = run?.tasks.find((t) => t.kind === 'resource.split' && t.resourceId === r.id);
   const busy = !!task && !TASK_DONE.has(task.state) && !TERMINAL_RUN.has(run!.status);
+  // Until the runs and the tasks of an active Prepare run have loaded, the row cannot know whether a split is under way.
+  const tracking = runs === undefined || (!!latest && !TERMINAL_RUN.has(latest.status) && run === undefined);
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.resources(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); };
 
   // The toast belongs to the person who watched the split run, so it needs the row to have seen it busy.
@@ -116,8 +118,8 @@ export function ExamSplit({ r, pid }: { r: Resource; pid: string }) {
         {refused && <span className="so-warn__result">{refused.message}{refused.action ? ` ${refused.action}` : ''} <Link to={`/books/${pid}/run`}>Open run</Link></span>}
         {(found || kept) && (
           <div className="so-warn__actions">
-            <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" onClick={() => split.mutate()} disabled={split.isPending || role.isPending}><Icon name="sparkle" size={14} />{kept || refused ? 'Try again' : 'Split with AI'}</button>
-            {found && <button type="button" className="ui-btn ui-btn--sm" onClick={() => role.mutate('theory')} disabled={split.isPending || role.isPending}>Mark as not an exam</button>}
+            <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" onClick={() => split.mutate()} disabled={tracking || split.isPending || role.isPending}><Icon name="sparkle" size={14} />{kept || refused ? 'Try again' : 'Split with AI'}</button>
+            {found && <button type="button" className="ui-btn ui-btn--sm" onClick={() => role.mutate('theory')} disabled={tracking || split.isPending || role.isPending}>Mark as not an exam</button>}
           </div>
         )}
       </div>
