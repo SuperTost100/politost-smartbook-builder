@@ -255,7 +255,8 @@ function FigureEditor({ details, stale, loadError, retry, pid, nodeId, title, nu
   // The discard question replaces the footer buttons: focus goes to its safe answer, and back to where the author was typing when they keep editing.
   const keepBtn = useRef<HTMLButtonElement>(null);
   const cameFrom = useRef<HTMLElement | null>(null);
-  const ask = () => { cameFrom.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setLeaving(true); };
+  // Asked again while the question is open (the close button stays reachable), the place to go back to is still the one the author left first.
+  const ask = () => { if (!leaving) cameFrom.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setLeaving(true); };
   useEffect(() => { if (leaving) keepBtn.current?.focus(); }, [leaving]);
   const requestClose = () => { if (unsaved) ask(); else onClose(); };
   // Leaving the page (reload, closing the tab) cannot wait for a question: the browser asks. A move inside the app (browser Back) gets the dialog's own question.

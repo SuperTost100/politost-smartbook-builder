@@ -1073,6 +1073,11 @@ test.describe('review findings of the figure dialog', () => {
       seen.add(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent ?? ''));
     }
     expect([...seen].sort()).toEqual(['Close', 'Discard', 'Keep editing']);
+    // The close button asks the same question again, and Keep editing still goes back to the field the author left.
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toBeFocused();
   });
 
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
