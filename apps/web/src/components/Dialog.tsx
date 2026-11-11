@@ -4,19 +4,21 @@ import { Icon } from './Icon';
 interface DialogProps {
   open: boolean;
   onClose: () => void;
-  title: string;
+  title: ReactNode;
   children: ReactNode;
   footer?: ReactNode;
   variant?: 'modal' | 'wide' | 'drawer' | 'drawer-left';
   /** Extra class on the dialog element. */
   className?: string;
+  /** Escape and a click outside do nothing while this is set (work is running that a stray key must not abandon). The close button still works. */
+  holdEscape?: boolean;
 }
 
 /**
  * Native <dialog>: the browser traps focus, closes on Esc and returns focus to the opener.
  * The component only mounts the dialog content while open.
  */
-export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '' }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
@@ -38,8 +40,8 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       className={cls}
       aria-labelledby={titleId}
       onClose={() => closeRef.current()}
-      onCancel={(e) => { e.preventDefault(); closeRef.current(); }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget) closeRef.current(); }}
+      onCancel={(e) => { e.preventDefault(); if (!holdEscape) closeRef.current(); }}
+      onMouseDown={(e) => { if (e.target === e.currentTarget && !holdEscape) closeRef.current(); }}
     >
       <div className="ui-dialog__head">
         <h2 id={titleId} className="ui-panel-title">{title}</h2>

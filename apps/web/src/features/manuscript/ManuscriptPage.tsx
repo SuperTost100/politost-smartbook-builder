@@ -1,19 +1,21 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { parseChapterMarkdown, type FormulaRef } from '@politost/content-core';
 import type { SectionView } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
 import { resolveAssetFrom } from '../../lib/assets';
-import { qk, useIssues, useManuscript, useProject, useResources, useRun } from '../../lib/queries';
-import { OPEN_ISSUE, blockOfIssue, mapSection } from '../../lib/blocks';
+import { qk, useAssets, useIssues, useManuscript, useProject, useResources, useRun } from '../../lib/queries';
+import { OPEN_ISSUE, blockOfIssue, figureNumber, imageFilename, mapSection } from '../../lib/blocks';
 import { timeAgo } from '../../lib/format';
 import { useBookId, useDocumentTitle, useMediaQuery } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { Dialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
 import { splitBlocks } from '@smartbuilder/content/blocks';
-import { BlockView, type BlockEdit, type Cite } from './BlockView';
+import { BlockView, type BlockEdit, type Cite, type FigureInfo } from './BlockView';
+import { DrawGhost } from './DrawGhost';
+import { FigureDialog } from './FigureDialog';
 import { DiffList } from './DiffList';
 import { EvidenceDrawer, IssueGroup } from './EvidenceDrawer';
 import { HistoryDialog } from './HistoryDialog';
@@ -38,6 +40,7 @@ export default function ManuscriptPage() {
   const project = useProject(pid);
   const resources = useResources(pid);
   const issuesQ = useIssues(pid);
+  const assetsQ = useAssets(pid);
   const chapters = ms.data ?? [];
 
   const narrow = useMediaQuery('(max-width: 1099px)');
@@ -46,6 +49,8 @@ export default function ManuscriptPage() {
   const [historyOpen, setHistoryOpen] = useState(false);
   const [regen, setRegen] = useState<{ selection?: string } | null>(null);
   const [figuresOpen, setFiguresOpen] = useState(false);
+  const [figureAt, setFigureAt] = useState<number | null>(null);
+  const [drawing, setDrawing] = useState<{ nodeId: string; runId: string; afterBlock: number } | null>(null);
   const [sel, setSel] = useState<number | null>(null);
   const [focusNote, setFocusNote] = useState<string | undefined>();
   const [focusIdx, setFocusIdx] = useState(0);
@@ -75,6 +80,26 @@ export default function ManuscriptPage() {
 
   const mapped = useMemo(() => (section ? mapSection(section) : null), [section]);
   const blocks = mapped?.blocks ?? [];
+
+  // Figure blocks: the badge of their kind and the entry to the figure dialog.
+  const figureOf = useMemo(() => {
+    const byFile = new Map((assetsQ.data ?? []).map((a) => [a.filename, a]));
+    const out = new Map<number, FigureInfo>();
+    for (const b of blocks) {
+      if (b.kind !== 'image') continue;
+      const a = byFile.get(imageFilename(b.source) ?? '');
+      const drawn = !!a && a.origin === 'generated-svg' && (a.spec as { kind?: string } | null)?.kind === 'drawing';
+      out.set(b.index, { badge: drawn ? { label: 'Drawn', accent: true } : a?.origin === 'stock' ? { label: 'Photo', accent: false } : a?.origin === 'imported' ? { label: 'Image', accent: false } : null });
+    }
+    return out;
+  }, [blocks, assetsQ.data]);
+  const onEditFigure = useCallback((i: number) => setFigureAt(i), []);
+  // The dialog is removed from the page when it closes, so the browser cannot return focus: do it here, to the button that opened it.
+  const closeFigure = useCallback(() => {
+    const at = figureAt;
+    setFigureAt(null);
+    if (at !== null) requestAnimationFrame(() => (blocksRef.current?.querySelector<HTMLElement>(`[data-block="${at}"] .ms-actions button`) ?? blocksRef.current?.querySelector<HTMLElement>(`[data-block="${at}"]`))?.focus());
+  }, [figureAt]);
 
   // Chapter-wide formula index and figure URLs, from the compiled chapter.
   const previewQ = useQuery({
@@ -140,7 +165,8 @@ export default function ManuscriptPage() {
   const editProps = useMemo<BlockEdit | undefined>(() => (draft ? {
     text: draft.text, baseText: draft.baseText, saved: !!draft.saved, saving, blocked: blockedEdit,
     onChange: changeText, onSave: saveDraft, onDelete: removeDraftBlock, onCancel: endEdit,
-  } : undefined), [draft, saving, blockedEdit, changeText, saveDraft, removeDraftBlock, endEdit]);
+    addFigure: { pid, nodeId: nodeId ?? '', drawing: !!project.data?.options.figures, prepare: editor.prepareInsert, onDrawing: (run, afterBlock) => setDrawing({ nodeId: nodeId ?? '', runId: run.id, afterBlock }) },
+  } : undefined), [draft, saving, blockedEdit, changeText, saveDraft, removeDraftBlock, endEdit, pid, nodeId, project.data?.options.figures, editor.prepareInsert]);
 
   // Return focus to the block after a save closes the editor.
   const wasEditing = useRef<number | null>(null);
@@ -223,7 +249,7 @@ export default function ManuscriptPage() {
           <Link className="ui-btn ui-btn--sm" aria-label="Reader preview" title="Reader preview" to={`/books/${pid}/preview/${loc?.chapter.chapterId ?? ''}`}><Icon name="eye" /><span className="ms-tb-label">Reader preview</span></Link>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="History" title="History" onClick={() => setHistoryOpen(true)} disabled={!nodeId}><Icon name="history" /><span className="ms-tb-label">History</span></button>
           <button type="button" className="ui-btn ui-btn--sm" aria-label="Regenerate section" title="Regenerate section" onClick={() => setRegen({})} disabled={!section?.current}><Icon name="sparkle" /><span className="ms-tb-label">Regenerate section</span></button>
-          {project.data?.options.figures && <button type="button" className="ui-btn ui-btn--sm" aria-label="Add figures" title="Add figures" onClick={() => setFiguresOpen(true)} aria-haspopup="dialog"><Icon name="image" /><span className="ms-tb-label">Add figures</span></button>}
+          {project.data?.options.figures && <button type="button" className="ui-btn ui-btn--sm" aria-label="Add figures with AI" title="Adds figures to this section, this chapter or the whole book" onClick={() => setFiguresOpen(true)} aria-haspopup="dialog"><Icon name="image" /><span className="ms-tb-label">Add figures with AI</span></button>}
           {project.data?.options.outsideMaterial && <button type="button" className="ui-btn ui-btn--sm" aria-label="Find outside sources" title="Find outside sources" onClick={() => research.mutate()} disabled={!section?.current || research.isPending}><Icon name="globe" /><span className="ms-tb-label">Find outside sources</span></button>}
         </div>
 
@@ -285,10 +311,10 @@ export default function ManuscriptPage() {
                 <p className="ms-keys ui-muted"><span className="ui-kbd">↑</span> <span className="ui-kbd">↓</span> move between blocks · <span className="ui-kbd">Space</span> evidence · <span className="ui-kbd">Enter</span> edit</p>
                 <div className="ms-blocks" role="list" aria-label="Section blocks" ref={blocksRef}>
                   {blocks.map((b) => (
+                    // The edited block keeps its identity (the draft id) when blocks shift around it, and no key
+                    // contains the revision id, so a newer revision never remounts the editor.
+                    <Fragment key={editingIdx === b.index && draft ? `edit-${draft.id}` : `block-${b.index}`}>
                     <BlockView
-                      // The edited block keeps its identity (the draft id) when blocks shift around it, and no key
-                      // contains the revision id, so a newer revision never remounts the editor.
-                      key={editingIdx === b.index && draft ? `edit-${draft.id}` : `block-${b.index}`}
                       block={b}
                       total={blocks.length}
                       chapterNumber={loc?.chapter.number ?? 0}
@@ -303,7 +329,13 @@ export default function ManuscriptPage() {
                       onEdit={startEdit}
                       onRegenerate={onRegenerate}
                       onFocusBlock={focusBlock}
+                      figure={figureOf.get(b.index)}
+                      onEditFigure={onEditFigure}
                     />
+                    {drawing && drawing.nodeId === nodeId && drawing.afterBlock === b.index && (
+                      <div role="listitem"><DrawGhost pid={pid} nodeId={nodeId!} runId={drawing.runId} afterBlock={drawing.afterBlock} onDone={() => setDrawing(null)} /></div>
+                    )}
+                    </Fragment>
                   ))}
                 </div>
               </>
@@ -324,6 +356,7 @@ export default function ManuscriptPage() {
             focusNote={focusNote}
             onClose={closeEvidence}
             onEdit={startEdit}
+            onEditFigure={figureOf.has(selBlock.index) ? () => onEditFigure(selBlock.index) : undefined}
           />
         </div>
       )}
@@ -344,6 +377,7 @@ export default function ManuscriptPage() {
       )}
       {nodeId && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} pid={pid} nodeId={nodeId} currentId={section?.current?.id ?? null} onRestored={setSectionData} />}
       {project.data?.options.figures && <FiguresDialog open={figuresOpen} onClose={() => setFiguresOpen(false)} pid={pid} nodeId={section?.current && loc && loc.index >= 0 ? nodeId ?? null : null} sectionTitle={title} chapter={loc?.chapter ?? null} />}
+      {nodeId && <FigureDialog open={figureAt !== null} onClose={closeFigure} pid={pid} nodeId={nodeId} section={section} blockIndex={figureAt} number={figureAt === null ? null : figureNumber(blocks[figureAt]?.compiled ?? null)} />}
       {nodeId && <RegenerateDialog open={!!regen} onClose={() => setRegen(null)} pid={pid} nodeId={nodeId} selection={regen?.selection} label={regen?.selection ? 'Regenerate selection' : 'Regenerate section'} />}
     </div>
   );

@@ -263,10 +263,28 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
     } catch (e) { toast(errorText(e), { tone: 'danger' }); }
   }, [draft, qc, pid, nodeId, mutate, toast]);
 
+  /**
+   * "Add figure" works on the saved text: text typed in the open block is saved first (the editor stays open), and the figure
+   * goes after the last block of what the author is editing. Throws with the reason when the text cannot be saved now.
+   */
+  const prepareInsert = useCallback(async (): Promise<{ baseRevId: string; afterBlock: number }> => {
+    if (!draft || !section?.current) throw new Error('Open the block the figure goes after first.');
+    if (changedElsewhere) throw new Error('The section changed while you were editing. Choose how to continue in the notice above the text, then add the figure.');
+    let revId = currentId;
+    if (draft.text !== draft.baseText) {
+      if (!draft.text.trim()) throw new Error('This block is empty. Write its text, or delete it, before adding a figure.');
+      if (draft.index >= latestBlocks.length) throw new Error('This block is no longer in the section.');
+      const sv = await write.mutateAsync({ nodeId, markdown: joinBlocks(applyDraft(latestBlocks, draft.index, draft.text, false, draft.span)), baseRevId: draft.baseRevId, draftId: draft.id, text: draft.text, auto: true });
+      revId = sv.current?.id ?? null;
+    }
+    if (!revId) throw new Error('This section has no text yet.');
+    return { baseRevId: revId, afterBlock: (located?.index ?? draft.index) + Math.max(1, splitBlocks(draft.text).length) - 1 };
+  }, [draft, section?.current, changedElsewhere, currentId, latestBlocks, write, nodeId, located]);
+
   const discard = useCallback(() => { setDraft(null); setConflict(null); setLeave(null); setState({ kind: 'idle' }); }, [setDraft]);
 
   return {
     editing, draft, located, startEdit, cancelEdit, changeText, saveDraft, removeDraftBlock, state, saving: write.isPending, conflict,
-    changedElsewhere, keepMine, discard, merged,
+    changedElsewhere, keepMine, discard, merged, prepareInsert,
   };
 }

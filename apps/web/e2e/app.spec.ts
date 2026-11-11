@@ -415,7 +415,7 @@ test('manuscript figures resolve whether the map is keyed by assets/<file> or th
   }
 });
 
-test('double-clicking Add figures starts one run and shows one toast', async ({ page }) => {
+test('double-clicking Add figures with AI starts one run and shows one toast', async ({ page }) => {
   let posts = 0;
   await page.route(`**/api/projects/${bookId}/sections/s1/figures`, async (route) => {
     posts++;
@@ -423,9 +423,9 @@ test('double-clicking Add figures starts one run and shows one toast', async ({ 
     await route.fulfill({ json: { id: 'run-figs', counts: { figures: 1 } } });
   });
   await page.goto(`/books/${bookId}/manuscript/s1`);
-  await page.getByRole('button', { name: 'Add figures' }).click();
-  const dialog = page.getByRole('dialog', { name: 'Add figures' });
-  await dialog.getByRole('button', { name: 'Add figures' }).dblclick();
+  await page.getByRole('button', { name: 'Add figures with AI' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add figures with AI' });
+  await dialog.getByRole('button', { name: 'Add figures', exact: true }).dblclick();
   await page.waitForTimeout(900);
   expect(posts).toBe(1);
   await expect(page.getByText('Adding figures to this section')).toHaveCount(1);

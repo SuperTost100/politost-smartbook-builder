@@ -42,6 +42,8 @@ export const useOutline = (pid: string | undefined) =>
 export const useRuns = (pid: string | undefined) =>
   useQuery({ queryKey: qk.runs(pid ?? ''), queryFn: () => api('GET /api/projects/:id/runs', { params: { id: pid! } }), enabled: !!pid });
 /** `poll` is a safety net for a live run in case the event stream is down. */
+export const useAssets = (pid: string | undefined) =>
+  useQuery({ queryKey: qk.assets(pid ?? ''), queryFn: () => api('GET /api/projects/:id/assets', { params: { id: pid! } }), enabled: !!pid });
 export const useRun = (runId: string | undefined, poll = false) =>
   useQuery({ queryKey: qk.run(runId ?? ''), queryFn: () => api('GET /api/runs/:runId', { params: { runId: runId! } }), enabled: !!runId, refetchInterval: poll ? 6000 : false });
 export const useManuscript = (pid: string | undefined) =>
@@ -77,3 +79,9 @@ export function invalidateProject(qc: QueryClient, pid: string) {
 
 export type { Res };
 export { useMutation };
+
+/** A section the service just returned after a change of its figures: the page shows it at once, and everything built from it is read again. */
+export function applySectionView(qc: QueryClient, pid: string, sv: Res<'GET /api/projects/:id/sections/:nodeId'>) {
+  qc.setQueryData(qk.section(pid, sv.sectionId), sv);
+  for (const key of [qk.manuscript(pid), qk.preview(pid, sv.chapterId), qk.history(pid, sv.sectionId), qk.issues(pid), qk.assets(pid), ['figure', pid]]) void qc.invalidateQueries({ queryKey: key });
+}
