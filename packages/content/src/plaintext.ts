@@ -38,10 +38,20 @@ export function latexToPlain(text: string): string {
 /**
  * Caption text for the reader, which prints it as plain text: formulas lose their LaTeX, and a bare "E_n" or "n^2"
  * (the way a model writes a caption) becomes "Eₙ" or "n²". A subscript whose letters Unicode has no form for
- * (b, c, d, f, g, q, w, y, z) stays as written, because a half-converted subscript reads worse.
+ * (b, c, d, f, g, q, w, y, z) stays as written, because a half-converted subscript reads worse. An exponent is
+ * converted whole or not at all, so "e^-kt" stays and never becomes "e⁻kt".
  */
 export function captionToPlain(text: string): string {
   return latexToPlain(text)
-    .replace(/\^([+-]?\d+|[+-]|[nix])/g, (_, a) => [...a].map((c) => SUP[c]).join(''))
-    .replace(/_([0-9a-z]+)/g, (m, a) => ([...a].every((c) => SUB[c]) ? [...a].map((c) => SUB[c]).join('') : m));
+    .split(/(\s+)/)
+    .map((word) => (NOT_MATH.test(word) ? word : word
+      .replace(/\^([+-]?\d+|[+-]?[nix](?![\p{L}\p{N}])|[+-](?![\p{L}\p{N}(]))/gu, (_, a: string) => [...a].map((c) => SUP[c]).join(''))
+      .replace(SUBSCRIPT, (m, base: string, a: string) => ([...a].every((c) => SUB[c]) ? base + [...a].map((c) => SUB[c]).join('') : m))))
+    .join('');
 }
+
+// A web address or a file name ("plot_1.png") is never a formula.
+const NOT_MATH = /:\/\/|^www\.|\.[a-z]{2,4}$/i;
+// A subscript hangs on a symbol of one or two letters ("E_n", "ΔH_vap", "σ*_1s") or on a closing bracket ("[A]_0").
+// A longer word before the underscore is a name, such as the user name in a photo credit ("Anna_123").
+const SUBSCRIPT = /((?<!\p{L})\p{L}{1,2}\*?|[\])])_([0-9a-z]+)/gu;

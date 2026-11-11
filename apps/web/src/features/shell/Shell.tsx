@@ -55,7 +55,9 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  const openIssues = (issues.data ?? []).filter((i) => i.status === 'open').length;
   // Tabs that don't fit scroll sideways: bring the open one into view and mark the side that has more.
+  // The Review badge widens its tab when the issue count arrives, so that count re-runs the check too.
   const tabs = useRef<HTMLElement>(null);
   const { pathname } = useLocation();
   useEffect(() => {
@@ -71,8 +73,7 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
     const ro = new ResizeObserver(mark);
     ro.observe(el);
     return () => { el.removeEventListener('scroll', mark); ro.disconnect(); };
-  }, [pathname, bookId]);
-  const openIssues = (issues.data ?? []).filter((i) => i.status === 'open').length;
+  }, [pathname, bookId, openIssues]);
 
   return (
     <header className="sh-bar" ref={bar}>
