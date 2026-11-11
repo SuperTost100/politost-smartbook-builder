@@ -2,7 +2,7 @@
 export { storeResource, detectKind } from './store.ts';
 export { extractResource, renderPageImage, LIBREOFFICE_MISSING } from './extract.ts';
 export { findPassage, searchPages } from './search.ts';
-export { segmentQuestions } from './segment.ts';
+export { segmentQuestions, splitQuestions } from './segment.ts';
 export { ExtractError } from './errors.ts';
 export { classifyPage, pageSignals } from './quality.ts';
 export { isBlockedAddress, safeFetch } from './safe-fetch.ts';

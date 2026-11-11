@@ -124,6 +124,11 @@ export interface ProjectSummary extends Project {
 export type ResourceKind = 'pdf' | 'docx' | 'pptx' | 'md' | 'url';
 export type ResourceRole = 'theory' | 'exercises' | 'exams' | 'mixed';
 export type ResourceStatus = 'queued' | 'extracting' | 'ready' | 'failed';
+/**
+ * Why the split of an exam file looks wrong. no_questions: nothing was found. no_heading: questions were found but no
+ * session heading, so the whole file is one session. thin_sessions: every session has at most one question.
+ */
+export type SplitWarning = 'no_questions' | 'no_heading' | 'thin_sessions';
 
 export interface Resource {
   id: string;
@@ -141,6 +146,11 @@ export interface Resource {
   /** Pages whose text layer is garbled or missing and need vision. */
   pagesNeedingVision: number;
   pagesTranscribed: number;
+  /** Sessions and questions found when the file was last split. Null until then, and for a file that is not an exam source. */
+  splitSessions: number | null;
+  splitQuestions: number | null;
+  /** Set only for an included source with the Exams role. Null when the split looks right. */
+  splitWarning: SplitWarning | null;
   createdAt: string;
 }
 
@@ -457,6 +467,8 @@ export interface RunSummary {
    * quota: a provider limit; the task resumes by itself at retryAt.
    */
   waiting: { taskId: string; reason: string; action: string; kind: 'author' | 'quota'; retryAt: string | null } | null;
+  /** Finished tasks that report trouble in their result. A run with warnings is complete but not a plain success. */
+  warnings: { taskId: string; label: string; message: string }[];
 }
 
 export interface TaskRow {

@@ -7,6 +7,7 @@ import { chapterIntro, sectionDraft, sectionEvidence } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { gate, outlinePlan } from './plan.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
+import { resourceSplit } from './examSplit.ts';
 import { resourceExtract, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { sectionResearch } from './research.ts';
 import { sectionFigures } from './figures.ts';
@@ -21,6 +22,7 @@ export function registerHandlers(ctx: AppContext) {
   q.register('resource.extract', h(resourceExtract));
   q.register('resource.index', h(resourceIndex));
   q.register('resource.questions', h(resourceQuestions));
+  q.register('resource.split', h(resourceSplit));
   q.register('notebook.sync', h(async (c, t) => syncNotebook(c, t.task.projectId, t.signal)));
   q.register('topics.map', h(topicsMap));
   q.register('outline.plan', h(outlinePlan));

@@ -1,6 +1,6 @@
 import { existsSync, rmSync } from 'node:fs';
 import { resolve, sep } from 'node:path';
-import type { Page, PageQuality, Resource, ResourceKind, ResourceRole, ResourceStatus, SourceIndex, SourceIndexEntry, Topic } from '@smartbuilder/domain';
+import type { Page, PageQuality, Resource, ResourceKind, ResourceRole, ResourceStatus, SourceIndex, SourceIndexEntry, SplitWarning, Topic } from '@smartbuilder/domain';
 import { paths, resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json } from '../db/db.ts';
@@ -16,11 +16,18 @@ const RESOURCE_SQL = `
     (SELECT COUNT(*) FROM pages p WHERE p.resource_id = r.id AND p.transcript IS NOT NULL) AS transcribed_pages
   FROM resources r`;
 
+/** What the last split of an exam file found, kept in the resource's meta by the pipeline. */
+interface StoredSplit { role: string; sessions: number; questions: number; warning: SplitWarning | null }
+
 export function mapResource(r: Rec): Resource {
+  // A split made under another role (the author changed it since) says nothing about this one.
+  const split = json<{ split?: StoredSplit }>(r.meta, {}).split;
+  const own = split && split.role === r.role && r.role === 'exams' ? split : null;
   return {
     id: r.id, projectId: r.project_id, kind: r.kind as ResourceKind, role: r.role as ResourceRole, filename: r.filename, url: r.url ?? null,
     sha256: r.sha256, size: Number(r.size), included: bool(r.included), status: r.status as ResourceStatus, error: r.error ?? null,
     pageCount: Number(r.page_count), pagesNeedingVision: Number(r.vision_pages ?? 0), pagesTranscribed: Number(r.transcribed_pages ?? 0),
+    splitSessions: own ? own.sessions : null, splitQuestions: own ? own.questions : null, splitWarning: own && bool(r.included) ? own.warning : null,
     createdAt: r.created_at,
   };
 }

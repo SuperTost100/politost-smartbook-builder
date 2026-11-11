@@ -11,6 +11,8 @@ export interface RunScope {
   chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck';
   /** align runs: apply this report (the chosen finding indexes; empty means all) instead of checking the book. */
   align?: { reportId: string; findings?: number[] };
+  /** prepare runs: split this exam file with the bulk model instead of the text rules. */
+  splitResourceId?: string;
 }
 
 const ACTIVE = `('running', 'pausing', 'paused', 'waiting')`;
@@ -24,7 +26,7 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
   const project = loadProject(ctx, projectId);
   let runId: string;
   switch (kind) {
-    case 'prepare': runId = prepareRun(ctx, projectId); break;
+    case 'prepare': runId = prepareRun(ctx, projectId, scope.splitResourceId); break;
     case 'plan': {
       const existing = activeRun(ctx, projectId, 'plan');
       if (existing) { runId = existing; break; }
@@ -118,14 +120,19 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
   return ctx.queue.runSummary(runId)!;
 }
 
-function prepareRun(ctx: AppContext, projectId: string) {
+function prepareRun(ctx: AppContext, projectId: string, splitResourceId?: string) {
   const resources = ctx.db.all<{ id: string; filename: string; role: string }>(`SELECT id, filename, role FROM resources WHERE project_id = ? AND included = 1 ORDER BY created_at`, projectId);
   if (!resources.length) throw new HttpError(409, 'no_sources', 'This book has no sources yet.', 'Add sources first.');
+  if (splitResourceId && !resources.some((r) => r.id === splitResourceId && r.role === 'exams')) throw new HttpError(409, 'not_an_exam', 'Only an included source marked as Exams can be split this way.', 'Mark the source as Exams and include it in the book, then try again.');
+  // The topic map of a running Prepare keeps its key, so it would not wait for a split added now and could classify the old questions.
+  if (splitResourceId && activeRun(ctx, projectId, 'prepare')) throw new HttpError(409, 'prepare_running', 'Prepare is running. Split this file when it has finished.', 'Wait for the run to finish, or open it from the Run panel.');
   const specs: TaskSpec[] = [];
   for (const r of resources) {
     specs.push({ kind: 'resource.extract', key: `extract:${r.id}`, label: `Read ${r.filename}`, input: { resourceId: r.id } });
     if (r.role !== 'exams') specs.push({ kind: 'resource.index', key: `index:${r.id}`, label: `Find the index of ${r.filename}`, input: { resourceId: r.id }, deps: [`extract:${r.id}`], pool: 'bulk' });
-    if (r.role !== 'theory') specs.push({ kind: 'resource.questions', key: `questions:${r.id}`, label: `Split ${r.filename} into questions`, input: { resourceId: r.id }, deps: [`extract:${r.id}`] });
+    // The AI split takes the place of the text rules for the one file the author asked about.
+    if (r.id === splitResourceId) specs.push({ kind: 'resource.split', key: `split:${r.id}`, label: `Split ${r.filename} with AI`, input: { resourceId: r.id }, deps: [`extract:${r.id}`], pool: 'bulk', maxAttempts: 2 });
+    else if (r.role !== 'theory') specs.push({ kind: 'resource.questions', key: `questions:${r.id}`, label: `Split ${r.filename} into questions`, input: { resourceId: r.id }, deps: [`extract:${r.id}`] });
   }
   const set = createHash('sha1').update(resources.map((r) => r.id).join(',')).digest('hex').slice(0, 10);
   if (ctx.settings().evidenceMode === 'notebooklm') {
@@ -133,7 +140,7 @@ function prepareRun(ctx: AppContext, projectId: string) {
   }
   specs.push({
     kind: 'topics.map', key: `topics:${set}`, label: 'Map topics and exam frequency',
-    deps: specs.filter((s) => s.kind === 'resource.index' || s.kind === 'resource.questions').map((s) => s.key), pool: 'editor',
+    deps: specs.filter((s) => s.kind === 'resource.index' || s.kind === 'resource.questions' || s.kind === 'resource.split').map((s) => s.key), pool: 'editor',
   });
   ctx.db.run(`UPDATE projects SET stage = 'mapping', updated_at = ? WHERE id = ? AND stage = 'sources'`, now(), projectId);
   const existing = activeRun(ctx, projectId, 'prepare');
