@@ -143,7 +143,7 @@ function toTaskError(f: Failure, route: Route, firstQuota: Failure | undefined, 
       const wait = waits.length ? Math.min(...waits) : DEFAULT_QUOTA_WAIT_MS;
       return new TaskError(`${where}: usage limit reached${hadFallback ? ' (fallback also unavailable)' : ''}. ${f.message}`.trim(), 'quota', 'Wait for the limit to reset, or pick another model in Settings.', wait);
     }
-    case 'unavailable': return new TaskError(`${where}: ${f.message}`, 'auth', 'Install the CLI or pick another model in Settings, then press Retry.');
+    case 'unavailable': return new TaskError(`${where}: ${f.message}`, 'auth', 'Install the CLI or pick another model in Settings, then press Continue.');
     case 'input': return new TaskError(`${where}: ${f.message}`, 'input');
     case 'fatal': return new TaskError(`${where}: ${f.message}`, 'fatal', 'Check the model and effort for this role in Settings.');
     default: return new TaskError(`${where}: ${f.message}`, 'temporary');
