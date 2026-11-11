@@ -91,15 +91,16 @@ const canonicalWord = (raw: string) => (/^tema/i.test(raw) ? "Tema d'esame" : ra
 const turnAfterYear = (rest: string) => rest.replace(/^[\s\-–—:,]+/, '').replace(/[\s.]+$/, '').replace(/\s+/g, ' ').trim();
 
 /**
- * The name of a session from the title the AI split read and its date, built by the same `sessionKey` as the text rules,
- * so the same paper read by either path is stored once. The word is the one the title starts with, "Esame" when it has none.
- * shortcut: a turn is read only after a four-digit year, so a title with a two-digit year carries no turn, upgrade when a paper needs it.
+ * The name of a session from the title the AI split read and its date. The title goes through the same heading parser as the
+ * text rules, so every heading form they support gets the name they give it, with the same turn or none. A title the rules
+ * do not recognise, or one whose date differs from the model's, is named from its first word and the model's date.
  */
 export function sessionName(title: string, d: { y: number; m: number; d: number }): string {
-  const m = /^(Esame|Appello|Compito|Tema\s+d['’]?\s*esame|Prova\s+scritta)\b/i.exec(title.trim());
-  const word = m ? (/^prova/i.test(m[1]) ? 'Prova scritta' : canonicalWord(m[1])) : 'Esame';
-  const year = m ? /\b(?:19|20)\d{2}\b(.*)$/.exec(title) : null;
-  return sessionKey(d, word, year ? turnAfterYear(year[1]) : '');
+  const t = title.trim();
+  const own = parseHeading(t, [], 0, '', []);
+  if (own?.date === isoOf(d)) return own.key;
+  const m = /^(Esame|Appello|Compito|Tema\s+d['’]?\s*esame|Prova\s+scritta)\b/i.exec(t);
+  return sessionKey(d, m ? (/^prova/i.test(m[1]) ? 'Prova scritta' : canonicalWord(m[1])) : 'Esame');
 }
 
 /** The date of a paper whose heading is on `l`: on the same line, in the header lines after it (a table of name, matricola, date), or just before it. */
@@ -180,6 +181,9 @@ function parsePaper(l: string, following: string[], label: string): Heading | nu
   if (!m) return null;
   const fila = /\bCompito\s+(?:fila\s+)?([A-Z]\d?)\b/i.exec([m[1], ...following.slice(0, 2)].join('\n'));
   const variant = fila ? fila[1].toUpperCase() : null;
+  // A full date in any supported form ("12 febbraio 2024", "2024-02-12", "23/06/2022") is read first; the pattern below also accepts a date without its year.
+  const full = findDate(m[1]);
+  if (full) return { key: sessionKey(full, 'Prova scritta'), date: isoOf(full), numbered: false, variant };
   const dm = /(\d{1,2})[/.-](\d{1,2})(?:[/.-](\d{4}|\d{2})(?!\d))?/.exec(m[1]);
   // No date on the line and no blank-template placeholder: a header table may carry it ("Data: 12/02/2024").
   if (!dm && !/[xX_]{2}|\d/.test(m[1])) {

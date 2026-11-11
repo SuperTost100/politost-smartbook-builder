@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { existsSync, readFileSync, readdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { test } from 'node:test';
-import { summarizeSplit } from '../pipeline/examSplit.ts';
+import { buildAiSplit, summarizeSplit } from '../pipeline/examSplit.ts';
 import { extractResource, segmentQuestions, splitQuestions, storeResource } from './index.ts';
 import { findDate, segmentExams, splitExams } from './segment.ts';
 import { makeCtx } from './testkit.ts';
@@ -155,6 +155,47 @@ test('"Compito FILA A" under a heading with a date is the version of that paper,
   assert.deepEqual(rows.map((r) => `${r.examGroup} #${r.number}`), ['Appello del 12 febbraio 2024 #1']);
   const own = segmentExams('r2', pages(['Compito B - 12/02/2024', 'Esercizio 1', 'Uno.']), { label: 'x', untitled: true });
   assert.deepEqual(own.map((r) => `${r.examGroup} #${r.number}`), ['Compito del 12 febbraio 2024 #1B']);
+});
+
+// One row per heading form the splitter supports: [heading line, lines after it, lines before it, the date as the model would report it].
+const HEADING_FORMS: [string, string[], string[], string][] = [
+  ['Esame del 12 febbraio 2024', [], [], '2024-02-12'],
+  ['Esame del 12 febbraio 2024 - Turno A', [], [], '2024-02-12'],
+  ['3 Esame del 12 febbraio 2024', [], [], '2024-02-12'],
+  ['Esame di ANALISI MATEMATICA I 12/02/2024 - Turno B', [], [], '2024-02-12'],
+  ['Esame di Elettronica digitale', ['Data: 12/02/2024'], [], '2024-02-12'],
+  ['Esame di Elettronica digitale del 12/02/2024', [], [], '2024-02-12'],
+  ['Appello del 2024-02-12', [], [], '2024-02-12'],
+  ['Appello del 12 febbraio 2024', [], [], '2024-02-12'],
+  ['Appello del 12 febbraio 2024 - Turno A', [], [], '2024-02-12'],
+  ['Appello del 12.02.24', [], [], '2024-02-12'],
+  ['Appello 12-2-2024 (secondo turno)', [], [], '2024-02-12'],
+  ['Appello', ['Cognome e nome:', 'Matricola:', 'Data:', '12 febbraio 2024'], [], '2024-02-12'],
+  ['Appello', [], ['12/02/2024'], '2024-02-12'],
+  ['Compito del 1° marzo 2024', [], [], '2024-03-01'],
+  ['Compito FILA A - 12/02/2024', [], [], '2024-02-12'],
+  ['Compito A', ['12/02/2024'], [], '2024-02-12'],
+  ["Tema d'esame del 12/02/2024", [], [], '2024-02-12'],
+  ['Tema d’esame 2024-02-12 - Gruppo 2', [], [], '2024-02-12'],
+  ['Prova scritta 23/06/2022 - Corso di Fisica - Prof. Rossi', [], [], '2022-06-23'],
+  ['Prova scritta 12.02.24', [], [], '2024-02-12'],
+  ['Prova scritta del 12 febbraio 2024', [], [], '2024-02-12'],
+  ['Prova scritta del 2024-02-12', [], [], '2024-02-12'],
+  ['Prova scritta', ['Data: 12/02/2024'], [], '2024-02-12'],
+];
+
+test('a session has the same name from the text rules and from the AI split, for every heading form', () => {
+  for (const [heading, after, before, date] of HEADING_FORMS) {
+    const lines = [...before, heading, ...after, 'Esercizio 1', 'Uno.'];
+    const text = pages(lines);
+    const rules = splitExams('r', text, { label: 'file', untitled: true }).rows;
+    assert.equal(rules.length, 1, `${heading}: the rules find one question`);
+    const ai = buildAiSplit('r', text, { sessions: [{ title: heading, date, page: 1, start: heading, exercises: [{ number: '1', page: 1, start: 'Esercizio 1' }] }] }, 'file');
+    assert.ok('rows' in ai, `${heading}: the AI split is accepted`);
+    assert.equal(ai.rows[0].examGroup, rules[0].examGroup, heading);
+    assert.equal(ai.rows[0].examDate, rules[0].examDate, `${heading}: date`);
+    assert.equal(rules[0].examDate, date, `${heading}: the rules read the date`);
+  }
 });
 
 // ---------- warnings ----------
