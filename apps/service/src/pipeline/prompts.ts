@@ -592,6 +592,8 @@ export const verifySchema = z.object({
   resultsAgree: z.boolean().describe('the final results of the given solution match yours'),
   agrees: z.boolean().describe('results match and the reasoning has no major gap'),
   problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
+  computation: codeString().optional().describe('Python that recomputes numeric final results, or empty'),
+  statedValues: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe('the final numeric results the given solution states, one per printed line of the computation'),
 });
 
 export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
@@ -604,7 +606,9 @@ ${p.statement}
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.`,
+Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.
+
+Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.`,
   };
 }
 

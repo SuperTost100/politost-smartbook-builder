@@ -6,10 +6,12 @@ import { z } from 'zod';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { transcribePage } from '../evidence/index.ts';
+import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
+import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
@@ -19,6 +21,8 @@ const AUTHENTIC_PER_CHAPTER = 8;
 /** Items from uploaded exercise collections shown to the writer of a chapter's exercises. They are never put in the book. */
 const COLLECTION_EXAMPLES = 6;
 const MAX_PAGES_PER_QUESTION = 4;
+/** Pages of the exercise collections the full-text search returns when looking for examples for one chapter. */
+const COLLECTION_SEARCH_PAGES = 12;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
@@ -183,13 +187,39 @@ export async function practiceGenerate(ctx: AppContext, t: TaskContext) {
   return { generated, reused };
 }
 
-/** Up to COLLECTION_EXAMPLES classified items of the included exercise collections on these topics, those with a known answer first. */
-function collectionExamples(ctx: AppContext, projectId: string, topicIds: Set<string>): string {
-  const items = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND kind = 'exercise' AND origin = 'authentic' AND resource_id IS NOT NULL AND topic_ids != '[]' AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId)
-    .map(rowToQuestion).filter((q) => q.topicIds.some((id) => topicIds.has(id)));
+/**
+ * Up to COLLECTION_EXAMPLES items of the included exercise collections on these topics, those with a known answer first.
+ * Items already classified on the topics come first. For the rest, Prepare does not classify collection items: the pages of
+ * the collections that best match the chapter's topic and section names (the full-text index of the pages) narrow the search,
+ * and the items on those pages are ranked by how many of those words their own text contains. This costs no model call. A
+ * classification would only add a topic and a difficulty, and the writer uses the items for level and style.
+ */
+function collectionExamples(ctx: AppContext, projectId: string, topicIds: Set<string>, query: string): string {
+  const rows = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND kind = 'exercise' AND origin = 'authentic' AND resource_id IS NOT NULL AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId).map(rowToQuestion);
   const known = (q: Question) => (q.solution.trim() ? 0 : 1);
-  return items.sort((a, b) => known(a) - known(b)).slice(0, COLLECTION_EXAMPLES)
-    .map((q) => `${truncate(q.statement, 800)}${q.solution.trim() ? `\n${truncate(q.solution, 300)}` : ''}`).join('\n\n');
+  const classified = rows.filter((q) => q.topicIds.some((id) => topicIds.has(id))).sort((a, b) => known(a) - known(b)).slice(0, COLLECTION_EXAMPLES);
+  const picked = [...classified];
+  if (picked.length < COLLECTION_EXAMPLES) {
+    const unclassified = rows.filter((q) => !q.topicIds.length && q.pageFrom !== null);
+    const resourceIds = [...new Set(unclassified.map((q) => q.resourceId!))];
+    const pageRank = new Map(searchPages(ctx, projectId, query, { limit: COLLECTION_SEARCH_PAGES, resourceIds }).map((h, i) => [`${h.resourceId}:${h.idx}`, i]));
+    const words = searchWords(query);
+    const found = unclassified.flatMap((q) => {
+      let rank = Infinity;
+      for (let page = q.pageFrom!; page <= (q.pageTo ?? q.pageFrom!); page++) rank = Math.min(rank, pageRank.get(`${q.resourceId}:${page}`) ?? Infinity);
+      const text = q.statement.normalize('NFKC').toLowerCase();
+      const hits = words.filter((w) => text.includes(w)).length;
+      return Number.isFinite(rank) && hits ? [{ q, rank, hits }] : [];
+    }).sort((a, b) => known(a.q) - known(b.q) || b.hits - a.hits || a.rank - b.rank);
+    picked.push(...found.slice(0, COLLECTION_EXAMPLES - picked.length).map((f) => f.q));
+  }
+  return picked.map((q) => `${truncate(q.statement, 800)}${q.solution.trim() ? `\n${truncate(q.solution, 300)}` : ''}`).join('\n\n');
+}
+
+/** The words of a search text that an item must contain to count as on the topic: at least 4 letters, cut by 2 when long, as the page search does. */
+function searchWords(query: string): string[] {
+  const words = query.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return [...new Set(words.filter((w) => w.length >= 4).map((w) => (w.length >= 7 ? w.slice(0, -2) : w)))];
 }
 
 async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' | 'exam') {
@@ -210,7 +240,8 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
     const known = bookFormulaKeys(ctx, projectId).map((k) => `${k.key}: ${k.label}`).join('\n');
     const examples = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND chapter_id = ? AND kind = 'exam' AND origin = 'authentic'`, projectId, chapterId)
       .map(rowToQuestion).slice(0, 3).map((q) => `${q.examGroup}, Esercizio ${q.number}:\n${truncate(q.statement, 1500)}`).join('\n\n');
-    const collection = kind === 'exercise' ? collectionExamples(ctx, projectId, new Set(topics.map((tp) => tp.id))) : '';
+    const searchText = [...topics.map((tp) => tp.name), ...chapter.sections.map((s) => s.title)].join(' ');
+    const collection = kind === 'exercise' ? collectionExamples(ctx, projectId, new Set(topics.map((tp) => tp.id)), searchText) : '';
     const list = kind === 'exercise'
       ? topics.map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: target(tp.priority) }))
       : topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 }));
@@ -278,14 +309,23 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.
+  // A numeric final answer is also recomputed in the sandbox from the program the checker returned, with no extra model call.
   let { data, route } = await check('checker');
-  const suspicious = !data.resultsAgree || data.problems.some((p) => p.severity !== 'minor');
-  if (suspicious && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
+  let recomputed = await recomputeFinalValues(data.computation, data.statedValues);
+  const suspicious = (d: typeof data, r: NumericCheck | null) => !d.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!r?.mismatches.length;
+  if (suspicious(data, recomputed) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
     ({ data, route } = await check('reviewer'));
+    recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   }
-  const ok = data.agrees && !data.problems.some((p) => p.severity !== 'minor');
-  const checks = [...q.checks.filter((c) => c.method !== 'independent-solve'), { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model }];
+  const mismatches = recomputed?.mismatches ?? [];
+  const resultsAgree = data.resultsAgree && !mismatches.length;
+  const ok = data.agrees && resultsAgree && !data.problems.some((p) => p.severity !== 'minor');
+  const checks = [
+    ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric'),
+    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model },
+    ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
+  ];
   return ctx.db.tx(() => {
     // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
     const changed = ctx.db.run('UPDATE questions SET status = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id, q.rev).changes;
@@ -297,8 +337,13 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
-    if (!data.resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) addIssue(ctx, q, 'blocker', 'solution', `The independent solution reaches a different result: ${data.independentAnswer}`, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
-    return { ok, problems: data.problems.length };
+    if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
+      const found = mismatches.length
+        ? `Recomputing the final values in Python gives a different result: ${mismatches.map((m) => `${m.name} is ${m.computed} by the computation and ${m.stated} in the solution`).join('; ')}.`
+        : `The independent solution reaches a different result: ${data.independentAnswer}`;
+      addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
+    }
+    return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}) };
   });
 }
 

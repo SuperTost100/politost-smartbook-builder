@@ -186,6 +186,55 @@ describe('15. disagreement is a blocker', () => {
   });
 });
 
+describe('15b. numeric final answers are recomputed in the sandbox', () => {
+  const circuit = 'Due resistori da 1 kΩ in parallelo. Calcola la resistenza equivalente.';
+  const verdict = (o: Record<string, unknown>) => answer({ independentAnswer: '500 Ω', resultsAgree: true, agrees: true, problems: [], ...o });
+  const program = 'r = 1 / (1 / 1000 + 1 / 1000)\nprint(f"R_eq = {r} ohm")';
+
+  test('a computation that agrees adds a numeric check and costs no extra call', async () => {
+    const id = q({ statement: circuit, solution: 'R = 500 Ω' });
+    fake.next(verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '0.50 kΩ' }] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: true, problems: 0, recomputed: 1, mismatches: 0 });
+    assert.equal(fake.calls.length, 1);
+    assert.equal(row(id).status, 'verified');
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row(id).checks, []).map((c) => [c.method, c.ok]), [['independent-solve', true], ['numeric', true]]);
+    assert.equal(issues().length, 0);
+  });
+
+  test('a mismatch asks the reviewer, and the blocker names both numbers', async () => {
+    const id = q({ statement: circuit, solution: 'R = 5 kΩ' });
+    const bad = verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] });
+    fake.next(bad, bad);
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+    assert.equal(fake.calls.length, 2, 'the checker, then the reviewer');
+    assert.equal(row(id).status, 'issue');
+    const [issue] = issues(`question_id = '${id}'`);
+    assert.equal(issue.severity, 'blocker');
+    assert.match(issue.message, /R_eq is 500\.0 ohm by the computation and 5\.0 kΩ in the solution/);
+    assert.equal(json<{ method: string; ok: boolean }[]>(row(id).checks, []).find((c) => c.method === 'numeric')!.ok, false);
+  });
+
+  test('a computation that throws is ignored and the model verdict stands', async () => {
+    const id = q({ statement: circuit, solution: 'R = 500 Ω' });
+    fake.next(verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: true, problems: 0 });
+    assert.equal(row(id).status, 'verified');
+    assert.deepEqual(json<{ method: string }[]>(row(id).checks, []).map((c) => c.method), ['independent-solve']);
+  });
+
+  test('a symbolic answer stays on the model check', async () => {
+    const id = q();
+    fake.next(verdict({ computation: '', statedValues: [] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: true, problems: 0 });
+    assert.equal(fake.calls.length, 1);
+    assert.match(fake.calls[0].prompt, /leave computation empty/);
+  });
+});
+
 describe('4. practice generation stages', () => {
   const topic = (key: string) => {
     const id = `${P.slice(0, 8)}-${key}`;
@@ -263,6 +312,67 @@ describe('4. practice generation stages', () => {
     const t = topic('limiti');
     seedOutline([['c1', ['s1']]], { topicIds: [t] });
     fake.next(answer(gen(1, 'esercizio')));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
+    assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
+  });
+});
+
+describe('4b. collection examples are found by search, not classified', () => {
+  const topic = (key: string) => {
+    const id = `${P.slice(0, 8)}-${key}`;
+    ctx.db.insert('topics', { id, project_id: P, name: key, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
+    return id;
+  };
+  const gen = { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'esercizio', hint: 'h', solution: 's', finalAnswer: '1' }] };
+  const item = (statement: string, page: number, o: Record<string, unknown> = {}) =>
+    q({ kind: 'exercise', origin: 'authentic', resource_id: 'coll', page_from: page, page_to: page, exam_group: 'Quiz A', statement, solution: '', topic_ids: [], ...o });
+
+  test('unclassified items on the pages that match the chapter topics, whose own text names the topic, with known answers first and no extra model call', async () => {
+    topic('limiti');
+    seedOutline([['c1', ['s1']]], { topicIds: [`${P.slice(0, 8)}-limiti`] });
+    seedResource(ctx, { projectId: P, id: 'coll', role: 'exercises' });
+    seedResource(ctx, { projectId: P, id: 'off', role: 'exercises', included: 0 });
+    seedPage(ctx, 'coll', 0, '1. Calcolare i limiti notevoli. 2. Sia z un numero complesso.');
+    seedPage(ctx, 'coll', 1, '3. Studiare la serie numerica.');
+    seedPage(ctx, 'off', 0, 'Calcolare i limiti.');
+    item('SENZA RISPOSTA: calcolare i limiti notevoli', 0);
+    const answered = item('CON RISPOSTA: i limiti di successioni', 0, { solution: 'Risposta corretta: b' });
+    item('STESSA PAGINA, ALTRO: sia z un numero complesso', 0);
+    item('ALTRA PAGINA: la serie numerica', 1);
+    item('FUORI DAL LIBRO: i limiti', 0, { resource_id: 'off' });
+    item('GIA CLASSIFICATO ALTROVE: i limiti', 0, { topic_ids: ['x-serie'] });
+    fake.next(answer(gen));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
+    assert.equal(fake.calls.length, 1, 'only the writer is called: nothing is classified');
+    const prompt = fake.calls[0].prompt;
+    assert.ok(prompt.includes('SENZA RISPOSTA') && prompt.includes(row(answered).statement) && prompt.includes('Risposta corretta: b'));
+    assert.ok(prompt.indexOf('CON RISPOSTA') < prompt.indexOf('SENZA RISPOSTA'), 'known answers first');
+    assert.ok(!/STESSA PAGINA|ALTRA PAGINA|FUORI DAL LIBRO|GIA CLASSIFICATO/.test(prompt));
+    assert.equal(ctx.db.all(`SELECT 1 FROM questions WHERE topic_ids != '[]' AND resource_id = 'coll'`).length, 1, 'the items stay unclassified');
+  });
+
+  test('classified items fill the examples first, and the search only fills what is left', async () => {
+    const t = topic('limiti');
+    seedOutline([['c1', ['s1']]], { topicIds: [t] });
+    seedResource(ctx, { projectId: P, id: 'coll', role: 'exercises' });
+    seedPage(ctx, 'coll', 0, 'limiti limiti limiti');
+    for (let i = 0; i < 5; i++) item(`CLASSIFICATO ${i}: limiti`, 0, { topic_ids: [t] });
+    item('CERCATO A: limiti', 0);
+    item('CERCATO B: limiti', 0);
+    fake.next(answer(gen));
+    await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
+    const prompt = fake.calls[0].prompt;
+    assert.equal(prompt.match(/CLASSIFICATO \d/g)!.length, 5);
+    assert.equal(prompt.match(/CERCATO/g)!.length, 1, 'six examples at most');
+  });
+
+  test('a book whose collection has no matching page gets no collection section', async () => {
+    const t = topic('limiti');
+    seedOutline([['c1', ['s1']]], { topicIds: [t] });
+    seedResource(ctx, { projectId: P, id: 'coll', role: 'exercises' });
+    seedPage(ctx, 'coll', 0, 'Argomento diverso: serie numeriche.');
+    item('Studiare una serie', 0);
+    fake.next(answer(gen));
     await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
     assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
   });
@@ -586,20 +696,19 @@ describe('12, 13. topic map: labels, fingerprint, mutex, classification; priorit
     assert.deepEqual([...labelResources([{ id: 'a' }, { id: 'b' }]).byLabel], [['R1', 'a'], ['R2', 'b']]);
   });
 
-  test('a new theory source rebuilds the map and re-classifies exam questions and collection items; unchanged sources do nothing', async () => {
+  test('a new theory source rebuilds the map and re-classifies exam questions; collection items lose their old topics and are not classified; unchanged sources do nothing', async () => {
     seedResource(ctx, { projectId: P, id: 'theory1', role: 'theory' });
     insertIndex('theory1');
     const exam = q({ kind: 'exam', origin: 'authentic', exam_group: 'G1', statement: 'Limite?' });
     const quiz = q({ kind: 'exercise', origin: 'authentic', exam_group: 'Quiz A', statement: 'Quiz?' });
     const written = q({ kind: 'exercise', origin: 'generated', statement: 'Scritto da noi' });
-    fake.next(answer(topics()), answer({ items: [{ id: exam, topics: ['limiti'], difficulty: 'medio' }, { id: quiz, topics: ['limiti'], difficulty: 'facile' }] }));
+    fake.next(answer(topics()), answer({ items: [{ id: exam, topics: ['limiti'], difficulty: 'medio' }] }));
     await topicsMap(ctx, startTask('topics.map', {}));
     assert.deepEqual(json(row(exam).topic_ids, []), [`${P.slice(0, 8)}-limiti`]);
-    assert.deepEqual(json(row(quiz).topic_ids, []), [`${P.slice(0, 8)}-limiti`], 'exercise-collection items are classified too');
+    assert.equal(row(quiz).topic_ids, '[]', 'exercise-collection items are not classified by Prepare');
     assert.equal(row(written).topic_ids, '[]', 'questions the book wrote itself are not');
-    // Exams come first in the batch, and only the exam session counts toward frequency.
-    assert.ok(fake.calls[1].prompt.indexOf(exam) < fake.calls[1].prompt.indexOf(quiz));
-    assert.ok(!fake.calls[1].prompt.includes(written));
+    assert.ok(fake.calls[1].prompt.includes(exam));
+    assert.ok(!fake.calls[1].prompt.includes(quiz) && !fake.calls[1].prompt.includes(written));
     assert.equal(ctx.db.get<{ n: number }>(`SELECT exam_sessions AS n FROM topics WHERE id = ?`, `${P.slice(0, 8)}-limiti`)!.n, 1);
     const stored = ctx.db.get<{ topic_fingerprint: string }>('SELECT topic_fingerprint FROM projects')!.topic_fingerprint;
     assert.ok(stored);
@@ -611,14 +720,27 @@ describe('12, 13. topic map: labels, fingerprint, mutex, classification; priorit
     // A second theory source: topics are rebuilt (two sources in the prompt) and the exam is classified again.
     seedResource(ctx, { projectId: P, id: 'theory2', role: 'theory', filename: 'altro.pdf' });
     insertIndex('theory2');
-    fake.next(answer({ topics: [...topics().topics, { key: 'serie', name: 'Serie', aliases: [], description: '', prerequisites: [], sources: [{ resource: 'R2', pageFrom: 1, pageTo: 2 }] }] }), answer({ items: [{ id: exam, topics: ['serie'], difficulty: 'facile' }, { id: quiz, topics: ['serie'], difficulty: 'facile' }] }));
+    ctx.db.run(`UPDATE questions SET topic_ids = '["old"]' WHERE id = ?`, quiz);
+    fake.next(answer({ topics: [...topics().topics, { key: 'serie', name: 'Serie', aliases: [], description: '', prerequisites: [], sources: [{ resource: 'R2', pageFrom: 1, pageTo: 2 }] }] }), answer({ items: [{ id: exam, topics: ['serie'], difficulty: 'facile' }] }));
     const r = await topicsMap(ctx, startTask('topics.map', {}));
     assert.match(fake.calls[2].prompt, /R2 altro\.pdf/);
     assert.equal(r.topics, 2);
     assert.deepEqual(json(row(exam).topic_ids, []), [`${P.slice(0, 8)}-serie`]);
-    assert.deepEqual(json(row(quiz).topic_ids, []), [`${P.slice(0, 8)}-serie`]);
+    assert.equal(row(quiz).topic_ids, '[]', 'the old topic ids of a collection item are dropped with the old map');
+    assert.equal(fake.calls.length, 4, 'a map call and an exam classification call, none for the quiz');
     assert.equal(ctx.db.get<{ n: number }>(`SELECT exam_sessions AS n FROM topics WHERE id = ?`, `${P.slice(0, 8)}-serie`)!.n, 1, 'the quiz group is not a session');
     assert.notEqual(ctx.db.get<{ topic_fingerprint: string }>('SELECT topic_fingerprint FROM projects')!.topic_fingerprint, stored);
+  });
+
+  test('Prepare classifies the exam questions only: 45 exams and 100 collection items take 3 bulk calls, not 8', async () => {
+    seedResource(ctx, { projectId: P, id: 'theory1', role: 'theory' });
+    insertIndex('theory1');
+    for (let i = 0; i < 45; i++) q({ kind: 'exam', origin: 'authentic', exam_group: `G${i % 9}`, statement: `Esame ${i}` });
+    for (let i = 0; i < 100; i++) q({ kind: 'exercise', origin: 'authentic', exam_group: 'Quiz A', statement: `Quiz ${i}` });
+    fake.next(answer(topics()), answer({ items: [] }), answer({ items: [] }), answer({ items: [] }));
+    await topicsMap(ctx, startTask('topics.map', {}));
+    assert.equal(fake.calls.length, 4, 'one map call and three classification calls of up to 20');
+    assert.ok(fake.calls.slice(1).every((c) => !c.prompt.includes('Quiz ')));
   });
 
   test('a rebuilt map keeps the priority the author set by hand on a topic that keeps its key', async () => {
