@@ -8,13 +8,10 @@
 //     looks the same on every device and in every rasteriser
 //   - under the 2 MB limit of the reader format
 import { Resvg } from '@resvg/resvg-js';
+import { INK, INK_MARKER } from '@smartbuilder/content';
 import { assertSafeSvg } from '../../repo/assets.ts';
 
-/** The ink of the existing figure drawers (`diagram.ts`, `plot.ts`). */
-export const INK = '#111827';
-
-/** Attribute on the root of a transparent, dark-ink drawing. A reader that shows figures through <img> can sniff it. */
-export const INK_MARKER = 'data-sb-ink="dark"';
+export { INK, INK_MARKER, isInkDrawing } from '@smartbuilder/content';
 
 /** The reader refuses files above this size. */
 export const MAX_SVG_BYTES = 2 * 1024 * 1024;
@@ -26,12 +23,6 @@ const MAX_WIDE = 10;
 export const LARGE_SVG_BYTES = 300 * 1024;
 
 const MARGIN = 4;
-
-/** True for an SVG made by this module: transparent, dark ink, a marker on the root. The reader-side dark mode fix relies on this. */
-export function isInkDrawing(svg: string): boolean {
-  const root = svg.match(/<svg\b[^>]*>/i)?.[0] ?? '';
-  return /\sdata-sb-ink\s*=\s*["']dark["']/.test(root);
-}
 
 export interface NormaliseOptions {
   /** Multiplies every stroke width. Typst draws thinner lines than the existing figures (1 pt against 2 px). */

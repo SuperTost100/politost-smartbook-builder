@@ -4,6 +4,7 @@ export * from './types.ts';
 export * from './compile.ts';
 export * from './lint.ts';
 export * from './plot.ts';
+export * from './ink.ts';
 export * from './blocks.ts';
 export * from './ptsb.ts';
 export * from './verify.ts';

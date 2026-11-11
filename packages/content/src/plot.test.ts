@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { isInkDrawing } from './ink.ts';
 import { renderPlotSvg, validatePlotSpec, type PlotSpec } from './plot.ts';
 
 /** Minimal well-formedness check: balanced tags, no stray "<" or "&" in text or attributes. */
@@ -64,7 +65,9 @@ test('renderPlotSvg: sane, safe, deterministic SVG', () => {
   assert.ok(svg.trimEnd().endsWith('</svg>'));
   assert.match(svg, /viewBox="0 0 640 400"/);
   assert.match(svg, /width="640" height="400"/);
-  assert.match(svg, /<rect width="640" height="400" fill="#FFFFFF"\/>/);
+  // Transparent with the dark-ink marker, so a reader can show it on a dark page.
+  assert.ok(!svg.includes('<rect width="640" height="400"'), 'no background rectangle');
+  assert.ok(isInkDrawing(svg));
   assert.ok(svg.includes('<path '));
   assert.ok(!/<script/i.test(svg));
   assert.ok(!/(href|src)=/i.test(svg) && !/https?:/.test(svg.replace('http://www.w3.org/2000/svg', '')));

@@ -1,5 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { isInkDrawing } from '@smartbuilder/content';
 import { assertSafeSvg } from '../repo/assets.ts';
 import { formulaMatches, nonbondingElectrons, renderStructureSvg, smilesComposition, validateStructureSpec, type StructureSpec } from './structure.ts';
 
@@ -45,6 +46,14 @@ test('nonbonding electrons follow valence, charge and bonds', () => {
     assert.equal(nonbondingElectrons(z, 0, 0), ve, `Z=${z}`);
   }
   assert.equal(nonbondingElectrons(26, 0, 0), null); // transition metals get no dots
+});
+
+test('a structure is transparent and marked as dark ink, so a reader can show it on a dark page', () => {
+  for (const style of ['lewis', 'skeletal'] as const) {
+    const svg = renderStructureSvg({ smiles: 'CC(=O)O', style, lonePairs: true, formula: 'CH3COOH' });
+    assert.ok(isInkDrawing(svg));
+    assert.doesNotMatch(svg, /<rect width="\d+" height="\d+" fill=/);
+  }
 });
 
 test('lone pairs are drawn as two dots each', () => {
