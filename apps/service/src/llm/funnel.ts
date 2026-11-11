@@ -21,7 +21,7 @@ const USAGE_CACHE_MS = 60_000;
 export function getFunnel(): FunnelLike {
   // The model catalog is bundled and can lag behind the CLIs; routes may name newer models.
   // Claude Code and Codex keep their process after a turn, so a repair turn in the same session skips the startup.
-  // runRole closes each session when its route is done; idleMs only catches one that was left open.
+  // runRole closes each session when its route is done and openRole's handle when the caller closes it; idleMs only catches one that was left open.
   instance ??= createFunnel({ allowUnlistedModels: true, sessions: { keepAlive: true, idleMs: 60_000 } }) as unknown as FunnelLike;
   return instance;
 }

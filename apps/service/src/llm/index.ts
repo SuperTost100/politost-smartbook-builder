@@ -2,7 +2,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { bookOptionsSchema, type BookOptions, type ConnectionsResponse, type ProbeResult, type Role, type Route } from '@smartbuilder/domain';
-import { sanitizeModelValue } from '@smartbuilder/content';
+import { sanitizeModelCode, sanitizeModelValue } from '@smartbuilder/content';
 import { z } from 'zod';
 import { TaskError } from '../queue/queue.ts';
 import { paths } from '../config.ts';
@@ -27,6 +27,12 @@ export interface RunRoleOptions<T> {
   images?: Buffer[];
   /** When set, the answer must parse and validate; one repair request is made on failure. */
   schema?: z.ZodType<T>;
+  /**
+   * For an answer that is not JSON (Markdown, code, a text block with a small header). Gets the answer text with terminal
+   * codes and control characters removed, and nothing else cleaned. When it rejects, one repair turn sends its `problem`
+   * and asks for the full corrected answer, as for a schema. No provider JSON schema is sent. Not together with `schema`.
+   */
+  parse?: (text: string) => ParseResult<T>;
   /** JSON schema sent to the provider (derived from schema when omitted). */
   jsonSchema?: Record<string, unknown>;
   projectId?: string | null;
@@ -38,6 +44,8 @@ export interface RunRoleOptions<T> {
   /** Let the model search and read the web. Every other tool stays refused. Only providers that pass approvals through can do this. */
   web?: boolean;
 }
+
+export type ParseResult<T> = { ok: true; data: T } | { ok: false; problem: string };
 
 export interface RunRoleResult<T> { text: string; data: T; route: Route; usage: { inputTokens: number | null; outputTokens: number | null } }
 
@@ -92,9 +100,55 @@ type Usage = { inputTokens: number | null; outputTokens: number | null };
 
 /** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable, a timeout or a truncated answer. */
 export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<T>): Promise<RunRoleResult<T>> {
+  const talk = await openRole(ctx, opts);
+  talk.close();
+  return talk.result;
+}
+
+/** What a follow-up message got back. */
+export interface FollowUp { text: string; usage: Usage }
+
+/** A follow-up that failed. It has the kind, action and wait of the TaskError a first call would have thrown. The caller decides what to do, usually to keep what it has. */
+export class FollowUpError extends TaskError {}
+
+/** The answer to a first call, and the conversation it started. Follow-ups go to the model that answered, on the route that answered. */
+export interface RoleConversation<T> {
+  readonly result: RunRoleResult<T>;
+  /**
+   * Sends one more message. A live session gets only the message. Without one (a provider that keeps no process, or a
+   * session that died) a new conversation carries the system prompt, the first prompt, the last answer and the message.
+   * Images need a route that reads them. Throws FollowUpError when the route fails, and the abort reason when the
+   * caller's signal aborts. Each call is a usage row and holds one provider slot while it runs.
+   */
+  send(prompt: string, options?: { images?: Buffer[] }): Promise<FollowUp>;
+  /** Ends the model's process. Safe to call again. */
+  close(): void;
+}
+
+/**
+ * Like runRole, but keeps the conversation open for follow-up messages. The caller must call close(), and withRole does
+ * it. The funnel closes a session that sits idle for a minute, so a leak ends there.
+ */
+export async function openRole<T = string>(ctx: AppContext, opts: RunRoleOptions<T>): Promise<RoleConversation<T>> {
+  const { result, convo } = await startConversation(ctx, opts);
+  return { result, send: (prompt, options) => convo.send(prompt, options?.images), close: () => convo.close() };
+}
+
+/** openRole with the close in a finally, so a throwing callback cannot leak the session. */
+export async function withRole<T, R>(ctx: AppContext, opts: RunRoleOptions<T>, use: (talk: RoleConversation<T>) => Promise<R>): Promise<R> {
+  const talk = await openRole(ctx, opts);
+  try {
+    return await use(talk);
+  } finally {
+    talk.close();
+  }
+}
+
+async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): Promise<{ result: RunRoleResult<T>; convo: Conversation }> {
+  if (opts.schema && opts.parse) throw new Error('A call takes a schema or a parse function, not both.');
   const funnel = getFunnel();
   const needsImages = !!opts.images?.length;
-  const canImages = (r: Route) => !!funnel.providers[r.provider]?.capabilities.images;
+  const canImages = (r: Route) => routeReadsImages(funnel, r);
   // Claude only: its tools can be switched off by the settings file in the web folder (see webFolder). Codex runs
   // commands it considers safe, such as cat, without asking, so a page could get it to read local files.
   const canWeb = (r: Route) => r.provider === 'claude' && !!funnel.providers[r.provider]?.capabilities.access?.includes('supervised');
@@ -160,6 +214,8 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
   throw new TaskError(lastFailure?.message ?? 'No route available', 'temporary');
 }
 
+const routeReadsImages = (funnel: FunnelLike, r: Route) => !!funnel.providers[r.provider]?.capabilities.images;
+
 /** The same task key, in an earlier run within the last two weeks, hit the call timeout on this route. */
 function timedOutBefore(ctx: AppContext, taskId: string, role: Role, route: Route): boolean {
   return !!ctx.db.get(
@@ -194,15 +250,16 @@ function toTaskError(f: Failure, route: Route, firstQuota: Failure | undefined, 
 /** What a usage row records besides the call itself: its number within the runRole call, and whether the route is the fallback. */
 interface CallMeta { calls: { n: number }; fallback: boolean }
 
-async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta): Promise<RunRoleResult<T>> {
+/** The first turn on one route, with its repair turn. The conversation stays open for the caller, except when the call fails. */
+async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta): Promise<{ result: RunRoleResult<T>; convo: Conversation }> {
   const raw = opts.schema ? rawJsonSchema(opts.schema) : undefined;
-  const jsonSchema = opts.jsonSchema ?? (raw ? strictify(raw) : undefined);
+  const jsonSchema = opts.parse ? undefined : (opts.jsonSchema ?? (raw ? strictify(raw) : undefined));
   const total: Usage = { inputTokens: null, outputTokens: null };
   const add = (u: Usage) => {
     for (const k of ['inputTokens', 'outputTokens'] as const) if (u[k] !== null) total[k] = (total[k] ?? 0) + u[k]!;
   };
 
-  const check = (r: CallOutput): { ok: true; data: T } | { ok: false; problem: string } => {
+  const checkSchema = (r: CallOutput): { ok: true; data: T } | { ok: false; problem: string } => {
     let value: unknown;
     try {
       value = r.structured !== undefined ? r.structured : parseJsonAnswer(r.text);
@@ -219,29 +276,109 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     const parsed = opts.schema!.safeParse(sanitizeModelValue(raw ? dropOptionalNulls(value, raw) : value, raw));
     return parsed.success ? { ok: true, data: parsed.data } : { ok: false, problem: describeIssues(parsed.error) };
   };
+  // A parse function gets the text with only the terminal codes and control characters removed: the caller cleans the rest.
+  const check = (r: CallOutput): { ok: true; data: T; text: string } | { ok: false; problem: string } => {
+    if (!opts.parse) {
+      const v = checkSchema(r);
+      return v.ok ? { ...v, text: r.text } : v;
+    }
+    const text = sanitizeModelCode(r.text);
+    const v = opts.parse(text);
+    return v.ok ? { ok: true, data: v.data, text } : v;
+  };
 
-  const first = await callOnce(ctx, funnel, opts, route, meta, { prompt: opts.prompt }, jsonSchema);
-  add(first.usage);
+  const convo = new Conversation(ctx, funnel, opts, route, meta);
   try {
-    if (!opts.schema) return { text: first.text, data: first.text as T, route, usage: total };
+    const first = await convo.first(jsonSchema);
+    add(first.usage);
+    if (!opts.schema && !opts.parse) return { result: { text: first.text, data: first.text as T, route, usage: total }, convo };
     const verdict = check(first);
-    if (verdict.ok) return { text: first.text, data: verdict.data, route, usage: total };
+    if (verdict.ok) return { result: { text: verdict.text, data: verdict.data, route, usage: total }, convo };
 
-    const fix = ['Your previous answer did not pass validation.', '', 'Problems:', verdict.problem, '', 'Reply with the corrected JSON only: no commentary, no code fence. It must satisfy the schema exactly.'];
-    // A live session already holds the prompt and the answer, so it only needs the problems. Other providers would replay the
-    // whole conversation (Antigravity took twice as long), so they get the prompt and the answer again in a new one.
-    const live = !!first.sessionId && funnel.sessions().some((x) => x.sessionId === first.sessionId);
-    const repair = live
-      ? { prompt: fix.join('\n'), sessionId: first.sessionId }
-      : { prompt: [opts.prompt, '', '---', fix[0], '', 'Previous answer:', first.text.length > 12_000 ? `${first.text.slice(0, 12_000)}\n[truncated]` : first.text, '', ...fix.slice(2)].join('\n') };
-    const second = await callOnce(ctx, funnel, opts, route, meta, repair, jsonSchema);
+    const fix = opts.parse
+      ? ['Your previous answer could not be used.', '', 'Problems:', verdict.problem, '', 'Reply with the full corrected answer in the same format as before, not only the parts that change.']
+      : ['Your previous answer did not pass validation.', '', 'Problems:', verdict.problem, '', 'Reply with the corrected JSON only: no commentary, no code fence. It must satisfy the schema exactly.'];
+    const second = await convo.next(fix.join('\n'), { jsonSchema });
     add(second.usage);
     const again = check(second);
-    if (again.ok) return { text: second.text, data: again.data, route, usage: total };
+    if (again.ok) return { result: { text: again.text, data: again.data, route, usage: total }, convo };
     throw new TaskError(`The ${opts.role} model returned an invalid answer twice: ${again.problem}`, 'input', 'Retry, or choose a different model for this role.');
-  } finally {
-    // Only the repair turn uses the live process, so it closes as soon as the route is done.
-    if (first.sessionId) funnel.closeSession(first.sessionId, route.provider as never);
+  } catch (err) {
+    convo.close();
+    throw err;
+  }
+}
+
+/** The text the model gets when its conversation cannot be continued: what it was asked, what it said last, and the new message. */
+function replayPrompt(firstPrompt: string, lastAnswer: string, message: string): string {
+  // The guard keeps a runaway answer from doubling the size of the prompt.
+  const answer = lastAnswer.length > 12_000 ? `${lastAnswer.slice(0, 12_000)}\n[truncated]` : lastAnswer;
+  return [firstPrompt, '', '---', 'Your previous answer to the request above:', '', answer, '', '---', message].join('\n');
+}
+
+/**
+ * One conversation with the model of one route. The first turn and every later turn go through callOnce, so they share the
+ * timeout, the abort signal, the private homes and the usage rows. A live session gets only the new message. Other providers
+ * would replay the whole conversation (Antigravity took twice as long), so they get the prompt and the last answer again in a new one.
+ */
+class Conversation {
+  private sessionId: string | undefined;
+  /** Every session a turn reported, so close() ends a replayed one too. */
+  private readonly sessionIds = new Set<string>();
+  private lastText = '';
+  private closed = false;
+
+  constructor(private readonly ctx: AppContext, private readonly funnel: FunnelLike, private readonly opts: RunRoleOptions<unknown>, readonly route: Route, private readonly meta: CallMeta) {}
+
+  first(jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+    return this.call({ prompt: this.opts.prompt, images: this.opts.images }, jsonSchema);
+  }
+
+  /** The next turn: the message alone in a live session, or the whole conversation in a new one. */
+  next(message: string, extra: { images?: Buffer[]; jsonSchema?: Record<string, unknown> } = {}): Promise<CallOutput> {
+    const live = !!this.sessionId && this.funnel.sessions().some((x) => x.sessionId === this.sessionId);
+    return this.call(
+      live ? { prompt: message, sessionId: this.sessionId, images: extra.images } : { prompt: replayPrompt(this.opts.prompt, this.lastText, message), images: [...(this.opts.images ?? []), ...(extra.images ?? [])] },
+      extra.jsonSchema,
+    );
+  }
+
+  private async call(turn: { prompt: string; sessionId?: string; images?: Buffer[] }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+    const out = await callOnce(this.ctx, this.funnel, this.opts, this.route, this.meta, turn, jsonSchema);
+    if (out.sessionId) {
+      this.sessionId = out.sessionId;
+      this.sessionIds.add(out.sessionId);
+      // A call that was running when the handle was closed must not leave its session behind.
+      if (this.closed) this.funnel.closeSession(out.sessionId, this.route.provider as never);
+    }
+    this.lastText = out.text;
+    return out;
+  }
+
+  /** A follow-up from the caller. It takes a provider slot for the call only, so a caller that works between turns blocks nobody. */
+  async send(prompt: string, images?: Buffer[]): Promise<FollowUp> {
+    if (this.closed) throw new FollowUpError('The conversation is closed.', 'input');
+    if (images?.length && !routeReadsImages(this.funnel, this.route)) throw new FollowUpError(`${this.route.provider}/${this.route.model} cannot read images.`, 'input');
+    const release = await slotsFor(this.ctx).acquire(this.route.provider, this.opts.signal);
+    try {
+      // The handle may have been closed while this call waited for its slot.
+      if (this.closed) throw new FollowUpError('The conversation is closed.', 'input');
+      const out = await this.next(prompt, { images });
+      return { text: out.text, usage: out.usage };
+    } catch (err) {
+      if (!(err instanceof RouteFailure)) throw err;
+      if (err.failure.kind === 'quota') coolDown(this.route.provider, err.failure);
+      const t = toTaskError(err.failure, this.route, undefined, false);
+      throw new FollowUpError(t.message, t.kind, t.action, t.retryAfterMs);
+    } finally {
+      release();
+    }
+  }
+
+  close() {
+    if (this.closed) return;
+    this.closed = true;
+    for (const id of this.sessionIds) this.funnel.closeSession(id, this.route.provider as never);
   }
 }
 
@@ -257,8 +394,8 @@ function callEnv(ctx: AppContext, route: Route, web: boolean | undefined): Recor
 /** The short word stored with a failed call. */
 const errorKind = (f: Failure) => (f.timedOut ? 'timeout' : f.truncated ? 'truncated' : f.kind);
 
-/** One turn. With `sessionId` it continues that conversation, which already has the images. */
-async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta, turn: { prompt: string; sessionId?: string }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+/** One turn. With `sessionId` it continues that conversation, and `images` are the ones that turn adds. */
+async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta, turn: { prompt: string; sessionId?: string; images?: Buffer[] }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
   const scratch = opts.web ? webFolder(ctx) : paths.scratch(ctx.config);
   mkdirSync(scratch, { recursive: true });
   const timeoutMs = callTimeoutMs(opts.role, route);
@@ -286,7 +423,7 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
       system: opts.system,
       prompt: turn.prompt,
       ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
-      ...(opts.images?.length && !turn.sessionId ? { attachments: opts.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
+      ...(turn.images?.length ? { attachments: turn.images.map((b) => ({ type: 'image' as const, mediaType: 'image/png' as const, data: b.toString('base64') })) } : {}),
       ...(jsonSchema ? { responseSchema: { name: 'response', schema: jsonSchema } } : {}),
       signal,
     });
