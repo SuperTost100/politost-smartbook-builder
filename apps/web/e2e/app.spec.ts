@@ -649,7 +649,7 @@ test('an unclosed $$ in a hand edit is reported on its block and does not swallo
   const view = await put.json();
   const found = view.issues.find((i: { category: string; message: string }) => i.category === 'katex' && /Unclosed/.test(i.message));
   expect(found, JSON.stringify(view.issues)).toBeTruthy();
-  expect(found.message).toContain('line 3');
+  expect(found.message).toContain('block 2');
 
   await page.goto(`/books/${bookId}/manuscript/s2`);
   await expect(page.locator('.ms-block')).toHaveCount(4);
