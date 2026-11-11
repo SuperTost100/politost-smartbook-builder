@@ -590,3 +590,21 @@ test('History folds consecutive edits by the author into one row', async ({ page
   await expect(dialog.getByRole('button', { name: 'Hide earlier edits' })).toHaveAttribute('aria-expanded', 'true');
   expect(await dialog.locator('.hi-item').count()).toBeGreaterThan(folded);
 });
+
+test('an unclosed $$ in a hand edit is reported on its block and does not swallow the blocks after it', async ({ page, request }) => {
+  const head = await s2(request);
+  const md = 'Primo paragrafo.\n\nSegue $$ x^2 + y\n\nTerzo paragrafo.\n\nQuarto paragrafo.';
+  const put = await request.put(`/api/projects/${bookId}/sections/s2`, { headers: H, data: { markdown: md, baseRevId: head.current?.id ?? null } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+  const view = await put.json();
+  const found = view.issues.find((i: { category: string; message: string }) => i.category === 'katex' && /Unclosed/.test(i.message));
+  expect(found, JSON.stringify(view.issues)).toBeTruthy();
+  expect(found.message).toContain('line 3');
+
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await expect(page.locator('.ms-block')).toHaveCount(4);
+  await expect(page.locator('.ms-block').last()).toContainText('Quarto paragrafo');
+  await expect(page.locator('.ms-block').nth(1)).toHaveClass(/ms-block--issue/);
+  await page.locator('.ms-block').nth(1).click();
+  await expect(page.getByText(/Unclosed "\$\$"/).first()).toBeVisible();
+});

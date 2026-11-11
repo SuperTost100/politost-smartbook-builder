@@ -51,6 +51,8 @@ export interface FormulaBlock {
 export interface Scan {
   lines: ScannedLine[];
   formulas: FormulaBlock[];
+  /** 1-based line of a "$$" that is never closed, or null. Everything after it reads as math. */
+  openDisplayLine: number | null;
 }
 
 export function parseAttrs(text: string): Record<string, string> {
@@ -114,6 +116,7 @@ export function scan(markdown: string): Scan {
   const lines: ScannedLine[] = [];
   const formulas: FormulaBlock[] = [];
   let display = false;
+  let displayLine = 0;
 
   const push = (i: number, kind: LineKind, masked?: string) => {
     lines.push({ n: i + 1, raw: src[i], kind, masked: masked ?? src[i] });
@@ -216,6 +219,7 @@ export function scan(markdown: string): Scan {
     // Prose or math.
     const startsDisplay = !display && t.startsWith('$$');
     const r = maskMath(raw, display);
+    if (r.inDisplay && !display) displayLine = i + 1;
     display = r.inDisplay;
     if (r.startedInDisplay || (startsDisplay && r.inDisplay)) {
       push(i, 'math', r.masked);
@@ -230,7 +234,20 @@ export function scan(markdown: string): Scan {
     }
     i++;
   }
-  return { lines, formulas };
+  return { lines, formulas, openDisplayLine: display ? displayLine : null };
+}
+
+/**
+ * Removes the last "$$" of the line where an unclosed "$$" opens, so the rest of the text is read as text again.
+ * Text with paired "$$" comes back unchanged. The lint reports the problem; this keeps a preview and a split into blocks usable.
+ */
+export function dropUnclosedDisplay(markdown: string): string {
+  const open = scan(markdown).openDisplayLine;
+  if (open === null) return markdown;
+  const src = markdown.replace(/\r\n?/g, '\n').split('\n');
+  const at = src[open - 1].lastIndexOf('$$');
+  src[open - 1] = src[open - 1].slice(0, at) + src[open - 1].slice(at + 2);
+  return src.join('\n');
 }
 
 /** True when a separator row like |---|:---:| */

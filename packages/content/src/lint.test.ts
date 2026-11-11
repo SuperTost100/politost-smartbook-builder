@@ -442,3 +442,12 @@ test('dropUnpairedBold removes the last ** of a line with an odd count, outside 
   const fixed = dropUnpairedBold('Testo **aperto');
   assert.deepEqual(lintSection(fixed, { sectionId: 's', language: 'it' }).filter((f) => f.rule === 'bold-unpaired'), []);
 });
+
+test('katex: an unclosed $$ is a blocker that names the line it opens on', () => {
+  const f = find('Prima riga.\n\nSegue $$ x^2 + y\n\nAltro testo.\n\nUltimo.', 'katex')!;
+  assert.ok(f);
+  assert.equal(f.severity, 'blocker');
+  assert.equal(f.line, 3);
+  assert.match(f.message, /\$\$/);
+  assert.ok(!has('Prima.\n\n$$\nx^2\n$$\n\nDopo.', 'katex'), 'a paired multi-line $$ is fine');
+});

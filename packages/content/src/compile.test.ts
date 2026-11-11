@@ -525,3 +525,13 @@ test('numbering is part of the book compile and leaves questions alone', () => {
   assert.match(text(book, 'chapters/01-cinematica.md'), /\*\*Teorema 1\.1\.\*\* Nuovo\./);
   assert.match(text(book, 'esercizi.md'), /\*\*Teorema 9\.9\*\* nel testo di una domanda\./);
 });
+
+test('an unclosed $$ in a section does not turn the rest of the chapter into math', () => {
+  const book = fixtureBook();
+  const ch = book.chapters[0];
+  ch.sections[0].markdown = `Testo $$ x^2 + y\n\n${':::formula{key="zz" label="Z"}\n$$z = 1$$\n:::'}\n\nDopo la formula.`;
+  const { markdown, formulaNumbers } = compileChapter(ch, undefined, { language: 'it' });
+  assert.ok(formulaNumbers.zz, 'the formula after the stray $$ is still numbered');
+  assert.equal((markdown.match(/\$\$/g) ?? []).length % 2, 0, 'the preview has paired $$');
+  assert.ok(markdown.includes('Dopo la formula.'));
+});

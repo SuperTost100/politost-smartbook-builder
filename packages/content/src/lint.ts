@@ -422,6 +422,9 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       add(mk('katex', file, `${span.display ? 'Display' : 'Inline'} math does not render: ${err.replace(/^KaTeX parse error:\s*/, '')}`, body.map[span.line - 1], span.tex));
     }
   }
+  if (sc.openDisplayLine !== null) {
+    add(mk('katex', file, `Unclosed "$$": the display math opened on line ${sc.openDisplayLine} never ends, so the rest of the section reads as math. Add the closing "$$".`, sc.openDisplayLine, lines[sc.openDisplayLine - 1].raw, 'blocker'));
+  }
   for (const l of lines) {
     if (!prose(l.kind)) continue;
     // A single "$" left after masking means an unclosed inline math (or a currency sign).

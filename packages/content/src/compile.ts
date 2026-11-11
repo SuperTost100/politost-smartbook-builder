@@ -4,7 +4,7 @@ import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
 import { lintCompiled, lintQuestionText, lintSection, langOf } from './lint.ts';
 import { proseLines } from './blocks.ts';
-import { maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
+import { dropUnclosedDisplay, maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Labels
@@ -97,7 +97,7 @@ function numberChapter(
       findings.push(finding('book-structure', 'blocker', id, 'Section has no title.'));
       unit.title = isIntro ? introTitle(language) : `Sezione ${paragraph}`;
     }
-    for (const fb of scan(markdown).formulas) {
+    for (const fb of scan(dropUnclosedDisplay(markdown)).formulas) {
       const parsed = parseFormulaBlock(fb);
       if (!parsed) continue;
       m++;
@@ -346,7 +346,7 @@ interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
 
 /** `markdown` is the unit's text after statement numbering. */
 function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string): string {
-  const sc = scan(protectDisplayMathBrackets(markdown));
+  const sc = scan(protectDisplayMathBrackets(dropUnclosedDisplay(markdown)));
   const byIndex = new Map(sc.formulas.map((f) => [f.index, f]));
   const refEnv: RefEnv = { ...env, file: unit.id, chapterNumber: number };
   const out: string[] = [];
