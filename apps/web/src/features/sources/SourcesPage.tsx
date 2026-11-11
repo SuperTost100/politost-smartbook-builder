@@ -90,7 +90,7 @@ export default function SourcesPage() {
     const files = [...(list ?? [])];
     if (!files.length) return;
     const ok = files.filter((f) => /\.(pdf|docx|pptx|md|markdown)$/i.test(f.name));
-    if (ok.length !== files.length) toast(`Skipped ${plural(files.length - ok.length, 'file')}: only PDF, DOCX, PPTX and Markdown are read.`, { tone: 'danger' });
+    if (ok.length !== files.length) toast(`Skipped ${plural(files.length - ok.length, 'file')}: only PDF, DOCX, PPTX and Markdown are read.`);
     if (ok.length) upload.mutate(ok);
   };
   const onDrop = (e: DragEvent) => { e.preventDefault(); setDragging(false); addFiles(e.dataTransfer.files); };

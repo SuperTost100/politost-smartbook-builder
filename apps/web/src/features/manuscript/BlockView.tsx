@@ -72,7 +72,8 @@ export const BlockView = memo(function BlockView(p: Props) {
       case 'ArrowUp': e.preventDefault(); p.onFocusBlock(block.index - 1); break;
       case 'Home': e.preventDefault(); p.onFocusBlock(0); break;
       case 'End': e.preventDefault(); p.onFocusBlock(p.total - 1); break;
-      case 'Enter': e.preventDefault(); p.onEdit(block.index); break;
+      // On a figure block Enter opens the figure dialog; the markup behind it stays behind its own button.
+      case 'Enter': e.preventDefault(); if (p.figure && p.onEditFigure) p.onEditFigure(block.index, e.currentTarget as HTMLElement); else p.onEdit(block.index); break;
       case ' ': e.preventDefault(); p.onSelect(block.index); break;
     }
   };
@@ -112,7 +113,7 @@ export const BlockView = memo(function BlockView(p: Props) {
           {selected && (
             <div className="ms-actions" role="group" aria-label={`Actions for block ${block.index + 1}`}>
               {p.figure && p.onEditFigure && <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEditFigure!(block.index, e.currentTarget); }} aria-haspopup="dialog"><Icon name="image" />Edit figure</button>}
-              <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEdit(block.index); }}><Icon name="edit" />Edit</button>
+              <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEdit(block.index); }}><Icon name="edit" />{p.figure && p.onEditFigure ? 'Edit markup' : 'Edit'}</button>
               <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onRegenerate(block.index); }}><Icon name="sparkle" />Regenerate selection</button>
             </div>
           )}

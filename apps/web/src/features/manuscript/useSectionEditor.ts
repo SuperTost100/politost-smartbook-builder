@@ -72,6 +72,8 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
   const [drafts, setDrafts] = useState<Record<string, Draft>>({});
   const [state, setState] = useState<SaveState>({ kind: 'idle' });
   const [conflict, setConflict] = useState<string | null>(null);
+  // Counts the times the author tried to leave a block whose section changed elsewhere; the page moves focus to the notice on each.
+  const [noticeAsks, setNoticeAsks] = useState(0);
   const nextId = useRef(1);
   // What the author is leaving the block for; it happens once the block is saved (or found to need no saving).
   const [leave, setLeave] = useState<{ kind: 'close' } | { kind: 'open'; index: number; text: string } | null>(null);
@@ -214,34 +216,39 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
     openAt(at >= 0 ? at : Math.min(leave.index, latestBlocks.length - 1), latestBlocks);
   }, [leave, write.isPending, draft, dirty, savable, submit, nodeId, latestBlocks, openAt, setDraft]);
 
+  const blocked = useCallback(() => {
+    setState({ kind: 'error', reason: 'the section changed while you were editing. Choose how to continue above' });
+  }, []);
+
+  /** Leaving the block is refused while the section changed elsewhere: the draft stays and the author is pointed at the notice. */
+  const askToChoose = useCallback(() => { blocked(); setNoticeAsks((n) => n + 1); }, [blocked]);
+
   const startEdit = useCallback((index: number) => {
     const blocks = splitBlocks(section?.current?.markdown ?? '');
     if (index >= blocks.length) return;
-    setConflict(null);
     // Re-opening the block that already has a draft keeps that draft; another block's typed text is saved first, never dropped.
     const open = drafts[nodeId];
-    if (open && located && located.index === index) return;
+    if (open && located && located.index === index) { setConflict(null); return; }
+    if (open && changedElsewhere) { askToChoose(); return; }
+    setConflict(null);
     if (open && open.text !== open.baseText) {
       if (savable) setLeave({ kind: 'open', index, text: blocks[index].text });
       else toast('Save or discard the block you are editing first.');
       return;
     }
     openAt(index, blocks);
-  }, [section?.current?.markdown, drafts, nodeId, located, savable, openAt, toast]);
+  }, [section?.current?.markdown, drafts, nodeId, located, changedElsewhere, askToChoose, savable, openAt, toast]);
 
   const changeText = useCallback((text: string) => {
     setDrafts((all) => (all[nodeId] ? { ...all, [nodeId]: { ...all[nodeId], text } } : all));
   }, [nodeId]);
 
-  /** Close the editor. Typed text is saved first when it can be; text that cannot be saved (emptied, or the section changed) is dropped as before. */
+  /** Close the editor. Typed text is saved first when it can be; emptied text is dropped as before. While the section changed elsewhere the draft stays until the author chooses in the notice. */
   const cancelEdit = useCallback(() => {
+    if (changedElsewhere) { askToChoose(); return; }
     if (savable) { setLeave({ kind: 'close' }); return; }
     setDraft(null); setConflict(null); if (state.kind === 'error') setState({ kind: 'idle' });
-  }, [savable, setDraft, state.kind]);
-
-  const blocked = useCallback(() => {
-    setState({ kind: 'error', reason: 'the section changed while you were editing. Choose how to continue above' });
-  }, []);
+  }, [changedElsewhere, askToChoose, savable, setDraft, state.kind]);
 
   /** Save the draft block and close the editor. Only while the head is the revision the edit started from. */
   const saveDraft = useCallback(() => {
@@ -306,6 +313,6 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
 
   return {
     editing, draft, located, startEdit, cancelEdit, changeText, saveDraft, removeDraftBlock, state, saving: write.isPending, conflict,
-    changedElsewhere, keepMine, discard, merged, prepareInsert,
+    changedElsewhere, noticeAsks, keepMine, discard, merged, prepareInsert,
   };
 }

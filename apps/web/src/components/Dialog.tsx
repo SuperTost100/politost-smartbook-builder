@@ -54,7 +54,7 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
 }
 
 export function ConfirmDialog(props: {
-  open: boolean; title: string; message: ReactNode; confirmLabel: string; danger?: boolean; busy?: boolean;
+  open: boolean; title: string; message: ReactNode; confirmLabel: string; /** What the dismiss button says. Default "Cancel", which is wrong when the confirmed action is itself a cancellation. */ cancelLabel?: string; danger?: boolean; busy?: boolean;
   onConfirm: () => void; onClose: () => void;
 }) {
   return (
@@ -64,7 +64,7 @@ export function ConfirmDialog(props: {
       title={props.title}
       footer={
         <>
-          <button type="button" className="ui-btn" onClick={props.onClose}>Cancel</button>
+          <button type="button" className="ui-btn" onClick={props.onClose}>{props.cancelLabel ?? 'Cancel'}</button>
           <button type="button" className={`ui-btn ${props.danger ? 'ui-btn--danger-solid' : 'ui-btn--accent'}`} disabled={props.busy} onClick={props.onConfirm}>{props.confirmLabel}</button>
         </>
       }

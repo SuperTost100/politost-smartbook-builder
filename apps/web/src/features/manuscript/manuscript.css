@@ -27,7 +27,7 @@
 .ms-title__id { font-family: var(--font-mono); font-size: 15px; font-weight: 400; color: var(--ink-subtle); margin-right: 12px; letter-spacing: 0; vertical-align: 6px; }
 .ms-meta { font-size: 13px; }
 .ms-save { font-size: 13px; color: var(--ink-muted); min-height: 20px; text-align: right; }
-.ms-save.is-error { color: var(--danger); }
+.ms-save.is-error { color: var(--danger); flex: 1 1 100%; text-align: left; } /* a long reason takes its own row instead of squeezing the title */
 .ms-keys { font-size: 12.5px; margin-top: -6px; }
 .ms-banner { margin: 0; }
 .ms-unloc { border: 0; border-radius: var(--radius-md); padding: 10px 14px; background: var(--danger-soft); }

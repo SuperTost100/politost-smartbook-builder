@@ -27,7 +27,7 @@ interface Props {
   focusNote?: string;
   onClose: () => void;
   onEdit: (index: number) => void;
-  /** Set for a figure block: the drawer is what covers the block's own buttons on a narrow screen. */
+  /** Set for a figure block. Like Edit, it is in the drawer because the drawer covers the block's own buttons on a narrow screen. */
   onEditFigure?: (opener: HTMLElement) => void;
 }
 
@@ -53,7 +53,10 @@ export function EvidenceDrawer({ pid, section, block, notes, issues, resources, 
       </header>
 
       <div className="ev-body">
-        {onEditFigure && <div className="ui-row"><button type="button" className="ui-btn ui-btn--sm" onClick={(e) => onEditFigure(e.currentTarget)} aria-haspopup="dialog"><Icon name="image" />Edit figure</button></div>}
+        <div className="ui-row">
+          {onEditFigure && <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => onEditFigure(e.currentTarget)} aria-haspopup="dialog"><Icon name="image" />Edit figure</button>}
+          <button type="button" className="ui-btn ui-btn--sm" onClick={() => onEdit(block.index)}><Icon name="edit" />{onEditFigure ? 'Edit markup' : 'Edit'}</button>
+        </div>
         {notes.length === 0 && (
           <p className="ev-none">This block cites no source. If it states a fact from your material, ask for a regeneration that cites it, or edit it and add the source by hand.</p>
         )}
@@ -84,7 +87,9 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
   const ref = useRef<HTMLElement>(null);
   useEffect(() => { if (highlighted) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [highlighted]);
 
-  const src = located
+  // Markdown files and saved web links are text only: there is no page to draw, so nothing is requested and no retry is offered.
+  const textOnly = resource?.kind === 'md' || resource?.kind === 'url';
+  const src = located && !textOnly
     ? apiUrl('GET /api/resources/:rid/pages/:idx/image', { params: { rid: note.resourceId!, idx: note.page! }, query: { scale: 1.5, highlight: note.quote.slice(0, 700), t: tries || undefined } })
     : null;
 
@@ -104,6 +109,7 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
           <img className={`ev-img${loaded ? ' is-in' : ''}`} src={src} alt={`Source page ${label} of ${resource?.filename ?? 'the source'}, with the quoted lines marked`} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
         </figure>
       )}
+      {located && textOnly && <p className="ev-page__none ui-muted">This kind of source has no page picture. The quoted text is below.</p>}
       {src && failed && (
         <div className="ev-page__fail">
           <span>The page image did not load.</span>

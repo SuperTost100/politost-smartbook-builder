@@ -34,3 +34,4 @@
 .ev-issue__cat { font-size: 13px; }
 .ev-issue__msg { font-size: 14px; }
 .ev-issue__sug { font-size: 13.5px; color: var(--ink-muted); }
+.ev-page__none { margin: 0; font-size: 13px; }
