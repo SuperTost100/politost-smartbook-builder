@@ -242,6 +242,18 @@ describe('draw task', () => {
     assert.equal(currentHead(ctx(), P, N)!.origin, 'ai');
   });
 
+  test('a drawing described without a caption gets no alt text, because the description is English and the author writes the alt text in the book\'s language; a caption becomes the alt text', async () => {
+    saveHuman(ctx(), P, N, 'Primo.', null);
+    fake.next(say(GOOD), say('OK'));
+    await figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'A voltage divider with two resistors R1 and R2.', caption: '' }));
+    const bare = listAssets(ctx(), P)[0];
+    assert.equal(bare.alt, '');
+    assert.match(currentHead(ctx(), P, N)!.markdown, /alt=""/);
+    fake.next(say(GOOD), say('OK'));
+    await figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'A circle.', caption: 'Figura 2: Un cerchio' }));
+    assert.equal(listAssets(ctx(), P).find((a) => a.id !== bare.id)!.alt, 'Un cerchio');
+  });
+
   test('a drawing that never compiles fails the task with the illustrator\'s reason and adds nothing', async () => {
     const head = saveHuman(ctx(), P, N, 'Primo.', null);
     fake.next(say('#circle('), say('#circle('), say('#circle('));

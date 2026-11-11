@@ -94,7 +94,8 @@ export async function figureDraw(ctx: AppContext, t: TaskContext) {
   const project = loadProject(ctx, projectId);
   const key = `figure-${newId().slice(0, 6)}`;
   const clean = cleanCaption(caption);
-  const alt = clean || description.replace(/\s+/g, ' ').slice(0, 140);
+  // The description is in English whatever the book's language, so it is not used as alt text: without a caption the alt text stays empty, which the lint reports until the author writes it in the figure dialog.
+  const alt = clean;
   const request: FigureRequest = {
     key, kind: 'drawing', caption: clean, alt, plot: null, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null,
     drawing: { shows: description, family: 'other' },

@@ -783,6 +783,7 @@ test.describe('Add figure', () => {
     await page.getByRole('button', { name: 'Add figure', exact: true }).click();
     await pop.getByRole('button', { name: /Describe a drawing/ }).click();
     await expect(pop.getByText(/in English/)).toHaveCount(0);
+    await expect(pop.getByLabel(/Caption/)).toHaveAccessibleDescription(/Without one, the alt text stays empty until you write it in the book's language/);
     await shot(page, '3b-describe');
     await pop.getByLabel('What should the drawing show?').fill('An op-amp with R1 and R2, the input grounded.');
     await pop.getByLabel('Caption').fill('Amplificatore di prova');
