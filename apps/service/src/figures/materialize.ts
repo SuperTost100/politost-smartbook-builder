@@ -4,15 +4,16 @@ import { renderPlotSvg, validatePlotSpec } from '@smartbuilder/content';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { FIGURE_KINDS, type FigureKind } from '@smartbuilder/domain';
+import { DRAWING_FAMILIES, FIGURE_KINDS, type FigureKind } from '@smartbuilder/domain';
 import { paths, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { cellSchema, describeDiagram, levelsSchema, orbitalsSchema, periodicSchema, renderDiagramSvg, validateDiagram, type DiagramKind } from './diagram.ts';
+import { illustrate } from './drawing/illustrator.ts';
 import { findStockPhoto } from './stock.ts';
 import { renderStructureSvg, structureIdentity, validateStructureSpec } from './structure.ts';
 import { codeString } from '../llm/schema.ts';
-import { findSection, loadOutline } from '../pipeline/util.ts';
+import { findSection, loadOutline, loadProject } from '../pipeline/util.ts';
 
 /** One nullable spec per figure kind. A new kind adds its spec here, its name to FIGURE_KINDS (domain) and a block to the figure rules (prompts.ts). */
 const KIND_SPECS = {
@@ -39,6 +40,10 @@ const KIND_SPECS = {
   orbitals: orbitalsSchema.nullable().describe('for kind "orbitals", else null'),
   cell: cellSchema.nullable().describe('for kind "cell", else null'),
   periodic: periodicSchema.nullable().describe('for kind "periodic", else null'),
+  drawing: z.object({
+    shows: z.string().describe('2-5 sentences in English: every element, how they are connected or arranged, every label and value that must appear, and what the reader should notice'),
+    family: z.enum(DRAWING_FAMILIES),
+  }).nullable().optional().describe('for kind "drawing", else null (a request stored before this kind existed has no field)'),
 } satisfies Record<FigureKind, z.ZodType>;
 
 const figureHead = { key: z.string().describe('kebab-case, used as file name'), caption: z.string(), alt: z.string() };
@@ -65,6 +70,7 @@ export type FigureRequest = z.infer<typeof figureSchema>;
 export function figureSignature(origin: string, spec: unknown): string {
   const s = (spec ?? {}) as Record<string, unknown>;
   if (origin === 'stock') return `photo:${s.provider}:${s.id}`;
+  if (origin === 'generated-svg') return `drawing:${String(s.shows ?? '').toLowerCase().replace(/\s+/g, ' ').trim()}`;
   if (origin === 'structure') return `structure:${s.style}:${structureIdentity(String(s.smiles ?? ''))}`;
   return `${origin}:${stableJson(spec)}`;
 }
@@ -98,7 +104,7 @@ export function bookFigures(ctx: AppContext, projectId: string, exclude?: string
 
 /** The book's figures as a list for the writer, so it does not propose one of them again. */
 export function bookFigureList(figures: Map<string, BookFigure>, maxChars = 10_000): string {
-  const kind: Record<string, string> = { stock: 'photo', plot: 'plot', structure: 'structure', diagram: 'diagram' };
+  const kind: Record<string, string> = { stock: 'photo', plot: 'plot', structure: 'structure', diagram: 'diagram', 'generated-svg': 'drawing' };
   const lines = [...figures.values()].map((f) => `- ${kind[f.origin] ?? f.origin}${f.formula ? ` ${f.formula}` : ''} in ${f.where}: ${f.caption.length > 100 ? `${f.caption.slice(0, 100)}…` : f.caption}`);
   const text = lines.join('\n');
   return text.length > maxChars ? `${text.slice(0, maxChars)}\n…` : text;
@@ -133,7 +139,7 @@ function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
   };
 }
 
-/** Draws or fetches every requested figure and writes its file. Figures that fail are left out, with a note. */
+/** Draws or fetches every requested figure and writes its file. Figures that fail are left out, with a note. A drawing is made by the illustrator model, so it can take a minute. */
 export async function buildFigures(ctx: AppContext, o: {
   projectId: string; nodeId: string; language: string; figures: FigureRequest[]; photos: boolean;
   /** The node's current text stays (a fix or the figures pass), so its figures count as taken too. */
@@ -170,6 +176,26 @@ export async function buildFigures(ctx: AppContext, o: {
       const v = validateDiagram(kind, fig[kind]);
       if (!v.ok) { out.notes.push(`${key}: ${v.errors.join('; ')}`); continue; }
       made = { bytes: renderDiagramSvg(kind, v.spec, o.language), ext: '.svg', mime: 'image/svg+xml', origin: 'diagram', spec: { kind, ...v.spec }, caption: fig.caption, alt: fig.alt, check: describeDiagram(kind, v.spec) };
+    } else if (fig.kind === 'drawing' && fig.drawing) {
+      // The twin check comes first: a drawing costs model calls.
+      const twin = taken.get(figureSignature('generated-svg', { shows: fig.drawing.shows }));
+      if (twin) { out.notes.push(`${key}: the same drawing is already in ${twin.where}`); continue; }
+      o.progress?.(`Drawing: ${fig.caption}`);
+      const symbols = loadProject(ctx, o.projectId).options.circuitSymbols;
+      let drawn: Awaited<ReturnType<typeof illustrate>>;
+      try {
+        drawn = await illustrate(ctx, { projectId: o.projectId, runId: o.runId, taskId: o.taskId, signal: o.signal, language: o.language, symbols, caption: fig.caption, shows: fig.drawing.shows, family: fig.drawing.family });
+      } catch (err) {
+        // A drawing is optional: when the illustrator cannot run, the section goes on without it.
+        if (o.signal?.aborted) throw err;
+        drawn = { ok: false, reason: `the drawing could not be made (${err instanceof Error ? err.message : String(err)})`, compileAttempts: 0, usage: { inputTokens: 0, outputTokens: 0, calls: 0 }, ms: 0 };
+      }
+      if (!drawn.ok) { out.notes.push(`${key}: ${drawn.reason}`); continue; }
+      made = {
+        bytes: drawn.svg, ext: '.svg', mime: 'image/svg+xml', origin: 'generated-svg', caption: fig.caption, alt: fig.alt,
+        spec: { kind: 'drawing', engine: drawn.engine, source: drawn.source, shows: fig.drawing.shows, family: fig.drawing.family, symbols },
+        check: `Drawn by the illustrator in ${drawn.engine}: compiled after ${drawn.compileAttempts} attempt${drawn.compileAttempts === 1 ? '' : 's'}, look turn: ${drawn.look}.`,
+      };
     } else if (fig.kind === 'photo' && fig.photo) {
       if (!o.photos) { out.notes.push(`${key}: no stock photo service is set up`); continue; }
       if (photos >= 1) { out.notes.push(`${key}: only one photo per section`); continue; }
