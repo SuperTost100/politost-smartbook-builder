@@ -11,7 +11,7 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
-import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
+import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
@@ -437,7 +437,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
     if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
       const found = mismatches.length
-        ? `Recomputing the final values in Python gives a different result: ${mismatches.map((m) => `${m.name} is ${m.computed} by the computation and ${m.stated} in the solution`).join('; ')}.`
+        ? mismatchMessage(mismatches)
         : `The independent solution reaches a different result: ${data.independentAnswer}`;
       addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
     }
@@ -477,6 +477,12 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
     return { skipped: 'the repair changed words or numbers' };
   }
+  // The author must be able to see that the paper's printed solution was changed, and how. The question turns "adapted" (below), which the Practice screen shows.
+  const corrected = q.origin === 'authentic' && changedWords(q.solution, data.solution) !== null;
+  const was = issues.flatMap((i) => readMismatches(i.message));
+  const resolution = !corrected ? `Rewritten by ${route.model}`
+    : was.length ? `The printed solution was corrected by ${route.model}: ${was.map((m) => `${m.name} was ${m.stated} and the numeric check gives ${m.computed}`).join(', ')}.`
+      : `The printed solution was rewritten by ${route.model}.`;
   return ctx.db.tx(() => {
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
       layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
@@ -484,7 +490,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
       return { stale: true };
     }
-    if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Rewritten by ${route.model}`, ...issues.map((i) => i.id));
+    if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, resolution, ...issues.map((i) => i.id));
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
     return { revised: true };

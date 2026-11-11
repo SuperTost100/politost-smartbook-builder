@@ -216,6 +216,49 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
   });
 });
 
+describe('5b. a corrected solution of an authentic exam question leaves a trace', () => {
+  const NUMERIC = 'Recomputing the final values in Python gives a different result: f_c is 3386.2754 Hz by the computation and 21,28 kHz in the solution.';
+  const issue = (qid: string, message: string, source = 'verification') => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source, severity: 'blocker', category: 'solution', quote: '', message, suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const fix = (id: string, iid: string, solution: string) => {
+    fake.next(answer({ statement: 'Calcola $f_c$.', hint: '', solution }));
+    return questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+  };
+
+  test('the resolution says what changed, with the old value and the value the numeric check gives; the question is marked adapted', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', statement: 'Calcola $f_c$.', solution: 'a) $f_c = 21{,}28\\,\\mathrm{kHz}$.' });
+    const iid = issue(id, NUMERIC);
+    await fix(id, iid, 'a) $f_c = 3{,}386\\,\\mathrm{kHz}$.');
+    assert.equal(row(id).origin, 'adapted');
+    const [i] = issues(`id = '${iid}'`);
+    assert.equal(i.status, 'fixed');
+    assert.equal(i.resolution, `The printed solution was corrected by ${DEFAULT_ROUTES.editor.primary.model}: f_c was 21,28 kHz and the numeric check gives 3386.2754 Hz.`);
+  });
+
+  test('without numbers from the numeric check the resolution says the solution was rewritten, and by which model', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', statement: 'Calcola $f_c$.', solution: 'Vale 1.' });
+    const iid = issue(id, 'The independent solution reaches a different result: 2');
+    await fix(id, iid, 'Vale 2.');
+    assert.equal(issues(`id = '${iid}'`)[0].resolution, `The printed solution was rewritten by ${DEFAULT_ROUTES.editor.primary.model}.`);
+    assert.equal(row(id).origin, 'adapted');
+  });
+
+  test('a fix of the same text with other line breaks, or of a generated question, keeps the short resolution', async () => {
+    const a = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '1', statement: 'Calcola $f_c$.', solution: 'Vale 1.\\n\\nFine.' });
+    const ia = issue(a, 'A literal backslash followed by n', 'lint');
+    await fix(a, ia, 'Vale 1.\n\nFine.');
+    assert.match(issues(`id = '${ia}'`)[0].resolution, /^Rewritten by /);
+    const g = q({ solution: 'Vale 1.' });
+    const ig = issue(g, NUMERIC);
+    await fix(g, ig, 'Vale 2.');
+    assert.match(issues(`id = '${ig}'`)[0].resolution, /^Rewritten by /);
+    assert.equal(row(g).origin, 'generated');
+  });
+});
+
 describe('15. disagreement is a blocker', () => {
   test('agrees=false with no problems, or only minor/major ones, adds a blocker; an existing blocker is not duplicated', async () => {
     const a = q();
