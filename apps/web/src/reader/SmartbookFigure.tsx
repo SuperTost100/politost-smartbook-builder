@@ -18,7 +18,7 @@ export function SmartbookFigure({ src, alt, caption, resolveAsset }: SmartbookFi
 
   return (
     <figure className="sb-figure">
-      <div className="sb-figure-frame">
+      <div className={url ? 'sb-figure-frame' : 'sb-figure-frame is-missing'}>
         {url ? (
           <img src={url} alt={alt} loading="lazy" decoding="async" />
         ) : (

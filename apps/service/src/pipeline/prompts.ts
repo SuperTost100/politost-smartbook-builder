@@ -589,11 +589,37 @@ Return JSON with the statement of "Esercizio ${p.number}" of this session (all i
   };
 }
 
+export const sessionExtractSchema = z.object({
+  exercises: z.array(z.object({
+    number: z.string().describe('the exercise number exactly as listed'),
+    statement: z.string(),
+    solution: z.string().describe('empty when the pages print no official solution for it'),
+    readable: z.boolean().describe('false if the pages do not contain this exercise or it cannot be read'),
+  })),
+});
+
+/** All the listed exercises of one exam session in a single call, from the same pages. `exercises` carries each stored question's number and its text-layer solution, if any. */
+export function sessionExtractPrompt(p: { language: string; examGroup: string; exercises: { number: string; solutionText: string }[]; pages: string }) {
+  const layer = p.exercises.filter((e) => e.solutionText.trim()).map((e) => `Esercizio ${e.number} (text layer, math may be garbled):\n${e.solutionText}`).join('\n\n');
+  return {
+    system: `You copy the exercises of one exam session and their official solutions from transcribed exam pages, faithfully, in the original language. You fix only obvious transcription glitches.\n\n${formatRules(p.language)}`,
+    prompt: `Session: ${p.examGroup}
+Exercises to copy: ${p.exercises.map((e) => e.number).join(', ')}
+
+Pages of the session (statements and solutions):
+${p.pages}
+${layer ? `\nText layer of the official solutions, which may help where the page transcription is unclear:\n${layer}\n` : ''}
+Return JSON {"exercises": [...]} with exactly one entry for each listed exercise number, in that order and with the number exactly as listed. Each entry has the statement of "Esercizio <number>" of this session (all its parts, without the points), its official solution (empty when the pages print none), and readable=true; readable=false if the exercise is not on the pages. Never add an exercise that is not listed.`,
+  };
+}
+
 export const verifySchema = z.object({
   independentAnswer: z.string(),
   resultsAgree: z.boolean().describe('the final results of the given solution match yours'),
   agrees: z.boolean().describe('results match and the reasoning has no major gap'),
   problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
+  computation: codeString().optional().describe('Python that recomputes numeric final results, or empty'),
+  statedValues: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe('the final numeric results the given solution states, one per printed line of the computation'),
 });
 
 export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
@@ -606,7 +632,9 @@ ${p.statement}
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.`,
+Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.
+
+Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.`,
   };
 }
 

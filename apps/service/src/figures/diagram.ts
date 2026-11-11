@@ -1,3 +1,4 @@
+import { INK, INK_MARKER } from '@smartbuilder/content';
 import { z } from 'zod';
 import { ELEMENTS, elementBySymbol, parseSpecies, suggestSymbol } from './elements.ts';
 
@@ -217,7 +218,6 @@ export const chemPlain = (text: string): string => chemRuns(text).map((r) => r.t
 // ---------------------------------------------------------------------------------------------
 
 const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-const INK = '#111827';
 const SOFT = '#374151';
 const MUTED = '#6B7280';
 const FAINT = '#9CA3AF';
@@ -282,9 +282,8 @@ const fitFs = (text: string, fs: number, max: number, min = 9): number => Math.m
 
 function svgOpen(w: number, h: number, label: string): string[] {
   return [
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${esc(label)}" font-family="${FONT}">`,
+    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${w} ${h}" width="${w}" height="${h}" role="img" aria-label="${esc(label)}" font-family="${FONT}" ${INK_MARKER}>`,
     `<title>${esc(label)}</title>`,
-    `<rect width="${w}" height="${h}" fill="#FFFFFF"/>`,
   ];
 }
 

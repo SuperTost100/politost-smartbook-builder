@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { compileExpr } from './expr.ts';
+import { INK_MARKER } from './ink.ts';
 
 /** Declarative function plot rendered to SVG deterministically. */
 export interface PlotSpec { title?: string; xRange: [number, number]; yRange: [number, number]; xLabel?: string; yLabel?: string;
@@ -112,15 +113,14 @@ export function renderPlotSvg(spec: PlotSpec): string {
   const py = (y: number) => Y1 - ((y - ymin) / (ymax - ymin)) * (Y1 - Y0);
 
   const out: string[] = [];
-  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(s.title ?? 'Plot')}" font-family="${FONT}">`);
+  out.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(s.title ?? 'Plot')}" font-family="${FONT}" ${INK_MARKER}>`);
   out.push(`<title>${esc(s.title ?? 'Plot')}</title>`);
   out.push(`<defs><clipPath id="plot-area"><rect x="${X0}" y="${Y0}" width="${X1 - X0}" height="${Y1 - Y0}"/></clipPath></defs>`);
-  out.push(`<rect width="${W}" height="${H}" fill="#FFFFFF"/>`);
 
   // grid + tick labels
   const tx = ticks(xmin, xmax, 8);
   const ty = ticks(ymin, ymax, 6);
-  out.push('<g stroke="#E5E7EB" stroke-width="1" shape-rendering="crispEdges">');
+  out.push('<g stroke="#D1D5DB" stroke-width="1" shape-rendering="crispEdges">');
   for (const v of tx.values) out.push(`<line x1="${f2(px(v))}" y1="${Y0}" x2="${f2(px(v))}" y2="${Y1}"/>`);
   for (const v of ty.values) out.push(`<line x1="${X0}" y1="${f2(py(v))}" x2="${X1}" y2="${f2(py(v))}"/>`);
   out.push('</g>');
