@@ -695,6 +695,23 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.equal(fake.calls.length, 1);
     assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 1);
   });
+
+  test('a Bode pair saves two graphs on the same log frequency axis', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    const t = startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' });
+    fake.next(answer({
+      id: 'bode', title: 'Modulo', description: 'Modulo in dB', functions: [{ fn: '-10*log10(1+(x/1000)^2)', label: '|H|' }],
+      xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', functions: [{ fn: '-atan(x/1000)*180/pi', label: 'fase' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+    }));
+    assert.deepEqual(await enrichGraph(ctx, t), { made: 2 });
+    const rows = ctx.db.all<{ payload: string; status: string }>(`SELECT payload, status FROM enrichments WHERE kind = 'graph' ORDER BY rowid`);
+    const layouts = rows.map((r) => json<{ id: string; config: { layout: { xaxis: { type: string; range: number[]; title: string } } } }>(r.payload, { id: '', config: { layout: { xaxis: { type: '', range: [], title: '' } } } }));
+    assert.deepEqual(layouts.map((l) => l.id), ['bode', 'bode-2'], 'the second graph gets its own id');
+    for (const l of layouts) assert.deepEqual(l.config.layout.xaxis, { title: 'f (Hz)', type: 'log', range: [1, 5] });
+    assert.deepEqual(rows.map((r) => r.status), ['verified', 'verified']);
+  });
 });
 
 describe('2. figure files are scoped to their section', () => {

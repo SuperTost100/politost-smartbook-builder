@@ -20,6 +20,8 @@ const KIND_SPECS = {
   plot: z.object({
     xRange: z.tuple([z.number(), z.number()]),
     yRange: z.tuple([z.number(), z.number()]),
+    xScale: z.enum(['linear', 'log']).optional().describe('"log" for a logarithmic x axis (a positive range); default linear'),
+    yScale: z.enum(['linear', 'log']).optional().describe('"log" for a logarithmic y axis (a positive range); default linear'),
     xLabel: z.string().nullable(),
     yLabel: z.string().nullable(),
     functions: z.array(z.object({ expr: codeString(), label: z.string().nullable(), domain: z.tuple([z.number(), z.number()]).nullable(), style: z.enum(['solid', 'dashed']).nullable() })),
@@ -132,7 +134,7 @@ export const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
 
 function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
   return {
-    xRange: p.xRange, yRange: p.yRange, xLabel: p.xLabel ?? undefined, yLabel: p.yLabel ?? undefined,
+    xRange: p.xRange, yRange: p.yRange, xScale: p.xScale ?? undefined, yScale: p.yScale ?? undefined, xLabel: p.xLabel ?? undefined, yLabel: p.yLabel ?? undefined,
     functions: p.functions.map((f) => ({ expr: f.expr, label: f.label ?? undefined, domain: f.domain ?? undefined, style: f.style ?? undefined })),
     points: (p.points ?? []).map((pt) => ({ x: pt.x, y: pt.y, label: pt.label ?? undefined, open: pt.open ?? undefined })),
     asymptotes: (p.asymptotes ?? []).map((a) => ({ kind: a.kind, value: a.value, label: a.label ?? undefined })),

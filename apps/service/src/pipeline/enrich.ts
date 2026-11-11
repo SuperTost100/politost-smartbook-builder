@@ -76,12 +76,19 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-  const sampled = sampleFunctionGraph({
-    id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
-    functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
+  const main = g.data;
+  const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
+    id, title, xDomain: main.xDomain, yDomain, xScale: main.xScale, yScale, xLabel: main.xLabel, yLabel,
+    functions: functions.map((f) => ({ expr: f.fn, label: f.label })),
   });
-  saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }]);
-  return { made: 1 };
+  const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.functions), description: main.description }];
+  // A pair (the phase under a Bode magnitude) shares the first graph's x axis, so the two line up when read one after the other.
+  if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.functions), description: main.pair.description });
+  for (const { spec, description } of graphs) {
+    const sampled = sampleFunctionGraph(spec);
+    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }]);
+  }
+  return { made: graphs.length };
 }
 
 /** One lab example (Python or MATLAB) for one section, run in its sandbox. Idempotent: skipped when the section already has one. */

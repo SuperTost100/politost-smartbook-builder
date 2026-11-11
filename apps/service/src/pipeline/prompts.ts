@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 18;
+export const PROMPT_VERSION = 19;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -319,7 +319,7 @@ const KIND_SEEING: Record<FigureKind, string> = {
 
 /** One block per kind. A new kind adds its block here and its name to the subject profiles (domain). */
 const KIND_BLOCKS: Record<FigureKind, (f: FigureSetup) => string> = {
-  plot: (f) => `  - plot: a function graph. Expressions use x, the constants e and pi, + - * / ^, and the functions ${[...ALLOWED_FUNCTIONS].join(' ')}; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write powers with Unicode superscripts ("x²"). Examples: ${f.profile.plotExamples}.`,
+  plot: (f) => `  - plot: a function graph. Expressions use x, the constants e and pi, + - * / ^, and the functions ${[...ALLOWED_FUNCTIONS].join(' ')}; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write powers with Unicode superscripts ("x²"). A log axis ("xScale" or "yScale" set to "log", null otherwise) needs a positive range, has its ticks at the powers of ten and fits frequency, decay and quantities that span orders of magnitude; values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB. A Bode plot is two plot figures, magnitude and then phase, with the same xScale "log" and xRange, and their image blocks follow one another. Example, the magnitude of a first-order low-pass: xScale "log", xRange [10, 100000], yRange [-40, 5], the function -10*log10(1+(x/1000)^2) and a point at x 1000, y -3.01 labelled "fc = 1 kHz". Other examples: ${f.profile.plotExamples}.`,
   structure: () => `  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.`,
   levels: () => `  - levels: an energy-level diagram: a molecular orbital diagram, the enthalpy of reactants and products with a ΔH arrow, a Hess cycle, the energy order of orbitals. The vertical axis is an energy (or enthalpy, entropy), named in "yLabel"; never use it for a flow chart, a conversion scheme or a classification. "columns" are the vertical groups from left to right (an MO diagram has three: atom, molecule, atom). Each level has a unique key, its column (from 0), an energy (only order and spacing matter), a label, "boxes" for degenerate orbitals (π2p has 2) and "electrons" (null to draw no arrows). "links" join levels by key: "dashed" for MO correlation lines, "arrow" for an energy change, labelled like "ΔH = −286 kJ".`,
   orbitals: () => `  - orbitals: orbital boxes for the electron configuration of one atom or ion. "species" as the text writes it ("O", "Fe3+"), "core" a noble-gas core like "[Ar]" or null, "subshells" in the order the text writes them, each with its electrons ("3d" with 5). The builder checks that the electrons add up to the species and drops the figure if they do not.`,
@@ -698,25 +698,42 @@ Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no gra
   };
 }
 
+const graphScale = z.enum(['linear', 'log']).optional().describe('"log" for a logarithmic axis (its domain must be positive); default linear');
+const graphFunctions = z.array(z.object({ fn: codeString(), label: z.string() }));
+
+/** The second graph of a pair, such as the phase under a Bode magnitude. It shares the first graph's x axis. */
+export const graphPairSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string(),
+  functions: graphFunctions,
+  yDomain: z.tuple([z.number(), z.number()]),
+  yScale: graphScale,
+  yLabel: z.string(),
+});
+
 export const graphSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  functions: z.array(z.object({ fn: codeString(), label: z.string() })),
+  functions: graphFunctions,
   xDomain: z.tuple([z.number(), z.number()]),
   yDomain: z.tuple([z.number(), z.number()]),
+  xScale: graphScale,
+  yScale: graphScale,
   xLabel: z.string(),
   yLabel: z.string(),
+  pair: graphPairSchema.optional().describe('a second graph on the same x axis, or null'),
 });
 
 export function graphPrompt(p: { language: string; purpose: string; section: string }) {
   return {
-    system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses.`,
+    system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
     prompt: `Purpose: ${p.purpose}
 Section text:
 ${p.section}
 
-Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xLabel, yLabel.`,
+Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,
   };
 }
 
