@@ -197,6 +197,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
   const eligible = candidates;
   const ready = candidates.filter(isReady);
   if (!ready.length) throw limitWait(eligible);
+  const cooling = eligible.filter((r) => !ready.includes(r));
   candidates = ready;
 
   let firstQuota: Failure | undefined;
@@ -211,7 +212,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
       // A call that waited for its slot may find that another call reported the provider's limit meanwhile, and a fallback may be on the provider that just did.
       if (!isReady(route)) {
         if (candidates.slice(i + 1).some(isReady)) continue;
-        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait(eligible);
+        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1, cooling) : limitWait(eligible);
       }
       return await attemptRoute(ctx, funnel, opts, route, { calls, fallback: route === fallback });
     } catch (err) {
@@ -226,7 +227,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
       // A call that hangs until the timeout, or an answer cut off at the output limit, usually repeats on the same model, so the fallback gets the next try.
       const canFallBack = candidates.slice(i + 1).some(isReady) && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut || !!f.truncated);
       if (canFallBack) continue;
-      throw toTaskError(f, route, firstQuota, candidates.length > 1);
+      throw toTaskError(f, route, firstQuota, candidates.length > 1, cooling);
     } finally {
       release();
     }
@@ -251,12 +252,14 @@ class RouteFailure extends Error {
   }
 }
 
-function toTaskError(f: Failure, route: Route, firstQuota: Failure | undefined, hadFallback: boolean): TaskError {
+/** `cooling` are the routes of the role that were already at their limit when the call started. A quota error waits for the earliest reset among them and the failed route, because one of them may be back before the route that failed. */
+function toTaskError(f: Failure, route: Route, firstQuota: Failure | undefined, hadFallback: boolean, cooling: Route[] = []): TaskError {
   const where = `${route.provider}/${route.model}`;
   switch (f.kind) {
     case 'auth': return new TaskError(`${where}: ${f.message}`, 'auth', loginAction(route.provider));
     case 'quota': {
       const waits = [f.retryAfterMs, firstQuota?.retryAfterMs].filter((x): x is number => typeof x === 'number');
+      for (const r of cooling) if (coolingFor(r.provider) > 0) waits.push(coolingFor(r.provider));
       const wait = waits.length ? Math.min(...waits) : DEFAULT_QUOTA_WAIT_MS;
       return new TaskError(`${where}: usage limit reached${hadFallback ? ' (fallback also unavailable)' : ''}. ${f.message}`.trim(), 'quota', 'Wait for the limit to reset, or pick another model in Settings.', wait);
     }

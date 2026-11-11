@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 21;
+export const PROMPT_VERSION = 22;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -670,6 +670,36 @@ export function examReadParser(numbers: string[]): (text: string) => { ok: true;
     }
     return { ok: true, data: { exercises } };
   };
+}
+
+/** How the editor answers the formatting repair of a question: plain text, one part per field, so that no text is ever a JSON string. */
+export const questionTextAnswerRule = `Answer in plain text, not JSON, so that no backslash has to be escaped. Write the three parts in this order, each as a header line and then its text, exactly as it should appear in the book (real line breaks, LaTeX written once with single backslashes):\n@@@ statement\n@@@ hint\n@@@ solution\nLeave a part empty (the header and nothing under it) when it was empty. Write nothing before the first "@@@" line, no code fence around anything, and no comment.`;
+
+const QUESTION_PART = /^@@@[ \t]*(statement|hint|solution)[ \t]*$/;
+
+/** Reads the answer described by `questionTextAnswerRule`. Each of the three parts must appear once and the statement may not be empty. */
+export function parseQuestionText(text: string): { ok: true; data: { statement: string; hint: string; solution: string } } | { ok: false; problem: string } {
+  const fail = (problem: string) => ({ ok: false as const, problem });
+  const parts = new Map<string, string[]>();
+  let open: string[] | null = null;
+  const before: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const head = QUESTION_PART.exec(line);
+    if (!head && line.startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". The headers are "@@@ statement", "@@@ hint" and "@@@ solution".`);
+    if (!head) {
+      (open ?? before).push(line);
+      continue;
+    }
+    if (parts.has(head[1]!)) return fail(`There are two "@@@ ${head[1]}" parts. Give each part once.`);
+    open = [];
+    parts.set(head[1]!, open);
+  }
+  if (before.join('').trim()) return fail('There is text before the first "@@@" line: every word of the answer belongs to a part.');
+  for (const name of ['statement', 'hint', 'solution']) if (!parts.has(name)) return fail(`The "@@@ ${name}" part is missing. Write all three headers, and leave a part empty when it was empty.`);
+  const body = (name: string) => rewriteLatexNames(parts.get(name)!.join('\n').trim());
+  const data = { statement: body('statement'), hint: body('hint'), solution: body('solution') };
+  if (!data.statement) return fail('The statement is empty. Write the full statement under "@@@ statement".');
+  return { ok: true, data };
 }
 
 export function authenticExtractPrompt(p: { language: string; examGroup: string; number: string; statementPages: string; solutionPages: string }) {

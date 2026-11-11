@@ -9,7 +9,7 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
+import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
@@ -60,8 +60,8 @@ async function repairQuestionFormat(ctx: AppContext, t: TaskContext, projectId: 
     const { data } = await runRole(ctx, {
       role: 'editor',
       system: `You fix formatting problems in a university exercise written in ${language === 'it' ? 'Italian' : language} without changing its wording, numbers or results.\n\n${formatRules(language)}`,
-      prompt: `PROBLEMS:\n${found.join('\n')}\n\nSTATEMENT:\n${text.statement}\n\nHINT:\n${text.hint}\n\nSOLUTION:\n${text.solution}\n\nReturn JSON with the statement, hint and solution; change only what the problems require and keep an empty hint empty.`,
-      schema: questionReviseSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+      prompt: `PROBLEMS:\n${found.join('\n')}\n\nSTATEMENT:\n${text.statement}\n\nHINT:\n${text.hint}\n\nSOLUTION:\n${text.solution}\n\nChange only what the problems require and keep an empty hint empty.\n\n${questionTextAnswerRule}`,
+      parse: parseQuestionText, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     const next = { ...data, hint: text.hint ? data.hint : '' };
     const why = wordsChanged(text, next);

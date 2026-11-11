@@ -54,6 +54,10 @@ describe('subject area inference', () => {
     assert.deepEqual([...SUBJECT_PROFILES.chemistry.figureKinds].sort(), [...FIGURE_KINDS].sort(), 'chemistry keeps every kind it has today');
   });
 
+  test('Book setup offers circuit symbols for electronics and physics only', () => {
+    assert.deepEqual(SUBJECT_AREAS.filter((a) => SUBJECT_PROFILES[a].hasCircuits), ['physics', 'electronics']);
+  });
+
   test('options of an existing book parse with the new defaults and no area', () => {
     const o = bookOptionsSchema.parse({ outsideMaterial: false, ide: false, graphs: true, figures: true, chapterScope: [] });
     assert.equal(o.subjectArea, undefined);

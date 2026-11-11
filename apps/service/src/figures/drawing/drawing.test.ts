@@ -6,6 +6,7 @@ import { fileURLToPath } from 'node:url';
 import { after, before, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { Resvg } from '@resvg/resvg-js';
+import { bookOptionsSchema } from '@smartbuilder/domain';
 import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { assertSafeSvg } from '../../repo/assets.ts';
 import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
@@ -185,6 +186,17 @@ describe('symbol style', () => {
       // A rectangle resistor is 4 corners, a zigzag 8 or more.
       const vertices = (svg: string) => Math.max(...(svg.match(/\sd="[^"]*"/g) ?? []).map((d) => (d.match(/[LlHhVv]/g) ?? []).length));
       assert.ok(vertices(us.svg) >= vertices(eu.svg), 'the zigzag path has at least as many segments');
+    });
+  }
+});
+
+describe('default symbol style', () => {
+  for (const [file, engine] of [['rc-filter.typ', 'typst'], ['rc-schemdraw.py', 'schemdraw']] as const) {
+    it(`${engine} draws what a book without the option gets`, async () => {
+      const [direct, book, european] = await Promise.all([undefined, bookOptionsSchema.parse({}).circuitSymbols, 'european' as const].map((symbols) => renderDrawing({ engine, source: source(file), symbols })));
+      assert.ok(direct.ok && book.ok && european.ok);
+      assert.equal(direct.svg, book.svg);
+      assert.notEqual(direct.svg, european.svg);
     });
   }
 });

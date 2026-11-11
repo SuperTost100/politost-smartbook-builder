@@ -177,9 +177,9 @@
  },
  "rc-filter.typ": {
   "counts": {
-   "path": 31,
+   "path": 33,
    "use": 9,
-   "g": 87,
+   "g": 91,
    "rect": 0,
    "circle": 0,
    "line": 0,

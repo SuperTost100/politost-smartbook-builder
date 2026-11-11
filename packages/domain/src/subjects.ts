@@ -15,6 +15,8 @@ export type DrawingFamily = (typeof DRAWING_FAMILIES)[number];
 export interface SubjectProfile {
   /** Figure kinds offered to the writer, in the order their blocks appear in the rules. */
   figureKinds: readonly FigureKind[];
+  /** Whether books of this subject have circuit figures, so Book setup offers the choice of circuit symbols. */
+  hasCircuits: boolean;
   /** Examples of plots for the plot block of the figure rules. */
   plotExamples: string;
   /** Examples of photos for the photo block. */
@@ -30,6 +32,7 @@ export interface SubjectProfile {
 export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   mathematics: {
     figureKinds: ['plot', 'drawing'],
+    hasCircuits: false,
     plotExamples: 'a limit or an asymptote, a derivative as slope, the area under a curve, a family of curves for several values of a parameter, a sequence as points',
     photoExamples: 'a geometric object or a model the student should recognise',
     notation: 'how to write the domain, intervals, derivatives, limits, sets and vectors',
@@ -38,6 +41,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   physics: {
     figureKinds: ['plot', 'drawing', 'photo'],
+    hasCircuits: true,
     plotExamples: 'x(t) or v(t) of a motion, p(V) isotherms, a potential against distance, a wave profile, a decay curve',
     photoExamples: 'an experimental apparatus, a measuring instrument, a natural phenomenon',
     notation: 'the symbol and unit of each quantity, how vectors and components are written, the sign conventions and the axes',
@@ -46,6 +50,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   chemistry: {
     figureKinds: ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'drawing', 'photo'],
+    hasCircuits: false,
     plotExamples: 'a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time, a periodic trend against atomic number (as points); write charges with Unicode superscripts ("Ca²⁺")',
     photoExamples: 'lab equipment, a precipitate, a flame test, crystals, minerals, corrosion, an industrial plant',
     notation: 'how to write species, charges, states of matter, concentrations, equilibrium constants and units',
@@ -54,6 +59,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   electronics: {
     figureKinds: ['plot', 'drawing', 'photo'],
+    hasCircuits: true,
     plotExamples: 'a characteristic curve (diode, transistor), a transfer function, a response against time, a Bode magnitude and phase against frequency on a log axis, a waveform, a load line',
     photoExamples: 'a component, a board, a measuring instrument, a laboratory setup',
     notation: 'units written in upright type with SI prefixes, the sign conventions for voltage and current, how phasors, small-signal quantities and logic levels are written',
@@ -62,6 +68,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   'computer-science': {
     figureKinds: ['plot', 'drawing'],
+    hasCircuits: false,
     plotExamples: 'running time against input size, the growth of two complexity classes, a probability distribution',
     photoExamples: 'a piece of hardware the student should recognise',
     notation: 'how to write complexity bounds, sets, sequences, indices and pseudocode',
@@ -70,6 +77,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   mechanics: {
     figureKinds: ['plot', 'drawing', 'photo'],
+    hasCircuits: false,
     plotExamples: 'a stress-strain curve, a bending moment diagram, a displacement against time, a force against displacement',
     photoExamples: 'a machine, a mechanism, a structure, a test specimen',
     notation: 'the symbol and unit of each quantity, how forces, vectors and components are written, the sign conventions and the reference frame',
@@ -78,6 +86,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   },
   other: {
     figureKinds: ['plot', 'drawing', 'photo'],
+    hasCircuits: false,
     plotExamples: 'a relation between two quantities, a trend, a distribution',
     photoExamples: 'an object, an apparatus or a phenomenon the student should recognise',
     notation: 'the conventions to use throughout (symbols, units, how the main objects are written)',

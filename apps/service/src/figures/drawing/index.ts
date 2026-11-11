@@ -15,7 +15,7 @@
 //   'schemdraw'  Python source that creates `with schemdraw.Drawing(show=False) as d:` and draws into it. Runs in Pyodide.
 //                Logic gates, timing diagrams (logic.TimingDiagram), Karnaugh maps (logic.Kmap), analog circuits, flow charts.
 //
-// `symbols` ('american' zigzag resistor, 'european' rectangle, default 'european') is applied by the wrapper in both
+// `symbols` ('american' zigzag resistor, 'european' rectangle, default 'american', like the book option) is applied by the wrapper in both
 // engines, so the model does not write it. It changes circuit parts only.
 //
 // What the caller can rely on in `r.svg`
@@ -79,7 +79,7 @@ async function renderNow(req: DrawingRequest): Promise<DrawingResult> {
   const status = drawingPackagesStatus();
   if (!status.ready) return { ok: false, kind: 'setup', error: `The figure packages are not installed (${status.missing.length} missing). Run "npm run figure-packages" once, with a network connection.` };
   if (!req.source.trim()) return { ok: false, kind: 'compile', error: 'The drawing source is empty.' };
-  const symbols: CircuitSymbols = req.symbols ?? 'european';
+  const symbols: CircuitSymbols = req.symbols ?? 'american';
   const timeoutMs = req.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   let raw: { ok: true; svg: string } | DrawingFailure;
