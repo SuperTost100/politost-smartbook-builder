@@ -76,7 +76,9 @@ export interface AlignEnv {
  * Exam-guide findings come only from the builder.
  */
 export function validateAlignment(raw: Raw, env: AlignEnv): { coverage: AlignmentReport['coverage']; findings: AlignmentFinding[] } {
-  const items = new Set(env.program.map((i) => i.key));
+  // Items the author left out on purpose are never missing, thin or without a proof.
+  const excluded = new Set(env.outline.programExclusions.map((e) => e.item));
+  const items = new Set(env.program.map((i) => i.key).filter((k) => !excluded.has(k)));
   const sections = new Map<string, OutlineSection>(env.outline.chapters.flatMap((c) => c.sections.map((s) => [s.id, s] as const)));
   const content = (id: string | null) => (id ? sections.get(id) : undefined)?.role === 'content' ? sections.get(id!) : undefined;
   const written = (id: string | null) => !!content(id) && env.texts.has(id!);
@@ -172,7 +174,8 @@ export async function alignCheck(ctx: AppContext, t: TaskContext) {
   t.progress('Reading the book against the program');
   const { data, route } = await runRole(ctx, {
     role: 'planner',
-    ...alignPrompt({ language: project.language, program: programItemsText(program.items), exam: examFormatText(program.examFormat), outline: bookDigest(ctx, projectId, current.outline, total), sessions: total }),
+    // The author's exclusions stay out of what the model reads: an item it never sees cannot be reported as missing.
+    ...alignPrompt({ language: project.language, program: programItemsText(program.items.filter((i) => !current.outline.programExclusions.some((e) => e.item === i.key))), exam: examFormatText(program.examFormat), outline: bookDigest(ctx, projectId, current.outline, total), sessions: total }),
     schema: alignSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const { coverage, findings } = validateAlignment(data, { program: program.items, outline: current.outline, texts, guides: guideFindings(ctx, projectId, current.outline) });
@@ -296,6 +299,8 @@ export async function alignApply(ctx: AppContext, t: TaskContext) {
 
   ctx.db.tx(() => {
     for (const f of findings) {
+      // A report made before the author excluded the item: the exclusion stands.
+      if ('item' in f && outline.programExclusions.some((e) => e.item === f.item)) { lines.push(`Skipped a ${f.kind} finding for ${q(f.item)}: the author left this program item out.`); continue; }
       switch (f.kind) {
         case 'missing': {
           const chapter = outline.chapters.find((c) => c.id === f.suggested.chapterId);

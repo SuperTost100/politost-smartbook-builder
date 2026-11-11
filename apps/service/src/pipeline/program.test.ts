@@ -519,6 +519,32 @@ describe('alignment check', () => {
     assert.deepEqual(report.coverage.find((c) => c.item === 'limiti'), { item: 'limiti', nodeIds: ['s1'] });
   });
 
+  test('an item the author excluded is not sent to the model and is never reported as missing, thin or without its proof', async () => {
+    const { outline, revId } = seedOutline([
+      ['c1', [section('s1', { programItems: ['limiti'] })]],
+      ['c2', [section('s3')]],
+    ], { programExclusions: [{ item: 'serie', reason: 'Analisi 2' }] });
+    seedProgram([item('limiti'), item('serie', { title: 'Serie numeriche' })]);
+    seedRevision('s1', 'Il limite.');
+    const found = [
+      { kind: 'missing', item: 'serie', chapterId: 'c2', afterSectionId: 's3', title: 'Serie numeriche', objectives: ['Convergenza'], depth: 'standard', message: 'Series are missing.' },
+      { kind: 'thin', item: 'serie', nodeId: 's1', message: 'Series are thin.' },
+      { kind: 'proof', item: 'serie', nodeId: 's1', message: 'Series need a proof.' },
+      { kind: 'thin', item: 'limiti', nodeId: 's1', message: 'Limits are thin.' },
+    ];
+    const env = { program: [item('limiti'), item('serie')], outline, texts: new Map([['s1', 'Il limite.']]), guides: [] };
+    const out = validateAlignment(raw(found), env);
+    assert.deepEqual(out.findings.map((f) => f.kind === 'missing' ? f.item : [f.kind, 'item' in f ? f.item : null]), [['thin', 'limiti']]);
+    assert.deepEqual(out.coverage.map((c) => c.item), ['limiti', 'serie'], 'coverage still lists every program item');
+
+    fake.next(answer(raw(found, [{ item: 'limiti', nodeIds: ['s1'] }])));
+    const r = await alignCheck(ctx, startTask('program.check', {}, 'align'));
+    assert.doesNotMatch(fake.calls[0].prompt, /Serie numeriche/);
+    assert.match(fake.calls[0].prompt, /Voce limiti/);
+    assert.deepEqual(getReport(ctx, P, r.reportId).findings.map((f) => f.kind), ['thin']);
+    assert.equal(getReport(ctx, P, r.reportId).outlineRevId, revId);
+  });
+
   test('exam-guide findings come from the exam questions, only for chapters with written text and no guide yet', () => {
     const { outline } = seedOutline([
       ['c1', [section('s1', { topicIds: [topicId('limiti')] })]],
@@ -581,6 +607,17 @@ describe('Align book', () => {
     if (extra.options) ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify(extra.options), P);
     return seeded;
   }
+
+  test('a report made before the item was excluded adds no section for it', async () => {
+    seedProgram([item('limiti'), item('serie', { title: 'Serie' })]);
+    const { revId } = seedOutline([['c1', [section('s1', { programItems: ['limiti'] })]], ['c2', [section('s3')]]], { programExclusions: [{ item: 'serie', reason: 'Analisi 2' }] });
+    seedRevision('s1', 'Limiti.');
+    seedRevision('s3', 'Altro.');
+    const report = reportOf(revId, [missing({ afterSectionId: 's3' })]);
+    await apply(report.id);
+    assert.equal(approved().chapters[1].sections.length, 1);
+    assert.deepEqual(approved().programExclusions, [{ item: 'serie', reason: 'Analisi 2' }]);
+  });
 
   test('delete mode: the section leaves the outline in a new approved revision, the texts stay, new sections and exam guides are queued, thin gets a fix task', async () => {
     const { revId } = book();
