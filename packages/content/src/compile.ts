@@ -4,7 +4,7 @@ import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
 import { lintCompiled, lintQuestionText, lintSection, langOf } from './lint.ts';
 import { proseLines } from './blocks.ts';
-import { maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
+import { dropUnclosedDisplay, maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
 // Labels
@@ -97,7 +97,7 @@ function numberChapter(
       findings.push(finding('book-structure', 'blocker', id, 'Section has no title.'));
       unit.title = isIntro ? introTitle(language) : `Sezione ${paragraph}`;
     }
-    for (const fb of scan(markdown).formulas) {
+    for (const fb of scan(dropUnclosedDisplay(markdown)).formulas) {
       const parsed = parseFormulaBlock(fb);
       if (!parsed) continue;
       m++;
@@ -346,7 +346,7 @@ interface CompileEnv extends Omit<RefEnv, 'file' | 'chapterNumber'> {
 
 /** `markdown` is the unit's text after statement numbering. */
 function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string): string {
-  const sc = scan(protectDisplayMathBrackets(markdown));
+  const sc = scan(protectDisplayMathBrackets(dropUnclosedDisplay(markdown)));
   const byIndex = new Map(sc.formulas.map((f) => [f.index, f]));
   const refEnv: RefEnv = { ...env, file: unit.id, chapterNumber: number };
   const out: string[] = [];
@@ -684,10 +684,16 @@ export function compileBook(input: BookInput): CompiledBook {
     const s = sectionNumbers[nodeId];
     return s ? s.chapter * 10000 + s.paragraph : Number.POSITIVE_INFINITY;
   };
+  // An extra whose check failed does not ship. The author sees it here and fixes or deletes it in Extras.
+  for (const e of input.enrichments) {
+    if (e.status !== 'issue') continue;
+    const title = typeof e.payload.title === 'string' ? e.payload.title : e.id;
+    findings.push(finding('extra-excluded', 'major', e.kind === 'ide' ? 'ide.json' : 'grafici.json', `The ${e.kind === 'ide' ? 'lab example' : 'graph'} "${title}" failed its check and is left out of the export. Fix it in Extras or delete it.`, undefined, title));
+  }
   const payloads = (kind: 'ide' | 'graph') =>
     input.enrichments
       .map((e, i) => ({ e, i }))
-      .filter(({ e }) => e.kind === kind)
+      .filter(({ e }) => e.kind === kind && e.status !== 'issue')
       .sort((a, b) => orderOf(a.e.nodeId) - orderOf(b.e.nodeId) || a.i - b.i)
       .map(({ e }) => e.payload);
   if (wanted.ide) files['ide.json'] = `${JSON.stringify(payloads('ide').map(plainLabText), null, 2)}\n`;

@@ -39,10 +39,11 @@ export function splitBlocks(markdown: string): Block[] {
       flush();
       continue;
     }
-    if (line.trim().startsWith('$$') && !buf.length) {
+    const single = line.trim().length > 2 && line.trim().endsWith('$$');
+    // An opening $$ with no closing one is plain text: it must not take the rest of the section with it.
+    if (line.trim().startsWith('$$') && !buf.length && (single || lines.slice(i + 1).some((l) => l.trim().endsWith('$$')))) {
       // Display math: keep until the closing $$, even across blank lines.
       const math = [line];
-      const single = line.trim().length > 2 && line.trim().endsWith('$$');
       if (!single) {
         while (++i < lines.length) {
           math.push(lines[i]);

@@ -72,3 +72,11 @@ test('empty input gives no blocks', () => {
   assert.deepEqual(splitBlocks(''), []);
   assert.equal(joinBlocks([]), '');
 });
+
+test('an unclosed $$ does not swallow the blocks after it', () => {
+  const blocks = splitBlocks('Uno.\n\nDue $$ x^2\n\nTre.\n\nQuattro.');
+  assert.deepEqual(blocks.map((b) => b.text), ['Uno.', 'Due $$ x^2', 'Tre.', 'Quattro.']);
+  const lone = splitBlocks('Uno.\n\n$$\nx^2\n\nTre.\n\nQuattro.');
+  assert.equal(lone.length, 4);
+  assert.equal(splitBlocks('Uno.\n\n$$\nx^2\n\ny\n$$\n\nDue.').length, 3, 'a paired $$ keeps its blank line');
+});

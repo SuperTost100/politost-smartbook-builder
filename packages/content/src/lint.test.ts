@@ -443,6 +443,28 @@ test('dropUnpairedBold removes the last ** of a line with an odd count, outside 
   assert.deepEqual(lintSection(fixed, { sectionId: 's', language: 'it' }).filter((f) => f.rule === 'bold-unpaired'), []);
 });
 
+test('katex: an unclosed $$ is a blocker that names the line it opens on', () => {
+  const f = find('Prima riga.\n\nSegue $$ x^2 + y\n\nAltro testo.\n\nUltimo.', 'katex')!;
+  assert.ok(f);
+  assert.equal(f.severity, 'blocker');
+  assert.equal(f.line, 3);
+  assert.match(f.message, /\$\$/);
+  assert.ok(!has('Prima.\n\n$$\nx^2\n$$\n\nDopo.', 'katex'), 'a paired multi-line $$ is fine');
+});
+
+test('katex: a stray $$ before a formula block is the one reported, whatever the formula looks like', () => {
+  const block = (body: string) => `Testo $$ x^2 + y\n\n:::formula{key="zz" label="Z"}\n${body}\n:::\n\nDopo.`;
+  for (const body of ['$$z = 1$$', '$$\nz = 1\n$$']) {
+    const f = find(block(body), 'katex')!;
+    assert.ok(f, body);
+    assert.equal(f.line, 1, `the stray $$ is on line 1 (${JSON.stringify(body)})`);
+    assert.match(f.message, /line 1 never ends/);
+  }
+  const last = find(':::formula{key="zz" label="Z"}\n$$\nz = 1\n$$\n:::\n\nUltima riga $$ x', 'katex')!;
+  assert.equal(last.line, 7);
+  assert.ok(!has('Prima.\n\n:::formula{key="zz" label="Z"}\n$$\nz = 1\n$$\n:::\n\nDopo.', 'katex'), 'no stray $$, no finding');
+});
+
 // ---- tables as KaTeX arrays, matrices and units -------------------------------------------------
 
 const TRUTH_TABLE = '$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\n0 & 0 & 0 \\\\\n0 & 1 & 0 \\\\\n1 & 0 & 0 \\\\\n1 & 1 & 1\n\\end{array}\n$$';

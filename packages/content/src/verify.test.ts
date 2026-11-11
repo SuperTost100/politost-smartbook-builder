@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFunctionGraph, numericallyEqual } from './verify.ts';
+import { checkFunctionGraph, numericallyEqual, sampleFunctionGraph } from './verify.ts';
 
 const graph = (functions: unknown[], xDomain: unknown = [-2, 2], yDomain: unknown = [-1, 5]) => ({
   id: 'g', title: 'G', type: 'function', config: { functions, xDomain, yDomain },
@@ -49,7 +49,7 @@ test('checkFunctionGraph: structural problems', () => {
   assert.equal(checkFunctionGraph(graph([{ fn: 'x' }], 'a')).ok, false);
   assert.equal(checkFunctionGraph(graph([{ fn: 'x' }], [0, 1], [3, 1])).ok, false);
   assert.equal(checkFunctionGraph(graph([{ nofn: true }])).ok, false);
-  assert.equal(checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data: [], layout: {} } }).ok, true);
+  assert.equal(checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data: [], layout: {} } }).ok, false, 'a plotly graph with no curve is a failure');
   assert.equal(checkFunctionGraph({ type: 'surface', config: {} }).ok, false);
 });
 
@@ -110,4 +110,42 @@ test('sampleFunctionGraph turns functions the reader cannot evaluate into plotly
   assert.ok(hyper.y.includes(null), 'discontinuity at 0 breaks the line');
   const bad = sampleFunctionGraph({ id: 'b', title: 'B', functions: [{ expr: 'import("fs")', label: 'x' }], xDomain: [0, 1], yDomain: [0, 1], xLabel: 'x', yLabel: 'y' });
   assert.equal(bad.ok, false);
+});
+
+test('checkFunctionGraph checks a sampled plotly graph like the generator does', () => {
+  const spec = { id: 'g', title: 'G', functions: [{ expr: 'x^2', label: 'f' }], xDomain: [0, 2] as [number, number], yDomain: [0, 4] as [number, number], xLabel: 'x', yLabel: 'y' };
+  const good = sampleFunctionGraph(spec).payload;
+  assert.equal(checkFunctionGraph(good).ok, true);
+  assert.equal(checkFunctionGraph({ ...good, config: { ...good.config, data: [] } }).ok, false, 'no curve');
+  const trace = good.config.data[0] as Record<string, unknown>;
+  const flat = { ...good, config: { ...good.config, data: [{ ...trace, y: (trace.y as number[]).map(() => 100) }] } };
+  assert.match(checkFunctionGraph(flat).detail, /never enters/);
+  const holes = { ...good, config: { ...good.config, data: [{ ...trace, y: (trace.y as number[]).map(() => null) }] } };
+  assert.equal(checkFunctionGraph(holes).ok, false, 'undefined everywhere');
+  assert.equal(checkFunctionGraph({ id: 'g', title: 'G', type: 'plotly', config: 'x' }).ok, false);
+});
+
+test('checkFunctionGraph accepts the other trace types the reader supports and reports the rest', () => {
+  const plotly = (...data: unknown[]) => checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data, layout: {} } });
+  assert.equal(plotly({ type: 'histogram', x: [1, 1, 2, 3] }).ok, true, 'a histogram has x and no y');
+  assert.equal(plotly({ type: 'histogram', y: [1, 1, 2, 3] }).ok, true, 'a horizontal histogram has y and no x');
+  assert.equal(plotly({ type: 'histogram', x: [] }).ok, false, 'a histogram without data');
+  assert.equal(plotly({ type: 'bar', x: ['a', 'b'], y: [3, 5] }).ok, true, 'a bar trace with category labels');
+  assert.equal(plotly({ type: 'bar', x: ['a', 'b'] }).ok, false, 'a bar trace without heights');
+  assert.equal(plotly({ type: 'box', y: [1, 2, 3, 9] }).ok, true);
+  assert.equal(plotly({ type: 'pie', values: [1, 2], labels: ['a', 'b'] }).ok, true);
+  assert.equal(plotly({ type: 'pie', labels: ['a', 'b'] }).ok, false, 'a pie without values');
+  assert.equal(plotly({ type: 'scatter', mode: 'lines', x: [0, 1, 2], y: [0, 1, 4] }).ok, true, 'a line trace with good data');
+  assert.equal(plotly({ x: [0, 1, 2], y: [0, 1, 4] }).ok, true, 'scatter is the default type');
+  assert.equal(plotly({ type: 'scattergl', x: [0, 1], y: [0, 1] }).ok, true, 'the reader reads scattergl as scatter');
+  const mostlyUndefined = plotly({ type: 'scatter', mode: 'lines', x: [0, 1, 2, 3], y: [null, null, null, 1] });
+  assert.equal(mostlyUndefined.ok, false);
+  assert.match(mostlyUndefined.detail, /undefined on most/);
+  assert.equal(plotly({ type: 'scatter', x: [0, 1], y: [] }).ok, false, 'a line trace without points');
+  assert.equal(plotly({ type: 'scatter', mode: 'text', x: [0], y: [0], text: ['a'] }).ok, true, 'a text-only scatter is not a curve');
+  const unsupported = plotly({ type: 'surface', z: [[1, 2], [3, 4]] });
+  assert.equal(unsupported.ok, false);
+  assert.match(unsupported.detail, /surface/);
+  assert.equal(plotly().ok, false, 'an empty graph');
+  assert.equal(plotly({ type: 'histogram', x: [1, 2] }, { type: 'scatter', y: [null, null] }).ok, false, 'one bad trace fails the graph');
 });

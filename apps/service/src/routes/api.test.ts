@@ -614,6 +614,19 @@ describe('review fixes (server)', () => {
     assert.equal(eventTypes(p.id, 'enrichment.updated').length, 2);
   });
 
+  it('6b. an edited graph is checked again and set to verified or issue', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-recheck'));
+    const eid = newId();
+    const good = { id: 'g', title: 'G', type: 'plotly', config: { data: [{ x: [0, 1, 2], y: [0, 1, 4] }], layout: { yaxis: { range: [0, 4] } } } };
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: good, status: 'issue', checks: [{ method: 'numeric', ok: false, detail: 'old' }], created_at: now() });
+    const fixed = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: good })).body;
+    assert.equal(fixed.status, 'verified');
+    assert.equal(fixed.checks[0].ok, true);
+    const broken = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: { ...good, config: { data: [], layout: {} } } })).body;
+    assert.equal(broken.status, 'issue');
+    assert.match(broken.checks[0].detail, /at least one curve/);
+  });
+
   it('7. the generate route forwards scope.nodeIds', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('node-scope'));
     await t.req('POST', `/api/projects/${p.id}/runs`, { kind: 'generate', scope: { nodeIds: ['s3'] } });
