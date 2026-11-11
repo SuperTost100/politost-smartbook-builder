@@ -94,16 +94,27 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     if (!p) return '';
     return `[${id}]\n${evidenceText(ctx, { id: p.id as string, projectId, nodeId: id, provider: p.provider as 'local', query: '', answer: '', notes: json(p.notes, []), createdAt: '' }, max).notes}`;
   };
-  // The second opinion reads only the sections that have findings.
-  const contextFor = (ids: Set<string>) => {
-    const involved = sections.filter((x) => ids.has(x.s.id) || ids.has(chapterId));
+  // The summary the section's draft task recorded for the writers of later sections: what a reviewer needs of a section it does not read in full.
+  const summaryOf = (x: (typeof sections)[number]) => {
+    const done = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'section.draft' AND state = 'succeeded' AND json_extract(input, '$.nodeId') = ? ORDER BY finished_at DESC LIMIT 1`, projectId, x.s.id);
+    return json<{ summary?: string }>(done?.result, {}).summary || x.s.objectives.join('; ');
+  };
+  // The second opinion reads only the sections that have findings. A finding filed under no section (a chapter-level one)
+  // belongs to the sections that hold its quote; only when none does, every section is shown.
+  const contextFor = (ids: Set<string>, quotes: string[] = []) => {
+    const sectionIds = new Set([...ids].filter((id) => id !== chapterId));
+    if (ids.has(chapterId)) {
+      const holding = sections.filter((x) => quotes.some((q) => quoteInBlock(q, x.head!.markdown)));
+      for (const x of holding.length ? holding : sections) sectionIds.add(x.s.id);
+    }
+    const involved = sections.filter((x) => sectionIds.has(x.s.id));
     return { text: truncate(involved.map(sectionText).join('\n\n'), 100_000), evidence: truncate(involved.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), 30_000) };
   };
 
   if (mode === 'recheck') {
     const open = ctx.db.all<{ id: string; node_id: string; severity: Severity; quote: string; message: string; suggestion: string }>(
       `SELECT id, node_id, severity, quote, message, suggestion FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
-    const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: open.map((o) => ({ ...o, sectionId: o.node_id })), ...contextFor(new Set(open.map((o) => o.node_id))) });
+    const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: open.map((o) => ({ ...o, sectionId: o.node_id })), ...contextFor(new Set(open.map((o) => o.node_id)), open.map((o) => o.quote)) });
     ctx.db.tx(() => {
       for (const d of opinion.dropped) ctx.db.run(`UPDATE review_issues SET status = 'dismissed', resolution = ? WHERE id = ?`, notRealResolution(d.reason), d.finding.id);
       for (const k of opinion.kept) ctx.db.run('UPDATE review_issues SET severity = ? WHERE id = ?', k.severity, k.id);
@@ -160,12 +171,15 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
       for (const i of call.data.issues) raw.push({ ...i, sectionId: x.s.id });
     }
   } else if (full || changedText) {
-    // Text that changed only in blocks already reviewed (or not at all) needs no model call.
+    // Text that changed only in blocks already reviewed (or not at all) needs no model call. A review of changed text gets the
+    // sections that changed in full, the others as their summaries, and the evidence of the changed sections only.
+    const shown = full ? sections : sections.filter(({ s }) => changedBlocks.get(s.id)!.length);
     const call = await review({
-      text: sections.map(sectionText).join('\n\n'), evidence: sections.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), objectives: objectivesOf(chapter.sections), handled: handledFor(new Set(reviewNodes)),
+      text: full ? sections.map(sectionText).join('\n\n') : sections.map((x) => (shown.includes(x) ? sectionText(x) : `=== [${x.s.id}] ${x.s.title} (reviewed before, summary only) ===\n${summaryOf(x)}`)).join('\n\n'),
+      evidence: shown.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), objectives: objectivesOf(chapter.sections), handled: handledFor(new Set(reviewNodes)),
       changes: full
         ? 'This is a full review: review all of the text.'
-        : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored. Report only blockers and majors: a minor issue is dropped without being read, so do not spend words on one.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`,
+        : `SINCE THE LAST REVIEW only the passages below are new or rewritten. Sections that did not change are shown as short summaries for context. Report only problems inside these passages, quoting them; anything else is ignored. Report only blockers and majors: a minor issue is dropped without being read, so do not spend words on one.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`,
     });
     model = call.route.model;
     raw.push(...call.data.issues);
@@ -187,7 +201,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     if (settled.some((x) => x.node_id === nodeId && sameQuote(x.quote, i.quote))) { skippedSettled++; continue; }
     candidates.push({ ...i, sectionId: nodeId });
   }
-  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId))) });
+  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
   const compileIssues: { nodeId: string; severity: string; rule: string; quote: string; message: string }[] = [];

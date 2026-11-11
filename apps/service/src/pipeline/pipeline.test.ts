@@ -1451,6 +1451,37 @@ describe('the review converges', () => {
     assert.equal(full.issues, 1);
   });
 
+  test('a review of changed text sends the changed section in full, the others as summaries, and the evidence of the changed section only', async () => {
+    const ids = ['s1', 's2', 's3', 's4'];
+    seedOutline([['c1', ids]]);
+    const heads = new Map<string, string>();
+    const bodies = new Map<string, string>();
+    const runId = newId();
+    ctx.db.insert('runs', { id: runId, project_id: P, kind: 'generate', status: 'completed', snapshot: {}, created_at: now() });
+    for (const id of ids) {
+      const body = Array.from({ length: 12 }, (_, k) => `Paragrafo ${k} della sezione ${id}: ${'testo lungo '.repeat(40)}`).join('\n\n');
+      bodies.set(id, body);
+      heads.set(id, seedRevision(id, body));
+      ctx.db.insert('evidence_packets', { id: newId(), project_id: P, node_id: id, provider: 'local', query: 'q', answer: '', notes: Array.from({ length: 8 }, (_, k) => ({ id: `n${k}`, quote: `Citazione ${id} ${k} ${'fonte '.repeat(60)}`, resourceId: null, page: null, url: 'https://x.example', verified: true, claim: '' })), created_at: now() });
+      ctx.db.insert('tasks', { id: newId(), run_id: runId, project_id: P, kind: 'section.draft', label: 'd', key: `draft:${id}`, input: { nodeId: id }, state: 'succeeded', result: { summary: `Riassunto di ${id}.` }, pool: 'writer', attempts: 1, max_attempts: 3, created_at: now(), finished_at: now() });
+    }
+    fake.next(answer({ issues: [] }));
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, heads.get('s2')!);
+    seedRevision('s2', bodies.get('s2')!.replace('Paragrafo 3', 'Paragrafo tre'));
+    fake.next(answer({ issues: [] }));
+    await review();
+    const [a, b] = [fake.calls[0], fake.calls[1]].map((c) => (c.system ?? '').length + c.prompt.length);
+    const prompt = fake.calls[1].prompt;
+    assert.match(prompt, /=== \[s1\] Sezione 1\.1 \(reviewed before, summary only\) ===\nRiassunto di s1\./);
+    assert.doesNotMatch(prompt, /Paragrafo 5 della sezione s1/);
+    assert.match(prompt, /Paragrafo 5 della sezione s2/);
+    assert.match(prompt, /Citazione s2 3/);
+    assert.doesNotMatch(prompt, /Citazione s1 3|Citazione s3 3/);
+    assert.ok(b < a / 2, `the second prompt (${b}) is less than half the first (${a})`);
+  });
+
   test('the reviewer cannot raise the style categories, and issues stored with them still load', () => {
     assert.equal(reviewSchema.safeParse({ issues: [{ sectionId: 's1', quote: 'q', severity: 'minor', category: 'clarity', message: 'm', suggestion: 's' }] }).success, false);
     assert.equal(reviewSchema.safeParse({ issues: [{ sectionId: 's1', quote: 'q', severity: 'minor', category: 'repetition', message: 'm', suggestion: 's' }] }).success, false);
@@ -1527,6 +1558,16 @@ describe('second opinion, full review and recheck', () => {
     assert.match(one, /full review of one section/);
     // A finding the model filed under another id belongs to the section it was reading.
     assert.deepEqual(issues(`status = 'open'`).map((i) => i.node_id), ['s1']);
+  });
+
+  test('the second opinion reads the sections its findings are in; a finding filed under no section goes with the section that holds its quote', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Prima sezione.');
+    seedRevision('s2', 'Seconda sezione.');
+    fake.next(answer({ issues: [finding({ sectionId: 'inventato', quote: 'Seconda sezione.' })] }), opinion(['real', 'blocker']));
+    await review();
+    assert.match(fake.calls[1].prompt, /Seconda sezione\./);
+    assert.doesNotMatch(fake.calls[1].prompt, /Prima sezione\./);
   });
 
   test('recheck gives open issues a second opinion without a new review, and the next review still compares with the last one', async () => {
