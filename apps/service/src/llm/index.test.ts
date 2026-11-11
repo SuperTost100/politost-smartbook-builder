@@ -395,6 +395,14 @@ describe('probe and connections', () => {
     assert.ok(r.ms >= 0);
   });
 
+  test('the illustrator role probes through its own default route', async () => {
+    fake.next(() => ({ structured: { kind: 'question' }, text: '{"kind":"question"}' }));
+    kit.ctx.saveSettings({ routes: DEFAULT_ROUTES });
+    const r = await probeRole(kit.ctx, 'illustrator');
+    assert.equal(r.ok, true);
+    assert.match(r.detail, /codex\/gpt-6-sol/);
+  });
+
   test('probeRole reports failure with the action', async () => {
     useRoutes('bulk', { provider: 'claude', model: 'm' });
     fake.next(() => new FunnelError('Not logged in', 'not-logged-in'));
@@ -513,7 +521,7 @@ describe('lean homes for the CLIs', () => {
 describe('call timeouts per role', () => {
   test('3 minutes for the short roles, 10 for the rest, and Antigravity keeps 10 in every role', () => {
     for (const role of ['checker', 'bulk', 'vision', 'evidence', 'editor'] as const) assert.equal(callTimeoutMs(role, route('codex')), 3 * 60_000, role);
-    for (const role of ['writer', 'planner', 'reviewer', 'exercises', 'research', 'verifier'] as const) assert.equal(callTimeoutMs(role, route('codex')), 10 * 60_000, role);
+    for (const role of ['writer', 'planner', 'reviewer', 'exercises', 'research', 'verifier', 'illustrator'] as const) assert.equal(callTimeoutMs(role, route('codex')), 10 * 60_000, role);
     assert.equal(callTimeoutMs('bulk', route('antigravity')), 10 * 60_000);
     llmTuning.callTimeoutMs = 50;
     assert.equal(callTimeoutMs('bulk', route('codex')), 50, 'a tuned limit below 3 minutes applies to every role');

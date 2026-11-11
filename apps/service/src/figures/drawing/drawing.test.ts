@@ -1,18 +1,24 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { before, describe, it } from 'node:test';
+import { after, before, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { Resvg } from '@resvg/resvg-js';
 import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { assertSafeSvg } from '../../repo/assets.ts';
-import { INK, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
+import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
 import type { DrawingEngine, DrawingResult } from './index.ts';
 import { readRssBytes } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
+
+// Every render makes its temp folders under TMPDIR. This file gets a folder of its own, so a render in another process at the
+// same moment (another test file, a running service) cannot show up in the "no sb-draw-* folder is left" checks below.
+const privateTmp = mkdtempSync(join(tmpdir(), 'sb-drawtest-'));
+process.env.TMPDIR = privateTmp;
+after(() => rmSync(privateTmp, { recursive: true, force: true }));
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const fixtureDir = join(here, 'fixtures');
@@ -21,7 +27,8 @@ const fixtureNames = readdirSync(fixtureDir).filter((f) => /\.(typ|py)$/.test(f)
 const engineOf = (file: string): DrawingEngine => (file.endsWith('.typ') ? 'typst' : 'schemdraw');
 const source = (file: string) => readFileSync(join(fixtureDir, file), 'utf8');
 
-const tempDirs = () => readdirSync(tmpdir()).filter((n) => n.startsWith('sb-draw-'));
+/** The render folders that exist now: only this file's renders can make them. */
+const tempDirs = () => readdirSync(privateTmp).filter((n) => n.startsWith('sb-draw-'));
 const typst = (src: string, extra: { timeoutMs?: number } = {}) => renderDrawing({ engine: 'typst', source: src, ...extra });
 const python = (src: string, extra: { timeoutMs?: number } = {}) => renderDrawing({ engine: 'schemdraw', source: src, ...extra });
 const failure = (r: DrawingResult) => {
@@ -132,6 +139,12 @@ describe('fixtures', () => {
       assert.ok(r.width > 100 && r.width < 700, `width ${r.width}`);
     });
   }
+
+  it('a timing diagram writes its signal names in the ink, not in schemdraw\'s blue', () => {
+    const r = rendered.get('timing-diagram.py')!;
+    assert.ok(r.ok);
+    assert.doesNotMatch(r.svg, /(?:fill|stroke)(?:="|:)\s*(?:blue|#0000ff|#00f\b|rgb\(0, ?0, ?255\))/i);
+  });
 
   it('match the stored snapshot (run with UPDATE_DRAWING_SNAPSHOTS=1 after a deliberate renderer upgrade)', () => {
     const now: Record<string, { counts: Record<string, number>; width: number; height: number }> = {};
@@ -302,6 +315,19 @@ describe('sandbox', () => {
     assert.ok(['memory', 'compile', 'crash'].includes(big.kind), big.kind);
     assert.deepEqual(tempDirs(), before);
     assert.ok((await python(source('rc-schemdraw.py'))).ok, 'the next render works');
+  });
+});
+
+describe('parallel renders', () => {
+  it('never has more renders running at once than the limit, whoever asks', async () => {
+    let peak = 0;
+    const timer = setInterval(() => { peak = Math.max(peak, tempDirs().length); }, 3);
+    const results = await Promise.all(Array.from({ length: 8 }, () => typst('#circle(radius: 5pt)')));
+    clearInterval(timer);
+    assert.ok(results.every((r) => r.ok));
+    assert.ok(peak >= 1, 'the sampling saw renders in flight');
+    assert.ok(peak <= MAX_PARALLEL_RENDERS, `${peak} renders ran at once, the limit is ${MAX_PARALLEL_RENDERS}`);
+    assert.deepEqual(tempDirs(), []);
   });
 });
 

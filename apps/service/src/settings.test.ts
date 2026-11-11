@@ -13,7 +13,11 @@ test('settings saved before new roles existed still load, with defaults for the 
   ctx.db.run(`INSERT INTO settings (key, value) VALUES ('settings', ?)`, JSON.stringify(old));
   const s = ctx.settings();
   assert.deepEqual(s.routes.checker, DEFAULT_ROUTES.checker);
+  assert.deepEqual(s.routes.illustrator, DEFAULT_ROUTES.illustrator, 'a stored row without the illustrator gets its default');
+  assert.equal(s.routes.illustrator.primary.model, 'gpt-6-sol');
+  assert.equal(s.routes.illustrator.fallback?.model, 'claude-sonnet-5-5');
   const saved = ctx.saveSettings({ routes: { writer: DEFAULT_ROUTES.editor } as never });
   assert.deepEqual(saved.routes.writer, DEFAULT_ROUTES.editor);
   assert.deepEqual(saved.routes.reviewer, DEFAULT_ROUTES.reviewer);
+  assert.deepEqual(saved.routes.illustrator, DEFAULT_ROUTES.illustrator);
 });
