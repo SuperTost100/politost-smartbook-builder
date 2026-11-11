@@ -174,15 +174,19 @@ function runDraftingNodes(ctx: AppContext, projectId: string, nodeIds: string[])
 }
 
 /**
- * Evidence and draft tasks of sections. A chapter's exam guide has no evidence task: it is written from the exam questions
- * and waits for the drafts of the chapter's other sections, so the examples it names can link to finished sections.
+ * Evidence and draft tasks of sections. The draft of a section waits for the draft of the section before it in the same
+ * chapter, so its writer reads that section's summary and formula keys instead of writing at the same moment. Evidence is
+ * gathered for all sections at once, and chapters stay parallel. In a scoped run the previous section is not in the list
+ * when it is already written, and then there is nothing to wait for. A chapter's exam guide has no evidence task: it is
+ * written from the exam questions and waits for the drafts of the chapter's other sections, so the examples it names can
+ * link to finished sections.
  */
 function sectionSpecs(sections: OutlineSection[], after: string[], evidencePool: string): TaskSpec[] {
   const specs: TaskSpec[] = [];
   const content = sections.filter((s) => s.role !== 'exam-guide');
-  for (const s of content) {
+  for (const [i, s] of content.entries()) {
     specs.push({ kind: 'section.evidence', key: `evidence:${s.id}`, label: `Gather evidence for "${s.title}"`, input: { nodeId: s.id }, deps: after, pool: evidencePool });
-    specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`], pool: 'writer' });
+    specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [`evidence:${s.id}`, ...(i > 0 ? [`draft:${content[i - 1].id}`] : [])], pool: 'writer' });
   }
   for (const s of sections.filter((x) => x.role === 'exam-guide')) {
     specs.push({ kind: 'section.draft', key: `draft:${s.id}`, label: `Write "${s.title}"`, input: { nodeId: s.id }, deps: [...after, ...content.map((x) => `draft:${x.id}`)], pool: 'writer' });

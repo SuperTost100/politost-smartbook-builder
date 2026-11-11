@@ -57,6 +57,11 @@ describe('projects', () => {
     const stay = await t.req('PATCH', `/api/projects/${id}`, { options: { noClaudeFallback: true } });
     assert.equal(stay.body.options.noClaudeFallback, true);
     assert.equal(stay.body.options.graphs, false);
+    assert.equal(patched.body.options.selfCheck, true, 'the writer checks its own draft by default');
+    const unchecked = await t.req('PATCH', `/api/projects/${id}`, { options: { selfCheck: false } });
+    assert.equal(unchecked.body.options.selfCheck, false);
+    assert.equal(unchecked.body.options.noClaudeFallback, true);
+    assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { selfCheck: true } })).body.options.selfCheck, true);
     assert.equal(patched.body.language, 'it', 'untouched fields keep their value');
     assert.deepEqual(patched.body.authors, ['Ada']);
 

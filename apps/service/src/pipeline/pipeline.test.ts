@@ -5,7 +5,7 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf, written, wroteCode } from '../llm/testkit.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
@@ -659,12 +659,24 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.graph:s2', 'enrich.ide:s1', 'enrich.ide:s2']);
   });
 
+  test('MATLAB code with A\\b and a string holding \\n is stored exactly as written', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'La divisione a sinistra.');
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ ide: true, labLanguage: 'matlab' }), P);
+    const code = "A = [2 1; 1 3];\nb = [3; 5];\nx = A\\b;\nfprintf('x1 = %g\\n', x(1));\nfprintf('%s\\n', 'a\\tb');";
+    fake.next(wroteCode({ id: 'sistema', title: 'Sistema', description: 'Cambia b', code, expectedOutput: 'x1 = 0.8' }));
+    assert.deepEqual(await enrichIde(ctx, startTask('enrich.ide', { nodeId: 's1', purpose: 'sistema lineare' })), { made: 1 });
+    const row = ctx.db.get<{ payload: string; status: string }>(`SELECT payload, status FROM enrichments WHERE kind = 'ide'`)!;
+    assert.equal(json<{ code: string }>(row.payload, { code: '' }).code, code);
+    assert.equal(row.status, 'verified');
+  });
+
   test('a MATLAB example is saved as matlab after numbl runs it', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Il ciclo for.');
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ ide: true, labLanguage: 'matlab' }), P);
     const t = startTask('enrich.ide', { nodeId: 's1', purpose: 'cicli' });
-    fake.next(answer({ id: 'somma', title: 'Somma', description: 'Cambia n', code: "s = 0;\nfor k = 1:4\n  s = s + k;\nend\nfprintf('s = %d\\n', s);", expectedOutput: 's = 10' }));
+    fake.next(wroteCode({ id: 'somma', title: 'Somma', description: 'Cambia n', code: "s = 0;\nfor k = 1:4\n  s = s + k;\nend\nfprintf('s = %d\\n', s);", expectedOutput: 's = 10' }));
     assert.deepEqual(await enrichIde(ctx, t), { made: 1 });
     const row = ctx.db.get<{ payload: string; status: string; checks: string }>(`SELECT payload, status, checks FROM enrichments WHERE kind = 'ide'`)!;
     assert.equal(json<{ language: string }>(row.payload, { language: '' }).language, 'matlab');
@@ -695,7 +707,7 @@ describe('2. figure files are scoped to their section', () => {
   test('two sections with the same figure key keep their own drawing and references', async () => {
     const [s1, s2] = [newId(), newId()];
     seedOutline([['c1', [s1, s2]]]);
-    fake.next(answer(draft('x^2')), answer(keepFigures(1)), answer(draft('x^3')), answer(keepFigures(1)));
+    fake.next(written(draft('x^2')), answer(keepFigures(1)), written(draft('x^3')), answer(keepFigures(1)));
     const r1 = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     const r2 = await sectionDraft(ctx, startTask('section.draft', { nodeId: s2 }));
     assert.equal(r1.status, 'current');
@@ -714,7 +726,7 @@ describe('2. figure files are scoped to their section', () => {
   test('regenerating a section replaces only its own asset (same node and file name)', async () => {
     const [s1, s2] = [newId(), newId()];
     seedOutline([['c1', [s1, s2]]]);
-    fake.next(answer(draft('x^2')), answer(keepFigures(1)), answer(draft('x^3')), answer(keepFigures(1)), answer(draft('x^4')), answer(keepFigures(1)));
+    fake.next(written(draft('x^2')), answer(keepFigures(1)), written(draft('x^3')), answer(keepFigures(1)), written(draft('x^4')), answer(keepFigures(1)));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s2 }));
     const before = ctx.db.all<{ id: string; node_id: string; path: string }>('SELECT * FROM assets ORDER BY rowid');
@@ -730,12 +742,12 @@ describe('2. figure files are scoped to their section', () => {
   test('a redraft that becomes a proposal leaves the current figure alone and names its own', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
+    fake.next(written(draft('x^2')), answer(keepFigures(1)));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     const [first] = ctx.db.all<{ id: string; filename: string; path: string }>('SELECT * FROM assets');
     const drawing = readFileSync(resolveDataPath(ctx.config, first.path), 'utf8');
     // The author saves the section while the model writes the redraft.
-    const redraft = answer(draft('x^4'));
+    const redraft = written(draft('x^4'));
     fake.next(() => {
       ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, s1);
       seedRevision(s1, `Testo dell'autore.\n\n:::image{src="assets/${first.filename}" alt="Grafico" caption="Fig"}\n:::`);
@@ -755,7 +767,7 @@ describe('2. figure files are scoped to their section', () => {
   test('assets and the revision are committed together: a failing commit leaves no asset row and no file', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
+    fake.next(written(draft('x^2')), answer(keepFigures(1)));
     ctx.db.run(`CREATE TRIGGER boom BEFORE INSERT ON content_revisions BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     await assert.rejects(sectionDraft(ctx, startTask('section.draft', { nodeId: s1 })), /disk full/);
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
@@ -769,7 +781,7 @@ describe('2. figure files are scoped to their section', () => {
   test('a retry of the same task returns its committed revision without calling the model', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
+    fake.next(written(draft('x^2')), answer(keepFigures(1)));
     const t = startTask('section.draft', { nodeId: s1, force: true });
     const first = await sectionDraft(ctx, t);
     const again = await sectionDraft(ctx, t);
@@ -1624,7 +1636,7 @@ describe('r8. excluded sources stop counting', () => {
     examsIn('in', 'S1', t); examsIn('out', 'S2', t); examsIn('out', 'S3', t);
     const [d1] = [newId()];
     seedOutline([['c1', [d1]]], { topicIds: [t] });
-    fake.next(answer({ markdown: 'Un paragrafo.', figures: [], noFigureReason: 'nessuna', summary: 's' }));
+    fake.next(written({ markdown: 'Un paragrafo.', figures: [], noFigureReason: 'nessuna', summary: 's' }));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: d1 }));
     assert.match(fake.calls.at(-1)!.prompt, /Limiti: \d+ of 1 exam sessions/);
   });
@@ -1692,7 +1704,7 @@ describe('a ready exercises source that gave no questions is split again by Prep
 });
 
 describe('chemistry figures: structures and photos', () => {
-  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry', selfCheck: false }), P));
   const fig = (o: Record<string, unknown>) => ({ key: 'acqua', kind: 'structure', caption: "Struttura di Lewis dell'acqua", alt: "Molecola d'acqua", plot: null, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null, ...o });
   const draft = (figures: unknown[], body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::') => ({
     markdown: `L'acqua ha due coppie solitarie sull'ossigeno.\n\n${body}`, figures, noFigureReason: null, summary: 'riassunto',
@@ -1702,7 +1714,7 @@ describe('chemistry figures: structures and photos', () => {
   test('a structure is drawn from SMILES, and its alt text gets the formula for the reviewer', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } })])), answer(keepFigures(1)));
+    fake.next(written(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } })])), answer(keepFigures(1)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 1);
     const a = ctx.db.get<{ filename: string; origin: string; alt: string; path: string }>('SELECT * FROM assets')!;
@@ -1717,7 +1729,7 @@ describe('chemistry figures: structures and photos', () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
     const body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/ammonio.svg" alt="x" caption="y"}\n:::\n\n:::image{src="assets/fiamma.svg" alt="x" caption="y"}\n:::';
-    fake.next(answer(draft([
+    fake.next(written(draft([
       fig({ structure: { smiles: 'not((a smiles', style: 'lewis', lonePairs: true, formula: 'H2O' } }),
       fig({ key: 'ammonio', structure: { smiles: '[NH4+]', style: 'lewis', lonePairs: true, formula: 'NH3' } }),
       fig({ key: 'fiamma', kind: 'photo', photo: { query: 'sodium flame test', mustShow: 'a yellow sodium flame' } }),
@@ -1737,11 +1749,11 @@ describe('chemistry figures: structures and photos', () => {
   test('the writer is told about photos only when a stock key is set', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer({ markdown: 'Testo.', figures: [], noFigureReason: 'Solo definizioni.', summary: 'r' }));
+    fake.next(written({ markdown: 'Testo.', figures: [], noFigureReason: 'Solo definizioni.', summary: 'r' }));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.noFigureReason, 'Solo definizioni.');
-    assert.match(fake.calls[0].prompt, /kind: "structure"|structure: a molecule/);
-    assert.doesNotMatch(fake.calls[0].prompt, /photo: a stock photo/);
+    assert.match(fake.calls[0].system ?? '', /kind: "structure"|structure: a molecule/);
+    assert.doesNotMatch(fake.calls[0].system ?? '', /photo: a stock photo/);
   });
 
   test('a fix for a useless figure can remove it, so the issue does not stay open for ever', async () => {
@@ -1776,7 +1788,7 @@ describe('chemistry figures: structures and photos', () => {
 });
 
 describe('figures pass: figures for written sections, text untouched', () => {
-  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry', selfCheck: false }), P));
   const levels = {
     yLabel: 'Energia', columns: [{ label: 'Reagenti' }, { label: 'Prodotti' }],
     levels: [{ key: 'r', column: 0, energy: 0, label: 'H2 + 1/2 O2', boxes: null, electrons: null }, { key: 'p', column: 1, energy: -286, label: 'H2O', boxes: null, electrons: null }],
@@ -1931,7 +1943,7 @@ describe('figures are checked where they are born', () => {
   test('a drafted figure the check drops is not built, its block goes, and the note says why', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(twoFigures()), answer(verdict(true, false)));
+    fake.next(written(twoFigures()), answer(verdict(true, false)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 1);
     assert.deepEqual(r.figureProblems, ['b: dropped by the check (Ripete il testo.)']);
@@ -1947,7 +1959,7 @@ describe('figures are checked where they are born', () => {
   test('a draft that proposes no figure makes no check call', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer({ markdown: 'Solo definizioni.', figures: [], noFigureReason: null, summary: 'r' }));
+    fake.next(written({ markdown: 'Solo definizioni.', figures: [], noFigureReason: null, summary: 'r' }));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(fake.calls.length, 1);
   });
@@ -1955,10 +1967,10 @@ describe('figures are checked where they are born', () => {
   test('the check also runs in generous mode, where it drops decorative figures', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous' }), P);
-    fake.next(answer(twoFigures()), answer(verdict(false, false)));
+    ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous', selfCheck: false }), P);
+    fake.next(written(twoFigures()), answer(verdict(false, false)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
-    assert.match(fake.calls[0].prompt, /Most sections have at least one place where a figure shows something faster than words/);
+    assert.match(fake.calls[0].system ?? '', /Most sections have at least one place where a figure shows something faster than words/);
     assert.equal(r.figures, 0);
     assert.equal(r.figureProblems.length, 2);
     assert.doesNotMatch(current(s1), /:::image/);
@@ -1967,7 +1979,7 @@ describe('figures are checked where they are born', () => {
   test('when the check cannot run, the draft keeps its figures and says so', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(twoFigures()), () => new TaskError('rete assente', 'temporary'));
+    fake.next(written(twoFigures()), () => new TaskError('rete assente', 'temporary'));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 2);
     assert.match(r.figureProblems[0], /could not run/);

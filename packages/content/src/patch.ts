@@ -88,6 +88,56 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
   return { blocks: out, kept: [...kept].sort((a, b) => a - b), reverted };
 }
 
+/** Opening lines of ::: blocks, by block name. */
+const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::\s*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
+const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+
+/**
+ * Why a rewrite of a whole section must not replace the original, or null when it may. A rewrite loses structure when it
+ * drops or rewrites a heading, drops a formula key, has fewer ::: blocks of some kind than the original, drops an image
+ * or leaves a ::: fence open.
+ */
+export function lostStructure(before: string, after: string): string | null {
+  const kept = headings(after);
+  const heading = headings(before).find((h) => !kept.includes(h));
+  if (heading) return `it drops or rewrites the heading "${heading}"`;
+  const keys = formulaKeys(after);
+  const key = formulaKeys(before).find((k) => !keys.includes(k));
+  if (key) return `it drops the formula "${key}"`;
+  const blocks = directiveNames(after);
+  for (const name of new Set(directiveNames(before))) {
+    if (blocks.filter((n) => n === name).length < directiveNames(before).filter((n) => n === name).length) return `it drops a :::${name} block`;
+  }
+  const sources = imageSources(after);
+  const image = imageSources(before).find((src) => !sources.includes(src));
+  if (image) return `it drops the image "${image}"`;
+  if (fenceBalance(after) !== 0 && fenceBalance(after) !== fenceBalance(before)) return 'it leaves a ::: fence open';
+  return null;
+}
+
+/** Prose only: display and inline math and the opening line of a ::: block hold LaTeX commands and attributes, which are no vocabulary. */
+const withoutMath = (s: string) => s.replace(/\$\$[\s\S]*?\$\$/g, ' ').replace(/\$[^$\n]*\$/g, ' ').replace(/^[ \t]*:::.*$/gm, ' ');
+export const paragraphWords = (s: string | undefined) => withoutMath(s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+const paragraphsOf = (md: string) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+
+/**
+ * A rewrite of a whole section sometimes starts or ends with a note about the rewrite ("I fixed the step in ..."), which would
+ * go into the book. True when the first or the last paragraph of `after` has few words in common with the same paragraph of
+ * `before` (a short one must use only words the old section has). Only prose counts: a corrected number or formula,
+ * inline or display, passes.
+ */
+export function addsCommentary(before: string, after: string): boolean {
+  const old = paragraphsOf(before);
+  const next = paragraphsOf(after);
+  const known = new Set(paragraphWords(before));
+  return [[old[0], next[0]], [old.at(-1), next.at(-1)]].some(([x, y]) => {
+    const words = paragraphWords(y);
+    if (!words.length) return false;
+    const sameParagraph = new Set(paragraphWords(x));
+    return words.length >= 4 ? words.filter((w) => sameParagraph.has(w)).length / words.length < 0.5 : words.some((w) => !known.has(w));
+  });
+}
+
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** The first 60 whitespace-normalised characters of a quote: what issues are matched on. */
