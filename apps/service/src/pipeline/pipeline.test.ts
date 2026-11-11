@@ -20,7 +20,7 @@ import { patchPrompt, reviewSchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, rejectProposal, insertProposal, listIssues, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, saveHuman, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -1480,6 +1480,36 @@ describe('the review converges', () => {
     assert.match(prompt, /Citazione s2 3/);
     assert.doesNotMatch(prompt, /Citazione s1 3|Citazione s3 3/);
     assert.ok(b < a / 2, `the second prompt (${b}) is less than half the first (${a})`);
+  });
+
+  test('a round that leaves no blocker or major says so, in the task result and in the project summary the Review screen reads', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.\n\nAltro blocco.');
+    assert.equal(getProjectSummary(ctx, P).review, null, 'nothing reviewed yet');
+    fake.next(answer({ issues: [finding({ severity: 'major' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] }));
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    assert.deepEqual([first.clean, first.openSerious], [false, 1]);
+    assert.equal(getProjectSummary(ctx, P).review!.clean, false);
+    assert.equal(getProjectSummary(ctx, P).review!.openSerious, 1);
+
+    // The author fixes the issue by hand. The next review reads the new text and finds nothing.
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review'`);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
+    seedRevision('s1', 'Una frase corretta.\n\nAltro blocco.');
+    assert.equal(getProjectSummary(ctx, P).review!.clean, false, 'changed text has not been reviewed');
+    fake.next(answer({ issues: [] }));
+    const second = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(second));
+    assert.deepEqual([second.clean, second.openSerious], [true, 0]);
+    assert.deepEqual(getProjectSummary(ctx, P).review, { clean: true, openSerious: 0, reviewedAt: getProjectSummary(ctx, P).review!.reviewedAt });
+
+    // A blocker from another source, or text written after the review, ends it.
+    ctx.db.insert('review_issues', { id: 'lint1', project_id: P, node_id: 's1', source: 'lint', severity: 'blocker', category: 'katex', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    assert.equal(getProjectSummary(ctx, P).review!.clean, false);
+    ctx.db.run(`UPDATE review_issues SET status = 'accepted' WHERE id = 'lint1'`);
+    assert.equal(getProjectSummary(ctx, P).review!.clean, true);
+    assert.equal((await review()).clean, true, 'a review with no new text reports it too');
   });
 
   test('the reviewer cannot raise the style categories, and issues stored with them still load', () => {

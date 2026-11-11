@@ -1,6 +1,6 @@
-import type { IssueSeverity, ReviewIssue } from '@smartbuilder/domain';
+import type { IssueSeverity, ReviewIssue, ReviewState } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
-import { newId, now } from '../db/db.ts';
+import { json, newId, now } from '../db/db.ts';
 import { notFound } from './errors.ts';
 import type { Rec } from './util.ts';
 
@@ -89,4 +89,35 @@ export function replaceLintIssues(
 /** Issues that block an approved export: blockers still open or waiting on a proposed fix. */
 export function countUnresolvedBlockers(ctx: AppContext, projectId: string): number {
   return Number(ctx.db.get<Rec>(`SELECT COUNT(*) AS n FROM review_issues WHERE project_id = ? AND severity = 'blocker' AND status IN ('open', 'proposed')`, projectId)?.n ?? 0);
+}
+
+/** Blockers and majors still open or waiting as a proposal, in the given nodes or in the whole book. */
+export function countOpenSerious(ctx: AppContext, projectId: string, nodeIds?: string[]): number {
+  const scope = nodeIds ? ` AND node_id IN (${nodeIds.map(() => '?').join(',')})` : '';
+  return Number(ctx.db.get<Rec>(`SELECT COUNT(*) AS n FROM review_issues WHERE project_id = ? AND severity IN ('blocker', 'major') AND status IN ('open', 'proposed')${scope}`, projectId, ...(nodeIds ?? []))?.n ?? 0);
+}
+
+/**
+ * The state of the review loop for the book (see ReviewState). A chapter counts as reviewed when its latest review read
+ * exactly the section revisions that are current now, so text changed after a review makes the book unreviewed again.
+ * Null when no chapter was ever reviewed.
+ */
+export function reviewState(ctx: AppContext, projectId: string): ReviewState | null {
+  const latest = new Map<string, { reviewed: string; finishedAt: string }>();
+  for (const t of ctx.db.all<{ chapter: string; reviewed: string; finished_at: string }>(
+    `SELECT json_extract(input, '$.chapterId') AS chapter, json_extract(result, '$.reviewed') AS reviewed, finished_at FROM tasks
+     WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(result, '$.reviewed') IS NOT NULL ORDER BY finished_at DESC, rowid DESC`, projectId)) {
+    if (!latest.has(t.chapter)) latest.set(t.chapter, { reviewed: t.reviewed, finishedAt: t.finished_at });
+  }
+  if (!latest.size) return null;
+  const outlineRow = ctx.db.get<Rec>('SELECT o.outline FROM outline_revisions o JOIN projects p ON p.outline_rev_id = o.id WHERE p.id = ?', projectId);
+  const chapters = json<{ chapters?: { id: string; sections?: { id: string }[] }[] }>(outlineRow?.outline, {}).chapters ?? [];
+  const heads = new Map(ctx.db.all<Rec>(`SELECT node_id, id FROM content_revisions WHERE project_id = ? AND status = 'current' AND kind = 'section'`, projectId).map((r) => [r.node_id as string, r.id as string]));
+  const reviewedNow = chapters.every((c) => {
+    const current = (c.sections ?? []).map((s) => heads.get(s.id)).filter((id): id is string => !!id).sort().join(',');
+    return !current || latest.get(c.id)?.reviewed === current;
+  });
+  const openSerious = countOpenSerious(ctx, projectId);
+  const reviewedAt = [...latest.values()].map((l) => l.finishedAt).sort().at(-1)!;
+  return { clean: reviewedNow && openSerious === 0, openSerious, reviewedAt };
 }

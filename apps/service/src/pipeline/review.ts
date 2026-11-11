@@ -2,7 +2,7 @@
 import { applyGuardedChanges, compileChapter, dropReferences, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
 import { outlineSchema, subjectProfileOf } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
-import { issuesChanged } from '../repo/issues.ts';
+import { countOpenSerious, issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
@@ -60,6 +60,8 @@ const notRealResolution = (reason: string) => `Second opinion: not a real proble
  * already open, without a new review. Every finding gets the second opinion before it is stored.
  */
 export interface ReviewResult {
+  /** The round left no open blocker or major in the chapter (any source), and how many there are. See ReviewState for the book as a whole. */
+  clean?: boolean; openSerious?: number;
   skipped?: boolean | string; reused?: boolean; reviewed?: string; mode?: string; full?: boolean; model?: string; verifier?: string;
   issues?: number; dropped?: number; lowered?: number; checked?: boolean; rechecked?: number; skippedSettled?: number; outOfScope?: number; minorsDropped?: number; compileIssues?: number;
 }
@@ -79,8 +81,10 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const prior = ctx.db.get<{ result: string }>(`SELECT result FROM tasks WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? AND json_extract(result, '$.reviewed') IS NOT NULL ORDER BY finished_at DESC LIMIT 1`, projectId, chapterId);
   const priorReviewed = prior ? json<{ reviewed?: string }>(prior.result, {}).reviewed : undefined;
   // Re-reviewing identical text wastes quota.
-  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force) return { reused: true, reviewed };
   const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
+  // What the round left: blockers and majors still open (or waiting as a proposal) in the chapter, from every source.
+  const standing = () => { const openSerious = countOpenSerious(ctx, projectId, reviewNodes); return { clean: openSerious === 0, openSerious }; };
+  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force) return { reused: true, reviewed, ...standing() };
   const inNodes = reviewNodes.map(() => '?').join(',');
   const notation = outline!.outline.notation;
   // The reviewer learns what the exam covers, so it flags extra material as minor instead of inventing scope.
@@ -121,7 +125,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     });
     issuesChanged(ctx, projectId, open.map((o) => o.id));
     // The text was not reviewed again: the next review compares with the same revisions as before.
-    return { rechecked: open.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked, model: opinion.model, ...(priorReviewed ? { reviewed: priorReviewed } : {}) };
+    return { rechecked: open.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked, model: opinion.model, ...standing(), ...(priorReviewed ? { reviewed: priorReviewed } : {}) };
   }
 
   // After the first review only the blocks written since the last one are reviewed. Re-reading text that was already reviewed
@@ -251,7 +255,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   ctx.events.emit('issue.created', { chapterId, count: opinion.kept.length }, { projectId, runId: t.task.runId });
   return {
     issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked,
-    skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode, full, compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model,
+    skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode, full, compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model, ...standing(),
   };
 }
 
