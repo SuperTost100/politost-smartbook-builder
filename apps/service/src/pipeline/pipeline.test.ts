@@ -722,6 +722,26 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     assert.deepEqual({ ...ctx.db.get<Record<string, unknown>>('SELECT status, resolution FROM review_issues') }, { status: 'fixed', resolution: 'The graph was redrawn and passes its check.' });
   });
 
+  test('a graph the author edited or deleted during the redraw is left alone and the issue stays open', async () => {
+    const { enrichment, issue } = await failing();
+    const input = { nodeId: 's1', purpose: 'p', force: true, replaceId: enrichment, issueIds: [issue] };
+    const edited = { ...graph, title: "Grafico dell'autrice" };
+    fake.next(() => { ctx.db.run('UPDATE enrichments SET payload = ? WHERE id = ?', JSON.stringify(edited), enrichment); return answer(graph)(); });
+    const r = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(r.made, 0);
+    assert.match(String(r.skipped), /edited the graph/);
+    assert.deepEqual(json(ctx.db.get<{ payload: string }>('SELECT payload FROM enrichments')!.payload, {}), edited);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues')!.resolution, /edited the graph/);
+
+    fake.next(() => { ctx.db.run('DELETE FROM enrichments WHERE id = ?', enrichment); return answer(graph)(); });
+    const gone = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(gone.made, 0);
+    assert.match(String(gone.skipped), /deleted the graph/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0, 'a deleted graph is not recreated');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
+  });
+
   test('an issue whose failing graph is gone, or passes now, closes without a model call', async () => {
     const { enrichment, issue } = await failing();
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);

@@ -68,6 +68,19 @@ function existingEnrichment(ctx: AppContext, projectId: string, nodeId: string, 
   return ctx.db.get('SELECT id FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = ?', projectId, nodeId, kind);
 }
 
+/** What an enrichment row holds that an edit changes. shortcut: the row has no revision column, so a comparison of the stored texts stands in for one, upgrade by adding an updated_at column. */
+function enrichmentState(ctx: AppContext, id: string) {
+  return ctx.db.get<{ payload: string; status: string; checks: string }>('SELECT payload, status, checks FROM enrichments WHERE id = ?', id);
+}
+
+/** Why a graph can no longer be replaced: it was deleted, or its stored state is not what it was when the model started. */
+function changedSince(before: ReturnType<typeof enrichmentState>, now: ReturnType<typeof enrichmentState>): string | undefined {
+  if (!now) return 'the author deleted the graph while it was being redrawn';
+  if (!before) return 'the graph was no longer there when the redraw started';
+  if (before.payload !== now.payload || before.status !== now.status || before.checks !== now.checks) return 'the author edited the graph while it was being redrawn';
+  return undefined;
+}
+
 /** One graph for one section. Idempotent: skipped when the section already has a graph. */
 export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
@@ -76,6 +89,9 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const head = headRevision(ctx, projectId, nodeId);
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
+  // A redraw replaces one graph. What it looked like before the model ran is what the author's edits are measured against.
+  const replaceId = t.task.input.replaceId as string | undefined;
+  const before = replaceId ? enrichmentState(ctx, replaceId) : undefined;
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const sampled = sampleFunctionGraph({
     id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
@@ -90,14 +106,24 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
       setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
       return { made: 0, failed: sampled.detail };
     }
-    const replaceId = t.task.input.replaceId as string | undefined;
-    const old = replaceId ? ctx.db.get('SELECT id FROM enrichments WHERE id = ?', replaceId) : undefined;
-    if (old) {
-      ctx.db.update('enrichments', replaceId!, { payload: sampled.payload, status: 'verified', checks });
+    if (replaceId) {
+      // Work done while the author changed the same graph is never applied over it: the check and the write are one transaction.
+      const stale = ctx.db.tx(() => {
+        const reason = changedSince(before, enrichmentState(ctx, replaceId));
+        if (!reason) ctx.db.update('enrichments', replaceId, { payload: sampled.payload, status: 'verified', checks });
+        return reason;
+      });
+      if (stale) {
+        setIssuesStatus(ctx, projectId, issueIds, 'open', `The redrawn graph was not applied: ${stale}`);
+        return { made: 0, skipped: stale };
+      }
       ctx.events.emit('enrichment.updated', { enrichmentId: replaceId, nodeId, kind: 'graph' }, { projectId });
-    } else saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+      setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
+      return { made: 1, replaced: true };
+    }
+    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
-    return { made: 1, replaced: !!old };
+    return { made: 1, replaced: false };
   }
   saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
   return { made: 1 };
