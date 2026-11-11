@@ -150,22 +150,23 @@ async function topicsMapLocked(ctx: AppContext, t: TaskContext) {
           exam_sessions: 0, priority: locked.get(id) ?? 'normal', priority_locked: locked.has(id) ? 1 : 0,
         });
       }
-      // New topics: every authentic exam question and exercise-collection item is classified again against them.
+      // New topics: every authentic exam question is classified again against them, and collection items lose the old topic ids.
       ctx.db.run(`UPDATE questions SET topic_ids = '[]', updated_at = ? WHERE project_id = ? AND origin = 'authentic' AND kind IN ('exam', 'exercise')`, now(), projectId);
       ctx.db.run('UPDATE projects SET topic_fingerprint = ? WHERE id = ?', fingerprint, projectId);
     });
     topicCount = data.topics.length;
   }
 
-  // Classify authentic questions that have no topics yet, in batches, exams first. Exercise-collection items only feed the
-  // examples given to the exercise writer: priorities (computePriorities) count exam sessions only.
-  // A classified item has topics or ['unmapped'], so each one is read by the model once.
+  // Classify authentic exam questions that have no topics yet, in batches: exam frequency per topic drives the outline.
+  // Exercise-collection items are not classified here. They only feed the examples given to the exercise writer, which
+  // finds them by full-text search when a chapter's exercises are written (practice.ts); items classified by an earlier
+  // version keep their topics. A classified question has topics or ['unmapped'], so each one is read by the model once.
   const topics = ctx.db.all<{ id: string; name: string }>('SELECT id, name FROM topics WHERE project_id = ?', projectId);
   const keyOf = (id: string) => id.slice(9);
   const topicList = topics.map((tp) => `${keyOf(tp.id)}: ${tp.name}`).join('\n');
   // Only sources that are still in the book count; each question is read with its rev so an edit made while the model works wins.
   const pending = ctx.db.all<{ id: string; statement: string; exam_group: string | null; rev: number }>(
-    `SELECT id, statement, exam_group, rev FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind IN ('exam', 'exercise') AND ${COUNTED_QUESTION_SQL} ORDER BY kind = 'exam' DESC, rowid`, projectId);
+    `SELECT id, statement, exam_group, rev FROM questions WHERE project_id = ? AND topic_ids = '[]' AND origin = 'authentic' AND kind = 'exam' AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId);
   let classified = 0;
   for (const group of chunk(pending, 20)) {
     if (t.signal.aborted) break;
