@@ -44,7 +44,7 @@ describe('drawing figures', () => {
     assert.equal(row.mime, 'image/svg+xml');
     assert.equal(row.filename, 'node0001-cerchio.svg');
     assert.deepEqual(row.spec, { kind: 'drawing', engine: 'typst', source: GOOD, shows: 'A circle with a radius of 8 pt.', family: 'sketch', symbols: 'european' });
-    assert.match(String((row.checks as { detail: string }[])[0].detail), /Drawn by the illustrator in typst: compiled after 1 attempt, look turn: ok/);
+    assert.match(String((row.checks as { detail: string }[])[0].detail), /^Drawn by the illustrator in typst: compiled on the first attempt, then the model looked at its render and left it as it was\.$/);
     assert.match(readFileSync(resolveDataPath(kit.ctx.config, String(row.path)), 'utf8'), /<svg[^>]*data-sb-ink="dark"/);
     assert.equal(built.renames.get('cerchio'), 'node0001-cerchio.svg');
   });

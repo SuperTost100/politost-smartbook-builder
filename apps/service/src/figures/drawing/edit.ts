@@ -8,7 +8,7 @@ import type { AppContext } from '../../context.ts';
 import { getAsset, assetFile } from '../../repo/assets.ts';
 import { badInput } from '../../repo/errors.ts';
 import { loadProject } from '../../pipeline/util.ts';
-import { illustrate, type LookOutcome } from './illustrator.ts';
+import { illustrate, whatHappened, type LookOutcome } from './illustrator.ts';
 import { renderDrawing } from './index.ts';
 
 const specSchema = z.object({
@@ -69,6 +69,6 @@ export async function redrawDrawing(ctx: AppContext, assetId: string, instructio
     caption: asset.caption, shows: spec.shows, family: spec.family, engine: spec.engine, redraw: { source: spec.source, instruction: clean },
   });
   if (!drawn.ok) return { ok: false, error: drawn.reason };
-  const detail = `Redrawn by the illustrator in ${spec.engine} at the author's request (look turn: ${drawn.look}).`;
+  const detail = `Redrawn by the illustrator in ${spec.engine} at the author's request: ${whatHappened(drawn.compileAttempts, drawn.look)}.`;
   return { ok: true, asset: replaceDrawing(ctx, asset, { ...spec, source: drawn.source }, drawn.svg, detail), look: drawn.look, model: drawn.model };
 }

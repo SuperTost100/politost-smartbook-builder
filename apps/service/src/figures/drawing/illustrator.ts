@@ -56,6 +56,17 @@ export type LookOutcome =
   /** The look did not happen: the follow-up failed (a route that cannot read images, a limit). */
   | 'skipped';
 
+/** The compile attempts and the look turn as a plain phrase for the check line of a figure. */
+export function whatHappened(attempts: number, look: LookOutcome): string {
+  const compiled = attempts === 1 ? 'compiled on the first attempt' : `compiled after ${attempts} attempts`;
+  switch (look) {
+    case 'ok': return `${compiled}, then the model looked at its render and left it as it was`;
+    case 'corrected': return `${compiled}, then corrected after the model looked at its render`;
+    case 'kept': return `${compiled}, then the model looked at its render, but its correction did not compile, so the first drawing was kept`;
+    case 'skipped': return `${compiled}, and the model could not look at its render`;
+  }
+}
+
 export type Illustrated =
   | {
     ok: true; engine: DrawingEngine; source: string; svg: string; width: number; height: number;

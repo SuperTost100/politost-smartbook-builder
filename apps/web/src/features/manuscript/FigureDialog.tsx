@@ -147,6 +147,9 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   /** A Render or a Replace already changed the figure in the book, so closing the dialog undoes nothing. */
   const [applied, setApplied] = useState(false);
   const [redrawn, setRedrawn] = useState(false);
+  /** Said inside the dialog because a toast would sit behind its scrim. */
+  const [rendered, setRendered] = useState(false);
+  const [replaced, setReplaced] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceErrorRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (replaceError) replaceErrorRef.current?.scrollIntoView({ block: 'nearest' }); }, [replaceError]);
@@ -183,7 +186,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const renderSent = useRef(false);
   const render = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/render', { params: route, body: { baseRevId: details.headRevId, source } }),
-    onSuccess: (sv) => { setCompileError(null); setError(null); setApplied(true); done(sv); toast('Rendered. The figure in the section is updated.'); },
+    onSuccess: (sv) => { setCompileError(null); setError(null); setApplied(true); setRendered(true); done(sv); },
     onError: (e) => { if (e instanceof ApiRequestError && e.code === 'does_not_compile') { setCompileError(e.message); setError(null); } else setError(errorText(e)); },
     onSettled: () => { renderSent.current = false; },
   });
@@ -212,8 +215,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   });
   const replace = useMutation({
     mutationFn: (file: File) => { const form = new FormData(); form.set('baseRevId', details.headRevId); form.set('file', file, file.name); return api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace', { params: route, form }); },
-    onMutate: () => { setError(null); setReplaceError(null); },
-    onSuccess: (sv) => { setApplied(true); done(sv); toast('Image replaced. The earlier figure is in the section history.'); },
+    onMutate: () => { setError(null); setReplaceError(null); setReplaced(false); },
+    onSuccess: (sv) => { setApplied(true); setReplaced(true); done(sv); },
     onError: (e) => setReplaceError(errorText(e)),
   });
   const remove = useMutation({
@@ -236,7 +239,12 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   ].filter((c) => c.field.theirs !== null);
   const held = busy || conflicts.length > 0;
   const unsaved = dirty || unrendered;
-  const requestClose = () => { if (unsaved) setLeaving(true); else onClose(); };
+  // The discard question replaces the footer buttons: focus goes to its safe answer, and back to where the author was typing when they keep editing.
+  const keepBtn = useRef<HTMLButtonElement>(null);
+  const cameFrom = useRef<HTMLElement | null>(null);
+  const ask = () => { cameFrom.current = document.activeElement instanceof HTMLElement ? document.activeElement : null; setLeaving(true); };
+  useEffect(() => { if (leaving) keepBtn.current?.focus(); }, [leaving]);
+  const requestClose = () => { if (unsaved) ask(); else onClose(); };
   // Leaving the page (reload, closing the tab) cannot wait for a question: the browser asks. A move inside the app (browser Back) gets the dialog's own question.
   useEffect(() => {
     if (!unsaved) return;
@@ -245,8 +253,12 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
     return () => window.removeEventListener('beforeunload', warn);
   }, [unsaved]);
   const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && currentLocation.pathname !== nextLocation.pathname);
-  useEffect(() => { if (blocker.state === 'blocked') setLeaving(true); }, [blocker.state]);
-  const keepEditing = () => { setLeaving(false); if (blocker.state === 'blocked') blocker.reset(); };
+  useEffect(() => { if (blocker.state === 'blocked') ask(); }, [blocker.state]);
+  const keepEditing = () => {
+    setLeaving(false);
+    if (blocker.state === 'blocked') blocker.reset();
+    requestAnimationFrame(() => (cameFrom.current?.isConnected ? cameFrom.current : document.getElementById('fd-caption'))?.focus());
+  };
   const discard = () => { if (blocker.state === 'blocked') blocker.proceed(); else onClose(); };
   const errLine = errorLineOf(compileError);
   const preview = apiUrl('GET /api/assets/:assetId/file', { params: { assetId: details.assetId } });
@@ -265,12 +277,13 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
       open
       onClose={requestClose}
       holdEscape={redrawing}
+      wrapTab
       className="fd"
       title={<>{title} <span className={`ui-badge${details.kind === 'drawing' ? ' ui-badge--accent' : ''} fd-kind`}>{KIND_LABEL[details.kind]}</span></>}
       footer={leaving ? (
         <>
           <div className="fd-foot-l"><span role="alert">Discard your changes to this figure?</span></div>
-          <button type="button" className="ui-btn" onClick={keepEditing} autoFocus>Keep editing</button>
+          <button ref={keepBtn} type="button" className="ui-btn" onClick={keepEditing}>Keep editing</button>
           <button type="button" className="ui-btn ui-btn--danger-solid" onClick={discard}>Discard</button>
         </>
       ) : (
@@ -318,6 +331,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
             <button type="button" className="ui-btn ui-btn--sm" onClick={() => fileRef.current?.click()} disabled={busy}><Icon name="upload" size={14} />Replace with an image…</button>
             <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="ui-sr" tabIndex={-1} aria-label="Choose an image to replace this figure" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ''; }} />
           </div>
+          {replaced && !replaceError && <p className="fd-ok" role="status">Image replaced. The earlier figure is in the section history.</p>}
           {replaceError && <div ref={replaceErrorRef} className="ui-banner ui-banner--danger" role="alert">{replaceError}</div>}
           <p className="ui-field__hint">PNG, JPEG, SVG or WebP, up to 2 MB.{drawing ? ' The figure then stops being a drawing and its source is removed from the section. The drawing stays in the section history.' : ' The new image takes the place of this one. This one stays in the section history.'}</p>
           {replace.isPending && <p className="fd-meta" role="status"><span className="ui-spinner" aria-hidden="true" /> Uploading…</p>}
@@ -364,7 +378,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
                       {rendering ? <><span className="ui-spinner" />Rendering…</> : <><Icon name="play" size={14} />Render</>}
                     </button>
                     <span className="fd-ok" role="status">
-                      {rendering ? 'Rendering…' : compileError ? 'Not rendered. Fix the line above, then press Render.' : unrendered ? 'Not rendered yet. The figure still shows the last render.' : `Rendered ${timeAgo(details.createdAt)}`}
+                      {rendering ? 'Rendering…' : compileError ? 'Not rendered. Fix the line above, then press Render.' : unrendered ? 'Not rendered yet. The figure still shows the last render.' : rendered ? 'Rendered. The figure in the book is updated. The earlier drawing is in the section history.' : `Rendered ${timeAgo(details.createdAt)}`}
                     </span>
                   </div>
                 </div>

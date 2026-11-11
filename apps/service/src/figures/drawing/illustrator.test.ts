@@ -8,7 +8,7 @@ import { DEFAULT_ROUTES, DRAWING_FAMILIES } from '@smartbuilder/domain';
 import { ensureFigurePackages, missingFigurePackages } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../../llm/index.ts';
 import { FakeFunnel, makeCtx, seedProject, usageOf } from '../../llm/testkit.ts';
-import { cleanSource, ENGINE_OF_FAMILY, illustrate, MAX_REPAIRS, saysOk, type IllustrateInput } from './illustrator.ts';
+import { cleanSource, ENGINE_OF_FAMILY, illustrate, MAX_REPAIRS, saysOk, whatHappened, type IllustrateInput } from './illustrator.ts';
 import { illustratorSystem } from './prompt.ts';
 
 const fixture = (name: string) => readFileSync(join(fileURLToPath(new URL('.', import.meta.url)), 'fixtures', name), 'utf8');
@@ -185,5 +185,14 @@ describe('the compile, repair and look loop', () => {
     assert.equal(r.engine, 'typst');
     assert.match(fake.calls[0].prompt, /drawn by this source now:\n#circle\(radius: 8pt\)/);
     assert.match(fake.calls[0].prompt, /asks for this change: Make the circle bigger\./);
+  });
+});
+
+describe('what happened, in words', () => {
+  test('says how many attempts the compile took and what the look at the render did', () => {
+    assert.equal(whatHappened(1, 'ok'), 'compiled on the first attempt, then the model looked at its render and left it as it was');
+    assert.equal(whatHappened(2, 'corrected'), 'compiled after 2 attempts, then corrected after the model looked at its render');
+    assert.equal(whatHappened(1, 'kept'), 'compiled on the first attempt, then the model looked at its render, but its correction did not compile, so the first drawing was kept');
+    assert.equal(whatHappened(3, 'skipped'), 'compiled after 3 attempts, and the model could not look at its render');
   });
 });

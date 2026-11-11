@@ -271,6 +271,28 @@ test.describe('figure dialog, leaving the page with unsaved edits', () => {
   });
 });
 
+test.describe('figure dialog, the discard question and focus', () => {
+  test('when the discard question appears focus moves to Keep editing and Tab stays inside the dialog', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    await dialog.getByLabel('Caption').press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('Tab');
+      expect(await page.evaluate(() => !!document.activeElement?.closest('dialog'))).toBe(true);
+    }
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('dialog'))).toBe(true);
+    // Keep editing hands focus back to the field the author was in, not to the top of the dialog.
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toBeFocused();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
+  });
+});
+
 test.describe('figure dialog, alt text', () => {
   const saveButton = (dialog: ReturnType<Page['locator']>) => dialog.getByRole('button', { name: 'Save figure' });
   const patches = (fm: FigureMock) => fm.writes.filter((w) => w.call.startsWith('PATCH')).map((w) => w.body);
@@ -385,7 +407,7 @@ test.describe('figure dialog, Save with a source that is not rendered', () => {
     await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
     await dialog.getByRole('button', { name: 'Keep editing' }).click();
     await dialog.getByRole('button', { name: 'Render' }).click();
-    await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
     await dialog.locator('.ui-dialog__foot').getByRole('button', { name: 'Close', exact: true }).click();
     await expect(dialog).toBeHidden();
   });
@@ -543,7 +565,7 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(dialog.locator('.fd-preview')).toHaveClass(/is-busy/);
     await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
     await shot(page, '2c-rendering');
-    await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
     await expect(dialog.locator('.fd-preview')).not.toHaveClass(/is-busy/);
     expect(await dialog.locator('.fd-preview img').getAttribute('src')).not.toBe(before);
     expect(fm.writes.find((w) => w.call.endsWith('/render'))!.body).toEqual({ baseRevId: 'rvf1', source: '#circle(radius: 9pt)' });
@@ -557,7 +579,7 @@ test.describe('figure dialog, a drawn figure', () => {
     await openSource(dialog);
     await typeSource(page, '#circle(radius: 9pt)');
     await dialog.getByRole('button', { name: 'Render' }).dblclick();
-    await expect(dialog.getByText('Rendered just now')).toBeVisible();
+    await expect(dialog.getByText('Rendered. The figure in the book is updated.')).toBeVisible();
     expect(fm.writes.filter((w) => w.call.endsWith('/render'))).toHaveLength(1);
     await expect(dialog.locator('.fd-error')).toHaveCount(0);
   });
@@ -644,7 +666,7 @@ test.describe('figure dialog, a drawn figure', () => {
     const dialog = await openDialog(page);
     await expect(dialog.getByText(/The figure then stops being a drawing and its source is removed/)).toBeVisible();
     await dialog.locator('input[type=file]').setInputFiles({ name: 'mio.png', mimeType: 'image/png', buffer: PNG });
-    await expect(page.getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
     await expect(dialog.getByRole('heading', { name: /Uploaded image/ })).toBeVisible();
     await expect(dialog.getByLabel('What it shows')).toHaveCount(0);
     await expect(dialog.locator('summary')).toHaveCount(0);
@@ -681,7 +703,7 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(dialog.locator('.fd-error')).toHaveCount(0);
     fm.stale = false;
     await input.setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
-    await expect(page.getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
     await expect(here).toHaveCount(0);
   });
 
@@ -900,7 +922,7 @@ test.describe('review findings of the figure dialog', () => {
     await openSource(dialog);
     await typeSource(page, '#circle(radius: 9pt) // R_1');
     await dialog.getByRole('button', { name: 'Render' }).click();
-    await expect(dialog.getByText('Rendered just now')).toBeVisible();
+    await expect(dialog.getByText('Rendered. The figure in the book is updated.')).toBeVisible();
     const rendered = fm.figures().find((f) => f.id !== first)!;
     await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
     await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
@@ -934,7 +956,7 @@ test.describe('review findings of the figure dialog', () => {
     await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
     fm.readMs = 600;
     await dialog.getByRole('button', { name: 'Render' }).click();
-    await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
     // The new figure's details are on their way: the old ones still on screen belong to a head the book has left.
     await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeDisabled();
     await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
@@ -1082,7 +1104,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
       await expect(dialog.getByText('Rendering the source…')).toBeVisible();
       await fits('rendering');
       await shot(page, 'state-rendering');
-      await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+      await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
       await dialog.getByLabel('Instruction for the redraw').fill('Move the labels off the wires');
       await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
       await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
