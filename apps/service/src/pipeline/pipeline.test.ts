@@ -1787,6 +1787,28 @@ describe('the review converges', () => {
     assert.match(fake.calls[1].system ?? '', /report each problem once/);
   });
 
+  test('the reviewer gets the symbols the exam papers use on the chapter topics, and the rule for a symbol that differs', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: ['t-filtri'] });
+    seedRevision('s1', 'La frequenza di taglio è $f_t$.');
+    const exam = (statement: string, topic: string) => ctx.db.insert('questions', {
+      id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
+      statement, hint: '', solution: '', difficulty: 'medio', topic_ids: [topic], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
+    });
+    exam('Calcolare la frequenza di taglio $f_c$ con $R_1 = 1\\,\\mathrm{k\\Omega}$.', 't-filtri');
+    exam('Un altro argomento con $q_p$.', 't-altro');
+    fake.next(answer({ issues: [] }));
+    await review();
+    const { prompt, system } = fake.calls[0];
+    assert.match(prompt, /\(standard\)\n\nSymbols used in the exam papers on this chapter's topics: f_c, R_1\.\n/);
+    assert.doesNotMatch(prompt, /q_p/);
+    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs\./);
+    ctx.db.run(`DELETE FROM questions`);
+    fake.next(answer({ issues: [] }));
+    await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', force: true }));
+    assert.doesNotMatch(fake.calls[1].prompt, /Symbols used in the exam papers/);
+    assert.equal(fake.calls[1].system, system, 'the static part does not depend on the exams');
+  });
+
   test('an issue whose quote matches one the author dismissed or accepted is not stored again; stale proposed issues are cleaned, live ones stay', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.');

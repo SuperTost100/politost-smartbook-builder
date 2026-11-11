@@ -828,7 +828,7 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string; program?: string; profile?: SubjectProfile }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; examSymbols?: string[]; handled?: string; changes?: string; program?: string; profile?: SubjectProfile }) {
   const lang = languageName(p.language);
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
@@ -837,6 +837,8 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
 Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text and a figure that shows something wrong. Use category "figure", severity major for a figure that shows something wrong and minor for a caption or label that is off. Never report a missing figure and never report a figure because it adds little: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
+
+A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
@@ -849,7 +851,7 @@ ${p.objectives}
 
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
-
+${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
 ${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue (the one minor that is not about a wrong word), category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
