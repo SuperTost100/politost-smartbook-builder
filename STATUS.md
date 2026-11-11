@@ -92,6 +92,11 @@ What a fresh book will still produce: on the first review, some real content err
 - **Autosave** saves the open block 3 seconds after you stop typing, and when you leave it. Each save is still a revision; History folds your own edits made within 10 minutes of each other into one row.
 - **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
 
+## Drafting in 0.4.0
+
+- The sections of a chapter are written in order, so each writer sees the summary and the formula keys of the section before it. Chapters still run side by side.
+- The section text, its repair and the lab example's code are no longer JSON strings. The answer is the text, a `<<<META>>>` line and a small JSON object. This removes the guessing that turned a line break before `u` or `i` into `\nu` or `\ni` (the case that remained open was a first row `i_1 &= …` after `\begin{aligned}`).
+
 ## Independent reviews
 
 GPT-6.1-Sol reviewed each milestone through `codex exec`.

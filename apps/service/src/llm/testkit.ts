@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Capabilities, LiveSessionInfo, ModelInfo, ProcessOptions, ProviderOverview, RateLimits, RunInput, RunResult } from 'cli-funnel';
 import type { Config } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
+import { META_SEPARATOR } from './body.ts';
 import type { FunnelLike } from './funnel.ts';
 
 // The tests never touch the owner's logins: the private homes link to these stand-ins instead.
@@ -114,3 +115,12 @@ export class FakeFunnel implements FunnelLike {
 }
 
 export const usageOf = (input: number, output: number) => ({ inputTokens: input, outputTokens: output, totalTokens: input + output });
+
+/** A section answer in the writer's format: the text, a separator line, then the small JSON. */
+export const written = (o: { markdown: string; figures?: unknown[]; noFigureReason?: string | null; summary?: string }) => () => ({
+  text: `${o.markdown}\n${META_SEPARATOR}\n${JSON.stringify({ figures: o.figures ?? [], noFigureReason: o.noFigureReason ?? null, summary: o.summary ?? 'riassunto' })}`,
+  usage: usageOf(10, 10),
+});
+
+/** A lab answer in the same format: the code, a separator line, then id, title, description and expectedOutput. */
+export const wroteCode = ({ code, ...meta }: { code: string; id: string; title: string; description: string; expectedOutput: string }) => () => ({ text: `${code}\n${META_SEPARATOR}\n${JSON.stringify(meta)}`, usage: usageOf(10, 10) });

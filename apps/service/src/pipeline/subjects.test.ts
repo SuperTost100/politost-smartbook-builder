@@ -6,7 +6,7 @@ import { bookOptionsSchema, FIGURE_KINDS, inferSubjectArea, SUBJECT_AREAS, SUBJE
 import { figureSchema, figureSchemaFor } from '../figures/materialize.ts';
 import { toProviderSchema } from '../llm/schema.ts';
 import { figurePlaces } from './figureCheck.ts';
-import { draftPrompt, draftSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchPrompt, patchSchemaFor, reviewPrompt, verifyPrompt } from './prompts.ts';
+import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchPrompt, patchSchemaFor, reviewPrompt, verifyPrompt } from './prompts.ts';
 
 const book = (subject: string, title: string, options: Record<string, unknown> = {}) => ({ subject, title, options: bookOptionsSchema.parse(options) });
 const setupOf = (area: SubjectArea, o: { photos?: boolean; policy?: 'helpful' | 'generous' } = {}) =>
@@ -123,7 +123,7 @@ describe('figure schema per subject', () => {
 
   test('the draft and the fix carry the same smaller schema, and a fix without a figure problem carries none', () => {
     const maths = setupOf('mathematics');
-    assert.doesNotMatch(JSON.stringify(toProviderSchema(draftSchemaFor(maths))), /smiles/);
+    assert.doesNotMatch(JSON.stringify(toProviderSchema(draftMetaSchemaFor(maths))), /smiles/);
     assert.match(JSON.stringify(toProviderSchema(patchSchemaFor(maths))), /xRange/);
     assert.doesNotMatch(JSON.stringify(toProviderSchema(patchSchemaFor(null))), /figures|xRange/);
   });

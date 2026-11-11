@@ -13,7 +13,7 @@ import { carryCitations, currentHead, insertProposal } from '../repo/content.ts'
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
 import { chapterExamStats, examSessionTotal } from './exam.ts';
-import { draftPrompt, draftSchemaFor, examGuidePrompt, figureSetupOf, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
+import { draftParser, draftPrompt, examGuidePrompt, figureSetupOf, introPrompt, repairParser, repairPrompt, repairSchema } from './prompts.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
@@ -202,7 +202,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     });
   }
   t.progress(`Writing "${section.title}"`);
-  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, parse: draftParser(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   t.setProvider(route.provider);
 
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
@@ -234,7 +234,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     t.progress(`Fixing ${serious.length} formatting problems`);
     const listing = serious.map((f) => `${f.rule}: ${f.message}${f.line ? ` (line ${f.line})` : ''}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`).join('\n');
     try {
-      const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), schema: repairSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+      const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), parse: repairParser, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
       const repaired = extractCitations(fix.data.markdown, splitBlocks);
       const after = lintSection(repaired.markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: new Set([...known.map((k) => k.key), ...formulaKeyLabels(repaired.markdown).map((k) => k.key)]) });
       if (after.filter((f) => f.severity !== 'minor').length < serious.length) {

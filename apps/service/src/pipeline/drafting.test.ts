@@ -4,9 +4,11 @@ import { afterEach, beforeEach, describe, test } from 'node:test';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedProject } from '../llm/testkit.ts';
-import { Queue, TaskError } from '../queue/queue.ts';
+import { META_SEPARATOR } from '../llm/body.ts';
+import { FakeFunnel, makeCtx, seedProject, usageOf, written } from '../llm/testkit.ts';
+import { Queue, TaskError, type TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
+import { sectionDraft } from './draft.ts';
 import { generateSpecs } from './runs.ts';
 
 let fake: FakeFunnel;
@@ -112,5 +114,68 @@ describe('sections of a chapter are written in order', () => {
     } finally {
       await queue.stop();
     }
+  });
+});
+
+/** A running task with a TaskContext, as the queue would hand it to a handler. */
+function startTask(kind: string, input: Record<string, unknown>): TaskContext {
+  const runId = newId();
+  ctx.db.insert('runs', { id: runId, project_id: P, kind: 'generate', status: 'running', snapshot: {}, created_at: now() });
+  const id = newId();
+  const key = `${kind}:${id}`;
+  ctx.db.insert('tasks', { id, run_id: runId, project_id: P, kind, label: kind, key, input, state: 'running', pool: 'local', attempts: 1, max_attempts: 3, created_at: now() });
+  return {
+    task: { id, runId, projectId: P, kind, key, label: kind, input, attempts: 1 }, signal: new AbortController().signal, deps: {},
+    enqueue: (specs) => ctx.queue.addTasks(runId, P, specs), progress: () => undefined, setProvider: () => undefined,
+  };
+}
+const current = (nodeId: string) => ctx.db.get<{ markdown: string }>(`SELECT markdown FROM content_revisions WHERE node_id = ? AND status = 'current'`, nodeId)!.markdown;
+const plain = (t: string) => () => ({ text: t, usage: usageOf(10, 10) });
+
+describe('the long text travels outside JSON', () => {
+  const circuit = 'Per la maglia vale:\n\n$$\n\\begin{aligned}\ni_1 &= \\frac{V}{R} \\\\\nu_2 &= R\\,i_1\n\\end{aligned}\n$$\n\nCon $\\nu \\neq \\theta$ e $\\beta$.';
+
+  test('a first row that starts with i, \\nu and \\neq are stored as the writer wrote them', async () => {
+    seedOutline([['c1', ['s1']]]);
+    fake.next(written({ markdown: circuit, summary: 'La maglia.' }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.status, 'current');
+    assert.equal(r.summary, 'La maglia.');
+    assert.equal(current('s1'), circuit);
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0].responseSchema, undefined, 'no JSON schema is sent for a text answer');
+  });
+
+  test('an answer without the separator gets one repair turn that says what is missing', async () => {
+    seedOutline([['c1', ['s1']]]);
+    fake.next(plain('Solo il testo della sezione.'), written({ markdown: 'Testo della sezione.' }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.status, 'current');
+    assert.equal(current('s1'), 'Testo della sezione.');
+    assert.equal(fake.calls.length, 2);
+    assert.match(fake.calls[1].prompt, /<<<META>>> is missing/);
+    assert.match(fake.calls[1].prompt, /full corrected answer in the same format/);
+  });
+
+  test('a second answer without it fails the task with the reason', async () => {
+    seedOutline([['c1', ['s1']]]);
+    fake.next(plain('Solo testo.'), plain('Ancora solo testo.'));
+    await assert.rejects(
+      sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' })),
+      (e: unknown) => e instanceof TaskError && e.kind === 'input' && /invalid answer twice: The line <<<META>>> is missing/.test(e.message),
+    );
+    assert.equal(fake.calls.length, 2);
+    assert.equal(ctx.db.all('SELECT 1 FROM content_revisions').length, 0);
+  });
+
+  test('the repair of a formatting problem is plain text too, and keeps what the writer wrote', async () => {
+    seedOutline([['c1', ['s1']]]);
+    fake.next(written({ markdown: 'Il valore è [?] ohm.\n\nCon $\\nu_1$ a riga:\n\n$$\ni_1 = 2\n$$' }), plain('Il valore è 5 ohm.\n\nCon $\\nu_1$ a riga:\n\n$$\ni_1 = 2\n$$'));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.status, 'current');
+    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls[1].responseSchema, undefined);
+    assert.match(`${fake.calls[1].system}\n${fake.calls[1].prompt}`, /Answer with the corrected section as plain text and nothing else/);
+    assert.equal(current('s1'), 'Il valore è 5 ohm.\n\nCon $\\nu_1$ a riga:\n\n$$\ni_1 = 2\n$$');
   });
 });
