@@ -1,13 +1,13 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
-import { codeString, toProviderSchema } from '../llm/schema.ts';
+import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 18;
+export const PROMPT_VERSION = 19;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -754,7 +754,8 @@ export const reviewSchema = z.object({
     sectionId: z.string(),
     quote: z.string().describe('verbatim text from the chapter that the issue points at, max 200 chars'),
     severity: z.enum(['blocker', 'major', 'minor']),
-    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'clarity', 'repetition', 'figure', 'language']),
+    // Style categories ("clarity", "repetition") are not offered any more. Issues stored with them still load and show: the stored category is a plain string.
+    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'figure', 'language']),
     message: z.string(),
     suggestion: z.string(),
   })),
@@ -764,15 +765,17 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   const lang = languageName(p.language);
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
-    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
+    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, explanations that mislead, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
-Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that shows something wrong and a figure that adds nothing the text does not already say plainly. Use category "figure" and severity minor, or major for a figure that shows something wrong. Never report a missing figure: whether the section needs one is the writer's choice.
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text and a figure that shows something wrong. Use category "figure", severity major for a figure that shows something wrong and minor for a caption or label that is off. Never report a missing figure and never report a figure because it adds little: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Do not report those. Prefer fewer, solid issues to a long list of doubtful ones.
+
+Style is not your job. Do not report wording, tone, length, order of presentation, repetition or "could be clearer", at any severity.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -780,13 +783,13 @@ ${p.objectives}
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
 
-${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue, category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
+${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue (the one minor that is not about a wrong word), category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
-Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
+Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: only a wrong word, symbol, unit or reference that could mislead a student (a symbol that differs from the one in the statement, a wrong unit, a link to the wrong formula); anything that is only style or could be said better is not an issue. Return an empty list if the chapter is correct.`,
   };
 }
 
@@ -863,6 +866,30 @@ Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reaso
   };
 }
 
+// ---------- check of a claim that the text already fixes a problem ----------
+
+export const resolutionCheckSchema = z.object({
+  issues: z.array(z.object({
+    index: z.number().int().min(1).describe('the number of the problem in the list'),
+    resolved: z.boolean(),
+    reason: z.string().describe('one short sentence: where the text fixes it, or what is still wrong'),
+  })),
+});
+
+/** A fix model said the section already fixes a problem and changed nothing for it. A cheap model looks at the text as it stands. */
+export function resolutionCheckPrompt(p: { language: string; issues: string; text: string }) {
+  return {
+    system: `You check whether a university textbook section written in ${languageName(p.language)} already fixes problems that a reviewer reported earlier. Another model claims that it does. Judge from the section as it stands now, never from the claim. A problem is resolved only when the text now says what the problem asked for, correctly: the hypothesis is stated, the statement is true, the symbol or reference is right. If the passage the problem quoted is no longer in the section, the problem is resolved only when what is there instead does not have the problem. Be strict about mathematics.`,
+    prompt: `PROBLEMS, each with the claim that the text already fixes it:
+${p.issues}
+
+SECTION AS IT STANDS (the blocks the problems point at, with their neighbours; "[…]" marks blocks left out):
+${p.text}
+
+Return JSON {"issues": [{"index": <number>, "resolved": <boolean>, "reason": "..."}]} with one entry per problem, the reason in ${languageName(p.language)}.`,
+  };
+}
+
 // ---------- revision ----------
 
 export function revisePrompt(p: { language: string; markdown: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string }) {
@@ -886,28 +913,33 @@ Return JSON {"markdown": "..."} with the full revised section.`,
 
 // ---------- targeted revision ----------
 
-const patchChanges = z.array(z.object({
-  block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
-  text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
-}));
+export interface PatchAnswer extends ParsedPatch { figures: z.infer<ReturnType<typeof figureSchemaFor>>[] }
 
-export interface PatchAnswer { changes: z.infer<typeof patchChanges>; figures?: z.infer<ReturnType<typeof figureSchemaFor>>[] }
-
-/** The figure specs are in the schema only when the fix may add a figure (a figure problem or an instruction), so most fixes do not carry them. */
-export function patchSchemaFor(figures: FigureSetup | null): z.ZodType<PatchAnswer> {
-  return figures
-    ? z.object({ changes: patchChanges, figures: z.array(figureSchemaFor(schemaKinds(figures))).describe('figures the new text adds with :::image blocks; usually empty') })
-    : z.object({ changes: patchChanges });
+/**
+ * Reads the plain-text patch answer (see PATCH_MARK). Figure specs are JSON and are checked against the figure schema,
+ * which is built only when the fix may add a figure (a figure problem or an instruction). Without that, a figures part is ignored.
+ * A malformed answer gets the standard repair turn of runRole, with the problem named.
+ */
+export function patchParser(figures: FigureSetup | null, limits: { blocks: number; issues: number }): (text: string) => { ok: true; data: PatchAnswer } | { ok: false; problem: string } {
+  const specs = z.array(figureSchemaFor(schemaKinds(figures)));
+  const raw = rawJsonSchema(specs);
+  return (text) => {
+    const read = parsePatchAnswer(text, limits);
+    if (!read.ok) return read;
+    if (!figures || !read.data.figures) return { ok: true, data: { ...read.data, figures: [] } };
+    const parsed = specs.safeParse(sanitizeModelValue(fillAbsentNulls(dropOptionalNulls(read.data.figures, raw), raw), raw));
+    return parsed.success ? { ok: true, data: { ...read.data, figures: parsed.data } } : { ok: false, problem: `The figures part does not match the figure format: ${describeIssues(parsed.error)}` };
+  };
 }
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; issues?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.${p.guards ? `\n\n${guardRules(p.guards)}` : ''}\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put its spec in the "${PATCH_MARK} figures" part and an :::image block in the block it belongs to. Otherwise write no figures part.\n${figureRules(p.figures)}` : ''}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
@@ -920,7 +952,16 @@ Section ids you may link to: ${p.sectionIds}
 SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
-Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]${p.figures ? ', "figures": []' : ''}}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+Answer in plain text, not JSON, in parts. Each part starts with a line that begins with ${PATCH_MARK}:
+${PATCH_MARK} block <number> | issues <numbers of the problems it answers, like 1, 3>
+<the full new text of that block, exactly as it goes in the book: write backslashes, $ and every other character as they are, with no escaping>
+${PATCH_MARK} delete <number> | issues <numbers>
+(no text: the block is removed)${p.issues ? `
+${PATCH_MARK} resolved | issues <numbers>
+<one sentence: where the section as it stands already fixes these problems. Use it only when no change is needed for them.>` : ''}${p.figures ? `
+${PATCH_MARK} figures
+<a JSON array with the specs of the figures the new text adds>` : ''}
+Give each block once. To add a paragraph, include it in the text of the block it follows. When nothing needs to change and no problem is resolved, answer only: ${PATCH_MARK} none`,
   };
 }
 
@@ -929,12 +970,13 @@ Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that
 export const figuresPassSchemaFor = (figures: FigureSetup) => z.object({
   figures: z.array(figureSchemaFor(schemaKinds(figures)).extend({
     afterBlock: z.number().int().min(1).describe('number of the block the figure illustrates, from the [n] labels; the figure goes right after it'),
+    issue: z.number().int().min(1).nullable().optional().describe('when the task lists numbered review problems, the number of the one problem this figure answers; otherwise leave null'),
   })),
   noFigureReason: z.string().nullable().optional().describe('leave null'),
 });
 
 /** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
-export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string }) {
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string; brief?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
@@ -948,11 +990,11 @@ Figures the section already has: ${p.existing || '(none)'}
 ${p.elsewhere ? `Figures other sections already show (the book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption):\n${p.elsewhere}\n` : ''}
 TEXT, numbered by block:
 ${p.blocks}
-
+${p.brief ? `\nA REVIEW FOUND A FIGURE MISSING. What it asks for:\n${p.brief}\nDesign the figures that answer it, and give each figure the number of the problem it answers in "issue". When no figure fits the text, return none and say why in one sentence.\n` : ''}
 INSTRUCTIONS
 - Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
 - Every number, species, label and direction in a figure must match the text exactly.
-- Return JSON: figures, noFigureReason (leave null).`,
+- Return JSON: figures, noFigureReason (${p.brief ? 'null, or why you propose no figure' : 'leave null'}).`,
   };
 }
 

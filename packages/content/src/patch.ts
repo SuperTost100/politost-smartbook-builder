@@ -1,4 +1,5 @@
 // Guards for model patches: block changes are applied one at a time and a change that would damage the section is dropped. Pure.
+import { rewriteLatexNames } from './sanitize.ts';
 import type { LintFinding } from './types.ts';
 
 export interface BlockChange { block: number; text: string }
@@ -13,6 +14,10 @@ export interface GuardedPatch {
 
 /** A fix may delete this many blocks at most; a model that wants more is rewriting, not fixing. */
 export const MAX_DELETED_BLOCKS = 3;
+/** A fix for off-program material may delete this many times as many blocks. */
+export const REMOVAL_FACTOR = 5;
+/** A fix that leaves less than this share of the section's text is not applied; it waits as a proposal. */
+export const MIN_KEPT_SHARE = 0.8;
 
 const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
@@ -66,7 +71,7 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
       if (!old.trim()) continue;
       const image = opts.figures && onlyImage(old);
       if (!image && !opts.removals && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
-      const limit = opts.removals ? MAX_DELETED_BLOCKS * 5 : MAX_DELETED_BLOCKS;
+      const limit = opts.removals ? MAX_DELETED_BLOCKS * REMOVAL_FACTOR : MAX_DELETED_BLOCKS;
       if (deleted >= limit) { drop(`it would delete more than ${limit} blocks`); continue; }
     } else {
       const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));
@@ -86,6 +91,110 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     if (!text) deleted++;
   }
   return { blocks: out, kept: [...kept].sort((a, b) => a - b), reverted };
+}
+
+/**
+ * The guard rules as text for the fix model, built from the constants above so that the prompt and the guard cannot drift.
+ * Without them the model deleted headings, formulas and blocks the guard then reverted, and one fix in five changed nothing.
+ */
+export function guardRules(opts: { figures?: boolean; removals?: boolean } = {}): string {
+  const rules = opts.removals
+    ? [`This fix removes off-program material, so you may delete whole blocks, headings, formulas and ::: blocks, up to ${MAX_DELETED_BLOCKS * REMOVAL_FACTOR} blocks. A block you rewrite instead of deleting keeps its heading and its formula keys.`]
+    : [
+      `Never delete a block that holds a heading, a formula or another ::: block, and never drop a heading or a formula key from a block you rewrite. Keep the heading line and the key="..." of every formula as they are.`,
+      `Delete at most ${MAX_DELETED_BLOCKS} blocks. Correct the sentence at fault instead of deleting its paragraph.`,
+    ];
+  rules.push(opts.figures
+    ? 'A figure block (:::image) may be deleted because a problem is about that figure.'
+    : 'Never delete a figure block (:::image): it may go only when a problem is about that figure.');
+  rules.push(
+    'Every ::: block you write opens and closes.',
+    'Write no formula or formatting error: a change that adds a KaTeX error, a placeholder or another blocker or major lint finding is dropped.',
+    `A fix that leaves less than ${Math.round(MIN_KEPT_SHARE * 100)}% of the section's text is not applied; it waits for the author.`,
+  );
+  return `Rules the builder enforces on every change. A change that breaks one is dropped and its problem stays open:\n${rules.map((r) => `- ${r}`).join('\n')}`;
+}
+
+/**
+ * What the fix model answers, in plain text. Each part starts with a line that begins with "@@@":
+ *   @@@ block 3 | issues 1, 2     the new text of block 3 follows, up to the next "@@@" line, exactly as it goes in the book
+ *   @@@ delete 5 | issues 2       removes block 5
+ *   @@@ resolved | issues 3       the current text already fixes problem 3; one sentence says where
+ *   @@@ figures                   a JSON array of figure specs follows (only when the fix may add figures)
+ *   @@@ none                      nothing to change, alone
+ * The new text is not a JSON string, so LaTeX backslashes need no escaping and none is eaten on the way.
+ */
+export const PATCH_MARK = '@@@';
+
+export interface PatchChange extends BlockChange { issues: number[] }
+export interface ParsedPatch {
+  changes: PatchChange[];
+  /** Problems (1-based, as numbered in the request) the model says the current text already fixes, each group with its reason. */
+  resolved: { issues: number[]; reason: string }[];
+  /** The JSON of the figures part, not yet checked against a figure schema. Null when there is none. */
+  figures: unknown[] | null;
+}
+
+/**
+ * Reads the answer described at PATCH_MARK. `blocks` is the number of numbered blocks, `issues` the number of numbered
+ * problems (0 for an author's instruction, which names none). A problem returns a message the model can act on in a repair turn.
+ * The caller passes text whose terminal codes and control characters are already removed. A new text gets the function
+ * names KaTeX lacks rewritten (\cotan), like a drafted section, and nothing else: these bodies never were JSON strings,
+ * so no backslash is guessed at.
+ */
+export function parsePatchAnswer(text: string, limits: { blocks: number; issues: number }): { ok: true; data: ParsedPatch } | { ok: false; problem: string } {
+  const fail = (problem: string) => ({ ok: false as const, problem });
+  type Part = { kind: string; arg: string; issues: string; body: string[] };
+  const parts: Part[] = [];
+  const before: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const head = new RegExp(`^${PATCH_MARK}[ \\t]*(block|delete|resolved|figures|none)\\b[ \\t]*(\\d*)[ \\t]*(?:\\|[ \\t]*issues?[ \\t]*([\\d,\\s]*))?[ \\t]*$`).exec(line);
+    if (head) parts.push({ kind: head[1], arg: head[2], issues: head[3] ?? '', body: [] });
+    else if (line.startsWith(PATCH_MARK)) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". Headers look like "${PATCH_MARK} block 3 | issues 1, 2".`);
+    else (parts.at(-1)?.body ?? before).push(line);
+  }
+  if (before.join('').trim()) return fail(`Text before the first "${PATCH_MARK}" line: every word of the answer belongs to a part.`);
+  if (!parts.length) return fail(`The answer has no parts. Start each part with a "${PATCH_MARK}" line, or answer only "${PATCH_MARK} none" when nothing needs to change.`);
+  const issueList = (raw: string): number[] | string => {
+    const nums = raw.split(/[,\s]+/).filter(Boolean).map(Number);
+    if (nums.some((n) => !Number.isInteger(n) || n < 1 || (limits.issues > 0 && n > limits.issues))) return `Problem numbers must be between 1 and ${limits.issues}, as in the request.`;
+    return limits.issues > 0 ? nums : [];
+  };
+  const changes: PatchChange[] = [];
+  const resolved: ParsedPatch['resolved'] = [];
+  let figures: unknown[] | null = null;
+  const seen = new Set<number>();
+  for (const p of parts) {
+    const body = p.body.join('\n').trim();
+    if (p.kind === 'none') {
+      if (parts.length > 1 || body) return fail(`"${PATCH_MARK} none" stands alone, with no text.`);
+      return { ok: true, data: { changes, resolved, figures } };
+    }
+    const issues = issueList(p.issues);
+    if (typeof issues === 'string') return fail(issues);
+    if (p.kind === 'figures') {
+      try {
+        const v: unknown = JSON.parse(body.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+        if (!Array.isArray(v)) return fail(`The "${PATCH_MARK} figures" part must be a JSON array.`);
+        figures = v;
+      } catch (err) {
+        return fail(`The "${PATCH_MARK} figures" part is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      continue;
+    }
+    if (p.kind === 'resolved') {
+      if (!issues.length) return fail(`"${PATCH_MARK} resolved" needs the numbers of the problems: "${PATCH_MARK} resolved | issues 2".`);
+      resolved.push({ issues, reason: body });
+      continue;
+    }
+    const block = Number(p.arg);
+    if (p.arg === '' || !Number.isInteger(block) || block < 0 || block >= limits.blocks) return fail(`"${PATCH_MARK} ${p.kind}" needs the number of an existing block, from 0 to ${limits.blocks - 1}.`);
+    if (seen.has(block)) return fail(`Block ${block} appears twice. Give each block once, with its full new text.`);
+    seen.add(block);
+    if (p.kind === 'block' && !body) return fail(`Block ${block} has no text. To remove a block, write "${PATCH_MARK} delete ${block}".`);
+    changes.push({ block, text: p.kind === 'delete' ? '' : rewriteLatexNames(body), issues });
+  }
+  return { ok: true, data: { changes, resolved, figures } };
 }
 
 /** Opening lines of ::: blocks, by block name. */

@@ -4,6 +4,7 @@ import { paths } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { conflict, notFound } from './errors.ts';
+import { reviewState } from './issues.ts';
 import { placeholders, type Rec } from './util.ts';
 
 const ACTIVE_RUN = ['running', 'pausing', 'paused', 'waiting', 'cancelling'];
@@ -72,7 +73,7 @@ function summarize(ctx: AppContext, p: Project): ProjectSummary {
     openIssues: n(`SELECT COUNT(*) AS n FROM review_issues WHERE project_id = ? AND status IN ('open', 'proposed')`),
   };
   const hasOutline = () => n('SELECT COUNT(*) AS n FROM outline_revisions WHERE project_id = ?') > 0;
-  return { ...p, stage: currentStage(p, counts, hasOutline), counts, activeRun: run ? ctx.queue.runSummary(run.id) : null };
+  return { ...p, stage: currentStage(p, counts, hasOutline), counts, activeRun: run ? ctx.queue.runSummary(run.id) : null, review: reviewState(ctx, p.id) };
 }
 
 /**
