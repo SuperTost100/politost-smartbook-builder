@@ -84,7 +84,7 @@ export const BlockView = memo(function BlockView(p: Props) {
       {rule === 'issue' && <span className="ms-tick" aria-hidden="true" />}
 
       {edit ? (
-        <BlockEditor block={block} edit={edit} />
+        <BlockEditor block={block} edit={edit} resolveAsset={p.resolveAsset} />
       ) : (
         <>
           <div className="ms-content">
@@ -111,7 +111,7 @@ export const BlockView = memo(function BlockView(p: Props) {
   );
 });
 
-function BlockEditor({ block, edit }: { block: MappedBlock; edit: BlockEdit }) {
+function BlockEditor({ block, edit, resolveAsset }: { block: MappedBlock; edit: BlockEdit; resolveAsset?: (src: string) => string | undefined }) {
   const { text, saving, blocked } = edit;
   const [confirmDelete, setConfirmDelete] = useState(false);
   const empty = !text.trim();
@@ -121,7 +121,7 @@ function BlockEditor({ block, edit }: { block: MappedBlock; edit: BlockEdit }) {
     <div className="ms-edit" onClick={(e) => e.stopPropagation()}>
       <div className="ui-meta">Editing block {block.index + 1} · {BLOCK_LABEL[block.kind]} · source</div>
       <SourceEditor value={text} onChange={edit.onChange} onSave={() => { if (!empty) edit.onSave(); }} onCancel={edit.onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
-      <LivePreview source={text} />
+      <LivePreview source={text} resolveAsset={resolveAsset} />
       <div className="ms-edit__actions">
         <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || (unchanged && !edit.saved) || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
         <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Close</button>

@@ -432,6 +432,22 @@ test('double-clicking Add figures starts one run and shows one toast', async ({ 
   await page.unroute(`**/api/projects/${bookId}/sections/s1/figures`);
 });
 
+test('a figure block shows its picture in the editor preview', async ({ page, request }) => {
+  const svg = 'data:image/svg+xml;utf8,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="10" height="10"/>');
+  const head = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
+  const figure = ':::image{src="assets/fig-editor.svg" alt="Figura nel blocco" caption="Una figura"}\n:::';
+  const put = await request.put(`/api/projects/${bookId}/sections/s1`, { headers: H, data: { markdown: `${head.current.markdown}\n\n${figure}`, baseRevId: head.current.id } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+  await page.route(`**/api/projects/${bookId}/chapters/c1/preview`, (route) => route.fulfill({ json: { markdown: '', number: 1, assets: { 'assets/fig-editor.svg': svg } } }));
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  const blocks = page.locator('.ms-block');
+  await expect(blocks.last().locator('img[alt="Figura nel blocco"]')).toBeVisible();
+  await openBlockEditor(page, await blocks.count());
+  await expect(page.locator('.se-preview img[alt="Figura nel blocco"]')).toBeVisible();
+  await expect(page.locator('.se-preview')).not.toContainText('non disponibile');
+  await page.unroute(`**/api/projects/${bookId}/chapters/c1/preview`);
+});
+
 // Autosave runs on its own section (s2) so the tests above keep their text. It saves about 3 s after the last keystroke.
 const AUTO_MD = 'Primo paragrafo.\n\nSecondo paragrafo.\n\nTerzo paragrafo.';
 
