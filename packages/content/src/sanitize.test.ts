@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeModelText, sanitizeModelValue } from './sanitize.ts';
+import { sanitizeModelCode, sanitizeModelText, sanitizeModelValue } from './sanitize.ts';
 
 test('a control character before a letter replaces the eaten backslash', () => {
   assert.equal(sanitizeModelText('$+\u001finfty$'), '$+\\infty$');
@@ -57,4 +57,25 @@ test('tool-call markup is removed: lines of tags with their newline, inline tags
   assert.equal(sanitizeModelText('Prima riga\n  </invoke> <parameter name="x">\nseconda riga'), 'Prima riga\nseconda riga');
   assert.equal(sanitizeModelText('<markdown>Testo $a<b$ e <i>.</markdown>'), 'Testo $a<b$ e <i>.');
   assert.equal(sanitizeModelText('$x<parameters$ e <marked>'), '$x<parameters$ e <marked>');
+});
+
+const codeSchema = { type: 'object', properties: { code: { type: 'string', 'x-code': true }, text: { type: 'string' }, fns: { type: 'array', items: { type: 'object', properties: { fn: { anyOf: [{ type: 'string', 'x-code': true }, { type: 'null' }] } } } } } };
+
+test('a field the schema marks as code keeps A\\C, \\n in a string and \\t in Python, while text still gets repaired', () => {
+  const out = sanitizeModelValue(
+    { code: 'x = A\\C;\nfprintf("a\\n");\nprint("a\\tb")\n', text: '$\\C \\sen x$', fns: [{ fn: 'sin(x)\\Q' }] },
+    codeSchema,
+  );
+  assert.equal(out.code, 'x = A\\C;\nfprintf("a\\n");\nprint("a\\tb")\n');
+  assert.equal(out.text, '$\\mathbb{C} \\operatorname{sen} x$');
+  assert.equal(out.fns[0].fn, 'sin(x)\\Q', 'a nullable code field inside an array is still code');
+});
+
+test('code still loses terminal codes, markup and stray control characters, and keeps tabs and newlines', () => {
+  assert.equal(sanitizeModelCode('a\u001b[1;31mb\u001b[0m\u0007\tc\n[?25ld'), 'ab\tc\nd');
+  assert.equal(sanitizeModelCode('x\u000cy</markdown>'), 'xy');
+});
+
+test('without a schema every string is repaired as before', () => {
+  assert.equal(sanitizeModelValue({ code: '$\\C$' }).code, '$\\mathbb{C}$');
 });

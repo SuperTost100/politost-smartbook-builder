@@ -10,6 +10,7 @@ import { newId, now } from '../db/db.ts';
 import { cellSchema, describeDiagram, levelsSchema, orbitalsSchema, periodicSchema, renderDiagramSvg, validateDiagram, type DiagramKind } from './diagram.ts';
 import { findStockPhoto } from './stock.ts';
 import { renderStructureSvg, structureIdentity, validateStructureSpec } from './structure.ts';
+import { codeString } from '../llm/schema.ts';
 import { findSection, loadOutline } from '../pipeline/util.ts';
 
 export const figureSchema = z.object({
@@ -22,12 +23,12 @@ export const figureSchema = z.object({
     yRange: z.tuple([z.number(), z.number()]),
     xLabel: z.string().nullable(),
     yLabel: z.string().nullable(),
-    functions: z.array(z.object({ expr: z.string(), label: z.string().nullable(), domain: z.tuple([z.number(), z.number()]).nullable(), style: z.enum(['solid', 'dashed']).nullable() })),
+    functions: z.array(z.object({ expr: codeString(), label: z.string().nullable(), domain: z.tuple([z.number(), z.number()]).nullable(), style: z.enum(['solid', 'dashed']).nullable() })),
     points: z.array(z.object({ x: z.number(), y: z.number(), label: z.string().nullable(), open: z.boolean().nullable() })).nullable(),
     asymptotes: z.array(z.object({ kind: z.enum(['vertical', 'horizontal']), value: z.number(), label: z.string().nullable() })).nullable(),
   }).nullable().describe('for kind "plot", else null'),
   structure: z.object({
-    smiles: z.string(),
+    smiles: codeString(),
     style: z.enum(['lewis', 'skeletal']),
     lonePairs: z.boolean(),
     formula: z.string().describe('the formula exactly as the text writes it, in plain text: "H2O", "NH4+", "SO4^2-", "NaCl"'),
@@ -97,6 +98,13 @@ export interface BuiltFigures {
 const DIAGRAMS: readonly string[] = ['levels', 'orbitals', 'cell', 'periodic'] satisfies DiagramKind[];
 
 const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
+/**
+ * The builder numbers figures, so a number the model wrote in front of the caption is removed. Formulas stay as written:
+ * the compiler turns them into plain text (`latexToPlain`), fractions and roots included.
+ */
+export function cleanCaption(caption: string): string {
+  return caption.replace(/^\s*(?:fig(?:ura|ure)?\.?)\s*\d+(?:\.\d+)*\s*[:.\-–—)]?\s*/i, '').trim();
+}
 const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
 
 function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
@@ -123,7 +131,8 @@ export async function buildFigures(ctx: AppContext, o: {
   // A picture appears once in a book: a figure the book already shows is dropped, and photo searches skip used photos.
   const taken = bookFigures(ctx, o.projectId, o.keepOwn ? undefined : o.nodeId);
   const usedPhotos = () => new Set([...taken.keys()].filter((k) => k.startsWith('photo:')).map((k) => k.slice('photo:'.length)));
-  for (const fig of o.figures) {
+  for (const requested of o.figures) {
+    const fig = { ...requested, caption: cleanCaption(requested.caption) };
     const key = cleanKey(fig.key);
     if (!key || out.renames.has(key)) continue;
     let made: { bytes: Buffer | string; ext: string; mime: string; origin: string; spec: unknown; caption: string; alt: string; check: string } | null = null;

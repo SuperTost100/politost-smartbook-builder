@@ -18,7 +18,7 @@ const STATUSES: QuestionStatus[] = ['draft', 'verified', 'issue'];
 const DIFFS: Difficulty[] = ['facile', 'medio', 'difficile'];
 const STATUS_TONE: Record<QuestionStatus, string> = { draft: '', verified: 'success', issue: 'danger' };
 
-const excerpt = (s: string) => s.replace(/\$[^$]*\$/g, '…').replace(/[#*:{}]/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
+const excerpt = (s: string) => s.replace(/\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$[^$]*\$/g, '…').replace(/[#*:{}]/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
 
 export default function PracticePage() {
   useDocumentTitle('Practice');

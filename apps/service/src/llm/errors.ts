@@ -112,5 +112,5 @@ export const CLI_LOGIN: Record<string, { name: string; command: string }> = {
 
 export function loginAction(provider: string): string {
   const info = CLI_LOGIN[provider] ?? { name: provider, command: `${provider} login` };
-  return `Sign in to ${info.name}: run "${info.command}" in a terminal, then press Retry.`;
+  return `Sign in to ${info.name}: run "${info.command}" in a terminal, then press Continue.`;
 }

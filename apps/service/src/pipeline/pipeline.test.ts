@@ -1305,6 +1305,16 @@ describe('r8. excluded sources stop counting', () => {
     assert.equal(row(generated).chapter_id, 'c1', 'questions without a source are unaffected');
     assert.equal(row(bad).chapter_id, null);
     assert.equal(row(bad2).chapter_id, null);
+
+    // The writer's session count agrees with the exam guide's.
+    ctx.db.run(`UPDATE resources SET included = 0 WHERE id = 'out'`);
+    ctx.db.run('DELETE FROM questions');
+    examsIn('in', 'S1', t); examsIn('out', 'S2', t); examsIn('out', 'S3', t);
+    const [d1] = [newId()];
+    seedOutline([['c1', [d1]]], { topicIds: [t] });
+    fake.next(answer({ markdown: 'Un paragrafo.', figures: [], noFigureReason: 'nessuna', summary: 's' }));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: d1 }));
+    assert.match(fake.calls.at(-1)!.prompt, /Limiti: \d+ of 1 exam sessions/);
   });
 });
 

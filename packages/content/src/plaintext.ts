@@ -1,7 +1,7 @@
 // The reader shows figure captions and alt text as plain text, so LaTeX there would appear raw.
 
 const SUP: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾', n: 'ⁿ', i: 'ⁱ', x: 'ˣ' };
-const SUB: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎', n: 'ₙ', k: 'ₖ', x: 'ₓ' };
+const SUB: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎', a: 'ₐ', e: 'ₑ', h: 'ₕ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', l: 'ₗ', m: 'ₘ', n: 'ₙ', o: 'ₒ', p: 'ₚ', r: 'ᵣ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ' };
 const SYMBOLS: Record<string, string> = {
   to: '→', infty: '∞', cdot: '·', times: '×', le: '≤', leq: '≤', ge: '≥', geq: '≥', neq: '≠', ne: '≠', approx: '≈', sim: '∼',
   in: '∈', pm: '±', mp: '∓', Rightarrow: '⇒', iff: '⇔', forall: '∀', exists: '∃', ldots: '…', dots: '…', circ: '∘', partial: '∂',
@@ -34,3 +34,24 @@ export function latexToPlain(text: string): string {
     .replace(/\s+/g, ' ')
     .trim();
 }
+
+/**
+ * Caption text for the reader, which prints it as plain text: formulas lose their LaTeX, and a bare "E_n" or "n^2"
+ * (the way a model writes a caption) becomes "Eₙ" or "n²". A subscript whose letters Unicode has no form for
+ * (b, c, d, f, g, q, w, y, z) stays as written, because a half-converted subscript reads worse. An exponent is
+ * converted whole or not at all, so "e^-kt" stays and never becomes "e⁻kt".
+ */
+export function captionToPlain(text: string): string {
+  return latexToPlain(text)
+    .split(/(\s+)/)
+    .map((word) => (NOT_MATH.test(word) ? word : word
+      .replace(/\^([+-]?\d+|[+-]?[nix](?![\p{L}\p{N}])|[+-](?![\p{L}\p{N}(]))/gu, (_, a: string) => [...a].map((c) => SUP[c]).join(''))
+      .replace(SUBSCRIPT, (m, base: string, a: string) => ([...a].every((c) => SUB[c]) ? base + [...a].map((c) => SUB[c]).join('') : m))))
+    .join('');
+}
+
+// A web address or a file name ("plot_1.png") is never a formula.
+const NOT_MATH = /:\/\/|^www\.|\.[a-z]{2,4}$/i;
+// A subscript hangs on a symbol of one or two letters ("E_n", "ΔH_vap", "σ*_1s") or on a closing bracket ("[A]_0").
+// A longer word before the underscore is a name, such as the user name in a photo credit ("Anna_123").
+const SUBSCRIPT = /((?<!\p{L})\p{L}{1,2}\*?|[\])])_([0-9a-z]+)/gu;
