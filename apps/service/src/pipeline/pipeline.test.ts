@@ -1363,6 +1363,20 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
       assert.match(state('i1').resolution, /the check could not run/);
     });
 
+    test('the author saved new text while the claim was checked: the issue stays open with that reason', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', 'Testo uno.\n\nAltro.');
+      issue('i1', { quote: 'Testo uno.' });
+      fake.next(patchAnswer({ changes: [], resolved: [{ issues: [1], reason: 'Già detto.' }] }), () => {
+        ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1'`);
+        seedRevision('s1', 'Testo uno, riscritto dall\'autrice.\n\nAltro.');
+        return verdicts([true, 'Sì.'])();
+      });
+      await fix(['i1']);
+      assert.equal(state('i1').status, 'open');
+      assert.match(state('i1').resolution, /section changed while the fix and the check ran/);
+    });
+
     test('with other changes: the changed blocks are checked against their own issues, and the claim is settled apart', async () => {
       seedOutline([['c1', ['s1']]]);
       seedRevision('s1', 'Prima frase.\n\nSeconda frase.');

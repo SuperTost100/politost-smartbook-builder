@@ -418,8 +418,15 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       for (const i of claimed) rejected.set(i.id, 'the check could not run');
     }
   }
-  const settleClaims = () => {
+  // The checker read the blocks captured before the calls. A verdict is applied only while the section is still the revision those
+  // blocks came from (or the one this fix just wrote on top of it), like a revision is only applied over the head it was based on.
+  const settleClaims = (expectedHead: string) => {
+    const stale = claimed.length > 0 && headRevision(ctx, projectId, nodeId)?.id !== expectedHead;
     for (const i of claimed) {
+      if (stale) {
+        ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id = ?`, 'The section changed while the fix and the check ran, so the check of the old text was not applied. Review it again against the new text.', i.id);
+        continue;
+      }
       const gone = i.quote.trim() && !blocks.some((b) => quoteInBlock(i.quote, b)) ? ' The passage it quoted is no longer in the section.' : '';
       if (confirmed.has(i.id)) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id = ?`, `Already resolved in the current text: ${confirmed.get(i.id)}${gone}`, i.id);
       else ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id = ?`, `The AI said the text already fixes this, but the check disagreed: ${rejected.get(i.id)}`, i.id);
@@ -500,7 +507,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     discardUnstored(built, []);
     ctx.db.tx(() => {
       reopen(fixable, (id) => `The AI fix was not applied: ${dropped(fixable.find((i) => i.id === id)!) ?? fallback}`);
-      settleClaims();
+      settleClaims(head.id);
     });
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
     return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }) };
@@ -549,7 +556,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
         const r = dropped(i);
         return r ? `The AI fix was not applied: ${r}` : `The AI fix did not resolve it: ${unresolved.get(fixable.indexOf(i))}`;
       });
-      settleClaims();
+      settleClaims(applied ? committed.revId : head.id);
     });
     saved = true;
   } finally {
