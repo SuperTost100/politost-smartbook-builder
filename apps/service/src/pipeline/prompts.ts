@@ -347,36 +347,49 @@ ${f.kinds.map((k) => KIND_BLOCKS[k](f)).join('\n')}${markup}
   Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0"${f.kinds.includes('structure') ? ', "H2O"' : ''}); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
 
+/**
+ * The draft prompt is ordered from what is the same for every section of the book to what is specific to this one, so the
+ * provider can reuse the start of the prompt (its cache) from one section to the next. The system prompt holds the role, the
+ * format rules, the figure rules and the writing instructions, which depend only on the book. The user prompt goes from the book
+ * (notation, section ids) to the chapter (plan, formula keys known so far), to what was written before, the program items, the
+ * evidence and, last, the task.
+ */
 export function draftPrompt(p: DraftPromptInput) {
   const lang = languageName(p.language);
   const length = p.section.depth === 'deep' ? '1200-2200' : p.section.depth === 'brief' ? '400-800' : '800-1500';
   return {
     system: `You write one section of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. You explain clearly and rigorously, state definitions and theorems with all hypotheses, give worked examples with every step, and point out the mistakes students usually make. You rely on the evidence provided; you never invent results the evidence does not support.
 
-${formatRules(p.language)}`,
-    prompt: `CHAPTER: ${p.chapterTitle}
-Chapter plan (sections in order; yours is marked ►):
-${p.chapterPlan}
+${formatRules(p.language)}
 
-YOUR SECTION: ${p.section.title}  (section id ${p.section.id})
-Objectives:
-${p.section.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
-Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
-Depth: ${p.section.depth} (about ${length} words)
-Topics and how often the exams test them:
-${p.topics}
-${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
+${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}
+
+INSTRUCTIONS
+- Cover the objectives in a logical order: motivation, definitions, results with hypotheses, at least one fully worked example, typical mistakes. Use ### subsections for the planned subsections.
+- After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
+- ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
+- Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
+- This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
+- ${draftAnswerFormat(p.figures)}`,
+    prompt: `BOOK
 Notation to follow:
 ${p.notation || '(standard notation of the field)'}
 
-Already written earlier in the book (do not repeat, refer back with links when useful):
-${p.earlier || '(nothing yet)'}
+Section ids you may link to:
+${p.sectionIds}
+
+CHAPTER: ${p.chapterTitle}
+Chapter plan (sections in order):
+${p.chapterPlan}
 
 Known formula keys from other sections (reference them with {{formula:@key}}; never define a formula block with one of these keys again):
 ${p.knownFormulas || '(none)'}
 
-Section ids you may link to:
-${p.sectionIds}
+Already written earlier in the book (do not repeat, refer back with links when useful):
+${p.earlier || '(nothing yet)'}
+${p.figures && p.bookFigures ? `\nFigures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}\n` : ''}${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
+Topics and how often the exams test them:
+${p.topics}
 
 EVIDENCE NOTES (verbatim passages from the course sources; cite them):
 ${p.evidence || '(no notes)'}
@@ -387,14 +400,11 @@ ${p.summary || '(none)'}
 SOURCE PAGES (clean transcriptions of the pages the notes come from; use them for exact formulas and statements):
 ${p.pages || '(none)'}
 
-INSTRUCTIONS
-- Cover the objectives in a logical order: motivation, definitions, results with hypotheses, at least one fully worked example, typical mistakes. Use ### subsections for the planned subsections.
-- After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
-- ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
-- Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
-- This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
-- ${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
-- ${draftAnswerFormat(p.figures)}`,
+Write the section "${p.section.title}" (section id ${p.section.id}).
+Objectives:
+${p.section.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
+Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
+Depth: ${p.section.depth} (about ${length} words)`,
   };
 }
 
@@ -514,17 +524,19 @@ FINDINGS (every finding is about one place. Be selective only with thin and proo
   };
 }
 
-/** One repair round after lint findings. */
+/** One repair round after lint findings. The static text is in the system prompt, then the section, then the problems. */
 export function repairPrompt(p: { language: string; markdown: string; findings: string }) {
   return {
-    system: `You fix formatting problems in a textbook section written in ${languageName(p.language)} without changing its content or its [[nX]] markers.\n\n${formatRules(p.language)}`,
-    prompt: `The section below has these problems (rule: message, line, text):
-${p.findings}
+    system: `You fix formatting problems in a textbook section written in ${languageName(p.language)} without changing its content or its [[nX]] markers.
 
-Return the full corrected section; change only what the problems require. ${bodyFormatRule('the corrected section', false)}
+${formatRules(p.language)}
 
-SECTION:
-${p.markdown}`,
+You are given a section and the problems found in it (rule: message, line, text). Return the full corrected section; change only what the problems require. ${bodyFormatRule('the corrected section', false)}`,
+    prompt: `SECTION:
+${p.markdown}
+
+The section above has these problems (rule: message, line, text):
+${p.findings}`,
   };
 }
 /** The corrected section as plain text. */

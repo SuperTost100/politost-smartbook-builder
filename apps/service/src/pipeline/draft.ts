@@ -191,7 +191,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   } else {
     prompt = draftPrompt({
       language: project.language, bookTitle: project.title, audience: project.audience, notation: outline.outline.notation,
-      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter, nodeId),
+      chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter),
       section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
       topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
       earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,

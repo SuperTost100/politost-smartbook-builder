@@ -1752,8 +1752,8 @@ describe('chemistry figures: structures and photos', () => {
     fake.next(written({ markdown: 'Testo.', figures: [], noFigureReason: 'Solo definizioni.', summary: 'r' }));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.noFigureReason, 'Solo definizioni.');
-    assert.match(fake.calls[0].prompt, /kind: "structure"|structure: a molecule/);
-    assert.doesNotMatch(fake.calls[0].prompt, /photo: a stock photo/);
+    assert.match(fake.calls[0].system ?? '', /kind: "structure"|structure: a molecule/);
+    assert.doesNotMatch(fake.calls[0].system ?? '', /photo: a stock photo/);
   });
 
   test('a fix for a useless figure can remove it, so the issue does not stay open for ever', async () => {
@@ -1970,7 +1970,7 @@ describe('figures are checked where they are born', () => {
     ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous' }), P);
     fake.next(written(twoFigures()), answer(verdict(false, false)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
-    assert.match(fake.calls[0].prompt, /Most sections have at least one place where a figure shows something faster than words/);
+    assert.match(fake.calls[0].system ?? '', /Most sections have at least one place where a figure shows something faster than words/);
     assert.equal(r.figures, 0);
     assert.equal(r.figureProblems.length, 2);
     assert.doesNotMatch(current(s1), /:::image/);

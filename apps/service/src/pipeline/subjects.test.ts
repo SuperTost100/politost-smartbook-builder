@@ -154,8 +154,8 @@ describe('prompts that name the subject', () => {
       language: 'it', bookTitle: 'T', audience: '', notation: '', chapterTitle: 'C', chapterPlan: '', section: { id: 's', title: 'S', objectives: [], depth: 'standard', subsections: '' },
       topics: '', earlier: '', knownFormulas: '', sectionIds: '', evidence: '', pages: '', summary: '', figures: null, outside: false,
     });
-    assert.match(p.prompt, /Do not add figures/);
-    assert.doesNotMatch(p.prompt, /Kinds \(/);
+    assert.match(p.system, /Do not add figures/);
+    assert.doesNotMatch(p.system, /Kinds \(/);
   });
 
   test('the reviewer does not ask for missing figures and takes its excluded cases from the subject', () => {

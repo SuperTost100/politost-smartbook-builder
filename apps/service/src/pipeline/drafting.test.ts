@@ -179,3 +179,56 @@ describe('the long text travels outside JSON', () => {
     assert.equal(current('s1'), 'Il valore è 5 ohm.\n\nCon $\\nu_1$ a riga:\n\n$$\ni_1 = 2\n$$');
   });
 });
+
+/** Finishes a task the way the queue does, so the writers of later sections can read its summary. */
+const finish = (t: TaskContext, result: unknown) => ctx.db.run(`UPDATE tasks SET state = 'succeeded', result = ?, finished_at = ? WHERE id = ?`, JSON.stringify(result), now(), t.task.id);
+
+describe('the draft prompt goes from what every section shares to what only this one has', () => {
+  const ohm = ':::formula{key="legge-ohm" label="Legge di Ohm"}\n$$V = R\\,i$$\n:::';
+
+  async function twoSections() {
+    seedOutline([['c1', ['s1', 's2']]]);
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.notation', 'Tensioni $v$, correnti $i$.')`);
+    fake.next(written({ markdown: `Una resistenza.\n\n${ohm}`, summary: 'Definita la resistenza e la legge di Ohm.' }), written({ markdown: 'Il partitore.', summary: 'Il partitore di tensione.' }));
+    const t1 = startTask('section.draft', { nodeId: 's1' });
+    finish(t1, await sectionDraft(ctx, t1));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: 's2' }));
+    return fake.calls.slice(0, 2);
+  }
+
+  test('two sections of one chapter share the system prompt and the start of the user prompt, as far as the book and the chapter go', async () => {
+    const [a, b] = await twoSections();
+    assert.equal(a.system, b.system);
+    const shared = (x: string, y: string) => { let n = 0; while (n < x.length && x[n] === y[n]) n++; return n; };
+    // The book block (notation, section ids) and the chapter plan come before the first thing that differs between sections.
+    const bookAndChapter = a.prompt.indexOf('Known formula keys');
+    assert.ok(bookAndChapter > 0);
+    assert.ok(shared(a.prompt, b.prompt) >= bookAndChapter, `the prompts first differ at ${shared(a.prompt, b.prompt)}, before "Known formula keys" at ${bookAndChapter}`);
+    assert.match(a.prompt.slice(0, bookAndChapter), /Notation to follow:\nTensioni \$v\$, correnti \$i\$\.[\s\S]*Section ids you may link to:\ns1: Sezione 1\.1\ns2: Sezione 1\.2[\s\S]*Chapter plan/);
+    assert.doesNotMatch(a.prompt.slice(0, bookAndChapter), /►/, 'the plan does not mark the section, so it is the same for every section');
+    assert.match(a.system ?? '', /^You write one section[\s\S]*OUTPUT FORMAT[\s\S]*FIGURES[\s\S]*INSTRUCTIONS[\s\S]*<<<META>>>/);
+  });
+
+  test('the user prompt runs from the book to the chapter, the earlier sections, the evidence and the task', async () => {
+    const [a] = await twoSections();
+    const at = ['Notation to follow', 'Section ids you may link to', 'CHAPTER:', 'Known formula keys', 'Already written earlier', 'Topics and how often', 'EVIDENCE NOTES', 'SOURCE PAGES', 'Write the section "Sezione 1.1"'].map((h) => a.prompt.indexOf(h));
+    assert.ok(at.every((n) => n >= 0), String(at));
+    assert.deepEqual([...at].sort((x, y) => x - y), at);
+    assert.match(a.prompt, /Write the section "Sezione 1\.1" \(section id s1\)\.\nObjectives:\n- Obiettivo 1\.1\n[\s\S]*Depth: standard \(about 800-1500 words\)$/);
+  });
+
+  test('section 2 reads the summary and the formula keys of section 1', async () => {
+    const [, b] = await twoSections();
+    assert.match(b.prompt, /Already written earlier in the book[^\n]*\n- Sezione 1\.1 \[s1\]: Definita la resistenza e la legge di Ohm\./);
+    assert.match(b.prompt, /Known formula keys[^\n]*\nlegge-ohm: Legge di Ohm/);
+  });
+
+  test('the repair prompt has the static rules in the system prompt, then the section, then the problems', async () => {
+    seedOutline([['c1', ['s1']]]);
+    fake.next(written({ markdown: 'Il valore è [?] ohm.' }), plain('Il valore è 5 ohm.'));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    const repair = fake.calls[1];
+    assert.match(repair.system ?? '', /^You fix formatting problems[\s\S]*OUTPUT FORMAT[\s\S]*Answer with the corrected section as plain text/);
+    assert.match(repair.prompt, /^SECTION:\nIl valore è \[\?\] ohm\.\n\nThe section above has these problems \(rule: message, line, text\):\nplaceholder:/);
+  });
+});
