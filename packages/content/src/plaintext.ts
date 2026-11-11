@@ -1,7 +1,7 @@
 // The reader shows figure captions and alt text as plain text, so LaTeX there would appear raw.
 
 const SUP: Record<string, string> = { '0': '⁰', '1': '¹', '2': '²', '3': '³', '4': '⁴', '5': '⁵', '6': '⁶', '7': '⁷', '8': '⁸', '9': '⁹', '+': '⁺', '-': '⁻', '=': '⁼', '(': '⁽', ')': '⁾', n: 'ⁿ', i: 'ⁱ', x: 'ˣ' };
-const SUB: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎', n: 'ₙ', k: 'ₖ', x: 'ₓ' };
+const SUB: Record<string, string> = { '0': '₀', '1': '₁', '2': '₂', '3': '₃', '4': '₄', '5': '₅', '6': '₆', '7': '₇', '8': '₈', '9': '₉', '+': '₊', '-': '₋', '=': '₌', '(': '₍', ')': '₎', a: 'ₐ', e: 'ₑ', h: 'ₕ', i: 'ᵢ', j: 'ⱼ', k: 'ₖ', l: 'ₗ', m: 'ₘ', n: 'ₙ', o: 'ₒ', p: 'ₚ', r: 'ᵣ', s: 'ₛ', t: 'ₜ', u: 'ᵤ', v: 'ᵥ', x: 'ₓ' };
 const SYMBOLS: Record<string, string> = {
   to: '→', infty: '∞', cdot: '·', times: '×', le: '≤', leq: '≤', ge: '≥', geq: '≥', neq: '≠', ne: '≠', approx: '≈', sim: '∼',
   in: '∈', pm: '±', mp: '∓', Rightarrow: '⇒', iff: '⇔', forall: '∀', exists: '∃', ldots: '…', dots: '…', circ: '∘', partial: '∂',
@@ -33,4 +33,15 @@ export function latexToPlain(text: string): string {
     .replace(/"/g, '”')
     .replace(/\s+/g, ' ')
     .trim();
+}
+
+/**
+ * Caption text for the reader, which prints it as plain text: formulas lose their LaTeX, and a bare "E_n" or "n^2"
+ * (the way a model writes a caption) becomes "Eₙ" or "n²". A subscript whose letters Unicode has no form for
+ * (b, c, d, f, g, q, w, y, z) stays as written, because a half-converted subscript reads worse.
+ */
+export function captionToPlain(text: string): string {
+  return latexToPlain(text)
+    .replace(/\^([+-]?\d+|[+-]|[nix])/g, (_, a) => [...a].map((c) => SUP[c]).join(''))
+    .replace(/_([0-9a-z]+)/g, (m, a) => ([...a].every((c) => SUB[c]) ? [...a].map((c) => SUB[c]).join('') : m));
 }

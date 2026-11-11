@@ -340,6 +340,17 @@ test('figure captions lose LaTeX and get chapter numbers', async () => {
   assert.equal(latexToPlain('$x^{10} = o(x^2)$'), 'x¹⁰ = o(x²)');
 });
 
+test('figure captions turn bare x_n and x^n notation into Unicode subscripts and superscripts', async () => {
+  const { captionToPlain } = await import('./plaintext.ts');
+  assert.equal(captionToPlain('E_n = -R_h/n^2'), 'Eₙ = -Rₕ/n²');
+  assert.equal(captionToPlain('Struttura di NCO^-'), 'Struttura di NCO⁻');
+  assert.equal(captionToPlain('Orbitali σ_1s e σ*_1s'), 'Orbitali σ₁ₛ e σ*₁ₛ');
+  assert.equal(captionToPlain('Rapporto e/m_e'), 'Rapporto e/mₑ');
+  assert.equal(captionToPlain('Il rapporto ΔH_vap/R'), 'Il rapporto ΔHᵥₐₚ/R');
+  assert.equal(captionToPlain('Costante 10^-3 e $x^2$'), 'Costante 10⁻³ e x²');
+  assert.equal(captionToPlain('un nome_file resta'), 'un nome_file resta', 'a subscript with letters Unicode lacks stays as written');
+});
+
 test('links into chapters left out of an export become plain text with a minor finding', async () => {
   const { compileBook } = await import('./compile.ts');
   const book = compileBook({
