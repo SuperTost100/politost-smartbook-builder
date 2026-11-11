@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, writeFileSync } from 'node:fs';
+import { isInkDrawing } from '@smartbuilder/content';
 import { assertSafeSvg } from '../repo/assets.ts';
 import { ELEMENTS, parseSpecies, suggestSymbol } from './elements.ts';
 import {
@@ -135,7 +136,9 @@ test('example figures render as safe SVG (and are written out for review when DI
     const svg = render(kind, spec, lang);
     assertSafeSvg(svg);
     assert.match(svg, /^<svg [^>]*role="img" aria-label="[^"]+"[^>]*font-family="system-ui/);
-    assert.match(svg, /<title>[^<]+<\/title>\n<rect width="\d+" height="\d+" fill="#FFFFFF"\/>/);
+    assert.match(svg, /<title>[^<]+<\/title>\n/);
+    assert.ok(isInkDrawing(svg), `${name}: marked as dark ink`);
+    assert.doesNotMatch(svg, /<rect width="\d+" height="\d+" fill=/, `${name}: no background rectangle`);
     assert.equal(render(kind, spec, lang), svg, `${name}: rendering must be deterministic`);
     assert.doesNotMatch(svg, /NaN|undefined|Infinity/);
     if (dir) writeFileSync(`${dir}/${name}.svg`, svg);

@@ -3,6 +3,7 @@ import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import type { Asset, Enrichment, QuestionCheck } from '@smartbuilder/domain';
 import { api, apiUrl, errorText } from '../../lib/api';
+import { useInkFigure } from '../../lib/inkFigure';
 import { qk, useManuscript } from '../../lib/queries';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
@@ -86,6 +87,8 @@ function FigureCard({ a, sections }: { a: Asset; sections: { id: string; label: 
   const [caption, setCaption] = useState(a.caption);
   const [alt, setAlt] = useState(a.alt);
   const [nodeId, setNodeId] = useState(a.nodeId ?? '');
+  const url = apiUrl('GET /api/assets/:assetId/file', { params: { assetId: a.id } });
+  const ink = useInkFigure(a.filename, url);
   const dirty = caption !== a.caption || alt !== a.alt || nodeId !== (a.nodeId ?? '');
   const save = useMutation({
     mutationFn: () => api('PATCH /api/assets/:assetId', { params: { assetId: a.id }, body: { caption, alt, nodeId: nodeId || null } }),
@@ -94,7 +97,7 @@ function FigureCard({ a, sections }: { a: Asset; sections: { id: string; label: 
   });
   return (
     <article className="ex-card ui-card">
-      <div className="ex-fig"><img src={apiUrl('GET /api/assets/:assetId/file', { params: { assetId: a.id } })} alt={a.alt || a.filename} loading="lazy" /></div>
+      <div className="ex-fig"><img src={url} alt={a.alt || a.filename} loading="lazy" data-ink={ink ? 'dark' : undefined} /></div>
       <div className="ex-card__body">
         <div className="ui-row"><span className="ui-mono ui-wrap ex-fname">{a.filename}</span><span className="ui-badge">{ORIGIN_LABEL[a.origin]}</span></div>
         <div className="ui-field"><label className="ui-field__label" htmlFor={`cap-${a.id}`}>Caption</label><input id={`cap-${a.id}`} className="ui-input ui-input--sm" value={caption} onChange={(e) => setCaption(e.target.value)} /></div>

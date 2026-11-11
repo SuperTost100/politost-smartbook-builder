@@ -1,3 +1,4 @@
+import { INK, INK_MARKER } from '@smartbuilder/content';
 import * as OCL from 'openchemlib';
 import { z } from 'zod';
 
@@ -220,7 +221,6 @@ export function nonbondingElectrons(atomicNo: number, charge: number, bondOrderS
 // ---------------------------------------------------------------------------------------------
 
 const FONT = "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif";
-const INK = '#111827';
 const SOFT = '#374151';
 const BOND = 40;
 const MARGIN = 24;
@@ -642,9 +642,8 @@ export function renderStructureSvg(spec: StructureSpec): string {
   const label = title || `Structure of ${spec.smiles.trim()}`;
 
   const svg: string[] = [];
-  svg.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)}" font-family="${FONT}">`);
+  svg.push(`<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 ${W} ${H}" width="${W}" height="${H}" role="img" aria-label="${esc(label)}" font-family="${FONT}" ${INK_MARKER}>`);
   svg.push(`<title>${esc(label)}</title>`);
-  svg.push(`<rect width="${W}" height="${H}" fill="#FFFFFF"/>`);
   svg.push(`<g transform="translate(${f2(ox)} ${f2(oy)})">`);
   svg.push(...out);
   svg.push(`<g fill="${INK}" font-size="${FS}">${texts.join('')}</g>`);

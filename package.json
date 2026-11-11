@@ -22,6 +22,7 @@
     "backup": "node --import tsx apps/service/src/bin/backup.ts backup",
     "restore": "node --import tsx apps/service/src/bin/backup.ts restore",
     "normalize-text": "node --import tsx apps/service/src/bin/normalize-text.ts",
+    "redraw-figures": "node --import tsx apps/service/src/bin/redraw-figures.ts",
     "figure-packages": "node scripts/fetch-figure-packages.mjs"
   },
   "devDependencies": {

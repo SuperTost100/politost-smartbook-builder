@@ -19,3 +19,6 @@
 .ex-code { max-height: 260px; }
 .ex-bad { color: var(--danger); font-size: 13px; }
 @media (max-width: 900px) { .ex-enr__cols { grid-template-columns: minmax(0, 1fr); } }
+/* A figure with dark ink on a transparent background follows the page theme (see reader.css), so its mat is the card surface. */
+[data-theme='dark'] .ex-fig:has(img[data-ink]) { background: var(--surface); }
+[data-theme='dark'] .ex-fig img[data-ink] { filter: invert(1) hue-rotate(180deg); }

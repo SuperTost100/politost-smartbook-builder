@@ -112,3 +112,8 @@ button.sb-link, .smartbook-ref.sb-link { display: inline; padding: 0; border: 0;
   .reader-preview { padding: var(--space-6) var(--space-4); }
   .sb-chhead h1 { font-size: 26px; line-height: 32px; }
 }
+
+/* A drawn figure is transparent with dark ink and says so (data-sb-ink="dark" on its root, read as data-ink on the <img>).
+   The page theme cannot reach inside an <img>, so on a dark page the picture is inverted: dark ink turns light and the hue
+   rotation brings the colours back to roughly where they were. Figures without the marker (photos, older books) are untouched. */
+[data-theme='dark'] .sb-figure-frame img[data-ink] { filter: invert(1) hue-rotate(180deg); }
