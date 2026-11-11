@@ -297,6 +297,17 @@ describe('error mapping and fallback', () => {
       assert.equal(fake.calls.length, 2, 'the waiting task made no call');
     });
 
+    test('a first route that hits its limit while the fallback is cooling waits for the earlier of the two resets', async () => {
+      setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, vision: { primary: route('claude') } });
+      fake.next(() => ({ text: 'd', limit: limit(600_000) }), full);
+      // Claude, the fallback, reports its limit first: ten minutes.
+      await runRole(kit.ctx, { ...base, role: 'vision' });
+      // Codex is ready, so it is tried alone, and its own call fails with a two-hour limit.
+      const wait = waits(await outcome(runRole(kit.ctx, { ...base, role: 'bulk' })));
+      assert.ok(wait > 0 && wait <= 600_000, `waits ${wait} ms, for the Claude reset and not the Codex one`);
+      assert.equal(fake.calls.length, 2, 'the failed call is the only one the role made');
+    });
+
     test('a provider with a limit does not stop a role from using its fallback on another provider', async () => {
       useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
       fake.next(full, () => ({ text: 'one' }), () => ({ text: 'two' }));
