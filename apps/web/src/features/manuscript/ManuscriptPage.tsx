@@ -199,8 +199,13 @@ export default function ManuscriptPage() {
   useEffect(() => {
     if (wasEditing.current !== null && editor.editing === null) {
       const i = wasEditing.current;
-      // Not when another block's editor has opened meanwhile (leaving one block for another): it holds the focus.
-      requestAnimationFrame(() => { if (!blocksRef.current?.querySelector('.ms-edit')) blocksRef.current?.querySelector<HTMLElement>(`[data-block="${i}"]`)?.focus(); });
+      // Not when another block's editor has opened meanwhile (leaving one block for another): it holds the focus. And not
+      // when the author has already moved to another block: taking the focus back would make their next key act on this one.
+      requestAnimationFrame(() => {
+        const blocks = blocksRef.current;
+        const moved = document.activeElement instanceof HTMLElement && document.activeElement !== document.body && !!blocks?.contains(document.activeElement);
+        if (!blocks?.querySelector('.ms-edit') && !moved) blocks?.querySelector<HTMLElement>(`[data-block="${i}"]`)?.focus();
+      });
     }
     wasEditing.current = editor.editing;
   }, [editor.editing]);
