@@ -85,7 +85,7 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
  */
 export function rewriteHead(
   ctx: AppContext, projectId: string, nodeId: string, fix: (markdown: string) => string,
-  o: { origin?: ContentOrigin; model?: string | null; expectedHeadId?: string | null } = {},
+  o: { origin?: ContentOrigin; model?: string | null; expectedHeadId?: string | null; taskId?: string | null } = {},
 ): ContentRevision | null {
   return ctx.db.tx(() => {
     const head = currentHead(ctx, projectId, nodeId);
@@ -94,7 +94,7 @@ export function rewriteHead(
     const markdown = fix(head.markdown);
     if (markdown === head.markdown) return null;
     return makeCurrent(ctx, projectId, nodeId, head, {
-      projectId, nodeId, kind: head.kind, markdown, origin: o.origin ?? 'repair', model: o.model ?? null, parentRevId: head.id, status: 'current', citations: carryCitations(head.markdown, markdown, head.citations),
+      projectId, nodeId, kind: head.kind, markdown, origin: o.origin ?? 'repair', model: o.model ?? null, parentRevId: head.id, status: 'current', citations: carryCitations(head.markdown, markdown, head.citations), taskId: o.taskId,
     });
   });
 }

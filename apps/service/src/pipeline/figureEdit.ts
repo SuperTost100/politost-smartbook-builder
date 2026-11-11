@@ -11,7 +11,7 @@ import { buildFigures, cleanCaption, commitFigures, discardUnstored, type Figure
 import { currentHead, rewriteHead } from '../repo/content.ts';
 import { getAsset } from '../repo/assets.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
-import { loadProject } from './util.ts';
+import { loadProject, revisionForTask } from './util.ts';
 
 const OPEN = `('running', 'pausing', 'paused', 'waiting', 'cancelling')`;
 
@@ -24,12 +24,12 @@ export function activeRedraw(ctx: AppContext, projectId: string, assetId: string
 }
 
 /** Starts a redraw of one drawn figure. A second request for the same figure joins the run that is already working on it. */
-export function startRedraw(ctx: AppContext, projectId: string, o: { nodeId: string; assetId: string; caption: string; instruction: string }): RunSummary {
+export function startRedraw(ctx: AppContext, projectId: string, o: { nodeId: string; assetId: string; caption: string; instruction: string; shows?: string }): RunSummary {
   const running = activeRedraw(ctx, projectId, o.assetId);
   if (running) return ctx.queue.runSummary(running)!;
   const runId = ctx.queue.createRun(projectId, 'figure', [{
     kind: 'figure.redraw', key: `redraw:${o.assetId}:${Date.now().toString(36)}`, label: `Redraw ${o.caption ? `"${o.caption.slice(0, 60)}"` : 'a figure'}`,
-    input: { nodeId: o.nodeId, assetId: o.assetId, instruction: o.instruction }, pool: 'illustrator', maxAttempts: 2,
+    input: { nodeId: o.nodeId, assetId: o.assetId, instruction: o.instruction, ...(o.shows ? { shows: o.shows } : {}) }, pool: 'illustrator', maxAttempts: 2,
   }]);
   return ctx.queue.runSummary(runId)!;
 }
@@ -43,16 +43,22 @@ export function startDraw(ctx: AppContext, projectId: string, o: { nodeId: strin
   return ctx.queue.runSummary(runId)!;
 }
 
-/** Task `figure.redraw`: the redraw is made on a copy of the figure, and the text is pointed at the copy once it exists. */
+/**
+ * Task `figure.redraw`: the redraw is made on a copy of the figure, and the text is pointed at the copy once it exists. If the
+ * author changed that figure meanwhile (a caption, a render, a replacement), the text no longer names the asset the redraw
+ * started from, so the result is dropped instead of undoing their change.
+ */
 export async function figureRedraw(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
-  const { nodeId, assetId, instruction } = t.task.input as { nodeId: string; assetId: string; instruction: string };
+  const { nodeId, assetId, instruction, shows } = t.task.input as { nodeId: string; assetId: string; instruction: string; shows?: string };
   const old = getAsset(ctx, assetId);
   if (!drawingSpec(old)) throw new TaskError('This figure was not drawn from source code, so it cannot be redrawn.', 'input');
   if (!showsFigure(currentHead(ctx, projectId, nodeId)?.markdown ?? '', old.filename)) return { skipped: 'the figure is not in the text any more' };
 
   t.progress(`Redrawing: ${old.caption || old.filename}`);
   const copy = copyAsset(ctx, old);
+  // A description the author edited before asking is part of this change: the model gets it and the new drawing keeps it.
+  if (shows) ctx.db.update('assets', copy.id, { spec: { ...drawingSpec(old), shows } });
   let drawn: Awaited<ReturnType<typeof redrawDrawing>>;
   try {
     drawn = await redrawDrawing(ctx, copy.id, instruction, { signal: t.signal });
@@ -64,11 +70,15 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
     discardAsset(ctx, copy);
     throw new TaskError(drawn.error, 'input', 'The figure is unchanged. Change the instruction and try again.');
   }
+  if (t.signal.aborted) {
+    discardAsset(ctx, copy);
+    throw t.signal.reason ?? new Error('cancelled');
+  }
   // The head is read now: the author may have saved text meanwhile, and that text keeps what they wrote.
   const rev = rewriteHead(ctx, projectId, nodeId, (md) => swapSrc(md, old.filename, copy.filename), { origin: 'ai' });
   if (!rev) {
     discardAsset(ctx, copy);
-    return { skipped: 'the figure left the text while it was being redrawn' };
+    return { skipped: 'the figure was changed or left the text while it was being redrawn' };
   }
   announce(ctx, projectId, nodeId, rev);
   return { assetId: copy.id, revId: rev.id, look: drawn.look };
@@ -78,6 +88,9 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
 export async function figureDraw(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const { nodeId, afterBlock, anchor, description, caption } = t.task.input as { nodeId: string; afterBlock: number; anchor: string; description: string; caption: string };
+  // A task that runs again after its revision was committed (the service stopped before the queue noted it) must not draw again.
+  const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
+  if (mine) return { revId: mine.id, reused: true };
   const project = loadProject(ctx, projectId);
   const key = `figure-${newId().slice(0, 6)}`;
   const clean = cleanCaption(caption);
@@ -87,12 +100,16 @@ export async function figureDraw(ctx: AppContext, t: TaskContext) {
     drawing: { shows: description, family: 'other' },
   };
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: [request], photos: false, keepOwn: true,
+    projectId, nodeId, language: project.language, figures: [request], photos: false, keepOwn: true, required: true,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   const asset = built.assets[0];
   if (!asset) throw new TaskError(built.notes[0] ?? 'The illustrator could not draw this figure.', 'input', 'Describe the figure again, with the parts and labels you want.');
 
+  if (t.signal.aborted) {
+    discardUnstored(built, []);
+    throw t.signal.reason ?? new Error('cancelled');
+  }
   let stored: string[] = [];
   let rev: ReturnType<typeof rewriteHead> = null;
   try {
@@ -105,7 +122,7 @@ export async function figureDraw(ctx: AppContext, t: TaskContext) {
       const out = commitFigures(ctx, { projectId, nodeId, built, markdown: text, replace: false, replaced: [] });
       stored = out.stored;
       return out.markdown;
-    }, { origin: 'ai' });
+    }, { origin: 'ai', taskId: t.task.id });
   } finally {
     discardUnstored(built, rev ? stored : []);
   }

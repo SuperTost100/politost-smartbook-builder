@@ -146,6 +146,8 @@ export async function buildFigures(ctx: AppContext, o: {
   projectId: string; nodeId: string; language: string; figures: FigureRequest[]; photos: boolean;
   /** The node's current text stays (a fix or the figures pass), so its figures count as taken too. */
   keepOwn?: boolean;
+  /** The caller needs the drawing: when the illustrator cannot run, its error is thrown (a usage limit, a sign-in) instead of becoming a note. */
+  required?: boolean;
   runId?: string; taskId?: string; signal?: AbortSignal; progress?: (message: string) => void;
 }): Promise<BuiltFigures> {
   const out: BuiltFigures = { assets: [], renames: new Map(), notes: [] };
@@ -189,7 +191,7 @@ export async function buildFigures(ctx: AppContext, o: {
         drawn = await illustrate(ctx, { projectId: o.projectId, runId: o.runId, taskId: o.taskId, signal: o.signal, language: o.language, symbols, caption: fig.caption, shows: fig.drawing.shows, family: fig.drawing.family });
       } catch (err) {
         // A drawing is optional: when the illustrator cannot run, the section goes on without it.
-        if (o.signal?.aborted) throw err;
+        if (o.signal?.aborted || o.required) throw err;
         drawn = { ok: false, reason: `the drawing could not be made (${err instanceof Error ? err.message : String(err)})`, compileAttempts: 0, usage: { inputTokens: 0, outputTokens: 0, calls: 0 }, ms: 0 };
       }
       if (!drawn.ok) { out.notes.push(`${key}: ${drawn.reason}`); continue; }
@@ -245,10 +247,14 @@ export async function buildFigures(ctx: AppContext, o: {
   return out;
 }
 
+/** The attributes of an image block: quoted values are taken whole, so a brace inside alt text does not end the block early. */
+export const IMAGE_ATTRS = '(?:"[^"\\n]*"|[^}"\\n])*';
+
 /** Removes an image block (and its closing :::) that points at assets/<filename>. */
 export function removeImageBlock(markdown: string, filename: string) {
   const esc = filename.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return markdown.replace(new RegExp(`:::image\\{[^}]*src="assets/${esc}"[^}]*\\}\\s*\\n:::\\s*\\n?`, 'g'), '').replace(new RegExp(`:::image\\{[^}]*src="assets/${esc}"[^}]*\\}\\s*\\n?`, 'g'), '');
+  const open = `:::image\\{${IMAGE_ATTRS}?src="assets/${esc}"${IMAGE_ATTRS}\\}`;
+  return markdown.replace(new RegExp(`${open}\\s*\\n:::\\s*\\n?`, 'g'), '').replace(new RegExp(`${open}\\s*\\n?`, 'g'), '');
 }
 
 /**

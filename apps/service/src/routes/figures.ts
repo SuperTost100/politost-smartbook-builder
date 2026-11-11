@@ -9,7 +9,7 @@ import type { AppContext } from '../context.ts';
 import { newId } from '../db/db.ts';
 import { bookFigures, cleanCaption, removeImageBlock } from '../figures/materialize.ts';
 import {
-  copyAsset, discardAsset, figureDetails, figureOfSection, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, setBlockAttrs, storeUpload, swapSrc, writeFigureRevision,
+  copyAsset, discardAsset, figureDetails, figureOfSection, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, saveFigureDetails, storeUpload, swapSrc, writeFigureRevision,
 } from '../figures/author.ts';
 import { drawingSpec } from '../figures/drawing/edit.ts';
 import { loadProject } from '../pipeline/util.ts';
@@ -95,16 +95,9 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
     const drawing = drawingSpec(asset);
     if (body.shows !== undefined && !drawing) throw badInput('Only a drawn figure has a description to save.', undefined, 'shows');
-    const caption = body.caption === undefined ? undefined : cleanCaption(body.caption);
-    // The asset record is what the preview and the export read, and the block repeats the caption, so both change together.
-    ctx.db.tx(() => {
-      const values: Record<string, unknown> = {};
-      if (caption !== undefined) values.caption = caption;
-      if (body.shows !== undefined && drawing) values.spec = { ...drawing, shows: body.shows };
-      if (Object.keys(values).length) ctx.db.update('assets', asset.id, values);
-      writeFigureRevision(ctx, projectId, nodeId, (md) => (caption === undefined ? md : setBlockAttrs(md, asset.filename, { caption })), { expectedHeadId: head.id });
-    });
-    ctx.events.emit('asset.updated', { assetId: asset.id, nodeId }, { projectId });
+    // The caption and the description are read by every revision that names the asset, so the change is made on a copy (figures/author.ts).
+    const rev = saveFigureDetails(ctx, projectId, nodeId, asset, { caption: body.caption === undefined ? undefined : cleanCaption(body.caption), shows: body.shows }, head.id);
+    if (rev) ctx.events.emit('asset.updated', { assetId: asset.id, nodeId }, { projectId });
     return view(projectId, nodeId);
   });
 
@@ -140,11 +133,14 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post(`${base}/:assetId/redraw`, async (req) => {
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');
-    const body = parse(z.object({ baseRevId: baseRev, instruction: z.string().trim().min(1, 'Say what the drawing should change').max(1000) }), req.body);
+    const body = parse(z.object({ baseRevId: baseRev, instruction: z.string().trim().min(1, 'Say what the drawing should change').max(1000), shows: z.string().trim().min(1).max(4000).optional() }), req.body);
     const head = headOf(ctx, projectId, nodeId, body.baseRevId);
     const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
-    if (!drawingSpec(asset)) throw badInput('This figure was not drawn from source code, so it cannot be redrawn.');
-    return deps.startRedraw(ctx, projectId, { nodeId, assetId: asset.id, caption: asset.caption, instruction: body.instruction });
+    const drawing = drawingSpec(asset);
+    if (!drawing) throw badInput('This figure was not drawn from source code, so it cannot be redrawn.');
+    // A description the author edited goes with the redraw, which saves it on the new drawing.
+    const shows = body.shows !== undefined && body.shows !== drawing.shows ? body.shows : undefined;
+    return deps.startRedraw(ctx, projectId, { nodeId, assetId: asset.id, caption: asset.caption, instruction: body.instruction, ...(shows ? { shows } : {}) });
   });
 
   app.post(`${base}/:assetId/replace`, async (req) => {
@@ -238,8 +234,12 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const s = storedSearch(projectId, body.searchId);
     const hit = s.search.candidates[body.index];
     if (!hit) throw notFound('This photo');
-    const twin = bookFigures(ctx, projectId).get(`photo:${hit.c.provider}:${hit.c.id}`);
-    if (twin) throw new HttpError(409, 'photo_used', `This photo is already in ${twin.where}.`, 'Pick another photo.');
+    // Checked again after the download: another request may have inserted the same photo meanwhile.
+    const notUsed = () => {
+      const twin = bookFigures(ctx, projectId).get(`photo:${hit.c.provider}:${hit.c.id}`);
+      if (twin) throw new HttpError(409, 'photo_used', `This photo is already in ${twin.where}.`, 'Pick another photo.');
+    };
+    notUsed();
     const got = await deps.fetchChosenPhoto(hit, loadProject(ctx, projectId).language);
     if (!got.ok) throw new HttpError(502, 'photo_failed', got.reason, 'Pick another photo or try again.');
     const p = got.photo;
@@ -247,6 +247,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const text = cleanCaption(body.caption);
     const caption = text ? `${text.replace(/[.;:,]?$/, '.')} ${p.credit}` : p.credit;
     const alt = text || s.query;
+    notUsed(); // no await from here to the revision, so no other request can insert the photo in between
     const asset = storeAsset(ctx, projectId, {
       filename: `${nodeId.slice(0, 8)}-photo-${newId().slice(0, 6)}${p.ext}`, bytes: p.bytes, origin: 'stock', nodeId, caption, alt,
       spec: { provider: p.provider, id: p.id, pageUrl: p.pageUrl, author: p.author, license: p.license, query: s.query, mustShow: alt },

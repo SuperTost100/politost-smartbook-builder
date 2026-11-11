@@ -8,6 +8,7 @@ import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import { newId, now } from '../db/db.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { buildFigures, commitFigures, type FigureRequest } from '../figures/materialize.ts';
+import { saveFigureDetails } from '../figures/author.ts';
 import { currentHead, getAsset, listAssets, listRevisions, saveHuman } from '../repo/index.ts';
 import { activeRedraw, figureDraw, figureRedraw, startRedraw } from './figureEdit.ts';
 
@@ -36,12 +37,12 @@ afterEach(() => {
   kit.cleanup();
 });
 
-function task(kind: string, input: Record<string, unknown>): TaskContext {
+function task(kind: string, input: Record<string, unknown>, abort = new AbortController()): TaskContext {
   const runId = newId();
   ctx().db.insert('runs', { id: runId, project_id: P, kind: 'figure', status: 'running', snapshot: {}, created_at: now() });
   const id = newId();
   ctx().db.insert('tasks', { id, run_id: runId, project_id: P, kind, label: 'x', key: `${kind}:${id}`, input, state: 'running', pool: 'illustrator', attempts: 1, max_attempts: 2, created_at: now() });
-  return { task: { id, runId, projectId: P, kind, key: `${kind}:${id}`, label: 'x', input, attempts: 1 }, signal: new AbortController().signal, deps: {}, enqueue: () => [], progress: () => undefined, setProvider: () => undefined };
+  return { task: { id, runId, projectId: P, kind, key: `${kind}:${id}`, label: 'x', input, attempts: 1 }, signal: abort.signal, deps: {}, enqueue: () => [], progress: () => undefined, setProvider: () => undefined };
 }
 
 /** A section with a drawn figure made through the real build path, between two paragraphs. */
@@ -112,6 +113,40 @@ describe('redraw task', () => {
     assert.ok(file);
   });
 
+  test('a caption saved while the model worked is kept: the redraw is dropped instead of putting the old caption back', async () => {
+    const { assetId } = await sectionWithDrawing();
+    let saved = '';
+    fake.next((_input) => {
+      const h = currentHead(ctx(), P, N)!;
+      saved = saveFigureDetails(ctx(), P, N, getAsset(ctx(), assetId), { caption: 'Caption from another tab' }, h.id)!.id;
+      return { text: GOOD_2, usage: usageOf(10, 10) };
+    }, say('OK'));
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' })) as { skipped?: string };
+    assert.match(out.skipped ?? '', /changed or left the text/);
+    const now = currentHead(ctx(), P, N)!;
+    assert.equal(now.id, saved);
+    assert.match(now.markdown, /caption="Caption from another tab"/);
+    assert.equal(listAssets(ctx(), P).length, 2, 'the original and the caption copy, no redraw copy');
+  });
+
+  test('an edited description is saved with the redraw and the model gets it', async () => {
+    const { assetId } = await sectionWithDrawing();
+    fake.next(say(GOOD_2), say('OK'));
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.', shows: 'A rectangle of 20 by 10 pt.' })) as { assetId: string };
+    assert.equal((getAsset(ctx(), out.assetId).spec as { shows: string }).shows, 'A rectangle of 20 by 10 pt.');
+    assert.equal((getAsset(ctx(), assetId).spec as { shows: string }).shows, 'A circle.', 'the earlier asset keeps its description');
+    assert.match(fake.calls[0].prompt, /A rectangle of 20 by 10 pt\./);
+  });
+
+  test('a redraw cancelled during the look turn commits nothing and leaves no copy', async () => {
+    const { assetId, head } = await sectionWithDrawing();
+    const abort = new AbortController();
+    fake.next(say(GOOD_2), (_input) => { abort.abort(new Error('cancelled')); return { text: GOOD, usage: usageOf(10, 10) }; });
+    await assert.rejects(figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'x' }, abort)));
+    assert.equal(currentHead(ctx(), P, N)!.id, head.id);
+    assert.equal(listAssets(ctx(), P).length, 1);
+  });
+
   test('a second request for the same figure joins the redraw that is running', async () => {
     const { assetId } = await sectionWithDrawing();
     const a = startRedraw(ctx(), P, { nodeId: N, assetId, caption: 'Un cerchio', instruction: 'one' });
@@ -145,6 +180,34 @@ describe('draw task', () => {
     const head = saveHuman(ctx(), P, N, 'Primo.', null);
     fake.next(say('#circle('), say('#circle('), say('#circle('));
     await assert.rejects(figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'x', caption: '' })), (e: unknown) => e instanceof TaskError && e.kind === 'input');
+    assert.equal(currentHead(ctx(), P, N)!.id, head.id);
+    assert.equal(listAssets(ctx(), P).length, 0);
+  });
+
+  test('a task that runs again after its revision was committed returns that revision and draws nothing', async () => {
+    saveHuman(ctx(), P, N, 'Primo.', null);
+    fake.next(say(GOOD), say('OK'));
+    const t = task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'A circle.', caption: '' });
+    const first = await figureDraw(ctx(), t) as { revId: string };
+    fake.calls.length = 0;
+    const again = await figureDraw(ctx(), t) as { revId: string; reused?: boolean };
+    assert.equal(again.revId, first.revId);
+    assert.equal(fake.calls.length, 0);
+    assert.equal(listAssets(ctx(), P).length, 1);
+  });
+
+  test('a usage limit of the illustrator reaches the queue as a quota error, so the task can wait', async () => {
+    const head = saveHuman(ctx(), P, N, 'Primo.', null);
+    fake.next(() => new Error('429 rate limit exceeded, try again later'));
+    await assert.rejects(figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'x', caption: '' })), (e: unknown) => e instanceof TaskError && e.kind !== 'input');
+    assert.equal(currentHead(ctx(), P, N)!.id, head.id);
+  });
+
+  test('a drawing cancelled during the look turn commits nothing and stores no file', async () => {
+    const head = saveHuman(ctx(), P, N, 'Primo.', null);
+    const abort = new AbortController();
+    fake.next(say(GOOD), (_input) => { abort.abort(new Error('cancelled')); return { text: GOOD_2, usage: usageOf(10, 10) }; });
+    await assert.rejects(figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'x', caption: '' }, abort)));
     assert.equal(currentHead(ctx(), P, N)!.id, head.id);
     assert.equal(listAssets(ctx(), P).length, 0);
   });

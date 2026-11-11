@@ -29,6 +29,7 @@ before(async () => {
     },
     fetchChosenPhoto: async (hit) => {
       calls.fetch++;
+      await new Promise((r) => setTimeout(r, 25)); // a download takes time: two requests can be in it together
       return { ok: true, photo: { bytes: PNG, ext: '.png', mime: 'image/png', provider: hit.c.provider, author: hit.c.author, pageUrl: hit.c.pageUrl, id: hit.c.id, license: hit.c.license, credit: 'Foto: Ada / Wikimedia Commons, CC BY 4.0', check: 'ok' } };
     },
   }));
@@ -94,26 +95,58 @@ describe('figure details', () => {
 });
 
 describe('save caption and description', () => {
-  it('saves the caption into the figure and its block as one new revision, and the description without changing the picture', async () => {
+  it('a caption change is a new asset and a new revision, so the earlier revision keeps the earlier caption', async () => {
     const s = await seed();
-    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Figura 2: Un cerchio nuovo', shows: 'A bigger circle.' });
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Figura 2: Un cerchio nuovo' });
     assert.equal(r.status, 200);
     const head = headOf(s);
     assert.notEqual(head.id, s.headId);
     assert.equal(head.origin, 'human');
     assert.match(head.markdown, /caption="Un cerchio nuovo"/, 'the number is the builder\'s');
-    assert.equal(getAsset(t.ctx, s.drawn).caption, 'Un cerchio nuovo');
-    const spec = getAsset(t.ctx, s.drawn).spec as { shows: string; source: string };
-    assert.equal(spec.shows, 'A bigger circle.');
-    assert.equal(spec.source, SOURCE);
+    assert.ok(!head.markdown.includes(`assets/${s.drawnFile}"`), 'the text points at the copy');
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`))!;
+    assert.notEqual(fresh.id, s.drawn);
+    assert.equal(fresh.caption, 'Un cerchio nuovo');
+    assert.equal((fresh.spec as { source: string }).source, SOURCE, 'the copy is the same drawing');
+    // What a restore of the first revision shows: the first asset, with the first caption.
+    assert.equal(getAsset(t.ctx, s.drawn).caption, 'Un cerchio');
+    assert.ok(t.ctx.db.get('SELECT 1 FROM content_revisions WHERE id = ? AND markdown LIKE ?', s.headId, `%assets/${s.drawnFile}"%`));
   });
 
-  it('saving only the description makes no revision', async () => {
+  it('a description change is a new asset and a new revision too, and the picture stays', async () => {
     const s = await seed();
-    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, shows: 'A square.' });
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, shows: 'A bigger circle.' });
+    assert.equal(r.status, 200);
+    const head = headOf(s);
+    assert.notEqual(head.id, s.headId);
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`))!;
+    const spec = fresh.spec as { shows: string; source: string };
+    assert.equal(spec.shows, 'A bigger circle.');
+    assert.equal(spec.source, SOURCE);
+    assert.equal((getAsset(t.ctx, s.drawn).spec as { shows: string }).shows, 'A circle.');
+  });
+
+  it('saving what is already stored makes no copy and no revision', async () => {
+    const s = await seed();
+    const before = listAssets(t.ctx, s.projectId).length;
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Un cerchio', shows: 'A circle.' });
     assert.equal(r.status, 200);
     assert.equal(headOf(s).id, s.headId);
-    assert.equal((getAsset(t.ctx, s.drawn).spec as { shows: string }).shows, 'A square.');
+    assert.equal(listAssets(t.ctx, s.projectId).length, before);
+  });
+
+  it('a caption with braces in the alt text of the block is saved and removed whole', async () => {
+    const s = await seed();
+    const md = headOf(s).markdown.replace('alt="Un cerchio"', 'alt="Radius $r_{1}$"');
+    const head = saveHuman(t.ctx, s.projectId, 's1', md, s.headId);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: head.id, caption: 'Nuova' })).status, 200);
+    const saved = headOf(s).markdown;
+    assert.match(saved, /alt="Radius \$r_\{1\}\$"/);
+    assert.equal(saved.match(/caption="/g)?.length, 1);
+    assert.match(saved, /caption="Nuova"/);
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => saved.includes(`assets/${a.filename}"`))!;
+    assert.equal((await t.req('POST', url(s, `/${fresh.id}/remove`), { baseRevId: headOf(s).id })).status, 200);
+    assert.equal(headOf(s).markdown, ['### Intro', 'First paragraph.', 'Second paragraph.'].join('\n\n'));
   });
 
   it('answers 409 when the text moved on, and 400 for a description on a figure that is not drawn', async () => {
@@ -121,7 +154,7 @@ describe('save caption and description', () => {
     saveHuman(t.ctx, s.projectId, 's1', `${headOf(s).markdown}\n\nThird.`, s.headId);
     const stale = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'X' });
     assert.equal(stale.status, 409);
-    assert.equal(getAsset(t.ctx, s.drawn).caption, 'Un cerchio', 'nothing was saved');
+    assert.equal(listAssets(t.ctx, s.projectId).length, 1, 'nothing was saved');
     const up = storeAsset(t.ctx, s.projectId, { filename: 'a.png', bytes: PNG, origin: 'imported', nodeId: 's1' });
     const head = saveHuman(t.ctx, s.projectId, 's1', `${headOf(s).markdown}\n\n:::image{src="assets/a.png" alt="A"}\n:::`, headOf(s).id);
     assert.equal((await t.req('PATCH', url(s, `/${up.id}`), { baseRevId: head.id, shows: 'x' })).status, 400);
@@ -175,6 +208,16 @@ describe('redraw', () => {
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: 'old', instruction: 'x' })).status, 409);
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: s.headId, instruction: '  ' })).status, 400);
     assert.equal(calls.redraw.length, 1);
+  });
+
+  it('passes an edited description on to the task, and nothing when it is unchanged', async () => {
+    const s = await seed();
+    await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: s.headId, instruction: 'Bigger', shows: '  A bigger circle.  ' });
+    await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: s.headId, instruction: 'Same', shows: 'A circle.' });
+    assert.deepEqual(calls.redraw, [
+      { nodeId: 's1', assetId: s.drawn, caption: 'Un cerchio', instruction: 'Bigger', shows: 'A bigger circle.' },
+      { nodeId: 's1', assetId: s.drawn, caption: 'Un cerchio', instruction: 'Same' },
+    ]);
   });
 
   it('refuses a figure that is not a drawing', async () => {
@@ -338,6 +381,16 @@ describe('add a figure', () => {
     const again = await t.req('POST', url(s, '/photo'), { baseRevId: headOf(s).id, afterBlock: 0, searchId: found.searchId, index: 0, caption: 'Ancora' });
     assert.equal(again.status, 409);
     assert.equal(calls.fetch, 1);
+  });
+
+  it('the same photo inserted into two sections at once is added once', async () => {
+    const s = await seed();
+    const found = (await t.req('POST', `/api/projects/${s.projectId}/figure-photos/search`, { query: 'scheda' })).body;
+    const two = saveHuman(t.ctx, s.projectId, 's2', 'Other section.', null);
+    const body = (baseRevId: string) => ({ baseRevId, afterBlock: 0, searchId: found.searchId, index: 0, caption: 'Una scheda' });
+    const [a, b] = await Promise.all([t.req('POST', url(s, '/photo'), body(s.headId)), t.req('POST', url({ ...s, nodeId: 's2' }, '/photo'), body(two.id))]);
+    assert.deepEqual([a.status, b.status].sort(), [200, 409]);
+    assert.equal(listAssets(t.ctx, s.projectId).filter((x) => x.origin === 'stock').length, 1);
   });
 
   it('a photo needs a live search, and 409s a stale dialog', async () => {

@@ -14,6 +14,7 @@ import { assertSafeSvg, assetPath, getAsset, mapAsset, storeAsset } from '../rep
 import { badInput, notFound } from '../repo/errors.ts';
 import type { Rec } from '../repo/util.ts';
 import { relint } from '../routes/views.ts';
+import { IMAGE_ATTRS } from './materialize.ts';
 import { drawingSpec } from './drawing/edit.ts';
 
 /** The most an uploaded figure may weigh. */
@@ -51,7 +52,7 @@ export function figureDetails(asset: Asset, headRevId: string, redrawRunId: stri
  * A second asset row with its own file for the same picture. The author's change is made on the copy and the text then points
  * at it, so the old asset keeps serving the revisions that name it. Returns the new asset.
  */
-export function copyAsset(ctx: AppContext, asset: Asset): Asset {
+export function copyAsset(ctx: AppContext, asset: Asset, o: { keepDate?: boolean } = {}): Asset {
   const row = ctx.db.get<Rec>('SELECT * FROM assets WHERE id = ?', asset.id);
   if (!row) throw notFound('This figure');
   const id = newId();
@@ -67,7 +68,7 @@ export function copyAsset(ctx: AppContext, asset: Asset): Asset {
   try {
     ctx.db.insert('assets', {
       id, project_id: asset.projectId, node_id: asset.nodeId, filename, mime: asset.mime, path: toDataPath(ctx.config, to), origin: asset.origin, spec: asset.spec,
-      caption: asset.caption, alt: asset.alt, checks: asset.checks, created_at: now(),
+      caption: asset.caption, alt: asset.alt, checks: asset.checks, created_at: o.keepDate ? asset.createdAt : now(),
     });
   } catch (err) {
     rmSync(to, { force: true });
@@ -93,7 +94,7 @@ export function swapSrc(markdown: string, from: string, to: string): string {
 
 /** Sets caption and alt text in the attributes of the block that shows `filename`. */
 export function setBlockAttrs(markdown: string, filename: string, v: { caption?: string; alt?: string }): string {
-  return markdown.replace(/:::image\{([^}\n]*)\}/g, (all, attrs: string) => {
+  return markdown.replace(new RegExp(`:::image\\{(${IMAGE_ATTRS})\\}`, 'g'), (all, attrs: string) => {
     if (!attrs.includes(`src="assets/${filename}"`)) return all;
     let next = attrs;
     for (const [name, value] of Object.entries(v)) {
@@ -104,6 +105,37 @@ export function setBlockAttrs(markdown: string, filename: string, v: { caption?:
     }
     return `:::image{${next.trim()}}`;
   });
+}
+
+/**
+ * Saves a new caption and/or description of a figure as a new revision. Both live on the asset record, which every revision that
+ * names the asset reads, so the change is made on a copy and the text is pointed at it: an earlier revision keeps its own caption
+ * and description when it is restored. Returns the new revision, or null when nothing differs or the figure is not in the text.
+ * `expectedHeadId` is the head the author saw (409 when it moved).
+ */
+export function saveFigureDetails(
+  ctx: AppContext, projectId: string, nodeId: string, asset: Asset, v: { caption?: string; shows?: string }, expectedHeadId: string,
+): ContentRevision | null {
+  const drawing = drawingSpec(asset);
+  const caption = v.caption !== undefined && v.caption !== asset.caption ? v.caption : undefined;
+  const shows = v.shows !== undefined && drawing && v.shows !== drawing.shows ? v.shows : undefined;
+  if (caption === undefined && shows === undefined) return null;
+  const copy = copyAsset(ctx, asset, { keepDate: true });
+  try {
+    const values: Record<string, unknown> = {};
+    if (caption !== undefined) values.caption = caption;
+    if (shows !== undefined && drawing) values.spec = { ...drawing, shows };
+    ctx.db.update('assets', copy.id, values);
+    const rev = writeFigureRevision(ctx, projectId, nodeId, (md) => {
+      const swapped = swapSrc(md, asset.filename, copy.filename);
+      return caption === undefined ? swapped : setBlockAttrs(swapped, copy.filename, { caption });
+    }, { expectedHeadId });
+    if (!rev) discardAsset(ctx, copy);
+    return rev;
+  } catch (err) {
+    discardAsset(ctx, copy);
+    throw err;
+  }
 }
 
 /** The text with a block inserted after block `afterBlock` (counted as the editor counts them; -1 puts it first). */
