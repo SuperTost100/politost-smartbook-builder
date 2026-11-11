@@ -19,18 +19,22 @@ const MAX_FIGURES = 3;
 const IMAGE_SRC = /^:::image\{[^}]*src="assets\/([^"]+)"/;
 
 /**
- * The figures pass for one section. When Auto Fix routed review issues here (`issueIds` and a `brief` in the input), the
- * issue text is the brief, and the issues close as fixed only when a figure landed. Otherwise they stay open with the reason.
+ * The figures pass for one section. When Auto Fix routed review issues here (`issueIds` and a numbered `brief` in the input), the
+ * issue text is the brief and each proposed figure says which issue it answers. An issue closes only when a figure that answers
+ * it landed. The others stay open with the reason.
  */
 export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   const result = await figuresPass(ctx, t);
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
   if (issueIds.length) {
-    const r = result as { revId?: string; status?: string; added?: number; skipped?: string; noFigureReason?: string; figureProblems?: string[] };
-    const landed = !!r.revId && (r.added === undefined || r.added > 0);
-    if (!landed) setIssuesStatus(ctx, t.task.projectId, issueIds, 'open', `No figure was added: ${r.skipped ?? r.noFigureReason ?? (r.figureProblems?.length ? r.figureProblems.join('; ') : 'the figures pass proposed none')}`);
-    else if (r.status === 'current') setIssuesStatus(ctx, t.task.projectId, issueIds, 'fixed', `Figure added by the figures pass in revision ${r.revId}`);
-    else setIssuesStatus(ctx, t.task.projectId, issueIds, 'proposed', `Proposal ${r.revId}`);
+    const r = result as { revId?: string; status?: string; answered?: number[]; reused?: boolean; skipped?: string; noFigureReason?: string; figureProblems?: string[] };
+    const why = r.skipped ?? r.noFigureReason ?? (r.figureProblems?.length ? r.figureProblems.join('; ') : 'the figures pass proposed none');
+    // A retry that finds its earlier result does not know which figures answered which issue.
+    const answered = new Set(r.reused ? [] : r.answered ?? []);
+    const hit = issueIds.filter((_, n) => answered.has(n + 1));
+    const missed = issueIds.filter((id) => !hit.includes(id));
+    if (hit.length) setIssuesStatus(ctx, t.task.projectId, hit, r.status === 'current' ? 'fixed' : 'proposed', r.status === 'current' ? `Figure added by the figures pass in revision ${r.revId}` : `Proposal ${r.revId}`);
+    if (missed.length) setIssuesStatus(ctx, t.task.projectId, missed, 'open', hit.length ? 'No figure answered this issue: the figures pass added figures for the other issues only.' : r.reused ? 'An earlier attempt of this task stored its result, and which issue each figure answers was not kept.' : `No figure was added: ${why}`);
   }
   return result;
 }
@@ -94,9 +98,15 @@ async function figuresPass(ctx: AppContext, t: TaskContext) {
   // Each image block goes in after its block; existing citations move with their blocks. Text is never rewritten.
   const existing = existingAssetNames(ctx, projectId);
   const after = new Map<number, string[]>();
+  const answered = new Set<number>();
+  const issueCount = Array.isArray(t.task.input.issueIds) ? t.task.input.issueIds.length : 0;
   for (const f of kept) {
     const block = rewriteImageRefs(`:::image{src="assets/${f.key}.svg"}\n:::`, built, existing);
-    if (block.trim()) after.set(f.afterBlock, [...(after.get(f.afterBlock) ?? []), block.trim()]);
+    if (!block.trim()) continue;
+    after.set(f.afterBlock, [...(after.get(f.afterBlock) ?? []), block.trim()]);
+    // A figure without a valid number answers the only issue there is, and none of several.
+    const n = f.issue ?? (issueCount === 1 ? 1 : 0);
+    if (Number.isInteger(n) && n >= 1 && n <= issueCount) answered.add(n);
   }
   const texts: string[] = [];
   const citations: Record<string, string[]> = {};
@@ -122,6 +132,6 @@ async function figuresPass(ctx: AppContext, t: TaskContext) {
   }
   if (stored.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
-  return { revId: committed.revId, status: committed.status, added: stored.length, figureProblems: notes, model: route.model };
+  return { revId: committed.revId, status: committed.status, added: stored.length, ...(issueCount ? { answered: [...answered].sort((a, b) => a - b) } : {}), figureProblems: notes, model: route.model };
 }
 

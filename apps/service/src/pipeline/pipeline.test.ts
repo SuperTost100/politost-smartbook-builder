@@ -2178,6 +2178,22 @@ describe('figures pass: figures for written sections, text untouched', () => {
       assert.equal(state().status, 'fixed');
     });
 
+    test('with several issues, only the ones a surviving figure answers close', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
+      missing();
+      missing({ id: 'f2', quote: 'Altro.', message: 'Manca un secondo schema' });
+      const input = { nodeId: 's1', issueIds: ['f1', 'f2'], brief: '1. Manca la struttura\n2. Manca un secondo schema' };
+      fake.next(answer({ figures: [fig({ issue: 1 }), fig({ key: 'altro', issue: 2, afterBlock: 2 })], noFigureReason: null }), answer({ figures: [{ index: 1, keep: true, reason: 'utile' }, { index: 2, keep: false, reason: 'decorativa' }] }));
+      const r = await sectionFigures(ctx, startTask('section.figures', input));
+      assert.equal(r.added, 1);
+      assert.match(fake.calls[0].prompt, /"issue"/);
+      const of = (id: string) => ({ ...ctx.db.get<{ status: string; resolution: string }>('SELECT status, resolution FROM review_issues WHERE id = ?', id)! });
+      assert.equal(of('f1').status, 'fixed');
+      assert.equal(of('f2').status, 'open');
+      assert.match(of('f2').resolution, /No figure answered this issue/);
+    });
+
     test('when the pass proposes none, or the section is full, the issue stays open with the reason', async () => {
       seedOutline([['c1', ['s1']]]);
       seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");

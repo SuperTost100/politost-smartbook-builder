@@ -926,6 +926,7 @@ Give each block once. To add a paragraph, include it in the text of the block it
 export const figuresPassSchemaFor = (figures: FigureSetup) => z.object({
   figures: z.array(figureSchemaFor(schemaKinds(figures)).extend({
     afterBlock: z.number().int().min(1).describe('number of the block the figure illustrates, from the [n] labels; the figure goes right after it'),
+    issue: z.number().int().min(1).nullable().optional().describe('when the task lists numbered review problems, the number of the one problem this figure answers; otherwise leave null'),
   })),
   noFigureReason: z.string().nullable().optional().describe('leave null'),
 });
@@ -945,7 +946,7 @@ Figures the section already has: ${p.existing || '(none)'}
 ${p.elsewhere ? `Figures other sections already show (the book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption):\n${p.elsewhere}\n` : ''}
 TEXT, numbered by block:
 ${p.blocks}
-${p.brief ? `\nA REVIEW FOUND A FIGURE MISSING. What it asks for:\n${p.brief}\nDesign the figures that answer it. When no figure fits the text, return none and say why in one sentence.\n` : ''}
+${p.brief ? `\nA REVIEW FOUND A FIGURE MISSING. What it asks for:\n${p.brief}\nDesign the figures that answer it, and give each figure the number of the problem it answers in "issue". When no figure fits the text, return none and say why in one sentence.\n` : ''}
 INSTRUCTIONS
 - Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
 - Every number, species, label and direction in a figure must match the text exactly.
