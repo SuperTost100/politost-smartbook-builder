@@ -8,23 +8,45 @@ function isRange(v: unknown): v is [number, number] {
   return Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && (v[0] as number) < (v[1] as number);
 }
 
-/** A sampled plotly graph, as `sampleFunctionGraph` writes it: the same rules, read back from the arrays. */
+/**
+ * The trace types the reader draws (`TRACE_TYPES` in the reader's plotlySanitize.ts) and the data each needs.
+ * "scattergl" is read as "scatter", and a trace with no type is a scatter.
+ */
+const DATA_KEYS: Record<string, string[]> = { scatter: ['y'], bar: ['y'], histogram: ['x', 'y'], box: ['x', 'y'], pie: ['values'] };
+
+const nonEmpty = (v: unknown): boolean => Array.isArray(v) && v.length > 0;
+
+/**
+ * A plotly graph, read back from its arrays. Only a function curve (a scatter drawn as lines or markers) gets the sampled-curve
+ * checks that `sampleFunctionGraph` applies. Other supported traces pass when they hold the data their type needs.
+ */
 function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: string } {
   const data = cfg.data;
   if (!Array.isArray(data) || data.length === 0) return { ok: false, detail: 'config.data must hold at least one curve' };
   const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { yaxis?: { range?: unknown } };
   const view = isRange(layout.yaxis?.range) ? layout.yaxis.range : null;
   const problems: string[] = [];
-  for (const [i, t] of data.entries()) {
-    const ys = (t as { y?: unknown } | null)?.y;
+  let curves = 0;
+  for (const [i, raw] of data.entries()) {
     const name = `data[${i}]`;
-    if (!Array.isArray(ys) || ys.length === 0) { problems.push(`${name}: y must be a non-empty array`); continue; }
+    const t = (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : null) as Record<string, unknown> | null;
+    if (!t) { problems.push(`${name}: not a trace object`); continue; }
+    const authored = typeof t.type === 'string' ? t.type : 'scatter';
+    const type = authored === 'scattergl' ? 'scatter' : authored;
+    const keys = DATA_KEYS[type];
+    if (!keys) { problems.push(`${name}: trace type "${authored}" is not supported by the reader`); continue; }
+    if (!keys.some((k) => nonEmpty(t[k]))) { problems.push(`${name}: a ${authored} trace needs a non-empty ${keys.join(' or ')} array`); continue; }
+    const mode = typeof t.mode === 'string' ? t.mode : 'lines+markers';
+    if (type !== 'scatter' || !/lines|markers/.test(mode)) continue;
+    // A function curve: its y values must be mostly numbers, and some must fall in the visible range.
+    curves++;
+    const ys = t.y as unknown[];
     const finite = ys.filter((y): y is number => typeof y === 'number' && Number.isFinite(y));
     if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain`);
     else if (view && !finite.some((y) => y >= view[0] && y <= view[1])) problems.push(`${name}: never enters the visible range [${view[0]}, ${view[1]}]`);
   }
   if (problems.length) return { ok: false, detail: problems.join('; ') };
-  return { ok: true, detail: `Checked ${data.length} curve(s): all defined and visible.` };
+  return { ok: true, detail: curves ? `Checked ${data.length} trace(s), ${curves} curve(s) all defined and visible.` : `Checked ${data.length} trace(s): the data is there.` };
 }
 
 /** Checks for graph payloads: evaluates fn over the domain with the reader's expression rules. */
