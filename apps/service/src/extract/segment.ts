@@ -19,10 +19,35 @@ const LEADERS = /(?:\.\s?){4,}/;
 
 interface Line { page: number; text: string }
 
+/** Emphasis that wraps the start of a line: **bold**, __bold__, *italic*, _italic_. The closing mark must end a word, so a product "a*b" is not one. */
+const EMPHASIS = [/^\*{1,3}(?=[^\s*])([^*\n]*?[^\s*])\*{1,3}(?=\s|$|[.,:;!?)])/, /^_{1,3}(?=[^\s_])([^_\n]*?[^\s_])_{1,3}(?=\s|$|[.,:;!?)])/];
+const plainCell = (s: string) => EMPHASIS.reduce((t, re) => t.replace(re, '$1'), s.replace(/^#{1,6}\s+/, '')).trim();
+
+/**
+ * The lines of a page as plain text, so a source written in Markdown reads like the PDF of the same paper: "## Esercizio 1" and
+ * "**Problema 1** (12 punti)" lose their marks, a row of a pipe table gives one line per cell (as a PDF text layer does), and a
+ * separator row, an empty row and a rule ("---") give none. Text that is not Markdown comes back unchanged apart from trimming.
+ * shortcut: a table row needs a space inside its outer pipes ("| a | b |"), because "|x| + |y|" is also a line of math. Upgrade when a real file writes "|a|b|".
+ */
+export function plainLines(text: string): string[] {
+  const out: string[] = [];
+  for (const raw of text.split('\n')) {
+    const l = raw.trim();
+    if (!l || /^(?:-{3,}|\*{3,})$/.test(l) || /^\|[\s:|-]*-[\s:|-]*\|$/.test(l)) continue;
+    if (/^\|\s.*\s\|$/.test(l)) {
+      out.push(...l.slice(1, -1).split(/(?<!\\)\|/).map((c) => plainCell(c.trim())).filter(Boolean));
+      continue;
+    }
+    const plain = plainCell(l);
+    if (plain) out.push(plain);
+  }
+  return out;
+}
+
 function pageLines(pages: PageText[]): Line[] {
   const out: Line[] = [];
   for (const p of pages) {
-    const raw = p.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const raw = plainLines(p.text);
     let kept = 0;
     raw.forEach((l, i) => {
       // Page numbers sit among the first lines; section numbers sit right before a session heading.

@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import { test } from 'node:test';
 import { buildAiSplit, summarizeSplit } from '../pipeline/examSplit.ts';
 import { extractResource, segmentQuestions, splitQuestions, storeResource } from './index.ts';
+import { splitMarkdown } from './markdown.ts';
 import { findDate, segmentExams, splitExams } from './segment.ts';
 import { makeCtx } from './testkit.ts';
 import { seedPage, seedResource } from '../llm/testkit.ts';
@@ -222,6 +223,34 @@ test('splitQuestions: an exam file with unknown headings is reported as "no head
   seedPage(ctx, 'blank', 0, 'Testo senza alcuna intestazione riconoscibile.');
   const blank = splitQuestions(ctx, 'blank');
   assert.deepEqual([blank.rows.length, summarizeSplit(blank.rows, blank.noHeading).warning], [0, 'no_questions']);
+});
+
+// ---------- a Markdown exam file (acceptance run, 11 November 2026) ----------
+
+// Two Elettrotecnica papers written in Markdown: a header table with pipes, "**Problema 1**" in bold and "**Soluzioni (Appello del …)**" after each paper.
+const MARKDOWN_EXAMS = readFileSync(new URL('./testdata/appelli-elettrotecnica-2024.md', import.meta.url), 'utf8');
+const markdownPages = () => splitMarkdown(MARKDOWN_EXAMS, 'appelli').units.map((u, idx) => ({ idx, text: u.text }));
+
+test('a Markdown exam file: bold exercise headings and a header table with pipes still give the two sessions and their problems', () => {
+  const split = splitExams('r', markdownPages(), { label: 'appelli-elettrotecnica-2024', untitled: true });
+  assert.equal(split.noHeading, false);
+  const sessions = new Map<string, string[]>();
+  for (const r of split.rows) sessions.set(r.examGroup!, [...(sessions.get(r.examGroup!) ?? []), `${r.number}:${r.examDate}`]);
+  assert.deepEqual([...sessions.keys()], ['Prova scritta del 12 febbraio 2024', 'Prova scritta del 3 luglio 2024']);
+  assert.deepEqual(split.rows.slice(0, 2).map((r) => r.number), ['1', '2']);
+  assert.match(split.rows[0].statement, /^Problema 1 \(12 punti\)\n+Un generatore di tensione continua/);
+  assert.doesNotMatch(split.rows[0].statement, /\*\*|\|/);
+  assert.equal(split.rows[0].examDate, '2024-02-12');
+});
+
+test('Markdown marks: heading marks, bold, italics and a pipe table are read as the plain lines they stand for', () => {
+  const rows = segmentExams('r', pages([
+    '# Appello del 5 luglio 2024', '', '| Cognome e nome | ________ |', '|---|---|', '| **Data** | 05/07/2024 |', '---', '',
+    '## Esercizio 1', 'Un resistore da $10\\ \\Omega$.', '', '__Esercizio 2__ (8 punti)', 'Un condensatore.', '', '*Quesito 3*', 'Un induttore.',
+  ]), { label: 'x', untitled: true });
+  assert.deepEqual(summary(rows), ['Appello del 5 luglio 2024 #1 2024-07-05 p0-0', 'Appello del 5 luglio 2024 #2 2024-07-05 p0-0', 'Appello del 5 luglio 2024 #3 2024-07-05 p0-0']);
+  assert.deepEqual(rows.map((r) => r.statement.split('\n')[0]), ['Esercizio 1', 'Esercizio 2 (8 punti)', 'Quesito 3']);
+  assert.ok(rows[0].statement.includes('$10\\ \\Omega$'), 'math keeps its characters');
 });
 
 // ---------- the real Analisi papers ----------

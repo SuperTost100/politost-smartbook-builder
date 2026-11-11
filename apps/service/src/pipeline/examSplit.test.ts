@@ -1,5 +1,6 @@
 // Exam split warnings in the sources API and the run, and "Split with AI" with scripted model answers.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
@@ -160,6 +161,25 @@ describe('Split with AI', () => {
     assert.match(questionRows('ex1')[1].statement, /^Es\. 2 Un condensatore .*\nCalcolare la costante di tempo\.$/);
     assert.ok(ctx.db.all<Record<string, any>>('SELECT kind, origin, status, exam_date FROM questions WHERE resource_id = ?', 'ex1').every((q) => q.kind === 'exam' && q.origin === 'authentic' && q.status === 'draft' && q.exam_date));
     assert.deepEqual([split('ex1').splitSessions, split('ex1').splitQuestions, split('ex1').splitWarning], [2, 3, null]);
+  });
+
+  test('a Markdown exam file: the model is shown the heading lines without their marks, and quotes them as they are shown', async () => {
+    const md = readFileSync(new URL('../extract/testdata/appelli-elettrotecnica-2024.md', import.meta.url), 'utf8');
+    resource('ex1', 'exams', [md], { filename: 'appelli-elettrotecnica-2024.md' });
+    const exercise = (n: number) => ({ number: String(n), page: 1, start: `Problema ${n} (12 punti)`, solution: { page: 1, start: `Problema ${n}.` } });
+    fake.next(answer({ sessions: [
+      { title: 'Prova scritta, Appello del 12 febbraio 2024', date: '2024-02-12', page: 1, start: 'Prova scritta, Appello del 12 febbraio 2024', exercises: [exercise(1), exercise(2)] },
+      { title: 'Prova scritta, Appello del 3 luglio 2024', date: '2024-07-03', page: 1, start: 'Prova scritta, Appello del 3 luglio 2024', exercises: [exercise(1), exercise(2)] },
+    ] }));
+    const out = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' }));
+    const prompt = String(fake.calls[0].prompt);
+    for (const line of ['Prova scritta, Appello del 12 febbraio 2024', 'Problema 1 (12 punti)', 'Problema 2 (12 punti)']) assert.ok(prompt.includes(`  ${line}\n`), `${line} is shown`);
+    assert.doesNotMatch(prompt, /\*\*|\| /);
+    assert.deepEqual(out, { applied: true, questions: 4, duplicates: 0, sessions: 2 });
+    const rows = ctx.db.all<Record<string, any>>('SELECT exam_group, number, statement, solution FROM questions WHERE resource_id = ? ORDER BY rowid', 'ex1');
+    assert.deepEqual(rows.map((r) => `${r.exam_group} #${r.number}`), ['Prova scritta del 12 febbraio 2024 #1', 'Prova scritta del 12 febbraio 2024 #2', 'Prova scritta del 3 luglio 2024 #1', 'Prova scritta del 3 luglio 2024 #2']);
+    assert.match(rows[0].statement, /^Problema 1 \(12 punti\)\n+Un generatore/);
+    assert.match(rows[3].solution, /^Problema 2\.\n+a\) \$\\tau = RC = 22/);
   });
 
   test('an answer that does not hold up leaves the file as it was, with the warning still shown', async () => {
