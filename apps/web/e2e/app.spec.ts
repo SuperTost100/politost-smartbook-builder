@@ -448,6 +448,21 @@ test('a figure block shows its picture in the editor preview', async ({ page, re
   await page.unroute(`**/api/projects/${bookId}/chapters/c1/preview`);
 });
 
+test.describe('book tabs on a phone', () => {
+  test.use({ viewport: { width: 375, height: 800 } });
+
+  test('the tab bar shows that more tabs exist and brings the active one into view', async ({ page }) => {
+    const tabs = page.getByRole('navigation', { name: 'Book sections' });
+    await page.goto(`/books/${bookId}/sources`);
+    await expect(tabs).toHaveAttribute('data-more', 'end');
+
+    await page.goto(`/books/${bookId}/export`);
+    const active = tabs.getByRole('link', { name: 'Export' });
+    await expect(active).toBeInViewport({ ratio: 1 });
+    await expect(tabs).toHaveAttribute('data-more', 'start');
+  });
+});
+
 // Autosave runs on its own section (s2) so the tests above keep their text. It saves about 3 s after the last keystroke.
 const AUTO_MD = 'Primo paragrafo.\n\nSecondo paragrafo.\n\nTerzo paragrafo.';
 

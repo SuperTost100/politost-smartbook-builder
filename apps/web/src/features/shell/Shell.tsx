@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { Link, NavLink, Outlet, useMatch, useNavigate } from 'react-router-dom';
+import { Link, NavLink, Outlet, useLocation, useMatch, useNavigate } from 'react-router-dom';
 import { Icon, Logo } from '../../components/Icon';
 import { Menu } from '../../components/Menu';
 import { Dialog } from '../../components/Dialog';
@@ -55,6 +55,23 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
     ro.observe(el);
     return () => ro.disconnect();
   }, []);
+  // Tabs that don't fit scroll sideways: bring the open one into view and mark the side that has more.
+  const tabs = useRef<HTMLElement>(null);
+  const { pathname } = useLocation();
+  useEffect(() => {
+    const el = tabs.current;
+    if (!el) return;
+    el.querySelector('.sh-tab.active')?.scrollIntoView({ inline: 'center', block: 'nearest' });
+    const mark = () => {
+      const more = [el.scrollLeft > 1 ? 'start' : '', el.scrollLeft + el.clientWidth < el.scrollWidth - 1 ? 'end' : ''].filter(Boolean).join(' ');
+      el.dataset.more = more;
+    };
+    mark();
+    el.addEventListener('scroll', mark, { passive: true });
+    const ro = new ResizeObserver(mark);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', mark); ro.disconnect(); };
+  }, [pathname, bookId]);
   const openIssues = (issues.data ?? []).filter((i) => i.status === 'open').length;
 
   return (
@@ -88,7 +105,7 @@ function TopBar({ bookId, stream }: { bookId?: string; stream: string }) {
 
       {bookId && (
         <div className="sh-tabs-row">
-          <nav className="sh-tabs" aria-label="Book sections">
+          <nav ref={tabs} className="sh-tabs" aria-label="Book sections">
             {TABS.map((t) => (
               <NavLink key={t.to} to={`/books/${bookId}/${t.to}`} className="sh-tab">
                 {t.label}
