@@ -91,10 +91,10 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.delete('/api/resources/:rid', async (req) => {
     const r = getResource(ctx, idParam(req, 'rid'));
-    deleteResource(ctx, r.id);
+    const questions = deleteResource(ctx, r.id);
     computePriorities(ctx, r.projectId);
     ctx.events.emit('resource.state', { resourceId: r.id, deleted: true }, { projectId: r.projectId });
-    return { ok: true as const };
+    return { ok: true as const, ...questions };
   });
 
   // ---------- pages ----------

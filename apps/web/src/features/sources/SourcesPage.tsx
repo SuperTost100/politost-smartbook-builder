@@ -28,6 +28,12 @@ const STATUS: Record<Resource['status'], { label: string; tone: string }> = {
   failed: { label: 'Failed', tone: 'danger' },
 };
 
+/** What the toast says after a delete: how many questions read from the source went, and how many stayed as the author's own. */
+function deletedText(d: { removedQuestions: number; keptQuestions: number }) {
+  const parts = [d.removedQuestions && `${plural(d.removedQuestions, 'question')} read from it removed`, d.keptQuestions && `${plural(d.keptQuestions, 'question')} you edited or that a chapter uses kept`].filter(Boolean);
+  return parts.length ? `Source deleted: ${parts.join(', ')}.` : 'Source deleted';
+}
+
 export default function SourcesPage() {
   useDocumentTitle('Sources');
   const pid = useBookId();
@@ -62,7 +68,7 @@ export default function SourcesPage() {
   });
   const remove = useMutation({
     mutationFn: (r: Resource) => api('DELETE /api/resources/:rid', { params: { rid: r.id } }),
-    onSuccess: (_d, r) => { toast('Source deleted'); setToDelete(null); refresh(); if (rid === r.id) navigate(`/books/${pid}/sources`); },
+    onSuccess: (d, r) => { toast(deletedText(d)); setToDelete(null); refresh(); if (rid === r.id) navigate(`/books/${pid}/sources`); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const prepare = useMutation({
@@ -173,7 +179,7 @@ export default function SourcesPage() {
       <ConfirmDialog
         open={!!toDelete}
         title="Delete source"
-        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.</>}
+        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.{toDelete && toDelete.role !== 'theory' ? ' Questions read from it are removed too, except those you edited or that a chapter already uses: they stay as your own.' : ''}</>}
         confirmLabel="Delete source"
         danger
         busy={remove.isPending}

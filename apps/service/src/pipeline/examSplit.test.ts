@@ -8,7 +8,7 @@ import { newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
 import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
-import { listResources, updateResource } from '../repo/index.ts';
+import { deleteResource, listResources, updateResource } from '../repo/index.ts';
 import { installFakes, projectBody, startApp, type TestApp } from '../routes/testkit.ts';
 import { splitExams } from '../extract/segment.ts';
 import { buildAiSplit, resourceSplit, splitMessage, type ExamSplitAnswer } from './examSplit.ts';
@@ -275,6 +275,54 @@ describe('Split with AI', () => {
   });
 });
 
+// The two versions of the exam file of the acceptance run: the same two papers, the second with the solutions attached.
+const PAPER = (day: string, first: string) => `Prova scritta, Appello del ${day}\nProblema 1 (12 punti)\n${first}\nProblema 2 (12 punti)\nUn secondo circuito.`;
+const EXAM_FILE = [PAPER('12 febbraio 2024', 'Un condensatore si carica.'), PAPER('3 luglio 2024', 'Un amplificatore invertente.')];
+
+describe('deleting a source takes out what was read from it', () => {
+  const prepare = (id: string) => resourceQuestions(ctx, startTask('resource.questions', { resourceId: id }));
+  const count = (id: string) => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE resource_id = ?', id)!.n;
+
+  test('the corrected file uploaded after the delete is stored in full, and nothing is counted as a duplicate of the old one', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    assert.deepEqual(await prepare('v1'), { questions: 4, duplicates: 0, sessions: 2 });
+    const [q] = questionRows('v1');
+    ctx.db.insert('review_issues', { id: 'i1', project_id: P, node_id: null, question_id: q.id, source: 'verification', severity: 'blocker', category: 'solution', message: 'Il risultato è sbagliato.', status: 'open', resolution: '', created_at: now() });
+    const out = deleteResource(ctx, 'v1');
+    assert.deepEqual(out, { removedQuestions: 4, keptQuestions: 0 });
+    assert.equal(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE project_id = ?', P)!.n, 0, 'no question of the deleted file is left');
+    assert.equal(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_issues WHERE id = ?', 'i1')!.n, 0, 'the problem about a removed question goes with it, or it would block the export for ever');
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 4, duplicates: 0, sessions: 2 });
+    assert.equal(count('v2'), 4);
+  });
+
+  test('a question you edited, or one already in a chapter, stays as your own and is not read again from a copy of the file', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    const [edited, inChapter] = questionRows('v1');
+    ctx.db.run(`UPDATE questions SET edited_at = ?, statement = 'Testo corretto a mano.' WHERE id = ?`, now(), edited.id);
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id = ?`, inChapter.id);
+    assert.deepEqual(deleteResource(ctx, 'v1'), { removedQuestions: 2, keptQuestions: 2 });
+    const kept = ctx.db.all<Record<string, any>>('SELECT id, resource_id, page_from, page_to, statement, exam_group, chapter_id FROM questions WHERE project_id = ? ORDER BY rowid', P);
+    assert.deepEqual(kept.map((k) => [k.id, k.resource_id, k.page_from, k.page_to]), [[edited.id, null, null, null], [inChapter.id, null, null, null]]);
+    assert.equal(kept[0].statement, 'Testo corretto a mano.');
+    assert.equal(kept[1].chapter_id, 'c1');
+    // They still count (no source says otherwise), so a new copy of the same paper does not add a second one of each.
+    assert.ok(ctx.db.get(`SELECT 1 FROM questions WHERE id = ? AND resource_id IS NULL`, edited.id));
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 2, duplicates: 2, sessions: 2 });
+  });
+
+  test('a source you excluded does not make the same paper in another file a duplicate', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    updateResource(ctx, 'v1', { included: false });
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 4, duplicates: 0, sessions: 2 });
+  });
+});
+
 describe('the author asks for the AI split', () => {
   test('a Prepare run has no split task unless the author asked for one file', async () => {
     resource('ex1', 'exams', ES_LAYOUT);
@@ -316,6 +364,16 @@ describe('API', () => {
     assert.deepEqual([list[0].splitSessions, list[0].splitQuestions, list[0].splitWarning], [1, 0, 'no_questions']);
     const patched = (await t.req('PATCH', '/api/resources/r-exams', { role: 'theory' })).body;
     assert.deepEqual([patched.role, patched.splitSessions, patched.splitWarning], ['theory', null, null]);
+  });
+
+  test('DELETE /api/resources/:rid says how many questions went and how many stayed', async () => {
+    const projectId = await seed('exams');
+    const insert = (id: string, o: Record<string, unknown> = {}) => t.ctx.db.insert('questions', { id, project_id: projectId, kind: 'exam', origin: 'authentic', resource_id: 'r-exams', page_from: 0, page_to: 0, exam_group: 'Appello', exam_date: '2024-02-12', number: id, statement: 'Testo.', hint: '', solution: '', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(), ...o });
+    insert('q1');
+    insert('q2', { chapter_id: 'c1' });
+    const res = await t.req('DELETE', '/api/resources/r-exams');
+    assert.deepEqual(res.body, { ok: true, removedQuestions: 1, keptQuestions: 1 });
+    assert.deepEqual(t.ctx.db.all<{ id: string; resource_id: string | null }>('SELECT id, resource_id FROM questions').map((q) => [q.id, q.resource_id]), [['q2', null]]);
   });
 
   test('POST /api/resources/:rid/split starts a prepare run for that one file', async () => {

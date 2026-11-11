@@ -96,7 +96,8 @@ export interface Api {
   'POST /api/projects/:id/resources/url': { body: { url: string; role: ResourceRole }; res: Resource };
   'GET /api/projects/:id/resources': { res: Resource[] };
   'PATCH /api/resources/:rid': { body: { role?: ResourceRole; included?: boolean }; res: Resource };
-  'DELETE /api/resources/:rid': { res: { ok: true } };
+  /** The questions read from the source are removed, except those the author edited or a chapter uses, which stay as the author's own. */
+  'DELETE /api/resources/:rid': { res: { ok: true; removedQuestions: number; keptQuestions: number } };
   /** Asks the bulk model where the sessions and exercises of one exam file start. Starts a prepare run; the answer replaces the file's questions only when it is valid. */
   'POST /api/resources/:rid/split': { res: RunSummary };
   'GET /api/resources/:rid/pages': { res: Pick<Page, 'id' | 'idx' | 'label' | 'quality'>[] };

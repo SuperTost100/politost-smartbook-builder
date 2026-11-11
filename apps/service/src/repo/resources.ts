@@ -5,6 +5,8 @@ import { paths, resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json } from '../db/db.ts';
 import { notFound } from './errors.ts';
+import { issuesChanged } from './issues.ts';
+import { questionsChanged } from './questions.ts';
 import { bool, type Rec } from './util.ts';
 
 // ---------- resources ----------
@@ -56,20 +58,39 @@ export function updateResource(ctx: AppContext, id: string, patch: { role?: Reso
   return getResource(ctx, id);
 }
 
-/** Deletes the resource with its pages and removes the stored file when no other resource uses it. */
-export function deleteResource(ctx: AppContext, id: string): void {
+/**
+ * Deletes the resource with its pages and removes the stored file when no other resource uses it. The questions read from it
+ * go too, with the review problems about them, because nothing else would take them out of the book and a corrected upload of the
+ * same paper would be counted as their duplicate. A question the author edited, or one a chapter already uses, stays: it loses
+ * its source (and its page range, which pointed into the deleted pages) and is the author's own from then on.
+ */
+export function deleteResource(ctx: AppContext, id: string): { removedQuestions: number; keptQuestions: number } {
   const row = ctx.db.get<Rec>('SELECT * FROM resources WHERE id = ?', id);
   if (!row) throw notFound('This source');
+  const gone: string[] = [];
+  const kept: string[] = [];
   ctx.db.tx(() => {
+    for (const q of ctx.db.all<{ id: string; edited_at: string | null; chapter_id: string | null }>('SELECT id, edited_at, chapter_id FROM questions WHERE resource_id = ?', id)) {
+      (q.edited_at !== null || q.chapter_id !== null ? kept : gone).push(q.id);
+    }
+    for (const qid of kept) ctx.db.run('UPDATE questions SET resource_id = NULL, page_from = NULL, page_to = NULL WHERE id = ?', qid);
+    const issues = gone.flatMap((qid) => ctx.db.all<{ id: string }>('SELECT id FROM review_issues WHERE question_id = ?', qid).map((r) => r.id));
+    for (const qid of gone) {
+      ctx.db.run('DELETE FROM review_issues WHERE question_id = ?', qid);
+      ctx.db.run('DELETE FROM questions WHERE id = ?', qid);
+    }
     ctx.db.run('DELETE FROM pages_fts WHERE rowid IN (SELECT rowid FROM pages WHERE resource_id = ?)', id);
     ctx.db.run('DELETE FROM resources WHERE id = ?', id);
+    issuesChanged(ctx, row.project_id, issues);
   });
+  questionsChanged(ctx, row.project_id, [...gone, ...kept]);
   const shared = ctx.db.get(
     'SELECT 1 FROM resources WHERE (sha256 = ? AND project_id = ?) OR path = ?', row.sha256, row.project_id, row.path ?? '');
   const projectDir = resolve(paths.project(ctx.config, row.project_id)) + sep;
   const file = typeof row.path === 'string' && row.path ? resolve(resolveDataPath(ctx.config, row.path)) : null;
   if (!shared && file && file.startsWith(projectDir) && existsSync(file)) rmSync(file, { force: true });
   rmSync(paths.pageCache(ctx.config, row.project_id, id), { recursive: true, force: true });
+  return { removedQuestions: gone.length, keptQuestions: kept.length };
 }
 
 // ---------- pages ----------

@@ -7,6 +7,7 @@ import { findDate, isSolutionMarker, joinLines, plainLines, sessionName, type Qu
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { questionsChanged } from '../repo/questions.ts';
+import { COUNTED_QUESTION_SQL } from './util.ts';
 
 // ---------- what a split found ----------
 
@@ -57,7 +58,8 @@ export function splitResult(ctx: AppContext, resourceId: string): Record<string,
 
 /**
  * Replaces the authentic questions of a file with `rows`. A session already stored from another file is not stored twice
- * (the same session can appear in two yearly files). The regex splitter and the AI split both store through here.
+ * (the same session can appear in two yearly files). Only questions that count are compared (`COUNTED_QUESTION_SQL`): one of an
+ * excluded source is not a copy, and one whose source was deleted but that stayed because the author edited it is. The regex splitter and the AI split both store through here.
  * With `keepWorkedOn` nothing is replaced when a question of the file was edited or checked, which is tested inside the
  * same transaction as the replacement so an edit made while a model call was pending is not lost.
  */
@@ -71,7 +73,7 @@ export function storeAuthenticQuestions(ctx: AppContext, projectId: string, reso
     ctx.db.run(`DELETE FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
     for (const q of rows) {
       const dup = q.kind === 'exam' && q.examDate && q.number
-        ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND resource_id != ?`, projectId, q.examGroup, q.number, resourceId)
+        ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND (resource_id IS NULL OR resource_id != ?) AND ${COUNTED_QUESTION_SQL}`, projectId, q.examGroup, q.number, resourceId)
         : undefined;
       if (dup) { duplicates++; continue; }
       const id = newId();
