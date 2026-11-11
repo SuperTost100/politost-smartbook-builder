@@ -325,4 +325,13 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX alignment_project ON alignment_reports(project_id);
   `,
+  // 6: what a model call cost and how it ended. Rows from before stay valid: the new columns are NULL there.
+  // attempt counts the calls of one runRole() invocation (1 first call, 2 repair or next route). fallback is 1 when the call ran on the role's fallback route.
+  `
+  ALTER TABLE usage ADD COLUMN cached_input_tokens INTEGER;
+  ALTER TABLE usage ADD COLUMN cache_creation_tokens INTEGER;
+  ALTER TABLE usage ADD COLUMN error_kind TEXT;
+  ALTER TABLE usage ADD COLUMN attempt INTEGER;
+  ALTER TABLE usage ADD COLUMN fallback INTEGER;
+  `,
 ];

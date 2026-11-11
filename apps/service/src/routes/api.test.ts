@@ -53,6 +53,10 @@ describe('projects', () => {
     assert.equal(patched.body.title, 'Nuovo titolo');
     assert.equal(patched.body.options.graphs, false);
     assert.equal(patched.body.options.ide, true, 'other options keep their value');
+    assert.equal(patched.body.options.noClaudeFallback, false, 'a book falls back from Claude by default');
+    const stay = await t.req('PATCH', `/api/projects/${id}`, { options: { noClaudeFallback: true } });
+    assert.equal(stay.body.options.noClaudeFallback, true);
+    assert.equal(stay.body.options.graphs, false);
     assert.equal(patched.body.language, 'it', 'untouched fields keep their value');
     assert.deepEqual(patched.body.authors, ['Ada']);
 
@@ -494,8 +498,8 @@ describe('runs', () => {
     for (const [i, o] of [[10, 5], [20, null], [30, 7]] as const) {
       t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, input_tokens, output_tokens, ms, ok, created_at) VALUES (?, ?, 'codex', ?, 'writer', ?, ?, 1, 1, ?)`, p.id, runId, 'm', i, o, now());
     }
-    t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, input_tokens, output_tokens, ms, ok, created_at) VALUES (?, ?, 'claude', 'c', 'planner', 1, 2, 1, 1, ?)`, p.id, runId, now());
-    assert.deepEqual(usageForRun(t.ctx, runId).map((u) => [u.provider, u.calls, u.inputTokens, u.outputTokens]), [['claude', 1, 1, 2], ['codex', 3, 60, null]]);
+    t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, input_tokens, output_tokens, cached_input_tokens, ms, ok, created_at) VALUES (?, ?, 'claude', 'c', 'planner', 1, 2, 1, 1, 1, ?)`, p.id, runId, now());
+    assert.deepEqual(usageForRun(t.ctx, runId).map((u) => [u.provider, u.calls, u.inputTokens, u.outputTokens, u.cachedInputTokens]), [['claude', 1, 1, 2, 1], ['codex', 3, 60, null, null]]);
 
     const detail = (await t.req('GET', `/api/runs/${runId}`)).body;
     assert.equal(detail.tasks.length, 2);

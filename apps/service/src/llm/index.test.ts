@@ -1,12 +1,14 @@
 import assert from 'node:assert/strict';
+import { readlinkSync } from 'node:fs';
+import { join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { FunnelError } from 'cli-funnel';
-import { DEFAULT_ROUTES } from '@smartbuilder/domain';
+import { DEFAULT_ROUTES, ROLES, type Role } from '@smartbuilder/domain';
 import { z } from 'zod';
 import { TaskError } from '../queue/queue.ts';
 import { setNlmRunner } from '../evidence/nlm.ts';
-import { classifyError, getConnections, llmTuning, parseRetryAfter, probeRole, resetConnectionsCache, resetLlmState, runRole, setFunnel } from './index.ts';
-import { FakeFunnel, makeCtx, usageOf } from './testkit.ts';
+import { callTimeoutMs, classifyError, getConnections, llmTuning, parseRetryAfter, probeRole, resetConnectionsCache, resetLlmState, runRole, setFunnel } from './index.ts';
+import { FakeFunnel, makeCtx, seedProject, usageOf } from './testkit.ts';
 
 const schema = z.object({ kind: z.enum(['a', 'b']), note: z.string().optional() });
 let fake: FakeFunnel;
@@ -452,4 +454,218 @@ describe('probe and connections', () => {
     ]);
     assert.equal(codex.limit, '5-hour window is full.');
   });
+});
+
+const route = (provider: string, model = 'm') => ({ provider, model });
+function setRoutes(routes: Partial<Record<Role, { primary: ReturnType<typeof route>; fallback?: ReturnType<typeof route> }>>, concurrency?: Record<string, number>) {
+  kit.ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, ...routes }, ...(concurrency ? { concurrency: { claude: 2, codex: 2, antigravity: 2, agent: 1, notebooklm: 2, ...concurrency } } : {}) });
+}
+
+describe('lean homes for the CLIs', () => {
+  test('Codex calls and the usage read run in the service\'s own Codex home; Claude calls without the web run as they are', async () => {
+    setRoutes({ bulk: { primary: route('codex') }, writer: { primary: route('claude') } });
+    kit.ctx.saveSettings({ routes: { ...kit.ctx.settings().routes, vision: { primary: route('codex'), fallback: route('claude') } } });
+    fake.usage.codex = { provider: 'codex', primary: { usedPercent: 1, windowMinutes: 300 } } as never;
+    fake.next(() => ({ text: 'a' }), () => ({ text: 'b' }), () => ({ text: 'c' }));
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    await runRole(kit.ctx, { ...base, role: 'writer' });
+    await runRole(kit.ctx, { ...base, role: 'vision' });
+    const home = join(kit.ctx.config.dataDir, 'codex-home');
+    assert.deepEqual(fake.calls.map((c) => c.env), [{ CODEX_HOME: home }, undefined, { CODEX_HOME: home }]);
+    assert.equal(readlinkSync(join(home, 'auth.json')), join(process.env.CODEX_HOME!, 'auth.json'));
+    // accountUsage runs when a role has a fallback: it reads the usage windows through the same home.
+    assert.deepEqual(fake.rateLimitOptions[0], { env: { CODEX_HOME: home } });
+  });
+
+  test('a web call runs Claude Code in a home with only the login, and offers it only the two web tools', async () => {
+    setRoutes({ research: { primary: route('claude') } });
+    fake.next((input) => ({ text: JSON.stringify({ kind: 'a' }), usage: usageOf(3, 1), structured: input && { kind: 'a' } }));
+    await runRole(kit.ctx, { ...base, role: 'research', web: true, schema });
+    const call = fake.calls[0];
+    assert.deepEqual(call.env, { CLAUDE_CONFIG_DIR: join(kit.ctx.config.dataDir, 'claude-home') });
+    const denied = call.providerOptions?.claude?.disallowedTools ?? [];
+    for (const tool of ['Bash', 'Read', 'Edit', 'Write', 'Agent', 'Skill']) assert.ok(denied.includes(tool), tool);
+    for (const tool of ['WebSearch', 'WebFetch']) assert.ok(!denied.includes(tool), tool);
+    assert.equal(call.selection.access, 'supervised');
+  });
+});
+
+describe('call timeouts per role', () => {
+  test('3 minutes for the short roles, 10 for the rest, and Antigravity keeps 10 in every role', () => {
+    for (const role of ['checker', 'bulk', 'vision', 'evidence', 'editor'] as const) assert.equal(callTimeoutMs(role, route('codex')), 3 * 60_000, role);
+    for (const role of ['writer', 'planner', 'reviewer', 'exercises', 'research', 'verifier'] as const) assert.equal(callTimeoutMs(role, route('codex')), 10 * 60_000, role);
+    assert.equal(callTimeoutMs('bulk', route('antigravity')), 10 * 60_000);
+    llmTuning.callTimeoutMs = 50;
+    assert.equal(callTimeoutMs('bulk', route('codex')), 50, 'a tuned limit below 3 minutes applies to every role');
+  });
+
+  test('a call that took 4 minutes and failed counts as a timeout for a checker task but not for a writer task', async () => {
+    seedProject(kit.ctx);
+    kit.ctx.db.run('PRAGMA foreign_keys = OFF');
+    const t = new Date().toISOString();
+    for (const [id, run] of [['old', 'r1'], ['new', 'r2']]) kit.ctx.db.insert('tasks', { id, run_id: run, project_id: 'p1', kind: 'x', label: 'x', key: 'k', created_at: t });
+    const call = (role: string) => kit.ctx.db.insert('usage', { project_id: 'p1', task_id: 'old', provider: 'codex', model: 'm', role, ms: 240_000, ok: 0, created_at: t });
+    call('checker');
+    setRoutes({ checker: { primary: route('codex'), fallback: route('claude') }, writer: { primary: route('codex'), fallback: route('claude') } });
+    fake.next(() => ({ text: 'ok' }), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'checker', taskId: 'new' })).route.provider, 'claude');
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'writer', taskId: 'new' })).route.provider, 'codex');
+  });
+});
+
+describe('one limit per provider', () => {
+  /** Calls of different roles that all take a while, and how many were running at the busiest moment. */
+  function busy() {
+    const state = { now: 0, peak: 0, perProvider: {} as Record<string, number>, peakPerProvider: {} as Record<string, number> };
+    const step = async (input: { selection: { provider: string } }) => {
+      const p = input.selection.provider;
+      state.now++;
+      state.perProvider[p] = (state.perProvider[p] ?? 0) + 1;
+      state.peak = Math.max(state.peak, state.now);
+      state.peakPerProvider[p] = Math.max(state.peakPerProvider[p] ?? 0, state.perProvider[p]);
+      await new Promise((r) => setTimeout(r, 20));
+      state.now--;
+      state.perProvider[p]--;
+      return { text: 'ok' };
+    };
+    return { state, step };
+  }
+
+  test('seven role pools on one provider never run more calls than its limit', async () => {
+    setRoutes({}, { codex: 2 });
+    const { state, step } = busy();
+    const codexRoles = ROLES.filter((r) => kit.ctx.settings().routes[r].primary.provider === 'codex');
+    assert.ok(codexRoles.length >= 6, 'the default routes put many roles on Codex');
+    fake.steps.push(...Array.from({ length: 24 }, () => step));
+    await Promise.all(Array.from({ length: 24 }, (_, i) => runRole(kit.ctx, { ...base, role: codexRoles[i % codexRoles.length] })));
+    assert.equal(state.peakPerProvider.codex, 2);
+  });
+
+  test('a call on a fallback route counts toward the fallback provider\'s limit', async () => {
+    setRoutes({ writer: { primary: route('claude'), fallback: route('codex') }, bulk: { primary: route('codex') }, checker: { primary: route('codex') } }, { codex: 1, claude: 2 });
+    const { state, step } = busy();
+    // Two writer calls fail on Claude and move to Codex while a bulk and a checker call run there: one at a time in all.
+    const answer = (input: { selection: { provider: string } }) => (input.selection.provider === 'claude' ? new Error('usage limit reached') : step(input));
+    fake.steps.push(...Array.from({ length: 6 }, () => answer));
+    await Promise.all([
+      runRole(kit.ctx, { ...base, role: 'writer' }),
+      runRole(kit.ctx, { ...base, role: 'writer' }),
+      runRole(kit.ctx, { ...base, role: 'bulk' }),
+      runRole(kit.ctx, { ...base, role: 'checker' }),
+    ]);
+    assert.equal(state.peakPerProvider.codex, 1);
+  });
+
+  test('the call timeout starts when the call starts, not while it waits for a slot', async () => {
+    setRoutes({ writer: { primary: route('codex') } }, { codex: 1 });
+    llmTuning.callTimeoutMs = 120;
+    const slow = () => new Promise<{ text: string }>((r) => setTimeout(() => r({ text: 'ok' }), 80));
+    fake.steps.push(slow, slow);
+    const [a, b] = await Promise.all([runRole(kit.ctx, { ...base, role: 'writer' }), runRole(kit.ctx, { ...base, role: 'writer' })]);
+    assert.deepEqual([a.text, b.text], ['ok', 'ok'], 'the second call waited 80 ms and ran 80 ms: more than its 120 ms limit in all');
+  });
+
+  test('a call that waits for a slot still honours its abort signal, and frees nothing it never held', async () => {
+    setRoutes({ writer: { primary: route('codex') } }, { codex: 1 });
+    let release!: () => void;
+    fake.steps.push(() => new Promise<{ text: string }>((r) => { release = () => r({ text: 'first' }); }), () => ({ text: 'third' }));
+    const first = runRole(kit.ctx, { ...base, role: 'writer' });
+    await new Promise((r) => setTimeout(r, 10));
+    const abort = new AbortController();
+    const second = runRole(kit.ctx, { ...base, role: 'writer', signal: abort.signal });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort(new Error('cancelled'));
+    await assert.rejects(second, /cancelled/);
+    assert.equal(fake.calls.length, 1, 'the aborted call never reached the CLI');
+    release();
+    assert.equal((await first).text, 'first');
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'writer' })).text, 'third');
+    assert.equal(usageRows().length, 2, 'no usage row for the call that never started');
+  });
+});
+
+describe('usage rows', () => {
+  test('a good call records cached tokens, its call number and that it is on the first route', async () => {
+    setRoutes({ bulk: { primary: route('codex') } });
+    fake.next(() => ({ text: 'ok', usage: { ...usageOf(1000, 20), cachedInputTokens: 600, cacheCreationInputTokens: 50 } }));
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    const r = usageRows()[0];
+    assert.deepEqual([r.input_tokens, r.cached_input_tokens, r.cache_creation_tokens, r.error_kind, r.attempt, r.fallback, r.ok], [1000, 600, 50, null, 1, 0, 1]);
+  });
+
+  test('a failed call on the primary and the good call on the fallback say what happened', async () => {
+    setRoutes({ bulk: { primary: route('claude'), fallback: route('codex') } });
+    fake.next(() => new Error('usage limit reached'), () => ({ text: 'ok', usage: usageOf(10, 2) }));
+    await runRole(kit.ctx, { ...base, role: 'bulk' });
+    const [failed, good] = usageRows();
+    assert.deepEqual([failed.error_kind, failed.attempt, failed.fallback, failed.ok, failed.input_tokens], ['quota', 1, 0, 0, null]);
+    assert.deepEqual([good.error_kind, good.attempt, good.fallback, good.ok], [null, 2, 1, 1]);
+  });
+
+  test('a repair turn is call number 2 on the same route; timeout and truncation have their own kinds', async () => {
+    setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') } });
+    fake.next(() => ({ text: '{"kind":"zzz"}' }), () => ({ text: '{"kind":"a"}' }));
+    await runRole(kit.ctx, { ...base, role: 'bulk', schema });
+    assert.deepEqual(usageRows().map((r) => [r.attempt, r.fallback]), [[1, 0], [2, 0]]);
+    kit.ctx.db.run('DELETE FROM usage');
+    llmTuning.callTimeoutMs = 20;
+    fake.next((input) => new Promise((_res, rej) => input.signal!.addEventListener('abort', () => rej(new FunnelError('aborted', 'aborted')))), () => ({ text: 'half', finishReason: 'length' }), () => ({ text: 'ok' }));
+    setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, checker: { primary: route('claude'), fallback: route('codex') } });
+    await runRole(kit.ctx, { ...base, role: 'bulk' }).catch(() => undefined);
+    await runRole(kit.ctx, { ...base, role: 'checker' });
+    assert.deepEqual(usageRows().map((r) => r.error_kind), ['timeout', 'truncated', null]);
+  });
+
+  test('a caller abort is recorded as aborted', async () => {
+    setRoutes({ bulk: { primary: route('codex') } });
+    const abort = new AbortController();
+    fake.next((input) => new Promise((_res, rej) => input.signal!.addEventListener('abort', () => rej(new FunnelError('aborted', 'aborted')))));
+    const run = runRole(kit.ctx, { ...base, role: 'bulk', signal: abort.signal });
+    await new Promise((r) => setTimeout(r, 10));
+    abort.abort();
+    await run.catch(() => undefined);
+    assert.equal(usageRows()[0].error_kind, 'aborted');
+  });
+});
+
+describe('a book that must not continue on a replacement for Claude', () => {
+  const claudeThenCodex = { primary: route('claude'), fallback: route('codex') };
+
+  test('a Claude quota error waits for the reset, with no call to the fallback', async () => {
+    seedProject(kit.ctx);
+    kit.ctx.db.run(`UPDATE projects SET options = ? WHERE id = 'p1'`, JSON.stringify({ noClaudeFallback: true }));
+    setRoutes({ writer: claudeThenCodex });
+    fake.next(() => Object.assign(new Error("You've hit your usage limit. Try again in 2 hours."), { code: 'cli-failed' }), () => ({ text: 'should not run' }));
+    await assert.rejects(runRole(kit.ctx, { ...base, role: 'writer', projectId: 'p1' }), (e: unknown) => {
+      assert.ok(e instanceof TaskError);
+      assert.equal(e.kind, 'quota');
+      assert.equal(e.retryAfterMs, 2 * 3_600_000);
+      assert.doesNotMatch(e.message, /fallback also unavailable/);
+      return true;
+    });
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude']);
+  });
+
+  test('the same role falls back as before when the option is off or the call has no book', async () => {
+    seedProject(kit.ctx);
+    setRoutes({ writer: claudeThenCodex });
+    fake.next(() => new Error('usage limit reached'), () => ({ text: 'ok' }), () => new Error('usage limit reached'), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'writer', projectId: 'p1' })).route.provider, 'codex');
+    resetLlmState();
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'writer' })).route.provider, 'codex');
+  });
+
+  test('a role that starts on another provider keeps its fallback, even on Claude', async () => {
+    seedProject(kit.ctx);
+    kit.ctx.db.run(`UPDATE projects SET options = ? WHERE id = 'p1'`, JSON.stringify({ noClaudeFallback: true }));
+    setRoutes({ editor: { primary: route('codex'), fallback: route('claude') } });
+    fake.next(() => new Error('usage limit reached'), () => ({ text: 'ok' }));
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'editor', projectId: 'p1' })).route.provider, 'claude');
+  });
+});
+
+test('no default route names the older Claude Sonnet', () => {
+  const models = Object.values(DEFAULT_ROUTES).flatMap((r) => [r.primary, r.fallback]).filter((x) => x?.provider === 'claude').map((x) => x!.model);
+  assert.ok(models.length >= 6);
+  for (const m of models) assert.ok(['claude-sonnet-5-5', 'claude-opus-5-5', 'claude-haiku-5-5'].includes(m), m);
 });

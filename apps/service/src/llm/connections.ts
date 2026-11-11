@@ -88,7 +88,7 @@ export async function getConnections(ctx: AppContext): Promise<ConnectionsRespon
   const keys = stockKeys(ctx);
   // Usage changes with every run, so it is read on each request (accountUsage caches it for a minute).
   const providers = await Promise.all(cache.value.map(async (p): Promise<ProviderStatus> => {
-    const u = p.installed && p.signedIn ? await accountUsage(p.provider) : null;
+    const u = p.installed && p.signedIn ? await accountUsage(p.provider, ctx.config) : null;
     return { ...p, usage: u ? usageWindows(u) : [], limit: u?.limit?.detail ?? null };
   }));
   return {

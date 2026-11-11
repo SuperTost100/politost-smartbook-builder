@@ -60,3 +60,20 @@ test('migration 5 adds the course program and alignment report tables, which go 
   assert.equal(db.get(`SELECT 1 FROM alignment_reports`), undefined);
   db.close();
 });
+
+test('migration 6 adds what a model call cost to the usage table and keeps the rows from before', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'sbm-')), 'db.sqlite');
+  const raw = new DatabaseSync(file);
+  for (const m of MIGRATIONS.slice(0, 5)) raw.exec(m);
+  raw.exec('CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version (version) VALUES (5)');
+  raw.exec(`INSERT INTO usage (provider, model, role, input_tokens, output_tokens, ms, ok, created_at) VALUES ('codex', 'm', 'checker', 100, 5, 7, 1, 'then')`);
+  raw.close();
+
+  const db = new Db(file);
+  const old = db.get<Record<string, unknown>>('SELECT * FROM usage')!;
+  assert.deepEqual([old.input_tokens, old.cached_input_tokens, old.cache_creation_tokens, old.error_kind, old.attempt, old.fallback], [100, null, null, null, null, null]);
+  db.run(`INSERT INTO usage (provider, model, role, ms, ok, cached_input_tokens, cache_creation_tokens, error_kind, attempt, fallback, created_at) VALUES ('claude', 'm', 'writer', 9, 0, 40, 10, 'quota', 2, 1, 'now')`);
+  const fresh = db.get<Record<string, unknown>>(`SELECT * FROM usage WHERE role = 'writer'`)!;
+  assert.deepEqual([fresh.cached_input_tokens, fresh.cache_creation_tokens, fresh.error_kind, fresh.attempt, fresh.fallback], [40, 10, 'quota', 2, 1]);
+  db.close();
+});
