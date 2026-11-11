@@ -9,6 +9,7 @@ export const qk = {
   project: (id: string) => ['project', id] as const,
   settings: ['settings'] as const,
   connections: ['connections'] as const,
+  usage: ['usage'] as const,
   resources: (pid: string) => ['resources', pid] as const,
   pages: (rid: string) => ['pages', rid] as const,
   page: (rid: string, idx: number) => ['page', rid, idx] as const,
@@ -48,6 +49,8 @@ export const useManuscript = (pid: string | undefined) =>
   useQuery({ queryKey: qk.manuscript(pid ?? ''), queryFn: () => api('GET /api/projects/:id/manuscript', { params: { id: pid! } }), enabled: !!pid });
 export const useIssues = (pid: string | undefined) =>
   useQuery({ queryKey: qk.issues(pid ?? ''), queryFn: () => api('GET /api/projects/:id/issues', { params: { id: pid! } }), enabled: !!pid });
+export const useAssets = (pid: string | undefined) =>
+  useQuery({ queryKey: qk.assets(pid ?? ''), queryFn: () => api('GET /api/projects/:id/assets', { params: { id: pid! } }), enabled: !!pid });
 export const useQuestions = (pid: string | undefined) =>
   useQuery({ queryKey: qk.questions(pid ?? ''), queryFn: () => api('GET /api/projects/:id/questions', { params: { id: pid! } }), enabled: !!pid });
 export const useExports = (pid: string | undefined) =>
@@ -63,6 +66,7 @@ export const useProgram = (pid: string | undefined) =>
 export const useAlignment = (pid: string | undefined, poll = false) =>
   useQuery({ queryKey: qk.alignment(pid ?? ''), queryFn: () => api('GET /api/projects/:id/alignment', { params: { id: pid! } }), enabled: !!pid, refetchInterval: poll ? 4000 : false });
 export const useConnections = () => useQuery({ queryKey: qk.connections, queryFn: () => api('GET /api/connections'), staleTime: 15_000 });
+export const useUsage = () => useQuery({ queryKey: qk.usage, queryFn: () => api('GET /api/usage'), staleTime: 15_000 });
 export const useSettings = () => useQuery({ queryKey: qk.settings, queryFn: () => api('GET /api/settings') });
 
 export function useInvalidate() {

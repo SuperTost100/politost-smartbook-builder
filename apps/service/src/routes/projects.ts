@@ -1,7 +1,7 @@
 import { onOutlineApproved } from '../pipeline/runs.ts';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { bookOptionsSchema, outlineSchema, projectInputSchema, type BookOptions } from '@smartbuilder/domain';
+import { bookOptionsSchema, outlineSchema, projectInputSchema, type BookOptionsPatch } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import {
   approveOutline, archiveProject, createProject, deleteProject, getProjectSummary, getTopic, latestOutlineRevision,
@@ -10,9 +10,10 @@ import {
 import { idParam, parse, projectOf } from './util.ts';
 
 const fields = projectInputSchema.shape;
-const optionsPatch = z.object(Object.fromEntries(
-  Object.entries(bookOptionsSchema.shape).map(([k, v]) => [k, v instanceof z.ZodDefault ? v.removeDefault().optional() : v]),
-)) as unknown as z.ZodType<Partial<BookOptions>>;
+const optionsPatch = z.object({
+  ...Object.fromEntries(Object.entries(bookOptionsSchema.shape).map(([k, v]) => [k, v instanceof z.ZodDefault ? v.removeDefault().optional() : v])),
+  subjectArea: bookOptionsSchema.shape.subjectArea.nullable(),
+}) as unknown as z.ZodType<BookOptionsPatch>;
 
 // Defaults are removed so a patch only touches the fields it names.
 const projectPatchSchema = z.object({

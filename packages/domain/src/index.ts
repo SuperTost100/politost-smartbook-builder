@@ -3,7 +3,7 @@
 import { z } from 'zod';
 
 export * from './api.ts';
-import { SUBJECT_AREAS } from './subjects.ts';
+import { SUBJECT_AREAS, type SubjectArea } from './subjects.ts';
 export * from './subjects.ts';
 
 // ---------- Model routing ----------
@@ -95,6 +95,8 @@ export const bookOptionsSchema = z.object({
   selfCheck: z.boolean().default(true),
 });
 export type BookOptions = z.infer<typeof bookOptionsSchema>;
+/** A patch of the options: a key left out keeps its value, and `subjectArea: null` clears the area so it is inferred again. */
+export type BookOptionsPatch = Partial<Omit<BookOptions, 'subjectArea'>> & { subjectArea?: SubjectArea | null };
 
 export const projectInputSchema = z.object({
   title: z.string().min(1).max(200),
@@ -501,6 +503,10 @@ export interface TaskRow {
   provider: string | null;
   error: { message: string; action?: string } | null;
   waitReason: string | null;
+  /** The source the task works on, for the tasks that name one. */
+  resourceId: string | null;
+  /** For a split with AI: whether its answer replaced the file's questions. Null for other tasks and when it did not run. */
+  applied: boolean | null;
   startedAt: string | null;
   finishedAt: string | null;
 }
@@ -514,6 +520,30 @@ export interface UsageRow {
   outputTokens: number | null;
   /** Part of the input tokens that came from the provider's cache, as far as calls reported it. Null when none did. */
   cachedInputTokens: number | null;
+}
+
+/** One provider's model calls over a period, as the Connections screen shows them. */
+export interface ProviderUsage {
+  provider: string;
+  /** Models used, the one with the most calls first. */
+  models: string[];
+  calls: number;
+  /** Sums over the calls that reported a count, null when none did. */
+  inputTokens: number | null;
+  outputTokens: number | null;
+  /** Share of input tokens read from the provider's cache (0 to 1), among the calls that reported it. Null when no call did, as for calls made before the count was kept. */
+  cachedShare: number | null;
+  /** Calls that did not give an answer, timeouts included, stopped calls excluded. */
+  failed: number;
+  /** Calls that ran past their time limit. */
+  timeouts: number;
+}
+
+export interface UsageSummary {
+  days: number;
+  providers: ProviderUsage[];
+  /** The same figures over every provider; `provider` is empty. */
+  total: ProviderUsage;
 }
 
 // ---------- Review ----------
