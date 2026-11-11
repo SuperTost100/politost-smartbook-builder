@@ -262,31 +262,69 @@ function creditFor(c: Candidate, language: string): string {
   return `${what}: ${c.author ? `${c.author} / ` : ''}${service}${c.license ? `, ${c.license}` : ''}`;
 }
 
-export async function findStockPhoto(ctx: AppContext, opts: {
-  query: string; mustShow: string; language: string;
-  /** "provider:id" of photos the book already uses; they are never offered again. */
-  exclude?: Set<string>;
-  projectId: string; runId?: string; taskId?: string; signal?: AbortSignal;
-}): Promise<{ ok: true; photo: StockPhoto } | { ok: false; reason: string }> {
+/** The candidates of a search: Commons and the stock services the author added keys for, without photos the book already uses. */
+async function searchCandidates(ctx: AppContext, opts: { query: string; exclude?: Set<string>; signal?: AbortSignal }): Promise<Candidate[]> {
   const keys = stockKeys(ctx);
-  if (!photosAvailable(ctx)) return { ok: false, reason: 'No photo service is set up. Add a Pixabay or Pexels key on the Connections screen.' };
-
   const [fromCommons, fromPixabay, fromPexels] = await Promise.all([
     deps.commons ? searchCommons(opts.query, opts.signal) : [],
     keys.pixabay ? searchPixabay(keys.pixabay, opts.query, opts.signal) : [],
     keys.pexels ? searchPexels(keys.pexels, opts.query, opts.signal) : [],
   ]);
   const fresh = (l: Candidate[]) => l.filter((c) => !opts.exclude?.has(`${c.provider}:${c.id}`));
-  const found = interleave(fresh(fromCommons), fresh(fromPixabay), fresh(fromPexels));
+  return interleave(fresh(fromCommons), fresh(fromPixabay), fresh(fromPexels));
+}
+
+/** Downloads the preview of every candidate. Previews that cannot be fetched or converted drop out. */
+async function previewsOf(found: Candidate[], signal?: AbortSignal) {
+  const previews = await Promise.all(found.map(async (c) => {
+    const img = await downloadImage(c.previewUrl, signal);
+    if (!img) return null;
+    try { return { c, png: deps.toPng(img.bytes), original: img }; } catch { return null; }
+  }));
+  return previews.filter((p): p is NonNullable<typeof p> => p !== null);
+}
+
+/** Downloads the full picture of the chosen candidate, with its credit line. Null when it cannot be downloaded. */
+async function downloadChosen(chosen: Candidate, language: string, check: string, signal?: AbortSignal): Promise<StockPhoto | null> {
+  const file = (await downloadImage(chosen.largeUrl, signal)) ?? (chosen.largeFallbackUrl ? await downloadImage(chosen.largeFallbackUrl, signal) : null);
+  if (!file) return null;
+  return {
+    ...file, provider: chosen.provider, author: chosen.author, pageUrl: chosen.pageUrl, id: chosen.id, license: chosen.license,
+    credit: creditFor(chosen, language), check,
+  };
+}
+
+/** A search an author runs by hand: the candidates with their previews, and the same candidate can then be fetched. */
+export interface PhotoSearch { candidates: { c: Candidate; preview: { bytes: Buffer; mime: string } }[] }
+
+export async function searchStockPhotos(ctx: AppContext, opts: { query: string; exclude?: Set<string>; signal?: AbortSignal }): Promise<{ ok: true; search: PhotoSearch } | { ok: false; reason: string }> {
+  if (!photosAvailable(ctx)) return { ok: false, reason: 'No photo service is set up. Add a Pixabay or Pexels key on the Connections screen.' };
+  const found = await searchCandidates(ctx, opts);
+  if (!found.length) return { ok: false, reason: `No stock photos found for "${opts.query}".` };
+  const previews = await previewsOf(found, opts.signal);
+  if (!previews.length) return { ok: false, reason: 'The candidate previews could not be downloaded.' };
+  return { ok: true, search: { candidates: previews.map((p) => ({ c: p.c, preview: { bytes: p.original.bytes, mime: p.original.mime } })) } };
+}
+
+/** The photo an author chose from a search. There is no model check: the author looked at it. */
+export async function fetchChosenPhoto(c: PhotoSearch['candidates'][number], language: string, signal?: AbortSignal): Promise<{ ok: true; photo: StockPhoto } | { ok: false; reason: string }> {
+  const photo = await downloadChosen(c.c, language, 'Chosen by the author from the search results.', signal);
+  return photo ? { ok: true, photo } : { ok: false, reason: 'The chosen photo could not be downloaded.' };
+}
+
+export async function findStockPhoto(ctx: AppContext, opts: {
+  query: string; mustShow: string; language: string;
+  /** "provider:id" of photos the book already uses; they are never offered again. */
+  exclude?: Set<string>;
+  projectId: string; runId?: string; taskId?: string; signal?: AbortSignal;
+}): Promise<{ ok: true; photo: StockPhoto } | { ok: false; reason: string }> {
+  if (!photosAvailable(ctx)) return { ok: false, reason: 'No photo service is set up. Add a Pixabay or Pexels key on the Connections screen.' };
+
+  const found = await searchCandidates(ctx, opts);
   if (!found.length) return { ok: false, reason: `No stock photos found for "${opts.query}".` };
 
   // Previews that cannot be fetched or converted drop out; the model sees the rest in order.
-  const previews = await Promise.all(found.map(async (c) => {
-    const img = await downloadImage(c.previewUrl, opts.signal);
-    if (!img) return null;
-    try { return { c, png: deps.toPng(img.bytes) }; } catch { return null; }
-  }));
-  const candidates = previews.filter((p): p is { c: Candidate; png: Buffer } => p !== null);
+  const candidates = await previewsOf(found, opts.signal);
   if (!candidates.length) return { ok: false, reason: 'The candidate previews could not be downloaded.' };
 
   const { data } = await deps.runRole(ctx, {
@@ -298,14 +336,6 @@ export async function findStockPhoto(ctx: AppContext, opts: {
   const chosen = Number.isInteger(data.pick) ? candidates[data.pick - 1]?.c : undefined;
   if (!chosen) return { ok: false, reason: 'Nothing matched: the model picked a candidate that does not exist.' };
 
-  const file = (await downloadImage(chosen.largeUrl, opts.signal)) ?? (chosen.largeFallbackUrl ? await downloadImage(chosen.largeFallbackUrl, opts.signal) : null);
-  if (!file) return { ok: false, reason: 'The chosen photo could not be downloaded.' };
-
-  return {
-    ok: true,
-    photo: {
-      ...file, provider: chosen.provider, author: chosen.author, pageUrl: chosen.pageUrl, id: chosen.id, license: chosen.license,
-      credit: creditFor(chosen, opts.language), check: data.reason,
-    },
-  };
+  const photo = await downloadChosen(chosen, opts.language, data.reason, opts.signal);
+  return photo ? { ok: true, photo } : { ok: false, reason: 'The chosen photo could not be downloaded.' };
 }

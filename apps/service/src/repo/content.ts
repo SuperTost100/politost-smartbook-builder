@@ -78,20 +78,30 @@ export function saveHuman(ctx: AppContext, projectId: string, nodeId: string, ma
 }
 
 /**
- * Replaces the current text with a mechanical rewrite of it (`fix`, no model): a new current revision with origin 'repair',
- * the old head as parent and the block citations carried over. Null when there is no text or nothing changes. The head is read
- * inside the transaction, so a save that lands meanwhile is never overwritten.
+ * Replaces the current text with a rewrite of it (`fix`): a new current revision with the old head as parent and the block
+ * citations carried over. Null when there is no text or nothing changes. The head is read inside the transaction, so a save
+ * that lands meanwhile is never overwritten. With `expectedHeadId` (the head the caller read: null when there was no text)
+ * a different head is refused with 409. The default origin is 'repair' (a mechanical fix, no model).
  */
-export function repairHead(ctx: AppContext, projectId: string, nodeId: string, fix: (markdown: string) => string): ContentRevision | null {
+export function rewriteHead(
+  ctx: AppContext, projectId: string, nodeId: string, fix: (markdown: string) => string,
+  o: { origin?: ContentOrigin; model?: string | null; expectedHeadId?: string | null } = {},
+): ContentRevision | null {
   return ctx.db.tx(() => {
     const head = currentHead(ctx, projectId, nodeId);
+    if (o.expectedHeadId !== undefined && (head?.id ?? null) !== o.expectedHeadId) throw conflict(STALE, undefined, nodeId);
     if (!head) return null;
     const markdown = fix(head.markdown);
     if (markdown === head.markdown) return null;
     return makeCurrent(ctx, projectId, nodeId, head, {
-      projectId, nodeId, kind: head.kind, markdown, origin: 'repair', model: null, parentRevId: head.id, status: 'current', citations: carryCitations(head.markdown, markdown, head.citations),
+      projectId, nodeId, kind: head.kind, markdown, origin: o.origin ?? 'repair', model: o.model ?? null, parentRevId: head.id, status: 'current', citations: carryCitations(head.markdown, markdown, head.citations),
     });
   });
+}
+
+/** A mechanical rewrite of the current text (no model): `rewriteHead` with origin 'repair'. */
+export function repairHead(ctx: AppContext, projectId: string, nodeId: string, fix: (markdown: string) => string): ContentRevision | null {
+  return rewriteHead(ctx, projectId, nodeId, fix);
 }
 
 /** Past this many cells the middle part is not diffed: only the common beginning and end keep their citations by identity. */

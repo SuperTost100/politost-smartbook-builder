@@ -25,6 +25,12 @@ export type EditResult =
   | { ok: true; asset: Asset; /** A redraw: what the look turn did. */ look?: LookOutcome }
   | { ok: false; error: string };
 
+/** The drawing spec of an asset the illustrator made, or null for any other figure. */
+export function drawingSpec(asset: Asset): DrawingSpec | null {
+  const spec = asset.origin === 'generated-svg' ? specSchema.safeParse(asset.spec) : null;
+  return spec?.success ? spec.data : null;
+}
+
 function drawnAsset(ctx: AppContext, assetId: string): { asset: Asset; spec: DrawingSpec } {
   const asset = getAsset(ctx, assetId);
   const spec = asset.origin === 'generated-svg' ? specSchema.safeParse(asset.spec) : null;

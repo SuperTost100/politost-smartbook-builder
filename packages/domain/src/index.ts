@@ -462,7 +462,7 @@ export type TaskState = 'queued' | 'running' | 'succeeded' | 'retry_wait' | 'wai
 export interface RunSummary {
   id: string;
   projectId: string;
-  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research' | 'figures' | 'program' | 'align';
+  kind: 'prepare' | 'plan' | 'generate' | 'review' | 'export' | 'regenerate' | 'research' | 'figures' | 'figure' | 'program' | 'align';
   status: RunStatus;
   createdAt: string;
   finishedAt: string | null;

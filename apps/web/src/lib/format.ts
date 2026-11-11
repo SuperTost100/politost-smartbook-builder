@@ -65,6 +65,7 @@ export const RUN_KIND_LABEL: Record<RunSummary['kind'], string> = {
   regenerate: 'Regenerating',
   research: 'Researching',
   figures: 'Adding figures',
+  figure: 'Drawing a figure',
   program: 'Reading program',
   align: 'Aligning book',
 };
