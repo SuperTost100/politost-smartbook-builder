@@ -108,7 +108,7 @@ Nodes sit at `(column, row)` with x to the right and y down. Put the text in `[ 
 ```
 
 ## lilaq (plots with a log axis, cycles)
-`lq.diagram(width:, height:, xscale: "log", yscale: "log", xlim:, ylim:, xlabel:, ylabel:, ...plots)`, `lq.plot(xs, ys, mark: none, color: black)`, `lq.logspace(a, b, num: n)` (10^a to 10^b), `lq.linspace(a, b, num: n)`, `lq.marks.o`, `lq.place(x, y, [text], align: left)`. Use `calc.log(x)` (base 10), `calc.pow`, `calc.sqrt`, `calc.atan`. For a cycle plot the segments as separate `lq.plot` calls and set `xaxis: (ticks: none)`.
+`lq.diagram(width:, height:, xscale: "log", yscale: "log", xlim:, ylim:, xlabel:, ylabel:, ...plots)`, `lq.plot(xs, ys, mark: none, color: black)`, `lq.logspace(a, b, num: n)` (10^a to 10^b), `lq.linspace(a, b, num: n)`, `lq.marks.o`, `lq.place(x, y, [text], align: left)`. Use `calc.log(x)` (base 10), `calc.pow`, `calc.sqrt`, `calc.atan`. For a cycle plot the segments as separate `lq.plot` calls and set `xaxis: (ticks: none)`. A curve that comes from a formula needs 120 points or more (`num: 120`), in lilaq and in a cetz `line` built from a list alike: with fewer points the bends show as corners.
 ```typ
 #import "@preview/lilaq:0.6.0" as lq
 #let w = lq.logspace(1, 5, num: 120)

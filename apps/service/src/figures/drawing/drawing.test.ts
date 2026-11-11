@@ -140,6 +140,12 @@ describe('fixtures', () => {
     });
   }
 
+  it('a timing diagram writes its signal names in the ink, not in schemdraw\'s blue', () => {
+    const r = rendered.get('timing-diagram.py')!;
+    assert.ok(r.ok);
+    assert.doesNotMatch(r.svg, /(?:fill|stroke)(?:="|:)\s*(?:blue|#0000ff|#00f\b|rgb\(0, ?0, ?255\))/i);
+  });
+
   it('match the stored snapshot (run with UPDATE_DRAWING_SNAPSHOTS=1 after a deliberate renderer upgrade)', () => {
     const now: Record<string, { counts: Record<string, number>; width: number; height: number }> = {};
     for (const f of fixtureNames) {
