@@ -453,6 +453,11 @@ function addIssue(ctx: AppContext, q: Question, severity: string, category: stri
   ctx.events.emit('issue.created', { questionId: q.id, severity }, { projectId: q.projectId });
 }
 
+/** The ids among these issues that are still open: the author has not dismissed, accepted or fixed them since the task was queued. */
+function stillOpen(ctx: AppContext, ids: string[]): string[] {
+  return ids.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'open' AND id IN (${ids.map(() => '?').join(',')})`, ...ids).map((r) => r.id) : [];
+}
+
 export const questionReviseSchema = z.object({ statement: z.string(), hint: z.string(), solution: z.string() });
 
 /** Rewrites an exercise for its open issues. Authentic questions keep their statement unless an issue says it is wrong. */
@@ -473,8 +478,12 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const formatting = issues.length > 0 && issues.every((i) => i.source === 'lint' && !WORD_RULES.has(i.category.replace(/^compile:/, '')));
   const why = formatting ? wordsChanged(q, data) : null;
   if (why) {
-    ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `The AI fix was not applied: ${why}`, ...issues.map((i) => i.id));
-    issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
+    // The reason goes only on issues that are still open: a decision the author made while the editor ran stays.
+    ctx.db.tx(() => {
+      const open = stillOpen(ctx, issues.map((i) => i.id));
+      if (open.length) ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, `The AI fix was not applied: ${why}`, ...open);
+      issuesChanged(ctx, q.projectId, open);
+    });
     return { skipped: 'the repair changed words or numbers' };
   }
   // The author must be able to see that the paper's printed solution was changed, and how. The question turns "adapted" (below), which the Practice screen shows.
@@ -484,15 +493,18 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     : was.length ? `The printed solution was corrected by ${route.model}: ${was.map((m) => `${m.name} was ${m.stated} and the numeric check gives ${m.computed}`).join(', ')}.`
       : `The printed solution was rewritten by ${route.model}.`;
   return ctx.db.tx(() => {
+    // The author may have closed the issues while the editor ran. A rewrite made for issues that are all closed now is not applied over that decision.
+    const open = stillOpen(ctx, issues.map((i) => i.id));
+    if (issues.length && !open.length) return { stale: true };
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
       layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
     if (!changed) {
       keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
       return { stale: true };
     }
-    if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, resolution, ...issues.map((i) => i.id));
+    if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
     questionsChanged(ctx, q.projectId, [q.id]);
-    issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
+    issuesChanged(ctx, q.projectId, open);
     return { revised: true };
   });
 }

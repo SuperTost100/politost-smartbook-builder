@@ -216,6 +216,66 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
   });
 });
 
+describe('1c. a decision the author makes on an issue while the editor runs stays', () => {
+  const broken = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.`;
+  const clean = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.`;
+  const lintIssue = (qid: string) => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'lint', severity: 'blocker', category: 'compile:literal-escape', quote: '', message: 'A literal backslash followed by n', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const decide = (iid: string, status: string) => () => { ctx.db.run(`UPDATE review_issues SET status = ?, resolution = 'Decided by the author' WHERE id = ?`, status, iid); };
+  const answering = (during: () => void, solution: string) => () => { during(); return { structured: { statement: 'Calcola.', hint: '', solution } as never, text: '{}', usage: usageOf(1, 1) }; };
+  const state = (iid: string) => issues(`id = '${iid}'`)[0];
+
+  for (const status of ['dismissed', 'accepted', 'fixed']) {
+    test(`a refused repair does not reopen an issue the author marked ${status}`, async () => {
+      const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+      const iid = lintIssue(id);
+      fake.next(answering(decide(iid, status), `${clean} acu`));
+      await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+      assert.equal(state(iid).status, status);
+      assert.equal(state(iid).resolution, 'Decided by the author');
+      assert.equal(row(id).solution, broken);
+    });
+  }
+
+  test('a refused repair writes its reason on the issues that are still open and leaves the decided one', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const [a, b] = [lintIssue(id), lintIssue(id)];
+    fake.next(answering(decide(a, 'dismissed'), `${clean} acu`));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
+    assert.equal(state(a).status, 'dismissed');
+    assert.equal(state(a).resolution, 'Decided by the author');
+    assert.equal(state(b).status, 'open');
+    assert.match(state(b).resolution, /^The AI fix was not applied/);
+  });
+
+  test('a repair that arrives after the author closed every issue is not applied', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answering(decide(iid, 'dismissed'), clean));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { stale: true });
+    assert.equal(row(id).solution, broken);
+    assert.equal(state(iid).status, 'dismissed');
+    assert.equal(state(iid).resolution, 'Decided by the author');
+  });
+
+  test('a repair that arrives while one issue is still open is applied and closes only that one', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const [a, b] = [lintIssue(id), lintIssue(id)];
+    fake.next(answering(decide(a, 'accepted'), clean));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
+    assert.equal(row(id).solution, clean);
+    assert.equal(state(a).status, 'accepted');
+    assert.equal(state(a).resolution, 'Decided by the author');
+    assert.equal(state(b).status, 'fixed');
+  });
+});
+
 describe('5b. a corrected solution of an authentic exam question leaves a trace', () => {
   const NUMERIC = 'Recomputing the final values in Python gives a different result: f_c is 3386.2754 Hz by the computation and 21,28 kHz in the solution.';
   const issue = (qid: string, message: string, source = 'verification') => {
