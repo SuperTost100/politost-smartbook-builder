@@ -442,7 +442,11 @@ test('a figure block shows its picture in the editor preview', async ({ page, re
   await page.goto(`/books/${bookId}/manuscript/s1`);
   const blocks = page.locator('.ms-block');
   await expect(blocks.last().locator('img[alt="Figura nel blocco"]')).toBeVisible();
-  await openBlockEditor(page, await blocks.count());
+  // Enter on a figure block opens the figure dialog, so the markup is reached through its own button.
+  const count = await blocks.count();
+  await blocks.last().click();
+  await page.locator('.ms-actions').getByRole('button', { name: 'Edit markup' }).click();
+  await expect(page.getByRole('textbox', { name: new RegExp(`Source of block ${count}$`) })).toBeVisible();
   await expect(page.locator('.se-preview img[alt="Figura nel blocco"]')).toBeVisible();
   await expect(page.locator('.se-preview')).not.toContainText('non disponibile');
   await page.unroute(`**/api/projects/${bookId}/chapters/c1/preview`);
