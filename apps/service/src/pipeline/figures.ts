@@ -5,6 +5,7 @@ import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstor
 import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { currentHead } from '../repo/content.ts';
+import { setIssuesStatus } from '../repo/issues.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { relint } from '../routes/views.ts';
 import { commitAiRevision } from './draft.ts';
@@ -17,7 +18,28 @@ const MAX_FIGURES = 3;
 
 const IMAGE_SRC = /^:::image\{[^}]*src="assets\/([^"]+)"/;
 
+/**
+ * The figures pass for one section. When Auto Fix routed review issues here (`issueIds` and a numbered `brief` in the input), the
+ * issue text is the brief and each proposed figure says which issue it answers. An issue closes only when a figure that answers
+ * it landed. The others stay open with the reason.
+ */
 export async function sectionFigures(ctx: AppContext, t: TaskContext) {
+  const result = await figuresPass(ctx, t);
+  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
+  if (issueIds.length) {
+    const r = result as { revId?: string; status?: string; answered?: number[]; reused?: boolean; skipped?: string; noFigureReason?: string; figureProblems?: string[] };
+    const why = r.skipped ?? r.noFigureReason ?? (r.figureProblems?.length ? r.figureProblems.join('; ') : 'the figures pass proposed none');
+    // A retry that finds its earlier result does not know which figures answered which issue.
+    const answered = new Set(r.reused ? [] : r.answered ?? []);
+    const hit = issueIds.filter((_, n) => answered.has(n + 1));
+    const missed = issueIds.filter((id) => !hit.includes(id));
+    if (hit.length) setIssuesStatus(ctx, t.task.projectId, hit, r.status === 'current' ? 'fixed' : 'proposed', r.status === 'current' ? `Figure added by the figures pass in revision ${r.revId}` : `Proposal ${r.revId}`);
+    if (missed.length) setIssuesStatus(ctx, t.task.projectId, missed, 'open', hit.length ? 'No figure answered this issue: the figures pass added figures for the other issues only.' : r.reused ? 'An earlier attempt of this task stored its result, and which issue each figure answers was not kept.' : `No figure was added: ${why}`);
+  }
+  return result;
+}
+
+async function figuresPass(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
   const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
@@ -46,6 +68,7 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
       language: project.language, bookTitle: project.title, chapterTitle: found.chapter.title, sectionTitle: found.section.title,
       blocks: truncate(blocks.map((b, i) => `[${i + 1}] ${b.text}`).join('\n\n'), 60_000),
       existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, figures: setup, elsewhere: bookFigureList(bookFigures(ctx, projectId, nodeId)),
+      brief: typeof t.task.input.brief === 'string' ? t.task.input.brief : undefined,
     }),
     schema: figuresPassSchemaFor(setup), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
@@ -75,9 +98,15 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   // Each image block goes in after its block; existing citations move with their blocks. Text is never rewritten.
   const existing = existingAssetNames(ctx, projectId);
   const after = new Map<number, string[]>();
+  const answered = new Set<number>();
+  const issueCount = Array.isArray(t.task.input.issueIds) ? t.task.input.issueIds.length : 0;
   for (const f of kept) {
     const block = rewriteImageRefs(`:::image{src="assets/${f.key}.svg"}\n:::`, built, existing);
-    if (block.trim()) after.set(f.afterBlock, [...(after.get(f.afterBlock) ?? []), block.trim()]);
+    if (!block.trim()) continue;
+    after.set(f.afterBlock, [...(after.get(f.afterBlock) ?? []), block.trim()]);
+    // A figure without a valid number answers the only issue there is, and none of several.
+    const n = f.issue ?? (issueCount === 1 ? 1 : 0);
+    if (Number.isInteger(n) && n >= 1 && n <= issueCount) answered.add(n);
   }
   const texts: string[] = [];
   const citations: Record<string, string[]> = {};
@@ -103,6 +132,6 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
   }
   if (stored.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
-  return { revId: committed.revId, status: committed.status, added: stored.length, figureProblems: notes, model: route.model };
+  return { revId: committed.revId, status: committed.status, added: stored.length, ...(issueCount ? { answered: [...answered].sort((a, b) => a - b) } : {}), figureProblems: notes, model: route.model };
 }
 

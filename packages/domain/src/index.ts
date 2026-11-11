@@ -119,9 +119,24 @@ export interface Project extends ProjectInput {
   archivedAt: string | null;
 }
 
+/**
+ * Where the review loop stands. `clean` is true when every chapter with text was reviewed at its current text and no
+ * blocker or major issue is open or waiting as a proposal anywhere in the book. The Review screen can then say "No blockers
+ * or major issues in the changed text. The book is ready to export."
+ */
+export interface ReviewState {
+  clean: boolean;
+  /** Blockers and majors that are open or proposed, across the whole book. */
+  openSerious: number;
+  /** When the latest chapter review finished. */
+  reviewedAt: string;
+}
+
 export interface ProjectSummary extends Project {
   counts: { resources: number; sections: number; drafted: number; questions: number; openIssues: number };
   activeRun: RunSummary | null;
+  /** Null until a chapter was reviewed. Optional so that fixtures written before it still type. The service always sets it. */
+  review?: ReviewState | null;
 }
 
 // ---------- Resources and pages ----------

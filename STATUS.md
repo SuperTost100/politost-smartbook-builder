@@ -1,6 +1,6 @@
 # Status
 
-Last updated 27 October 2026.
+Last updated 11 November 2026.
 
 ## What works
 
@@ -54,6 +54,17 @@ What changed:
 On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
 
 On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors and 0 warnings. The last 80 warnings were for exam questions without hints, and exams now have no hints by design. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+
+## Review and fix loop (changed 11 November)
+
+On the four books built so far, reviews and fixes used 75M of 132M input tokens, one fix in five changed nothing, and late review rounds found little. What changed:
+- A review of changed text reports only blockers and majors and sends the changed sections in full, the others as their stored summaries, and the evidence of the changed sections only. The first review and the full review still report everything, with minor defined as a wrong word, symbol, unit or reference that could mislead. The reviewer can no longer raise the `clarity` and `repetition` categories. Stored issues of those categories still load.
+- A review round says when it left no open blocker or major (`clean` in the task result, `review` in the project summary). The web app does not show it yet.
+- The fix model is told the guard rules from the guard's own constants and gets only the evidence its blocks cite. It answers in plain text parts instead of JSON.
+- When the fix model says the text already resolves an issue and the cheap checker agrees, the issue closes as fixed. A missing-figure issue goes to the figures pass and a failed graph is redrawn.
+- A formula block with a citation no longer merges the rest of the section into one block in the fix prompt. That bug hit 30 of 243 live sections.
+
+Prompt version 19.
 
 ## Open issues on the Analisi book
 

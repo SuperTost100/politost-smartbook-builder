@@ -89,6 +89,32 @@ export function dropOptionalNulls(value: unknown, original: Json): unknown {
   return strip(value, original);
 }
 
+/**
+ * The reverse of `dropOptionalNulls` for an answer written as plain JSON by a model that was not held to the strict provider
+ * schema: a property the schema allows to be null, but which the answer leaves out, becomes null, so the zod schema that
+ * requires "nullable" keys accepts it.
+ */
+export function fillAbsentNulls(value: unknown, original: Json): unknown {
+  return fill(value, original);
+}
+
+const allowsNull = (s: unknown): boolean => isObj(s) && (s.type === 'null' || (Array.isArray(s.type) && s.type.includes('null')) || [s.anyOf, s.oneOf].some((v) => Array.isArray(v) && v.some(allowsNull)));
+
+function fill(v: unknown, s: unknown): unknown {
+  if (Array.isArray(v)) {
+    const items = itemSchema(s);
+    return v.map((x) => fill(x, items));
+  }
+  if (!isObj(v)) return v;
+  const sch = objectSchema(s);
+  if (!sch) return v;
+  const props = sch.properties as Json;
+  const out: Json = {};
+  for (const [k, val] of Object.entries(v)) out[k] = fill(val, props[k] ?? (isObj(sch.additionalProperties) ? sch.additionalProperties : undefined));
+  for (const [k, ps] of Object.entries(props)) if (!(k in out) && allowsNull(ps)) out[k] = null;
+  return out;
+}
+
 function objectSchema(s: unknown): Json | undefined {
   if (!isObj(s)) return undefined;
   if (isObj(s.properties)) return s;
