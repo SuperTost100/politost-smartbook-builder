@@ -250,3 +250,13 @@ test('checkFunctionGraph reads a log axis: range in exponents, positive values o
   const xNegative = { ...good, config: { ...good.config, data: [{ ...trace, x: (trace.x as number[]).map((x) => -x) }] } };
   assert.equal(checkFunctionGraph(xNegative).ok, false, 'a log x axis cannot show negative x');
 });
+
+test('checkFunctionGraph gives a trace without x the coordinates 0, 1, 2, ... that Plotly uses', () => {
+  const layout = { xaxis: { type: 'log' }, yaxis: {} };
+  const trace = (y: number[], x?: number[]) => ({ type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', y, ...(x ? { x } : {}) }], layout } });
+  // x is 0, 1, 2, 3: three points are positive, so three of four are visible on a log axis.
+  assert.equal(checkFunctionGraph(trace([1, 2, 3, 4])).ok, true, checkFunctionGraph(trace([1, 2, 3, 4])).detail);
+  // Explicit x values are read as they are: one positive x in four is too few.
+  assert.equal(checkFunctionGraph(trace([1, 2, 3, 4], [-1, -2, 0, 5])).ok, false, 'explicit x values are still read as they are');
+  assert.match(checkFunctionGraph(trace([1, 2, 3, 4], [-1, -2, 0, 5])).detail, /undefined on most of the domain/);
+});
