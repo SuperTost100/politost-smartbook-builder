@@ -145,3 +145,17 @@ test('a rewrite that opens or closes with a note about itself is told from one t
   assert.equal(addsCommentary(before, `Ecco la versione corretta:\n\n${before}`), true, 'a short opening with words the section does not have');
   assert.equal(addsCommentary('$$a = b$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$', '$$a = b + 1$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$'), false, 'a formula at either end has no words to compare');
 });
+
+test('a corrected formula at either end of a section is not read as a note about the correction', () => {
+  const text = 'Il circuito è il filtro RC passa-basso, il più semplice che lascia passare le basse frequenze.';
+  const wrong = '$$\\frac{d}{dx}\\sin x = \\sin x$$';
+  const right = '$$\\frac{d}{dx}\\sin x = \\cos x$$';
+  assert.equal(addsCommentary(`${wrong}\n\n${text}\n\n${wrong}`, `${right}\n\n${text}\n\n${right}`), false, 'display formulas at both ends');
+  assert.equal(addsCommentary(`${wrong}\n\n${text}`, `${right}\n\n${text}`), false, 'a display formula first');
+  const block = (f: string) => `:::formula{key="derivata" label="Derivata"}\n${f}\n:::`;
+  assert.equal(addsCommentary(`${text}\n\n${block(wrong)}`, `${text}\n\n${block(right)}`), false, 'a formula block last');
+  const inline = 'La derivata vale $\\frac{d}{dx}\\sin x = \\sin x$ per ogni valore reale della variabile indipendente.';
+  assert.equal(addsCommentary(inline, inline.replace('= \\sin x', '= \\cos x')), false, 'an inline formula inside a long paragraph');
+  assert.equal(addsCommentary(`${text}\n\n${wrong}`, `${text}\n\n${wrong}\n\nNota: ho cambiato la derivata del seno nella formula precedente.`), true, 'prose after a formula is still a note');
+  assert.equal(addsCommentary(`${wrong}\n\n${text}`, `Ho corretto la derivata del seno nella formula.\n\n${right}\n\n${text}`), true, 'prose before a formula is still a note');
+});

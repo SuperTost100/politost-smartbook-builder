@@ -115,13 +115,16 @@ export function lostStructure(before: string, after: string): string | null {
   return null;
 }
 
-const paragraphWords = (s: string | undefined) => (s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+/** Prose only: display and inline math and the opening line of a ::: block hold LaTeX commands and attributes, which are no vocabulary. */
+const withoutMath = (s: string) => s.replace(/\$\$[\s\S]*?\$\$/g, ' ').replace(/\$[^$\n]*\$/g, ' ').replace(/^[ \t]*:::.*$/gm, ' ');
+const paragraphWords = (s: string | undefined) => withoutMath(s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
 const paragraphsOf = (md: string) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
 
 /**
  * A rewrite of a whole section sometimes starts or ends with a note about the rewrite ("I fixed the step in ..."), which would
  * go into the book. True when the first or the last paragraph of `after` has few words in common with the same paragraph of
- * `before` (a short one must use only words the old section has). A corrected number or formula in that paragraph passes.
+ * `before` (a short one must use only words the old section has). Only prose counts: a corrected number or formula,
+ * inline or display, passes.
  */
 export function addsCommentary(before: string, after: string): boolean {
   const old = paragraphsOf(before);
