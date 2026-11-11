@@ -1,0 +1,258 @@
+{
+ "beam.typ": {
+  "counts": {
+   "path": 38,
+   "use": 7,
+   "g": 114,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 278,
+  "height": 168
+ },
+ "block-diagram.typ": {
+  "counts": {
+   "path": 41,
+   "use": 30,
+   "g": 195,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 366,
+  "height": 99
+ },
+ "bode-plot.typ": {
+  "counts": {
+   "path": 167,
+   "use": 43,
+   "g": 531,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 1
+  },
+  "width": 308,
+  "height": 198
+ },
+ "cetz-plot-sine.typ": {
+  "counts": {
+   "path": 57,
+   "use": 43,
+   "g": 234,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 292,
+  "height": 149
+ },
+ "finite-automaton.typ": {
+  "counts": {
+   "path": 36,
+   "use": 18,
+   "g": 137,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 213,
+  "height": 98
+ },
+ "free-body.typ": {
+  "counts": {
+   "path": 20,
+   "use": 6,
+   "g": 69,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 177,
+  "height": 125
+ },
+ "karnaugh-map.py": {
+  "counts": {
+   "path": 42,
+   "use": 36,
+   "g": 78,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 5,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 188,
+  "height": 183
+ },
+ "logic-circuit.py": {
+  "counts": {
+   "path": 20,
+   "use": 4,
+   "g": 12,
+   "rect": 0,
+   "circle": 1,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 276,
+  "height": 136
+ },
+ "opamp-inverting.typ": {
+  "counts": {
+   "path": 32,
+   "use": 11,
+   "g": 89,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 333,
+  "height": 171
+ },
+ "opamp-schemdraw.py": {
+  "counts": {
+   "path": 25,
+   "use": 11,
+   "g": 12,
+   "rect": 0,
+   "circle": 4,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 280,
+  "height": 181
+ },
+ "pv-cycle.typ": {
+  "counts": {
+   "path": 19,
+   "use": 6,
+   "g": 103,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 1
+  },
+  "width": 249,
+  "height": 195
+ },
+ "rc-filter.typ": {
+  "counts": {
+   "path": 31,
+   "use": 9,
+   "g": 87,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 250,
+  "height": 163
+ },
+ "rc-schemdraw.py": {
+  "counts": {
+   "path": 12,
+   "use": 5,
+   "g": 9,
+   "rect": 0,
+   "circle": 2,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 145,
+  "height": 161
+ },
+ "state-machine.typ": {
+  "counts": {
+   "path": 38,
+   "use": 28,
+   "g": 183,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 313,
+  "height": 87
+ },
+ "timing-diagram.py": {
+  "counts": {
+   "path": 22,
+   "use": 5,
+   "g": 9,
+   "rect": 1,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 1
+  },
+  "width": 322,
+  "height": 101
+ },
+ "tree.typ": {
+  "counts": {
+   "path": 26,
+   "use": 9,
+   "g": 108,
+   "rect": 0,
+   "circle": 0,
+   "line": 0,
+   "polygon": 0,
+   "polyline": 0,
+   "ellipse": 0,
+   "clipPath": 0
+  },
+  "width": 236,
+  "height": 168
+ }
+}
