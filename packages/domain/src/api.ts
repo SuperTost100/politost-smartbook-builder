@@ -2,7 +2,7 @@
 // Bodies are JSON unless noted. Errors use ApiError from index.ts with an HTTP status.
 // Mutations require the header `x-smartbuilder: 1` (CSRF guard).
 import type {
-  AlignmentReport, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
+  AlignmentReport, DrawingFamily, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
   Asset, BookOptions, BookOptionsPatch, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
   ProjectInput, ProjectSummary, Question, Resource, ResourceRole, ReviewIssue, RunSummary, Settings,
   SourceIndex, TaskRow, Topic, UsageRow, UsageSummary, Role,
@@ -71,6 +71,29 @@ export interface ValidationReport {
 
 export interface ExportRow { id: string; createdAt: string; approved: boolean; sha256: string; size: number; report: ValidationReport; filename: string }
 
+/** What a figure in a section is, for the figure dialog. */
+export type FigureKindName = 'drawing' | 'photo' | 'image' | 'plot' | 'structure' | 'diagram';
+
+export interface FigureDetails {
+  assetId: string;
+  filename: string;
+  kind: FigureKindName;
+  /** The caption without the number; the compiler adds "Fig. 4.3". */
+  caption: string;
+  alt: string;
+  /** When this picture was made: drawn, rendered, uploaded or fetched. */
+  createdAt: string;
+  /** For a figure drawn from source code; null for every other kind. */
+  drawing: { shows: string; engine: 'typst' | 'schemdraw'; source: string; family: DrawingFamily } | null;
+  /** The section text the figure was read from. Every change of it sends this back and is refused with 409 when the text moved on. */
+  headRevId: string;
+  /** The redraw of this figure that is still running, if any. */
+  redrawRunId: string | null;
+}
+
+/** A photo the stock search found. The picture itself comes from `GET /api/projects/:id/figure-photos/:searchId/:index`. */
+export interface PhotoCandidate { index: number; provider: 'commons' | 'pixabay' | 'pexels'; author: string; license: string | null; pageUrl: string }
+
 /** Route table. `params` are path params, `body` is the JSON body, `res` is the response. */
 export interface Api {
   'GET /api/health': { res: { ok: true; version: string; dataDir: string } };
@@ -133,6 +156,29 @@ export interface Api {
   'POST /api/projects/:id/sections/:nodeId/regenerate': { body: { instruction?: string; selection?: string }; res: RunSummary };
   'POST /api/projects/:id/sections/:nodeId/research': { res: RunSummary };
   'POST /api/projects/:id/sections/:nodeId/figures': { res: RunSummary };
+  /** The figure the section's current text shows through this asset. 404 when the text does not show it. */
+  'GET /api/projects/:id/sections/:nodeId/figures/:assetId': { res: FigureDetails };
+  /** Saves the caption and, for a drawing, what it shows (which does not change the picture). */
+  'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; shows?: string }; res: SectionView };
+  /** Compiles edited source. When it compiles, the figure shows the new drawing; otherwise 422 with the compiler's message and nothing changes. */
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/render': { body: { baseRevId: string; source: string }; res: SectionView };
+  /** Starts a task that asks the illustrator for a new drawing from the one-line instruction. An edited `shows` (the description) is saved on the new drawing. */
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw': { body: { baseRevId: string; instruction: string; shows?: string }; res: RunSummary };
+  /** multipart/form-data: file (PNG, JPEG, SVG or WebP, up to 2 MB), baseRevId. The figure becomes an uploaded image and its drawing source is dropped. */
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace': { res: SectionView };
+  /** Takes the figure out of the text. Its picture stays in the section history. */
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove': { body: { baseRevId: string }; res: SectionView };
+  /** Inserts a drawing after block `afterBlock` once the illustrator has drawn it: starts a task. */
+  'POST /api/projects/:id/sections/:nodeId/figures/draw': { body: { baseRevId: string; afterBlock: number; description: string; caption: string }; res: RunSummary };
+  /** multipart/form-data: file (PNG, JPEG, SVG or WebP, up to 2 MB), baseRevId, afterBlock, caption. */
+  'POST /api/projects/:id/sections/:nodeId/figures/upload': { res: SectionView };
+  /** Searches Wikimedia Commons and the stock services the author added a key for. */
+  'POST /api/projects/:id/figure-photos/search': { body: { query: string }; res: { searchId: string; photos: PhotoCandidate[] } };
+  /** A preview picture of one search result. */
+  'GET /api/projects/:id/figure-photos/:searchId/:index': { res: Blob };
+  /** Inserts one search result after block `afterBlock`, with the credit line of its service in the caption. */
+  'POST /api/projects/:id/sections/:nodeId/figures/photo': { body: { baseRevId: string; afterBlock: number; searchId: string; index: number; caption: string }; res: SectionView };
+
   /** headRevId: the current revision the author saw the proposal against; accept is refused with 409 if it changed. */
   'POST /api/projects/:id/sections/:nodeId/proposal': { body: { action: 'accept' | 'reject'; revId: string; headRevId: string | null }; res: SectionView };
   /** Compiled reader Markdown for the chapter (preview). */

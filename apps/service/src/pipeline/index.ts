@@ -11,6 +11,7 @@ import { resourceSplit } from './examSplit.ts';
 import { resourceExtract, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { sectionResearch } from './research.ts';
 import { sectionFigures } from './figures.ts';
+import { figureDraw, figureRedraw } from './figureEdit.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { programParse } from './program.ts';
 import { startRun } from './runs.ts';
@@ -51,6 +52,8 @@ export function registerHandlers(ctx: AppContext) {
   q.register('section.revise', h(sectionRevise));
   q.register('section.research', h(sectionResearch));
   q.register('section.figures', h(sectionFigures));
+  q.register('figure.redraw', h(figureRedraw));
+  q.register('figure.draw', h(figureDraw));
   q.register('program.parse', h(programParse));
   q.register('program.check', h(alignCheck));
   q.register('program.apply', h(alignApply));

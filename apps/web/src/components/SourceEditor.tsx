@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import { Compartment, EditorState } from '@codemirror/state';
-import { EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
+import { Decoration, EditorView, keymap, lineNumbers, placeholder as cmPlaceholder } from '@codemirror/view';
 import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { markdown } from '@codemirror/lang-markdown';
 import { useDebounced } from '../lib/hooks';
@@ -18,13 +18,20 @@ interface Props {
   autoFocus?: boolean;
   placeholder?: string;
   minRows?: number;
+  /** Code in another language (a drawing's source): plain text with line numbers instead of the Markdown source dialect. */
+  code?: boolean;
+  /** With `code`: the 1-based line to mark as the one that does not compile. */
+  errorLine?: number | null;
 }
 
+const errorLineMark = Decoration.line({ class: 'se-error-line' });
+
 /** CodeMirror 6 on the source dialect. Ctrl/Cmd+Enter saves, Esc cancels. Tab moves focus on. */
-export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFocus, placeholder, minRows = 4 }: Props) {
+export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFocus, placeholder, minRows = 4, code, errorLine }: Props) {
   const host = useRef<HTMLDivElement>(null);
   const view = useRef<EditorView | null>(null);
   const attrs = useRef(new Compartment());
+  const marks = useRef(new Compartment());
   const cb = useRef({ onChange, onSave, onCancel });
   cb.current = { onChange, onSave, onCancel };
 
@@ -34,10 +41,11 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
       doc: value,
       extensions: [
         history(),
-        markdown(),
-        EditorView.lineWrapping,
+        code ? [lineNumbers(), EditorState.tabSize.of(2)] : markdown(),
+        code ? [] : EditorView.lineWrapping,
+        marks.current.of([]),
         placeholder ? cmPlaceholder(placeholder) : [],
-        attrs.current.of(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' })),
+        attrs.current.of(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: code ? 'false' : 'true' })),
         keymap.of([
           { key: 'Mod-Enter', run: () => { cb.current.onSave?.(); return true; } },
           { key: 'Escape', run: () => { if (!cb.current.onCancel) return false; cb.current.onCancel(); return true; } },
@@ -53,6 +61,8 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
           '.cm-cursor': { borderLeftColor: 'var(--accent)' },
           '.cm-selectionBackground, &.cm-focused .cm-selectionBackground, ::selection': { backgroundColor: 'var(--marker) !important' },
           '.cm-placeholder': { color: 'var(--ink-muted)' },
+          '.cm-gutters': { backgroundColor: 'var(--code-bg, var(--surface))', color: 'var(--ink-subtle)', border: 'none', borderRadius: '8px 0 0 8px' },
+          '.se-error-line': { backgroundColor: 'var(--danger-soft)', boxShadow: 'inset 3px 0 0 var(--danger)' },
         }),
       ],
     });
@@ -65,8 +75,16 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
 
   // The label can change while the editor stays mounted (the block it edits moved).
   useEffect(() => {
-    view.current?.dispatch({ effects: attrs.current.reconfigure(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: 'true' })) });
-  }, [label]);
+    view.current?.dispatch({ effects: attrs.current.reconfigure(EditorView.contentAttributes.of({ 'aria-label': label, 'aria-multiline': 'true', spellcheck: code ? 'false' : 'true' })) });
+  }, [label, code]);
+
+  // The line that does not compile stays marked until the source is rendered again.
+  useEffect(() => {
+    const v = view.current;
+    if (!v) return;
+    const line = code && errorLine && errorLine >= 1 && errorLine <= v.state.doc.lines ? v.state.doc.line(errorLine) : null;
+    v.dispatch({ effects: marks.current.reconfigure(line ? EditorView.decorations.of(Decoration.set([errorLineMark.range(line.from)])) : []) });
+  }, [code, errorLine, value]);
 
   useEffect(() => {
     const v = view.current;

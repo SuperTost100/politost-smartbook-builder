@@ -1,6 +1,6 @@
 import { memo, useMemo, useState } from 'react';
 import type { FormulaRef } from '@politost/content-core';
-import type { EvidenceNote } from '@smartbuilder/domain';
+import type { EvidenceNote, RunSummary } from '@smartbuilder/domain';
 import { SourceEditor, LivePreview } from '../../components/SourceEditor';
 import { ContentFlow } from '../../reader/ContentFlow';
 import { ExerciseCard } from '../../reader/ExerciseCard';
@@ -8,6 +8,8 @@ import { exercisesIn, formulaMap, prepareSnippet, previewSource } from '../../re
 import { BLOCK_LABEL, type MappedBlock } from '../../lib/blocks';
 import { CiteMark } from '../../components/CiteMark';
 import { Icon } from '../../components/Icon';
+import { AddFigure, type FigureTarget } from './AddFigure';
+import './add-figure.css';
 
 export interface Cite { n: number; note: EvidenceNote }
 
@@ -24,7 +26,12 @@ export interface BlockEdit {
   onSave: () => void;
   onDelete: () => void;
   onCancel: () => void;
+  /** The "Add figure" chooser of the action row. Without it the row has no such button. */
+  addFigure?: { pid: string; nodeId: string; drawing: boolean; prepare: () => Promise<FigureTarget>; onDrawing: (run: RunSummary, afterBlock: number) => void };
 }
+
+/** What a figure block needs on top of a plain block: the badge for its kind and the dialog entry. */
+export interface FigureInfo { badge: { label: string; accent: boolean } | null }
 
 interface Props {
   block: MappedBlock;
@@ -37,6 +44,8 @@ interface Props {
   selected: boolean;
   tabbable: boolean;
   edit?: BlockEdit;
+  figure?: FigureInfo;
+  onEditFigure?: (index: number, opener: HTMLElement) => void;
   onSelect: (index: number, note?: string) => void;
   onEdit: (index: number) => void;
   onRegenerate: (index: number) => void;
@@ -99,8 +108,10 @@ export const BlockView = memo(function BlockView(p: Props) {
               ))}
             </div>
           )}
+          {p.figure?.badge && <span className={`ui-badge${p.figure.badge.accent ? ' ui-badge--accent' : ''} ms-fig-badge`}>{p.figure.badge.label}</span>}
           {selected && (
             <div className="ms-actions" role="group" aria-label={`Actions for block ${block.index + 1}`}>
+              {p.figure && p.onEditFigure && <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEditFigure!(block.index, e.currentTarget); }} aria-haspopup="dialog"><Icon name="image" />Edit figure</button>}
               <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEdit(block.index); }}><Icon name="edit" />Edit</button>
               <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onRegenerate(block.index); }}><Icon name="sparkle" />Regenerate selection</button>
             </div>
@@ -125,6 +136,7 @@ function BlockEditor({ block, edit, resolveAsset }: { block: MappedBlock; edit: 
       <div className="ms-edit__actions">
         <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || (unchanged && !edit.saved) || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
         <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Close</button>
+        {edit.addFigure && <AddFigure {...edit.addFigure} />}
         <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves and closes, <kbd className="ui-kbd">Esc</kbd> closes. Edits save when you pause.</span>
         <span className="ui-grow" />
         {confirmDelete ? (

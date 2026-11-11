@@ -1,6 +1,9 @@
 // Collaborators of the routes. Defaults are the real modules; tests replace them with overrideDeps().
 import { compileBook, compileChapter, lintSection, packPtsb, readBackPtsb } from '@smartbuilder/content';
 import { renderPageImage, storeResource } from '../extract/index.ts';
+import { renderEditedDrawing } from '../figures/drawing/edit.ts';
+import { fetchChosenPhoto, searchStockPhotos } from '../figures/stock.ts';
+import { startDraw, startRedraw } from '../pipeline/figureEdit.ts';
 import { transcribePage } from '../evidence/index.ts';
 import { getConnections, probeRole } from '../llm/index.ts';
 import { startRun } from '../pipeline/runs.ts';
@@ -10,6 +13,11 @@ export interface RouteDeps {
   renderPageImage: typeof renderPageImage;
   transcribePage: typeof transcribePage;
   startRun: typeof startRun;
+  startRedraw: typeof startRedraw;
+  startDraw: typeof startDraw;
+  renderEditedDrawing: typeof renderEditedDrawing;
+  searchStockPhotos: typeof searchStockPhotos;
+  fetchChosenPhoto: typeof fetchChosenPhoto;
   getConnections: typeof getConnections;
   probeRole: typeof probeRole;
   compileBook: typeof compileBook;
@@ -22,7 +30,7 @@ export interface RouteDeps {
 }
 
 export const deps: RouteDeps = {
-  storeResource, renderPageImage, transcribePage, startRun, getConnections, probeRole,
+  storeResource, renderPageImage, transcribePage, startRun, startRedraw, startDraw, renderEditedDrawing, searchStockPhotos, fetchChosenPhoto, getConnections, probeRole,
   compileBook, compileChapter, lintSection, packPtsb, readBackPtsb,
   shutdown: () => { process.kill(process.pid, 'SIGTERM'); },
 };

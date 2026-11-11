@@ -43,7 +43,7 @@ export function FiguresDialog({ open, onClose, pid, nodeId, sectionTitle, chapte
     <Dialog
       open={open}
       onClose={onClose}
-      title="Add figures"
+      title="Add figures with AI"
       footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="fg-form" className="ui-btn ui-btn--accent" disabled={go.isPending}>{go.isPending ? 'Starting…' : 'Add figures'}</button></>}
     >
       <form id="fg-form" className="ui-stack" onSubmit={(e) => { e.preventDefault(); if (submitted.current) return; submitted.current = true; go.mutate(); }}>

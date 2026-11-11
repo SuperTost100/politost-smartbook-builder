@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { AppContext } from '../context.ts';
 import { deps, overrideDeps, type RouteDeps } from './deps.ts';
 import { registerEventRoutes } from './events.ts';
+import { registerFigureRoutes } from './figures.ts';
 import { registerManuscriptRoutes } from './manuscript.ts';
 import { registerMaterialRoutes } from './material.ts';
 import { registerProgramRoutes } from './program.ts';
@@ -22,6 +23,7 @@ export async function registerRoutes(app: FastifyInstance, ctx: AppContext, over
   registerResourceRoutes(app, ctx);
   registerRunRoutes(app, ctx);
   registerManuscriptRoutes(app, ctx);
+  registerFigureRoutes(app, ctx);
   registerMaterialRoutes(app, ctx);
   registerReviewRoutes(app, ctx);
   registerEventRoutes(app, ctx);
