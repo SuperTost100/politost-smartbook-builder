@@ -51,7 +51,7 @@ export interface FormulaBlock {
 export interface Scan {
   lines: ScannedLine[];
   formulas: FormulaBlock[];
-  /** 1-based line of a "$$" that is never closed, or null. Everything after it reads as math. */
+  /** 1-based line of the first "$$" that is never closed, or null. A stray "$$" ends at the next ":::" block line or the end of the text. */
   openDisplayLine: number | null;
 }
 
@@ -117,6 +117,9 @@ export function scan(markdown: string): Scan {
   const formulas: FormulaBlock[] = [];
   let display = false;
   let displayLine = 0;
+  let stray: number | null = null;
+  // Inside a fenced code block a "$$" is code, not math.
+  let codeFence: string | null = null;
 
   const push = (i: number, kind: LineKind, masked?: string) => {
     lines.push({ n: i + 1, raw: src[i], kind, masked: masked ?? src[i] });
@@ -127,6 +130,13 @@ export function scan(markdown: string): Scan {
     const raw = src[i];
     const t = raw.trim();
 
+    // A "$$" opened in prose and still open at a block line (":::formula", ":::image", ":::") is the stray one: the block
+    // after it must keep its own delimiters, so the display ends here and the line is read again as a block line.
+    if (display && t.startsWith(':::')) {
+      stray ??= displayLine;
+      display = false;
+    }
+
     if (!display) {
       if (!t) {
         push(i, 'blank', '');
@@ -134,6 +144,9 @@ export function scan(markdown: string): Scan {
         continue;
       }
       if (/^(```|~~~)/.test(t)) {
+        const marker = t.slice(0, 3);
+        if (codeFence === null) codeFence = marker;
+        else if (marker === codeFence) codeFence = null;
         push(i, 'code-fence');
         i++;
         continue;
@@ -219,6 +232,7 @@ export function scan(markdown: string): Scan {
     // Prose or math.
     const startsDisplay = !display && t.startsWith('$$');
     const r = maskMath(raw, display);
+    if (codeFence !== null) r.inDisplay = false;
     if (r.inDisplay && !display) displayLine = i + 1;
     display = r.inDisplay;
     if (r.startedInDisplay || (startsDisplay && r.inDisplay)) {
@@ -234,20 +248,23 @@ export function scan(markdown: string): Scan {
     }
     i++;
   }
-  return { lines, formulas, openDisplayLine: display ? displayLine : null };
+  return { lines, formulas, openDisplayLine: stray ?? (display ? displayLine : null) };
 }
 
 /**
- * Removes the last "$$" of the line where an unclosed "$$" opens, so the rest of the text is read as text again.
+ * Removes the last "$$" of every line where an unclosed "$$" opens, so the rest of the text is read as text again.
  * Text with paired "$$" comes back unchanged. The lint reports the problem; this keeps a preview and a split into blocks usable.
  */
 export function dropUnclosedDisplay(markdown: string): string {
-  const open = scan(markdown).openDisplayLine;
-  if (open === null) return markdown;
-  const src = markdown.replace(/\r\n?/g, '\n').split('\n');
-  const at = src[open - 1].lastIndexOf('$$');
-  src[open - 1] = src[open - 1].slice(0, at) + src[open - 1].slice(at + 2);
-  return src.join('\n');
+  let src = markdown;
+  // Each pass removes one "$$", so the loop ends. Strays are rare, so a rescan per stray costs nothing that matters.
+  for (let open = scan(src).openDisplayLine; open !== null; open = scan(src).openDisplayLine) {
+    const lines = src.replace(/\r\n?/g, '\n').split('\n');
+    const at = lines[open - 1].lastIndexOf('$$');
+    lines[open - 1] = lines[open - 1].slice(0, at) + lines[open - 1].slice(at + 2);
+    src = lines.join('\n');
+  }
+  return src;
 }
 
 /** True when a separator row like |---|:---:| */

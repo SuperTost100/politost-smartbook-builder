@@ -559,3 +559,33 @@ test('a truth table and a matrix written as KaTeX arrays survive the compile and
   const content = parseChapterMarkdown(out.markdown, 3).paragraphs.map((p) => p.content).join('\n');
   assert.ok(content.includes('\\begin{array}{cc|c}') && content.includes('\\hline') && content.includes('\\end{array}'), content);
 });
+
+test('a stray $$ before a formula block does not cost the formula its number', () => {
+  const formulas: Record<string, string> = { single: '$$z = 1$$', multi: '$$\nz = 1\n$$' };
+  for (const [name, body] of Object.entries(formulas)) {
+    const ch = fixtureBook().chapters[0];
+    ch.sections[0].markdown = `Testo $$ x^2 + y\n\n:::formula{key="zz" label="Z"}\n${body}\n:::\n\nDopo la formula.`;
+    const { markdown, formulaNumbers } = compileChapter(ch, undefined, { language: 'it' });
+    assert.ok(formulaNumbers.zz, `${name}: the formula is numbered`);
+    assert.ok(markdown.includes(body), `${name}: the formula keeps its own delimiters\n${markdown}`);
+    assert.equal((markdown.match(/\$\$/g) ?? []).length % 2, 0, `${name}: paired $$`);
+    assert.ok(markdown.includes('Dopo la formula.'));
+  }
+});
+
+test('a stray $$ as the last thing in a section is removed and the formulas before it stay', () => {
+  const ch = fixtureBook().chapters[0];
+  ch.sections[0].markdown = ':::formula{key="zz" label="Z"}\n$$\nz = 1\n$$\n:::\n\nUltima riga $$ x';
+  const { markdown, formulaNumbers } = compileChapter(ch, undefined, { language: 'it' });
+  assert.ok(formulaNumbers.zz);
+  assert.ok(markdown.includes('$$\nz = 1\n$$'));
+  assert.ok(markdown.includes('Ultima riga  x'), 'the stray $$ is gone');
+  assert.ok(!markdown.includes('$$ x'));
+});
+
+test('a $$ inside fenced code is left as written', () => {
+  const ch = fixtureBook().chapters[0];
+  ch.sections[0].markdown = 'Prima.\n\n```python\nprint("$$")\n```\n\nDopo.';
+  const { markdown } = compileChapter(ch, undefined, { language: 'it' });
+  assert.ok(markdown.includes('print("$$")'), markdown);
+});
