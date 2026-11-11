@@ -9,7 +9,7 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, sessionExtractSchema, verifyPrompt, verifySchema } from './prompts.ts';
+import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
@@ -171,15 +171,12 @@ export async function sessionImport(ctx: AppContext, t: TaskContext) {
     if (text.length > MAX_SESSION_CHARS) return { fallback: `the pages hold ${text.length} characters, more than ${MAX_SESSION_CHARS}` };
     t.progress(`Reading ${questions.length} exercises of ${examGroup ?? 'the session'} together`);
     const project = loadProject(ctx, t.task.projectId);
+    // The parser accepts only an answer that has every listed number once and no other, in the listed order.
     const { data } = await runRole(ctx, {
       role: 'bulk', ...sessionExtractPrompt({ language: project.language, examGroup: examGroup ?? '', exercises: questions.map((q, i) => ({ number: numbers[i]!, solutionText: truncate(q.solution, 4000) })), pages: text }),
-      schema: sessionExtractSchema, projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+      parse: examReadParser(numbers), projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
-    const byNumber = new Map(data.exercises.map((e) => [e.number.trim().toLowerCase(), e]));
-    if (data.exercises.length !== questions.length || byNumber.size !== questions.length || numbers.some((n) => !byNumber.has(n.toLowerCase()))) {
-      return { fallback: `the answer lists ${data.exercises.map((e) => e.number).join(', ') || 'nothing'} instead of ${numbers.join(', ')}` };
-    }
-    return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = byNumber.get(numbers[i]!.toLowerCase())!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
+    return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = data.exercises[i]!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
   } catch (err) {
     if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
     throw err;
@@ -211,10 +208,11 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
     const pages: string[] = [];
     for (const idx of importPages(question)) pages.push(pageText(await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
     const solutionPages = question.solution ? `(text layer, math may be garbled)\n${truncate(question.solution, 6000)}` : '(same pages)';
-    ({ data } = await runRole(ctx, {
+    const read = await runRole(ctx, {
       role: 'bulk', ...authenticExtractPrompt({ language: project.language, examGroup: question.examGroup ?? '', number: question.number ?? '', statementPages: pages.join('\n\n'), solutionPages }),
-      schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-    }));
+      parse: examReadParser([question.number ?? '']), projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    data = read.data.exercises[0]!;
   }
   if (!data.readable) {
     // Out of the book until the author types it in: its raw text-layer statement is garbled.

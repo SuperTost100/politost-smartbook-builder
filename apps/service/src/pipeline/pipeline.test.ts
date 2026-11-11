@@ -2,11 +2,11 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { MAX_DELETED_BLOCKS } from '@smartbuilder/content';
+import { lintQuestionText, MAX_DELETED_BLOCKS } from '@smartbuilder/content';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, patchAnswer, patchText, seedPage, seedProject, seedResource, usageOf, written, wroteCode } from '../llm/testkit.ts';
+import { FakeFunnel, examRead, examText, makeCtx, patchAnswer, patchText, seedPage, seedProject, seedResource, usageOf, written, wroteCode } from '../llm/testkit.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
@@ -17,7 +17,7 @@ import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { patchPrompt, reviewSchema } from './prompts.ts';
+import { examReadParser, patchPrompt, reviewSchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
@@ -133,7 +133,7 @@ describe('1. question updates do not overwrite author edits', () => {
     seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
-    fake.next(() => { edit(id)(); return { structured: { statement: 'Calcola.', solution: 'Fatto.', readable: true } as never, text: '{}', usage: usageOf(1, 1) }; });
+    fake.next(() => { edit(id)(); return { text: examText([{ number: '1', statement: 'Calcola.', solution: 'Fatto.' }]), usage: usageOf(1, 1) }; });
     const r = await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.deepEqual(r, { stale: true });
     assert.equal(row(id).statement, "Testo dell'autrice");
@@ -144,7 +144,7 @@ describe('1. question updates do not overwrite author edits', () => {
     seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
-    fake.next(answer({ statement: 'Calcola.', solution: 'Fatto.', readable: true }));
+    fake.next(examRead({ number: '1', statement: 'Calcola.', solution: 'Fatto.' }));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.equal(row(id).statement, 'Calcola.');
     assert.equal(row(id).rev, 2);
@@ -154,7 +154,7 @@ describe('1. question updates do not overwrite author edits', () => {
     seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
-    fake.next(answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.', readable: true }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: 'inventato', solution: 'Vale $1$.' }));
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: 'inventato', solution: 'Vale $1$.' }));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x)$.');
     assert.equal(row(id).hint, '');
@@ -402,7 +402,7 @@ describe('4c. one extraction call per exam session', () => {
 
   test('three exercises of one session on three pages make one call, and no import makes another', async () => {
     const ids = session();
-    fake.next(answer({ exercises: [ex(1), ex(2), ex(3)] }));
+    fake.next(examRead(ex(1), ex(2), ex(3)));
     const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
     assert.equal(fake.calls.length, 1);
     assert.equal(fake.calls[0].prompt.match(/PAGINA \d/g)!.length, 3, 'each page is sent once');
@@ -433,7 +433,7 @@ describe('4c. one extraction call per exam session', () => {
   test('a question the author edited, or that was already read, is not asked for', async () => {
     const [a, b, c] = session();
     ctx.db.run(`UPDATE questions SET edited_at = '2024-01-01', statement = 'Testo dell''autrice' WHERE id = ?`, a);
-    fake.next(answer({ exercises: [ex(2), ex(3)] }));
+    fake.next(examRead(ex(2), ex(3)));
     const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
     assert.match(fake.calls[0].prompt, /Exercises to copy: 2, 3/);
     assert.ok(!fake.calls[0].prompt.includes('PAGINA 0'));
@@ -444,19 +444,62 @@ describe('4c. one extraction call per exam session', () => {
     assert.equal(row(a).statement, "Testo dell'autrice");
   });
 
-  test('an answer that misses, invents or repeats an exercise falls back to one call per question', async () => {
+  test('an answer that misses, invents or repeats an exercise gets one repair turn, and falls back to one call per question when that fails too', async () => {
     const ids = session();
-    for (const bad of [[ex(1), ex(2)], [ex(1), ex(2), ex(4)], [ex(1), ex(2), ex(2)], [ex(1), ex(2), ex(3), ex(4)]]) {
-      fake.next(answer({ exercises: bad }));
+    for (const bad of [[ex(1), ex(2)], [ex(1), ex(2), ex(4)], [ex(1), ex(2), ex(2), ex(3)], [ex(1), ex(2), ex(3), ex(4)]]) {
+      fake.next(examRead(...bad), examRead(...bad));
       const r = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
-      assert.match((r as { fallback: string }).fallback, /instead of 1, 2, 3/);
+      assert.match((r as { fallback: string }).fallback, /invalid answer twice/);
     }
+    assert.match(fake.calls[1].prompt, /Exercise 3 is missing/, 'the repair turn names the problem');
     const before = fake.calls.length;
-    fake.next(answer({ statement: 'Calcola 1.', solution: 'Fatto 1.', readable: true }));
+    fake.next(examRead({ number: '1', statement: 'Calcola 1.', solution: 'Fatto 1.' }));
     await read([ids[0]], key, { fallback: 'x' });
     assert.equal(fake.calls.length, before + 1, 'the import made its own call');
     assert.match(fake.calls.at(-1)!.prompt, /Exercise number: 1/);
     assert.equal(row(ids[0]).statement, 'Calcola 1.');
+  });
+
+  test('the exam answer parser: what it accepts and what it sends back', () => {
+    const parse = examReadParser(['1', '2']);
+    const ok = parse('@@@ statement 1\nPrimo.\n\na) Calcolare $\\nu$.\n@@@ solution 1\nVale $\\neq 0$.\n@@@ unreadable 2');
+    assert.deepEqual(ok, { ok: true, data: { exercises: [{ number: '1', statement: 'Primo.\n\na) Calcolare $\\nu$.', solution: 'Vale $\\neq 0$.', readable: true }, { number: '2', statement: '', solution: '', readable: false }] } });
+    assert.deepEqual(parse('@@@ statement 2\nB.\n@@@ statement 1\nA.'), { ok: true, data: { exercises: [{ number: '1', statement: 'A.', solution: '', readable: true }, { number: '2', statement: 'B.', solution: '', readable: true }] } }, 'the order of the answer does not matter, the result is in the listed order');
+    assert.deepEqual(examReadParser(['7'])('@@@ statement\nSolo.'), { ok: true, data: { exercises: [{ number: '7', statement: 'Solo.', solution: '', readable: true }] } }, 'one exercise may leave its number off');
+    const problem = (text: string, p = parse) => { const r = p(text); assert.equal(r.ok, false, text); return (r as { problem: string }).problem; };
+    assert.match(problem('@@@ statement 1\nA.'), /Exercise 2 is missing/);
+    assert.match(problem('Ecco.\n@@@ statement 1\nA.\n@@@ statement 2\nB.'), /text before the first/);
+    assert.match(problem('@@@ statement 1\nA.\n@@@ statement 2\nB.\n@@@ statement 3\nC.'), /"3" is not one of the listed/);
+    assert.match(problem('@@@ statement 1\nA.\n@@@ statement 1\nB.\n@@@ statement 2\nC.'), /two "statement" parts/);
+    assert.match(problem('@@@ statement 1\nA.\n@@@ unreadable 1\n@@@ statement 2\nB.'), /both unreadable and given/);
+    assert.match(problem('@@@ statement 1\n\n@@@ statement 2\nB.'), /Exercise 1 has no statement/);
+    assert.match(problem('@@@ statement 1\nA.\n@@@ soluzione 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/);
+    assert.match(problem('@@@ statement\nA.\n@@@ statement 2\nB.'), /has no exercise number/);
+  });
+
+  test('a wrong first answer is put right by the repair turn: two calls, the corrected text is stored', async () => {
+    const ids = session();
+    fake.next(examRead(ex(1), ex(2)), examRead(ex(1), ex(2), ex(3)));
+    const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    assert.equal(fake.calls.length, 2);
+    assert.equal((result as { exercises: number }).exercises, 3);
+    assert.deepEqual(await read(ids, key, result), [{ readable: true }, { readable: true }, { readable: true }]);
+  });
+
+  test('the July session of the acceptance run: line breaks, \\nu and a solution heading come out as the model wrote them', async () => {
+    // The first model answer was a JSON string in which "\n" stayed two characters, so the stored text was one long line.
+    const ids = session();
+    const statement1 = 'Un amplificatore invertente ha $R_1 = 3{,}3\\,\\mathrm{k\\Omega}$ e $\\nu = 2$.\n\na) Calcolare il guadagno $G = v_{out}/v_{in}$.\n\nb) Calcolare la tensione di uscita $v_{out}$.';
+    const solution1 = 'a) $G = -R_2/R_1 = -10$.\n\nb) $v_{out} = G v_{in} = -2{,}5\\,\\mathrm{V}$ e $G \\neq 0$.';
+    fake.next(examRead(ex(1, { statement: statement1, solution: solution1 }), ex(2), ex(3)));
+    const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    await read(ids, key, result);
+    assert.equal(row(ids[0]).statement, statement1);
+    assert.equal(row(ids[0]).solution, solution1);
+    for (const id of ids) {
+      assert.ok(!/\\[nt]\b|\\n\\n/.test(row(id).statement.replace(/\$[^$]*\$/g, '')), 'no literal \\n outside math');
+      assert.deepEqual(lintQuestionText(row(id).statement, { file: 's', language: 'it' }).filter((f) => f.rule === 'literal-escape'), []);
+    }
   });
 
   test('a session over the page limit, or two questions with one number, is not sent to the model', async () => {
@@ -475,7 +518,7 @@ describe('4c. one extraction call per exam session', () => {
 
   test('a model that cannot give a valid answer falls back, and a failure a retry can cure is thrown', async () => {
     session();
-    fake.next(answer({ nothing: true }), answer({ nothing: true }));
+    fake.next(answer({ exercises: [] }), () => ({ text: 'Ecco gli esercizi: 1, 2 e 3.', usage: usageOf(1, 1) }));
     const r = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
     assert.match((r as { fallback: string }).fallback, /invalid answer/);
     const hangUp = () => new Error('socket hang up');
@@ -527,9 +570,8 @@ describe('4c. one extraction call per exam session', () => {
     const ids = session();
     // Which answer a call needs depends on its prompt, because the pools run side by side.
     const dispatch = (input: { prompt: string }) => {
-      const body = /Exercises to copy/.test(input.prompt)
-        ? { exercises: [ex(1), ex(2), ex(3)] }
-        : /^STATEMENT:/.test(input.prompt) ? { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }
+      if (/Exercises to copy/.test(input.prompt)) return { text: examText([ex(1), ex(2), ex(3)]), usage: usageOf(1, 1) };
+      const body = /^STATEMENT:/.test(input.prompt) ? { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }
           : { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'Esercizio nuovo.', hint: 'h', solution: 's', finalAnswer: '1' }] };
       return { structured: body as never, text: JSON.stringify(body), usage: usageOf(1, 1) };
     };
@@ -555,7 +597,7 @@ describe('4c. one extraction call per exam session', () => {
       return q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: gi * 3 + n - 1, page_to: gi * 3 + n - 1, exam_group: g, number: String(n), solution: '' });
     }));
     for (const [gi, g] of groups.entries()) {
-      fake.next(answer({ exercises: [ex(1, { solution: '' }), ex(2, { solution: '' }), ex(3, { solution: '' })] }));
+      fake.next(examRead(ex(1, { solution: '' }), ex(2, { solution: '' }), ex(3, { solution: '' })));
       const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: g }, { key: sessionImportKey('r-exam', g) }));
       fake.next(answer({ markdown: 's' }), answer({ markdown: 's' }), answer({ markdown: 's' }));
       await read(ids[gi], sessionImportKey('r-exam', g), result);
@@ -1151,7 +1193,7 @@ describe('r3. verifying again never overwrites an author-repaired authentic ques
 
   test('import marks the question as imported; a second import (even after the checks were cleared) reuses it without a model call', async () => {
     const id = examQ();
-    fake.next(answer({ statement: 'Calcola.', solution: 'Fatto.', readable: true }));
+    fake.next(examRead({ number: '1', statement: 'Calcola.', solution: 'Fatto.' }));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.ok(row(id).imported_at);
     ctx.db.run(`UPDATE questions SET checks = '[]', status = 'draft' WHERE id = ?`, id);
@@ -1162,11 +1204,11 @@ describe('r3. verifying again never overwrites an author-repaired authentic ques
 
   test('an imported question whose solution is empty is read again; an unreadable one is not marked as imported', async () => {
     const id = examQ({ imported_at: '2026-01-01', solution: '' });
-    fake.next(answer({ statement: 'Calcola.', solution: 'Ora c\'è.', readable: true }));
+    fake.next(examRead({ number: '1', statement: 'Calcola.', solution: 'Ora c\'è.' }));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.equal(row(id).solution, "Ora c'è.");
     const bad = examQ();
-    fake.next(answer({ statement: '', solution: '', readable: false }));
+    fake.next(examRead({ number: '1', readable: false }));
     await questionImport(ctx, startTask('question.import', { questionId: bad }));
     assert.equal(row(bad).imported_at, null);
   });

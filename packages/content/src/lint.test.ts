@@ -70,6 +70,36 @@ test('placeholder: a [?] or ??? a model left in prose or math is a blocker', () 
   assert.equal(lint('Valori: $[?]$ e $[?]$, poi ???.').filter((f) => f.rule === 'placeholder').length, 3, 'one finding per placeholder, so adding one on the same line counts');
 });
 
+// ---- literal \n and \t -------------------------------------------------------------------
+
+test('literal-escape: a backslash-n or backslash-t in prose is a blocker, in math and code it is not', () => {
+  // The two rows the exam reader stored for the July session of the acceptance run.
+  for (const c of [
+    "Un amplificatore ha $R_1 = 3{,}3\\,\\mathrm{k\\Omega}$.\\n\\na) Calcolare il guadagno $G$.\\n\\nb) Calcolare $v_{out}$.",
+    "**Problema 1.\\n\\na) $G = -R_2/R_1 = -10$.\\n\\nb) $v_{out} = -2{,}5\\,\\mathrm{V}$.**",
+    '### Problema 2.\\n\\na) $\\tau = RC = 22\\,\\mathrm{ms}$.',
+    'Colonna uno\\tcolonna due.',
+    '- primo punto\\n- secondo punto',
+    'Il valore \\ntrovato \\text{vero}.',
+  ]) {
+    const f = find(c, 'literal-escape');
+    assert.ok(f, c);
+    assert.equal(f!.severity, 'blocker', c);
+  }
+  for (const c of [
+    'Con $\\nu = 2$ e $\\neq$, poi $\\theta \\times \\tau$.',
+    '$$\n\\nabla \\cdot \\vec{E} = \\frac{\\rho}{\\varepsilon_0}\n$$',
+    'In MATLAB `fprintf("%d\\n", x)` stampa e va a capo.',
+    'Righe a capo vere.\n\na) Calcolare.',
+    'Il valore $x$ è \\text{vero} e \\tau è la costante.',
+  ]) assert.equal(find(c, 'literal-escape'), undefined, c);
+});
+
+test('literal-escape: question text is linted too, which is what the export validates', () => {
+  const f = lintQuestionText('Un resistore $R = 1\\,\\mathrm{k\\Omega}$.\\n\\na) Calcolare $I$.', { file: 'statement', language: 'it' }).find((x) => x.rule === 'literal-escape');
+  assert.equal(f?.severity, 'blocker');
+});
+
 // ---- meta-leak (F-04) --------------------------------------------------------------------
 
 test('meta-leak: model commentary is flagged as blocker', () => {

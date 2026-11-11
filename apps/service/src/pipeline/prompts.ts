@@ -1,13 +1,13 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, rewriteLatexNames, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 20;
+export const PROMPT_VERSION = 21;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -607,11 +607,66 @@ Write ${p.count} problems in total, distributing them as requested across topics
   };
 }
 
-export const authenticExtractSchema = z.object({
-  statement: z.string(),
-  solution: z.string(),
-  readable: z.boolean().describe('false if the pages do not contain this exercise or it cannot be read'),
-});
+/** What one reading of exam pages gives, one entry per listed exercise in the listed order. `solution` is empty when the pages print none. */
+export interface ExamReading { exercises: { number: string; statement: string; solution: string; readable: boolean }[] }
+
+const EXAM_PART = /^@@@[ \t]*(statement|solution|unreadable)\b[ \t]*(.*?)[ \t]*$/;
+
+/** How the model answers a reading of exam pages: plain text, so that no statement or solution is ever a JSON string. */
+const examAnswerRule = `Answer in plain text, not JSON, so that no backslash has to be escaped. For each exercise write a line "@@@ statement <number>" and then its statement, exactly as it should appear in the book: real line breaks, and LaTeX written once, with single backslashes. When the pages print an official solution, write a line "@@@ solution <number>" and then the solution in the same way. When the exercise is not on the pages or cannot be read, write only the line "@@@ unreadable <number>" for it. Give the exercises in the order listed, with the number exactly as listed. Write nothing before the first "@@@" line, no code fence around anything, and no comment.`;
+
+/**
+ * Reads the answer described by `examAnswerRule`. `numbers` are the exercises asked for. The answer must have every one of them
+ * once, either as a statement (with a solution or without) or as unreadable, and no other. A single exercise may leave its
+ * number off. A problem goes back to the model in the repair turn. The texts never were JSON strings, so a line break stays
+ * a line break and nothing is guessed at a backslash: only the function names KaTeX lacks are rewritten, like in a drafted section.
+ */
+export function examReadParser(numbers: string[]): (text: string) => { ok: true; data: ExamReading } | { ok: false; problem: string } {
+  const wanted = new Map(numbers.map((n) => [n.trim().toLowerCase(), n]));
+  const example = numbers[0] ?? '1';
+  return (text) => {
+    const fail = (problem: string) => ({ ok: false as const, problem });
+    const found = new Map<string, { statement?: string; solution?: string; unreadable?: boolean }>();
+    let open: { kind: 'statement' | 'solution'; key: string; body: string[] } | null = null;
+    const before: string[] = [];
+    const close = () => {
+      if (open) found.get(open.key)![open.kind] = rewriteLatexNames(open.body.join('\n').trim());
+      open = null;
+    };
+    for (const line of text.split(/\r?\n/)) {
+      const head = EXAM_PART.exec(line);
+      if (!head && line.startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". Headers look like "@@@ statement ${example}", "@@@ solution ${example}" and "@@@ unreadable ${example}".`);
+      if (!head) {
+        (open?.body ?? before).push(line);
+        continue;
+      }
+      close();
+      const kind = head[1] as 'statement' | 'solution' | 'unreadable';
+      const key = (head[2] || (numbers.length === 1 ? numbers[0] : '')).trim().toLowerCase();
+      if (!wanted.has(key)) return fail(head[2] ? `Exercise "${head[2]}" is not one of the listed exercises (${numbers.join(', ')}). Never add an exercise that is not listed.` : `The line "${line.slice(0, 80)}" has no exercise number. Write it as "@@@ ${kind} ${example}".`);
+      const entry = found.get(key) ?? {};
+      found.set(key, entry);
+      if (kind === 'unreadable') entry.unreadable = true;
+      else if (entry[kind] !== undefined) return fail(`Exercise ${wanted.get(key)} has two "${kind}" parts. Give each part once.`);
+      else open = { kind, key, body: [] };
+    }
+    close();
+    if (before.join('').trim()) return fail('There is text before the first "@@@" line: every word of the answer belongs to a part.');
+    const exercises: ExamReading['exercises'] = [];
+    for (const n of numbers) {
+      const entry = found.get(n.trim().toLowerCase());
+      if (!entry) return fail(`Exercise ${n} is missing. Give a statement, or "@@@ unreadable ${n}", for every listed exercise.`);
+      if (entry.unreadable) {
+        if (entry.statement !== undefined || entry.solution !== undefined) return fail(`Exercise ${n} is both unreadable and given. Write either its statement or "@@@ unreadable ${n}".`);
+        exercises.push({ number: n, statement: '', solution: '', readable: false });
+        continue;
+      }
+      if (!entry.statement) return fail(`Exercise ${n} has no statement. Write "@@@ statement ${n}" and its text, or "@@@ unreadable ${n}".`);
+      exercises.push({ number: n, statement: entry.statement, solution: entry.solution ?? '', readable: true });
+    }
+    return { ok: true, data: { exercises } };
+  };
+}
 
 export function authenticExtractPrompt(p: { language: string; examGroup: string; number: string; statementPages: string; solutionPages: string }) {
   return {
@@ -625,18 +680,9 @@ ${p.statementPages}
 Pages with the solution (SVOLGIMENTO), may be the same pages:
 ${p.solutionPages}
 
-Return JSON with the statement of "Esercizio ${p.number}" of this session (all its parts, without the points), the official solution of that exercise, and readable=true; readable=false if it is not there.`,
+Copy "Esercizio ${p.number}" of this session: its statement (all its parts, without the points and without its heading line) and its official solution. ${examAnswerRule}`,
   };
 }
-
-export const sessionExtractSchema = z.object({
-  exercises: z.array(z.object({
-    number: z.string().describe('the exercise number exactly as listed'),
-    statement: z.string(),
-    solution: z.string().describe('empty when the pages print no official solution for it'),
-    readable: z.boolean().describe('false if the pages do not contain this exercise or it cannot be read'),
-  })),
-});
 
 /** All the listed exercises of one exam session in a single call, from the same pages. `exercises` carries each stored question's number and its text-layer solution, if any. */
 export function sessionExtractPrompt(p: { language: string; examGroup: string; exercises: { number: string; solutionText: string }[]; pages: string }) {
@@ -649,7 +695,7 @@ Exercises to copy: ${p.exercises.map((e) => e.number).join(', ')}
 Pages of the session (statements and solutions):
 ${p.pages}
 ${layer ? `\nText layer of the official solutions, which may help where the page transcription is unclear:\n${layer}\n` : ''}
-Return JSON {"exercises": [...]} with exactly one entry for each listed exercise number, in that order and with the number exactly as listed. Each entry has the statement of "Esercizio <number>" of this session (all its parts, without the points), its official solution (empty when the pages print none), and readable=true; readable=false if the exercise is not on the pages. Never add an exercise that is not listed.`,
+Copy "Esercizio <number>" of this session for each listed number: its statement (all its parts, without the points and without its heading line) and its official solution. ${examAnswerRule} Never add an exercise that is not listed.`,
   };
 }
 

@@ -29,6 +29,7 @@ export const LINT_RULES = [
   'exercise-fence',
   'placeholder',
   'difficulty-decoration',
+  'literal-escape',
 ] as const;
 export type LintRule = (typeof LINT_RULES)[number];
 
@@ -109,6 +110,7 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   image: 'blocker',
   'exercise-fence': 'blocker',
   placeholder: 'blocker',
+  'literal-escape': 'blocker',
   'colon-dangling': 'major',
   'unicode-math': 'major',
   'bold-unpaired': 'major',
@@ -174,6 +176,9 @@ const META_PATTERNS: MetaPattern[] = [
 ];
 
 const META_INLINE_CODE = /`[^`]*(?:## p\d+|:::formula|:::exercise|\{\{formula)[^`]*`/;
+
+/** A LaTeX command that starts with n or t, at the start of the text: a backslash followed by it is no escaped line break or tab. */
+const LATEX_COMMAND_N_T = /^\\(?:nu|neq?|nabla|ni|notin|not|nless|ngtr|nleq|ngeq|nmid|nparallel|nsim|ncong|nexists|nrightarrow|nleftarrow|text(?:bf|it|rm|sf|tt|normal|up)?|tau|theta|times|to|top|tan|tanh|tilde|therefore|triangle\w*|tag|tbinom|tfrac)(?![A-Za-z])/;
 
 // -- unicode math ------------------------------------------------------------------------------
 
@@ -338,6 +343,10 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       // unicode math
       const chars = unicodeMathChars(l.masked);
       if (chars.length) add(mk('unicode-math', file, `Math symbols outside $...$: ${chars.join(' ')}. Write them as LaTeX inside $...$.`, l.n, t));
+
+      // The two characters backslash and n (or t) where a line break or a tab was meant: a model wrote them inside a JSON string and they were never decoded.
+      // Math and inline code are masked, so \nu in a formula and `printf("\n")` are not caught. A LaTeX command written outside math (\text, \tau) is another mistake and is left out.
+      if ([...l.masked.matchAll(/(?<!\\)\\[nt]/g)].some((m) => !LATEX_COMMAND_N_T.test(l.masked.slice(m.index)))) add(mk('literal-escape', file, 'A literal backslash followed by n or t in the text, where a line break or a tab was meant. Write the line break itself.', l.n, t));
 
       // markdown images
       if (/!\[[^\]]*\]\([^)]*\)/.test(l.masked)) add(mk('image', file, 'Markdown images are not allowed; use a :::image block with an asset.', l.n, t));
