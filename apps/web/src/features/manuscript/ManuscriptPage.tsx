@@ -165,6 +165,10 @@ export default function ManuscriptPage() {
   const endEdit = cancelEdit;
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
   const [compareOpen, setCompareOpen] = useState(false);
+  // Leaving a block whose section changed elsewhere does nothing but point the author at the notice's choices.
+  const compareRef = useRef<HTMLButtonElement>(null);
+  const noticeAsks = editor.noticeAsks;
+  useEffect(() => { if (noticeAsks > 0) compareRef.current?.focus(); }, [noticeAsks]);
   const blockedEdit = editor.changedElsewhere;
   const editProps = useMemo<BlockEdit | undefined>(() => (draft ? {
     text: draft.text, baseText: draft.baseText, saved: !!draft.saved, saving, blocked: blockedEdit,
@@ -286,7 +290,7 @@ export default function ManuscriptPage() {
                     {editor.conflict ? ` ${editor.conflict}` : ''}
                   </span>
                   <div className="ui-banner__actions">
-                    <button type="button" className="ui-btn ui-btn--sm" onClick={() => setCompareOpen(true)}>Compare</button>
+                    <button ref={compareRef} type="button" className="ui-btn ui-btn--sm" onClick={() => setCompareOpen(true)}>Compare</button>
                     <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={() => void editor.keepMine()} disabled={editor.saving}>Keep my version (save over latest)</button>
                     <button type="button" className="ui-btn ui-btn--sm" onClick={editor.discard} disabled={editor.saving}>Discard my draft</button>
                   </div>

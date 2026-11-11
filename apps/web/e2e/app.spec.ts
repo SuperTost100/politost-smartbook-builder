@@ -577,6 +577,56 @@ test('no autosave while the section changed elsewhere', async ({ page, request }
   await expect(banner).toBeVisible();
 });
 
+/** Block 2 of s2 has a typed draft, then the section is saved by someone else: the notice shows and the draft is unsaved. */
+async function draftWithChangedSection(page: Page, request: APIRequestContext) {
+  await seedAutosave(request);
+  await page.goto(`/books/${bookId}/manuscript/s2`);
+  await openBlockEditor(page, 2);
+  await page.keyboard.type(' BOZZA-TENUTA');
+  const head = await s2(request);
+  const put = await request.put(`/api/projects/${bookId}/sections/s2`, { headers: H, data: { markdown: head.current.markdown + '\n\nQuarto paragrafo.', baseRevId: head.current.id } });
+  expect(put.ok(), await put.text()).toBeTruthy();
+  const banner = page.getByRole('alert').filter({ hasText: 'The section changed while you were editing' });
+  await expect(banner).toBeVisible();
+  return banner;
+}
+
+test('Escape keeps the draft while the section changed elsewhere and moves focus to the notice', async ({ page, request }) => {
+  const banner = await draftWithChangedSection(page, request);
+  await page.locator('.ms-edit .cm-content').click();
+  await page.keyboard.press('Escape');
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('BOZZA-TENUTA');
+  await expect(banner).toBeVisible();
+  await expect(banner.getByRole('button', { name: 'Compare' })).toBeFocused();
+  expect((await s2(request)).current.markdown).not.toContain('BOZZA-TENUTA');
+  // The author still decides: discarding closes the editor.
+  await banner.getByRole('button', { name: 'Discard my draft' }).click();
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+});
+
+test('opening another block keeps the draft while the section changed elsewhere and moves focus to the notice', async ({ page, request }) => {
+  const banner = await draftWithChangedSection(page, request);
+  await page.locator('.ms-block').nth(0).focus();
+  await page.keyboard.press('Enter');
+  await expect(page.locator('.ms-edit')).toHaveCount(1);
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('BOZZA-TENUTA');
+  await expect(banner.getByRole('button', { name: 'Compare' })).toBeFocused();
+  await banner.getByRole('button', { name: 'Discard my draft' }).click();
+  await expect(page.locator('.ms-edit')).toHaveCount(0);
+});
+
+test('switching section and coming back keeps the draft while the section changed elsewhere', async ({ page, request }) => {
+  const banner = await draftWithChangedSection(page, request);
+  await page.getByRole('link', { name: /Definizione di limite/ }).first().click();
+  await expect(page).toHaveURL(/\/manuscript\/s1/);
+  await page.getByRole('link', { name: /Limiti notevoli/ }).first().click();
+  await expect(page).toHaveURL(/\/manuscript\/s2/);
+  await expect(page.locator('.ms-edit .cm-content')).toContainText('BOZZA-TENUTA');
+  await expect(banner).toBeVisible();
+  expect((await s2(request)).current.markdown).not.toContain('BOZZA-TENUTA');
+  await banner.getByRole('button', { name: 'Discard my draft' }).click();
+});
+
 test('History folds consecutive edits by the author into one row', async ({ page }) => {
   await page.goto(`/books/${bookId}/manuscript/s2`);
   await page.getByRole('button', { name: 'History' }).click();
