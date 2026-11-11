@@ -111,7 +111,7 @@ test.describe('Book setup', () => {
     await expect(effects).toContainText('Function plots');
     await expect(effects).not.toContainText('Molecule structures');
     await page.getByLabel('Subject area').selectOption('chemistry');
-    await expect(effects).toContainText('Function plots, molecule structures, energy-level diagrams, orbital boxes, electrochemical cells, periodic table highlights, photos');
+    await expect(effects).toContainText('Function plots, molecule structures, energy-level diagrams, orbital boxes, electrochemical cells, periodic table highlights, drawings (circuits, diagrams, sketches), photos');
     await expect(effects).toContainText('Notation hints');
     await expect(effects).toContainText('How to write species, charges, states of matter');
     await expect(effects).not.toContainText('Exam papers');

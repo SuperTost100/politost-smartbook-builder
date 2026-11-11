@@ -22,7 +22,7 @@ const AREA_LABEL: Record<SubjectArea, string> = {
 };
 // A Record over FigureKind, so a kind added to the domain table cannot be shown without a name here.
 const KIND_LABEL: Record<FigureKind, string> = {
-  plot: 'function plots', structure: 'molecule structures', levels: 'energy-level diagrams', orbitals: 'orbital boxes', cell: 'electrochemical cells', periodic: 'periodic table highlights', photo: 'photos',
+  plot: 'function plots', structure: 'molecule structures', levels: 'energy-level diagrams', orbitals: 'orbital boxes', cell: 'electrochemical cells', periodic: 'periodic table highlights', drawing: 'drawings (circuits, diagrams, sketches)', photo: 'photos',
 };
 // shortcut: the domain profile does not say which subjects have circuits, so the two that do are listed here. Move it into the profile when the figure drawing agent adds circuit figures.
 const CIRCUIT_AREAS: readonly SubjectArea[] = ['electronics', 'physics'];
