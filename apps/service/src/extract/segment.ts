@@ -260,11 +260,15 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
     cur = null;
   };
   // A heading repeated at the top of a later page is a running header unless the exercises start again from the first one.
+  // An exercise that continues from the page before repeats its own heading, which is not a restart.
   const startsNewCopy = (i: number, g: Group) => {
     for (let j = i + 1; j < lines.length; j++) {
       if (heads[j] || isSolutionMarker(texts[j])) return false;
       const e = parseExercise(texts[j]);
-      if (e) return !e.solution && mode === 'statement' && g.statements.some((s) => s.word === e.word && s.id === e.id);
+      if (e) {
+        const first = g.statements[0];
+        return !e.solution && mode === 'statement' && !!first && first.word === e.word && first.id === e.id;
+      }
     }
     return false;
   };

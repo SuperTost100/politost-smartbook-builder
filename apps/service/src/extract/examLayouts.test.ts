@@ -131,6 +131,25 @@ test('a heading repeated at the top of later pages is a running header; numberin
   ]);
 });
 
+test('an exercise that continues on the next page under a repeated header is one question, not a second copy of the paper', () => {
+  const header = 'Appello del 12 febbraio 2024';
+  const rows = segmentExams('r1', pages(
+    [header, 'Esercizio 1', 'Uno.', 'Esercizio 2', 'Due, prima parte.'],
+    [header, 'Esercizio 2', 'Due, seguito.', 'Esercizio 3', 'Tre.'],
+  ), { label: 'x', untitled: true });
+  assert.deepEqual(summary(rows), [
+    'Appello del 12 febbraio 2024 #1 2024-02-12 p0-0', 'Appello del 12 febbraio 2024 #2 2024-02-12 p0-1', 'Appello del 12 febbraio 2024 #3 2024-02-12 p1-1',
+  ]);
+  assert.match(rows[1].statement, /Due, prima parte\.\nDue, seguito\./);
+  // Numbering that starts again from the first exercise is still a second copy.
+  const copies = segmentExams('r2', pages(
+    [header, 'Esercizio 1', 'Uno A.', 'Esercizio 2', 'Due A.'], [header, 'Esercizio 1', 'Uno B.', 'Esercizio 2', 'Due B.'],
+  ), { label: 'x', untitled: true });
+  assert.deepEqual(copies.map((r) => `${r.examGroup} #${r.number}`), [
+    'Appello del 12 febbraio 2024 - versione 1 #1', 'Appello del 12 febbraio 2024 - versione 1 #2', 'Appello del 12 febbraio 2024 - versione 2 #1', 'Appello del 12 febbraio 2024 - versione 2 #2',
+  ]);
+});
+
 test('"Compito FILA A" under a heading with a date is the version of that paper, not another session', () => {
   const rows = segmentExams('r1', pages(['Appello del 12/02/2024', 'Compito FILA A', 'Esercizio 1', 'Uno.']), { label: 'x', untitled: true });
   assert.deepEqual(rows.map((r) => `${r.examGroup} #${r.number}`), ['Appello del 12 febbraio 2024 #1']);
