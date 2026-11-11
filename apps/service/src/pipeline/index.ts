@@ -6,7 +6,7 @@ import { alignApply, alignCheck } from './align.ts';
 import { chapterIntro, sectionDraft, sectionEvidence } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { gate, outlinePlan } from './plan.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport } from './practice.ts';
 import { resourceSplit } from './examSplit.ts';
 import { resourceExtract, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { sectionResearch } from './research.ts';
@@ -38,6 +38,7 @@ export function registerHandlers(ctx: AppContext) {
   q.register('section.draft', h(sectionDraft));
   q.register('chapter.intro', h(chapterIntro));
   q.register('chapter.practice', h(chapterPractice));
+  q.register('question.session', h(sessionImport));
   q.register('question.import', h(questionImport));
   q.register('practice.generate', h(practiceGenerate));
   q.register('practice.done', h(practiceDone));

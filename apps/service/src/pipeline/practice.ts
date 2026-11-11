@@ -6,10 +6,12 @@ import { z } from 'zod';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { transcribePage } from '../evidence/index.ts';
+import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, verifyPrompt, verifySchema } from './prompts.ts';
+import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, sessionExtractSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
+import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
@@ -19,6 +21,15 @@ const AUTHENTIC_PER_CHAPTER = 8;
 /** Items from uploaded exercise collections shown to the writer of a chapter's exercises. They are never put in the book. */
 const COLLECTION_EXAMPLES = 6;
 const MAX_PAGES_PER_QUESTION = 4;
+/**
+ * One extraction call reads a whole exam session when the pages of its exercises (each question's own window of
+ * MAX_PAGES_PER_QUESTION) add up to at most this many pages and this many characters of transcript. A longer session is read
+ * exercise by exercise, as before. The longest session in the Analisi, Fisica and Chimica books spans 6 pages by this count.
+ */
+const MAX_SESSION_PAGES = 12;
+const MAX_SESSION_CHARS = 60_000;
+/** Pages of the exercise collections the full-text search returns when looking for examples for one chapter. */
+const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
@@ -88,9 +99,23 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   // Text the author typed or corrected is verified as it is: it is never read from the source pages again.
   const editedIds = new Set(ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND edited_at IS NOT NULL`, projectId).map((r) => r.id));
   const imported = authentic.filter((q) => !editedIds.has(q.id));
+  // A session with two or more questions still to read is read in one call, by a task of its own that the imports wait for.
+  const sessionTasks = new Map<string, boolean>();
+  const sessionKeyOf = new Map<string, string>();
+  for (const q of imported) {
+    if (q.resourceId === null || q.pageFrom === null) continue;
+    const key = sessionImportKey(q.resourceId, q.examGroup);
+    if (!sessionTasks.has(key)) {
+      // A session task another chapter already made in this run holds the reading of every question it listed, so wait for it too.
+      const several = questionsToRead(ctx, q.resourceId, q.examGroup).length >= 2 || !!ctx.db.get('SELECT 1 FROM tasks WHERE run_id = ? AND key = ?', t.task.runId, key);
+      sessionTasks.set(key, several);
+      if (several) specs.push({ kind: 'question.session', key, label: `Read exam session ${q.examGroup ?? ''}`.trim(), input: { resourceId: q.resourceId, examGroup: q.examGroup }, pool: 'vision' });
+    }
+    if (sessionTasks.get(key)) sessionKeyOf.set(q.id, key);
+  }
   for (const q of authentic) {
     const label = `${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim();
-    if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
+    if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision', deps: sessionKeyOf.has(q.id) ? [sessionKeyOf.get(q.id)!] : [] });
     specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${label}`, input: { questionId: q.id }, deps: editedIds.has(q.id) ? [] : [`import:${q.id}`], pool: 'checker' });
   }
   const imports = imported.map((q) => `import:${q.id}`);
@@ -102,7 +127,73 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   return { authentic: authentic.length, language: project.language };
 }
 
-/** Clean statement and official solution from vision transcripts of the question's pages. */
+/** What one import reads for a question: its cleaned statement and official solution, or that it is not readable. */
+type ImportRead = { statement: string; solution: string; readable: boolean };
+
+/** The key of the task that reads a whole session. Questions of one source file with the same session name share it. */
+export const sessionImportKey = (resourceId: string, examGroup: string | null) => `import-session:${resourceId}:${examGroup ?? ''}`;
+
+/** The pages a question's import reads: its own range, at most MAX_PAGES_PER_QUESTION from its first page. */
+function importPages(q: { pageFrom: number | null; pageTo: number | null }): number[] {
+  if (q.pageFrom === null) return [];
+  const last = Math.min(q.pageTo ?? q.pageFrom, q.pageFrom + MAX_PAGES_PER_QUESTION - 1);
+  return Array.from({ length: last - q.pageFrom + 1 }, (_, i) => q.pageFrom! + i);
+}
+
+/** The questions of a session that an import would still read: not edited by the author, not read from the pages yet, with a page range. */
+function questionsToRead(ctx: AppContext, resourceId: string, examGroup: string | null): Question[] {
+  return ctx.db.all(`SELECT * FROM questions WHERE resource_id = ? AND exam_group IS ? AND kind = 'exam' AND edited_at IS NULL AND page_from IS NOT NULL ORDER BY rowid`, resourceId, examGroup)
+    .filter((r) => !(r.imported_at && String(r.solution).trim())).map(rowToQuestion);
+}
+
+const pageText = (p: { label: string; transcript: string | null; text: string }) => `--- page ${p.label} ---\n${p.transcript ?? p.text}`;
+
+/**
+ * Reads every question of a session that still needs reading in one call, so the pages are sent once and the fixed cost of a
+ * call is paid once. The answer is used only when it lists exactly the questions' numbers: none missing, none invented, none
+ * twice. In every other case (a session too long for one call, an answer that does not match, a model that cannot give a valid
+ * one) the result says `fallback` and each question's import reads its own pages, as it did before. Errors that a retry can
+ * cure (a limit, a login, a timeout) are thrown, so the queue retries this task like any other.
+ */
+export async function sessionImport(ctx: AppContext, t: TaskContext) {
+  const resourceId = t.task.input.resourceId as string;
+  const examGroup = (t.task.input.examGroup as string | null) ?? null;
+  const questions = questionsToRead(ctx, resourceId, examGroup);
+  if (questions.length < 2) return { fallback: 'fewer than two questions to read' };
+  const numbers = questions.map((q) => (q.number ?? '').trim());
+  if (numbers.some((n) => !n) || new Set(numbers.map((n) => n.toLowerCase())).size !== numbers.length) return { fallback: 'the questions of the session have no distinct numbers' };
+  const pageIdx = [...new Set(questions.flatMap(importPages))].sort((a, b) => a - b);
+  if (pageIdx.length > MAX_SESSION_PAGES) return { fallback: `the session spans ${pageIdx.length} pages, more than ${MAX_SESSION_PAGES}` };
+  try {
+    const pages: string[] = [];
+    for (const idx of pageIdx) pages.push(pageText(await transcribePage(ctx, resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
+    const text = pages.join('\n\n');
+    if (text.length > MAX_SESSION_CHARS) return { fallback: `the pages hold ${text.length} characters, more than ${MAX_SESSION_CHARS}` };
+    t.progress(`Reading ${questions.length} exercises of ${examGroup ?? 'the session'} together`);
+    const project = loadProject(ctx, t.task.projectId);
+    const { data } = await runRole(ctx, {
+      role: 'bulk', ...sessionExtractPrompt({ language: project.language, examGroup: examGroup ?? '', exercises: questions.map((q, i) => ({ number: numbers[i]!, solutionText: truncate(q.solution, 4000) })), pages: text }),
+      schema: sessionExtractSchema, projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    const byNumber = new Map(data.exercises.map((e) => [e.number.trim().toLowerCase(), e]));
+    if (data.exercises.length !== questions.length || byNumber.size !== questions.length || numbers.some((n) => !byNumber.has(n.toLowerCase()))) {
+      return { fallback: `the answer lists ${data.exercises.map((e) => e.number).join(', ') || 'nothing'} instead of ${numbers.join(', ')}` };
+    }
+    return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = byNumber.get(numbers[i]!.toLowerCase())!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
+  } catch (err) {
+    if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
+    throw err;
+  }
+}
+
+/** The session task's reading of this question, when the question waited for one and it gave a usable answer. */
+function sessionRead(t: TaskContext, q: Question): ImportRead | null {
+  if (q.resourceId === null) return null;
+  const result = t.deps[sessionImportKey(q.resourceId, q.examGroup)] as { extracted?: Record<string, ImportRead> } | null | undefined;
+  return result?.extracted?.[q.id] ?? null;
+}
+
+/** Clean statement and official solution from vision transcripts of the question's pages: from its session's single reading, or else one call of its own. */
 export async function questionImport(ctx: AppContext, t: TaskContext) {
   const q = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!q) return { skipped: true };
@@ -115,17 +206,16 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   // Every update below applies only if the author has not edited the question since this read.
   const rev = question.rev;
   const project = loadProject(ctx, question.projectId);
-  const last = Math.min(question.pageTo ?? question.pageFrom, question.pageFrom + MAX_PAGES_PER_QUESTION - 1);
-  const pages: string[] = [];
-  for (let idx = question.pageFrom; idx <= last; idx++) {
-    const p = await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id });
-    pages.push(`--- page ${p.label} ---\n${p.transcript ?? p.text}`);
+  let data = sessionRead(t, question);
+  if (!data) {
+    const pages: string[] = [];
+    for (const idx of importPages(question)) pages.push(pageText(await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
+    const solutionPages = question.solution ? `(text layer, math may be garbled)\n${truncate(question.solution, 6000)}` : '(same pages)';
+    ({ data } = await runRole(ctx, {
+      role: 'bulk', ...authenticExtractPrompt({ language: project.language, examGroup: question.examGroup ?? '', number: question.number ?? '', statementPages: pages.join('\n\n'), solutionPages }),
+      schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    }));
   }
-  const solutionPages = question.solution ? `(text layer, math may be garbled)\n${truncate(question.solution, 6000)}` : '(same pages)';
-  const { data } = await runRole(ctx, {
-    role: 'bulk', ...authenticExtractPrompt({ language: project.language, examGroup: question.examGroup ?? '', number: question.number ?? '', statementPages: pages.join('\n\n'), solutionPages }),
-    schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  });
   if (!data.readable) {
     // Out of the book until the author types it in: its raw text-layer statement is garbled.
     const changed = ctx.db.run(`UPDATE questions SET status = 'issue', chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;
@@ -183,13 +273,39 @@ export async function practiceGenerate(ctx: AppContext, t: TaskContext) {
   return { generated, reused };
 }
 
-/** Up to COLLECTION_EXAMPLES classified items of the included exercise collections on these topics, those with a known answer first. */
-function collectionExamples(ctx: AppContext, projectId: string, topicIds: Set<string>): string {
-  const items = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND kind = 'exercise' AND origin = 'authentic' AND resource_id IS NOT NULL AND topic_ids != '[]' AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId)
-    .map(rowToQuestion).filter((q) => q.topicIds.some((id) => topicIds.has(id)));
+/**
+ * Up to COLLECTION_EXAMPLES items of the included exercise collections on these topics, those with a known answer first.
+ * Items already classified on the topics come first. For the rest, Prepare does not classify collection items: the pages of
+ * the collections that best match the chapter's topic and section names (the full-text index of the pages) narrow the search,
+ * and the items on those pages are ranked by how many of those words their own text contains. This costs no model call. A
+ * classification would only add a topic and a difficulty, and the writer uses the items for level and style.
+ */
+function collectionExamples(ctx: AppContext, projectId: string, topicIds: Set<string>, query: string): string {
+  const rows = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND kind = 'exercise' AND origin = 'authentic' AND resource_id IS NOT NULL AND ${COUNTED_QUESTION_SQL} ORDER BY rowid`, projectId).map(rowToQuestion);
   const known = (q: Question) => (q.solution.trim() ? 0 : 1);
-  return items.sort((a, b) => known(a) - known(b)).slice(0, COLLECTION_EXAMPLES)
-    .map((q) => `${truncate(q.statement, 800)}${q.solution.trim() ? `\n${truncate(q.solution, 300)}` : ''}`).join('\n\n');
+  const classified = rows.filter((q) => q.topicIds.some((id) => topicIds.has(id))).sort((a, b) => known(a) - known(b)).slice(0, COLLECTION_EXAMPLES);
+  const picked = [...classified];
+  if (picked.length < COLLECTION_EXAMPLES) {
+    const unclassified = rows.filter((q) => !q.topicIds.length && q.pageFrom !== null);
+    const resourceIds = [...new Set(unclassified.map((q) => q.resourceId!))];
+    const pageRank = new Map(searchPages(ctx, projectId, query, { limit: COLLECTION_SEARCH_PAGES, resourceIds }).map((h, i) => [`${h.resourceId}:${h.idx}`, i]));
+    const words = searchWords(query);
+    const found = unclassified.flatMap((q) => {
+      let rank = Infinity;
+      for (let page = q.pageFrom!; page <= (q.pageTo ?? q.pageFrom!); page++) rank = Math.min(rank, pageRank.get(`${q.resourceId}:${page}`) ?? Infinity);
+      const text = q.statement.normalize('NFKC').toLowerCase();
+      const hits = words.filter((w) => text.includes(w)).length;
+      return Number.isFinite(rank) && hits ? [{ q, rank, hits }] : [];
+    }).sort((a, b) => known(a.q) - known(b.q) || b.hits - a.hits || a.rank - b.rank);
+    picked.push(...found.slice(0, COLLECTION_EXAMPLES - picked.length).map((f) => f.q));
+  }
+  return picked.map((q) => `${truncate(q.statement, 800)}${q.solution.trim() ? `\n${truncate(q.solution, 300)}` : ''}`).join('\n\n');
+}
+
+/** The words of a search text that an item must contain to count as on the topic: at least 4 letters, cut by 2 when long, as the page search does. */
+function searchWords(query: string): string[] {
+  const words = query.normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) ?? [];
+  return [...new Set(words.filter((w) => w.length >= 4).map((w) => (w.length >= 7 ? w.slice(0, -2) : w)))];
 }
 
 async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' | 'exam') {
@@ -210,7 +326,8 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
     const known = bookFormulaKeys(ctx, projectId).map((k) => `${k.key}: ${k.label}`).join('\n');
     const examples = ctx.db.all(`SELECT * FROM questions WHERE project_id = ? AND chapter_id = ? AND kind = 'exam' AND origin = 'authentic'`, projectId, chapterId)
       .map(rowToQuestion).slice(0, 3).map((q) => `${q.examGroup}, Esercizio ${q.number}:\n${truncate(q.statement, 1500)}`).join('\n\n');
-    const collection = kind === 'exercise' ? collectionExamples(ctx, projectId, new Set(topics.map((tp) => tp.id))) : '';
+    const searchText = [...topics.map((tp) => tp.name), ...chapter.sections.map((s) => s.title)].join(' ');
+    const collection = kind === 'exercise' ? collectionExamples(ctx, projectId, new Set(topics.map((tp) => tp.id)), searchText) : '';
     const list = kind === 'exercise'
       ? topics.map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: target(tp.priority) }))
       : topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 }));
@@ -278,14 +395,23 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.
+  // A numeric final answer is also recomputed in the sandbox from the program the checker returned, with no extra model call.
   let { data, route } = await check('checker');
-  const suspicious = !data.resultsAgree || data.problems.some((p) => p.severity !== 'minor');
-  if (suspicious && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
+  let recomputed = await recomputeFinalValues(data.computation, data.statedValues);
+  const suspicious = (d: typeof data, r: NumericCheck | null) => !d.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!r?.mismatches.length;
+  if (suspicious(data, recomputed) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
     ({ data, route } = await check('reviewer'));
+    recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   }
-  const ok = data.agrees && !data.problems.some((p) => p.severity !== 'minor');
-  const checks = [...q.checks.filter((c) => c.method !== 'independent-solve'), { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model }];
+  const mismatches = recomputed?.mismatches ?? [];
+  const resultsAgree = data.resultsAgree && !mismatches.length;
+  const ok = data.agrees && resultsAgree && !data.problems.some((p) => p.severity !== 'minor');
+  const checks = [
+    ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric'),
+    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model },
+    ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
+  ];
   return ctx.db.tx(() => {
     // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
     const changed = ctx.db.run('UPDATE questions SET status = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id, q.rev).changes;
@@ -297,8 +423,13 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
-    if (!data.resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) addIssue(ctx, q, 'blocker', 'solution', `The independent solution reaches a different result: ${data.independentAnswer}`, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
-    return { ok, problems: data.problems.length };
+    if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
+      const found = mismatches.length
+        ? `Recomputing the final values in Python gives a different result: ${mismatches.map((m) => `${m.name} is ${m.computed} by the computation and ${m.stated} in the solution`).join('; ')}.`
+        : `The independent solution reaches a different result: ${data.independentAnswer}`;
+      addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
+    }
+    return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}) };
   });
 }
 
