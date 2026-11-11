@@ -152,7 +152,7 @@ A book has a subject area: mathematics, physics, chemistry, electronics, compute
 | Drawing | Anything the kinds above cannot draw, in every subject area: circuits, logic networks, timing diagrams, Karnaugh maps, state machines, block diagrams, trees, free-body sketches. | The illustrator model writes Typst or schemdraw code, and the builder compiles it. |
 | Photo | From Wikimedia Commons (no key), Pixabay or Pexels (a key on the Connections screen). Only photos with a licence a book can credit, and the credit line ends the caption. When the writer asks for a photo, a vision model checks each candidate before it goes in. | Searched by the builder. |
 
-AI image generation is not implemented. Captions are plain text, because the reader prints them as text, and figures are numbered per chapter (`Fig. 6.1`).
+AI image generation is not implemented. Captions are plain text, because the reader prints them as text, and figures are numbered per chapter (`Fig. 6.1`). A figure without a caption shows no label and takes no number, so the numbers a reader sees never skip.
 
 ### How a figure gets into the text
 
