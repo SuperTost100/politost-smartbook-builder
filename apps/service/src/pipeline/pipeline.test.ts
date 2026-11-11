@@ -26,6 +26,8 @@ let kit: ReturnType<typeof makeCtx>;
 let ctx: AppContext;
 const P = 'project01';
 const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) });
+/** The figure check's answer: keep the first n figures. */
+const keepFigures = (n: number) => ({ figures: Array.from({ length: n }, (_, i) => ({ index: i + 1, keep: true, reason: 'utile' })) });
 /** The cheap check's answer: every listed block good, every issue (1..n) fixed. */
 const checkGood = (blocks: number[], n = 1) => ({ changes: blocks.map((block) => ({ block, verdict: 'good', reason: '' })), issues: Array.from({ length: n }, (_, k) => ({ index: k + 1, fixed: true, reason: '' })) });
 
@@ -395,7 +397,7 @@ describe('2. figure files are scoped to their section', () => {
   test('two sections with the same figure key keep their own drawing and references', async () => {
     const [s1, s2] = [newId(), newId()];
     seedOutline([['c1', [s1, s2]]]);
-    fake.next(answer(draft('x^2')), answer(draft('x^3')));
+    fake.next(answer(draft('x^2')), answer(keepFigures(1)), answer(draft('x^3')), answer(keepFigures(1)));
     const r1 = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     const r2 = await sectionDraft(ctx, startTask('section.draft', { nodeId: s2 }));
     assert.equal(r1.status, 'current');
@@ -414,7 +416,7 @@ describe('2. figure files are scoped to their section', () => {
   test('regenerating a section replaces only its own asset (same node and file name)', async () => {
     const [s1, s2] = [newId(), newId()];
     seedOutline([['c1', [s1, s2]]]);
-    fake.next(answer(draft('x^2')), answer(draft('x^3')), answer(draft('x^4')));
+    fake.next(answer(draft('x^2')), answer(keepFigures(1)), answer(draft('x^3')), answer(keepFigures(1)), answer(draft('x^4')), answer(keepFigures(1)));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s2 }));
     const before = ctx.db.all<{ id: string; node_id: string; path: string }>('SELECT * FROM assets ORDER BY rowid');
@@ -430,7 +432,7 @@ describe('2. figure files are scoped to their section', () => {
   test('a redraft that becomes a proposal leaves the current figure alone and names its own', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')));
+    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
     await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     const [first] = ctx.db.all<{ id: string; filename: string; path: string }>('SELECT * FROM assets');
     const drawing = readFileSync(resolveDataPath(ctx.config, first.path), 'utf8');
@@ -440,7 +442,7 @@ describe('2. figure files are scoped to their section', () => {
       ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, s1);
       seedRevision(s1, `Testo dell'autore.\n\n:::image{src="assets/${first.filename}" alt="Grafico" caption="Fig"}\n:::`);
       return redraft();
-    });
+    }, answer(keepFigures(1)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1, force: true }));
     assert.equal(r.status, 'proposal');
     const assets = ctx.db.all<{ id: string; filename: string; path: string }>('SELECT * FROM assets ORDER BY rowid');
@@ -455,7 +457,7 @@ describe('2. figure files are scoped to their section', () => {
   test('assets and the revision are committed together: a failing commit leaves no asset row and no file', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')));
+    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
     ctx.db.run(`CREATE TRIGGER boom BEFORE INSERT ON content_revisions BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     await assert.rejects(sectionDraft(ctx, startTask('section.draft', { nodeId: s1 })), /disk full/);
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
@@ -469,13 +471,13 @@ describe('2. figure files are scoped to their section', () => {
   test('a retry of the same task returns its committed revision without calling the model', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft('x^2')));
+    fake.next(answer(draft('x^2')), answer(keepFigures(1)));
     const t = startTask('section.draft', { nodeId: s1, force: true });
     const first = await sectionDraft(ctx, t);
     const again = await sectionDraft(ctx, t);
     assert.equal(again.reused, true);
     assert.equal(again.revId, first.revId);
-    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls.length, 2);
   });
 });
 
@@ -1380,6 +1382,7 @@ describe('a ready exercises source that gave no questions is split again by Prep
 });
 
 describe('chemistry figures: structures and photos', () => {
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
   const fig = (o: Record<string, unknown>) => ({ key: 'acqua', kind: 'structure', caption: "Struttura di Lewis dell'acqua", alt: "Molecola d'acqua", plot: null, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null, ...o });
   const draft = (figures: unknown[], body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::') => ({
     markdown: `L'acqua ha due coppie solitarie sull'ossigeno.\n\n${body}`, figures, noFigureReason: null, summary: 'riassunto',
@@ -1389,7 +1392,7 @@ describe('chemistry figures: structures and photos', () => {
   test('a structure is drawn from SMILES, and its alt text gets the formula for the reviewer', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } })])));
+    fake.next(answer(draft([fig({ structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } })])), answer(keepFigures(1)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 1);
     const a = ctx.db.get<{ filename: string; origin: string; alt: string; path: string }>('SELECT * FROM assets')!;
@@ -1408,7 +1411,7 @@ describe('chemistry figures: structures and photos', () => {
       fig({ structure: { smiles: 'not((a smiles', style: 'lewis', lonePairs: true, formula: 'H2O' } }),
       fig({ key: 'ammonio', structure: { smiles: '[NH4+]', style: 'lewis', lonePairs: true, formula: 'NH3' } }),
       fig({ key: 'fiamma', kind: 'photo', photo: { query: 'sodium flame test', mustShow: 'a yellow sodium flame' } }),
-    ], body)));
+    ], body)), answer(keepFigures(3)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.equal(r.figures, 0);
     assert.equal(r.figureProblems.length, 3);
@@ -1450,7 +1453,7 @@ describe('chemistry figures: structures and photos', () => {
     fake.next(answer({
       figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true, formula: 'NH3' } })],
       changes: [{ block: 0, text: "L'ammoniaca ha una coppia solitaria.\n\n:::image{src=\"assets/nh3.svg\" alt=\"a\" caption=\"c\"}\n:::\n\n:::image{src=\"assets/inventata.svg\" alt=\"a\" caption=\"c\"}\n:::" }],
-    }), answer(checkGood([0])));
+    }), answer(keepFigures(1)), answer(checkGood([0])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
     assert.equal(r.status, 'current');
     const a = ctx.db.get<{ filename: string; origin: string }>('SELECT * FROM assets')!;
@@ -1458,11 +1461,12 @@ describe('chemistry figures: structures and photos', () => {
     const md = current('s1');
     assert.match(md, new RegExp(`src="assets/${a.filename}"`));
     assert.doesNotMatch(md, /inventata/);
-    assert.match(fake.calls[0].system ?? '', /missing figure/);
+    assert.match(fake.calls[0].system ?? '', /Add a figure only when a problem or the author's instruction asks for one/);
   });
 });
 
 describe('figures pass: figures for written sections, text untouched', () => {
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
   const levels = {
     yLabel: 'Energia', columns: [{ label: 'Reagenti' }, { label: 'Prodotti' }],
     levels: [{ key: 'r', column: 0, energy: 0, label: 'H2 + 1/2 O2', boxes: null, electrons: null }, { key: 'p', column: 1, energy: -286, label: 'H2O', boxes: null, electrons: null }],
@@ -1602,3 +1606,88 @@ describe('figures pass: figures for written sections, text untouched', () => {
   });
 });
 
+
+describe('figures are checked where they are born', () => {
+  const plot = (expr: string) => ({ xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr, label: null, domain: null, style: null }], points: null, asymptotes: null });
+  const fig = (key: string, expr: string) => ({ key, kind: 'plot', caption: `Grafico ${key}`, alt: 'Grafico', plot: plot(expr), structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null });
+  const img = (key: string) => `:::image{src="assets/${key}.svg" alt="x" caption="y"}\n:::`;
+  const twoFigures = () => ({
+    markdown: `Testo uno.\n\n${img('a')}\n\nTesto due.\n\n${img('b')}`,
+    figures: [fig('a', 'x^2'), fig('b', 'x^3')], noFigureReason: null, summary: 'riassunto',
+  });
+  const current = (s: string) => ctx.db.get<{ markdown: string }>(`SELECT markdown FROM content_revisions WHERE node_id = ? AND status = 'current'`, s)!.markdown;
+  const verdict = (...keep: boolean[]) => ({ figures: keep.map((k, i) => ({ index: i + 1, keep: k, reason: k ? 'utile' : 'Ripete il testo.' })) });
+
+  test('a drafted figure the check drops is not built, its block goes, and the note says why', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer(twoFigures()), answer(verdict(true, false)));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(r.figures, 1);
+    assert.deepEqual(r.figureProblems, ['b: dropped by the check (Ripete il testo.)']);
+    assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 1);
+    assert.doesNotMatch(current(s1), /-b\.svg/);
+    assert.match(current(s1), /-a\.svg/);
+    assert.equal(fake.calls.length, 2);
+    assert.match(fake.calls[1].system ?? '', /You check figures proposed/);
+    assert.match(fake.calls[1].prompt, /1\. kind: plot\ncaption: Grafico a[\s\S]*passage: Testo uno\.\nafter the figure: Testo due\./);
+    assert.match(fake.calls[1].prompt, /2\. kind: plot\ncaption: Grafico b[\s\S]*passage: Testo uno\.\n\nTesto due\.\n\nReturn JSON/);
+  });
+
+  test('a draft that proposes no figure makes no check call', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer({ markdown: 'Solo definizioni.', figures: [], noFigureReason: null, summary: 'r' }));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(fake.calls.length, 1);
+  });
+
+  test('the check also runs in generous mode, where it drops decorative figures', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous' }), P);
+    fake.next(answer(twoFigures()), answer(verdict(false, false)));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.match(fake.calls[0].prompt, /Most sections have at least one place where a figure shows something faster than words/);
+    assert.equal(r.figures, 0);
+    assert.equal(r.figureProblems.length, 2);
+    assert.doesNotMatch(current(s1), /:::image/);
+  });
+
+  test('when the check cannot run, the draft keeps its figures and says so', async () => {
+    const s1 = newId();
+    seedOutline([['c1', [s1]]]);
+    fake.next(answer(twoFigures()), () => new TaskError('rete assente', 'temporary'));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
+    assert.equal(r.figures, 2);
+    assert.match(r.figureProblems[0], /could not run/);
+  });
+
+  test('a fix for a figure problem carries the figure rules and the check drops a decorative figure it adds', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno.');
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Testo uno.', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
+    fake.next(
+      answer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno corretto.\n\n${img('a')}` }] }),
+      answer(verdict(false)), answer(checkGood([0])),
+    );
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
+    assert.match(fake.calls[0].system ?? '', /Add a figure only when a problem or the author's instruction asks for one[\s\S]*- plot:/);
+    assert.equal(r.status, 'current');
+    assert.deepEqual(r.figureProblems, ['a: dropped by the check (Ripete il testo.)']);
+    assert.equal(current('s1'), 'Testo uno corretto.');
+    assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
+  });
+
+  test('a fix for another kind of problem gets no figure rules, and an author instruction gets them', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno.');
+    ctx.db.insert('review_issues', { id: 'c1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'clarity', quote: 'Testo uno.', message: 'Poco chiaro.', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno chiaro.' }] }), answer(checkGood([0])));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['c1'] }));
+    assert.doesNotMatch(fake.calls[0].system ?? '', /FIGURES|Kinds \(/);
+    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo uno con grafico.' }] }));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'Aggiungi un grafico di x^2.' }));
+    assert.match(fake.calls.at(-1)!.system ?? '', /FIGURES[\s\S]*- plot:/);
+  });
+});

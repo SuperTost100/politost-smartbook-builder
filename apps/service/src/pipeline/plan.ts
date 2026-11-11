@@ -1,5 +1,5 @@
 // Plan: the common index, proposed by the planner model and approved (or edited) by the author.
-import { outlineSchema, type Outline } from '@smartbuilder/domain';
+import { outlineSchema, subjectProfileOf, type Outline } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
@@ -30,7 +30,7 @@ export async function outlinePlan(ctx: AppContext, t: TaskContext) {
     role: 'planner',
     ...outlinePrompt({
       title: project.title, subject: project.subject, language: project.language, audience: project.audience, goals: project.goals, topics: topicText,
-      indexes: sourceIndexesText(ctx, resources), sessions, program: program ? { items: program.items, exam: program.examFormat } : undefined,
+      indexes: sourceIndexesText(ctx, resources), sessions, program: program ? { items: program.items, exam: program.examFormat } : undefined, profile: subjectProfileOf(project),
     }),
     schema: plannedOutlineSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
