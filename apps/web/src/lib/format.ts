@@ -52,6 +52,10 @@ export function tokenCount(n: number | null): string {
   return n === null || n === undefined ? 'unknown' : n.toLocaleString('en');
 }
 
+const COMPACT = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+/** 41 800 000 as "41.8M", for tables where the exact count is in the cell's title. */
+export const compactCount = (n: number) => COMPACT.format(n);
+
 export function newId(prefix: string): string {
   return `${prefix}_${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-3)}`;
 }

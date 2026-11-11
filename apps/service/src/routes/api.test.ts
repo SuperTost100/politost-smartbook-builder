@@ -502,6 +502,25 @@ describe('exports', () => {
 });
 
 describe('runs', () => {
+  it('sums the last 30 days of model calls per provider, with a cached share only where it was reported', async () => {
+    const day = 86_400_000;
+    const row = (provider: string, model: string, input: number | null, cached: number | null, ok: number, kind: string | null, age: number) =>
+      t.ctx.db.run(`INSERT INTO usage (provider, model, role, input_tokens, output_tokens, cached_input_tokens, error_kind, ms, ok, created_at) VALUES (?, ?, 'writer', ?, 10, ?, ?, 1, ?, ?)`,
+        provider, model, input, cached, kind, ok, new Date(Date.now() - age * day).toISOString());
+    row('claude', 'sonnet', 1000, 750, 1, null, 1);
+    row('claude', 'sonnet', 1000, 250, 0, 'timeout', 2);
+    row('claude', 'opus', 500, null, 0, 'aborted', 3); // an old row without the cache count, and a stopped call
+    row('claude', 'sonnet', 9999, 0, 1, null, 40); // outside the period
+    row('codex', 'gpt', 200, null, 1, null, 1); // no call reported its cache
+    const { body } = await t.req('GET', '/api/usage');
+    assert.equal(body.days, 30);
+    const claude = body.providers.find((p: { provider: string }) => p.provider === 'claude');
+    assert.deepEqual([claude.models, claude.calls, claude.inputTokens, claude.cachedShare, claude.failed, claude.timeouts], [['sonnet', 'opus'], 3, 2500, 0.5, 1, 1]);
+    assert.equal(body.providers.find((p: { provider: string }) => p.provider === 'codex').cachedShare, null);
+    assert.deepEqual([body.total.calls, body.total.failed, body.total.cachedShare], [4, 1, 0.5]);
+    assert.equal((await t.req('GET', '/api/usage?days=0')).status, 400);
+  });
+
   it('controls runs through the queue and aggregates usage with NULL propagation', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('runs'));
     const runId = t.ctx.queue.createRun(p.id, 'plan', [{ kind: 'login', key: 'a', label: 'A' }, { kind: 'gate', key: 'g', label: 'Gate' }]);

@@ -496,6 +496,30 @@ export interface UsageRow {
   cachedInputTokens: number | null;
 }
 
+/** One provider's model calls over a period, as the Connections screen shows them. */
+export interface ProviderUsage {
+  provider: string;
+  /** Models used, the one with the most calls first. */
+  models: string[];
+  calls: number;
+  /** Sums over the calls that reported a count. */
+  inputTokens: number;
+  outputTokens: number;
+  /** Share of input tokens read from the provider's cache (0 to 1), among the calls that reported it. Null when no call did, as for calls made before the count was kept. */
+  cachedShare: number | null;
+  /** Calls that did not give an answer, timeouts included, stopped calls excluded. */
+  failed: number;
+  /** Calls that ran past their time limit. */
+  timeouts: number;
+}
+
+export interface UsageSummary {
+  days: number;
+  providers: ProviderUsage[];
+  /** The same figures over every provider; `provider` is empty. */
+  total: ProviderUsage;
+}
+
 // ---------- Review ----------
 
 export type IssueSeverity = 'blocker' | 'major' | 'minor';

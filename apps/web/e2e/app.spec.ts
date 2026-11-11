@@ -64,7 +64,7 @@ test('create a book', async ({ page }) => {
   await expect(page).toHaveURL(/\/new$/);
   await page.getByLabel('Title', { exact: true }).fill('Analisi matematica 1');
   await expect(page.getByLabel('Slug')).toHaveValue('analisi-matematica-1');
-  await page.getByLabel('Subject').fill('Analisi matematica');
+  await page.getByLabel('Subject', { exact: true }).fill('Analisi matematica');
   await page.getByLabel('Authors').fill('Tost');
   await page.getByRole('button', { name: 'Create book' }).click();
   await expect(page).toHaveURL(/\/books\/[^/]+\/sources/);
@@ -382,7 +382,7 @@ test('a proposal is accepted against the head that was shown; a 409 shows the me
 test('a quota wait shows when it resumes and offers no Continue or Skip', async ({ page }) => {
   const at = new Date(Date.now() + 3 * 3600_000).toISOString();
   const waiting = { taskId: 't-q', reason: 'The provider limit was reached.', action: '', kind: 'quota', retryAt: at };
-  const run = { id: 'r-quota', projectId: bookId, kind: 'generate', status: 'running', createdAt: new Date().toISOString(), finishedAt: null, counts: { retry_wait: 1, succeeded: 2 }, waiting };
+  const run = { id: 'r-quota', projectId: bookId, kind: 'generate', status: 'running', createdAt: new Date().toISOString(), finishedAt: null, counts: { retry_wait: 1, succeeded: 2 }, waiting, warnings: [] };
   const task = { id: 't-q', runId: 'r-quota', kind: 'draft', label: 'Draft 1.1', state: 'retry_wait', attempts: 1, provider: 'claude', error: null, waitReason: waiting.reason, startedAt: null, finishedAt: null };
   await page.route(`**/api/projects/${bookId}/runs`, (route) => route.request().method() === 'GET' ? route.fulfill({ json: [run] }) : route.fallback());
   await page.route('**/api/runs/r-quota', (route) => route.fulfill({ json: { ...run, tasks: [task], usage: [] } }));

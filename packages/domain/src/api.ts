@@ -5,7 +5,7 @@ import type {
   AlignmentReport, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
   Asset, BookOptions, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
   ProjectInput, ProjectSummary, Question, Resource, ResourceRole, ReviewIssue, RunSummary, Settings,
-  SourceIndex, TaskRow, Topic, UsageRow, Role,
+  SourceIndex, TaskRow, Topic, UsageRow, UsageSummary, Role,
 } from './index.ts';
 
 export interface ProviderStatus {
@@ -79,6 +79,8 @@ export interface Api {
   'GET /api/settings': { res: Settings };
   'PUT /api/settings': { body: Partial<Settings>; res: Settings };
   'GET /api/connections': { res: ConnectionsResponse };
+  /** Model calls of the last `days` days (default 30) per provider, from the usage the builder recorded. */
+  'GET /api/usage': { res: UsageSummary };
   'POST /api/connections/probe': { body: { role: Role }; res: ProbeResult };
   'PUT /api/stock-keys': { body: { pixabay?: string | null; pexels?: string | null }; res: { pixabay: boolean; pexels: boolean } };
 

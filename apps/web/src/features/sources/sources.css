@@ -66,3 +66,20 @@
 }
 
 .so-page-row:hover .so-page-row__q, .so-page-row.is-selected .so-page-row__q { color: var(--ink); }
+
+/* An exam file whose split looks wrong (marker 4a to 4c of the 0.4.0 mockup). */
+.so-row--warn { border-color: var(--star); box-shadow: inset 4px 0 0 var(--star); }
+.so-row--warn.is-selected { box-shadow: inset 4px 0 0 var(--star), 0 0 0 1px var(--accent); border-color: var(--accent); }
+.so-warn { display: flex; gap: 10px; align-items: flex-start; padding: 10px 12px; border-radius: var(--radius-md); background: var(--warning-soft); font-size: 14px; line-height: 20px; }
+.so-warn > svg { flex: none; margin-top: 2px; color: var(--warning); }
+.so-warn--busy { background: var(--info-soft); }
+.so-warn--busy .ui-spinner { margin-top: 4px; color: var(--info); flex: none; }
+.so-warn--note { background: var(--surface-raised); }
+.so-warn--note > svg { color: var(--ink-muted); }
+.so-warn__body { display: flex; flex-direction: column; gap: 6px; min-width: 0; flex: 1; }
+.so-warn__title { font-weight: 600; overflow-wrap: anywhere; }
+.so-warn__result { color: var(--ink); overflow-wrap: anywhere; }
+.so-warn__actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 2px; }
+.so-found { font-size: 13px; color: var(--ink-muted); }
+.so-found b { font-weight: 600; color: var(--ink); font-variant-numeric: tabular-nums; }
+.so-found--ok svg { color: var(--success); vertical-align: -2px; }
