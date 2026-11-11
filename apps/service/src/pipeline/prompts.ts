@@ -3,7 +3,7 @@
 import { z } from 'zod';
 import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
-import { bodyFormatRule, bodyParser } from '../llm/body.ts';
+import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
@@ -246,6 +246,8 @@ export const draftMetaSchemaFor = (figures: FigureSetup | null) => z.object({
   noFigureReason: z.string().nullable().optional().describe('leave null'),
   summary: z.string().describe('2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections'),
 });
+
+export type DraftAnswer = z.output<ReturnType<typeof draftMetaSchemaFor>> & { markdown: string };
 
 /** Parses a section answer into `{ markdown, figures, noFigureReason, summary }`: the body, a separator line, then the JSON. */
 export const draftParser = (figures: FigureSetup | null) => bodyParser('markdown', 'markdown', draftMetaSchemaFor(figures));
@@ -539,6 +541,15 @@ The section above has these problems (rule: message, line, text):
 ${p.findings}`,
   };
 }
+/**
+ * The writer's second look at its own section, sent as a follow-up in the conversation that wrote it. An answer of exactly OK
+ * keeps the draft, and anything else must be the whole answer again, in the format of the first one.
+ */
+export function selfCheckPrompt() {
+  return `Check the section you just wrote once more, as a strict reviewer would. Look at every statement for a missing hypothesis, every derivation step, every computation and numeric result with its unit and sign, and every reference to a formula key (the key must be defined in your text or be one of the known keys). Where a result could differ, recompute it.
+If everything is right, answer exactly OK and nothing else. If something is wrong, answer with the full corrected answer in the same format as before (the section, the line ${META_SEPARATOR}, then the JSON object), changing only what is wrong and keeping every heading, formula key and ::: block.`;
+}
+
 /** The corrected section as plain text. */
 export const repairParser = bodyParser('markdown', 'markdown');
 /** The chapter introduction is a short JSON answer. */

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, dropReferences, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { applyGuardedChanges, dropReferences, lostStructure, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -118,4 +118,20 @@ test('a change that turns a major finding into a blocker of the same rule is rev
   const findings = (md: string) => md.includes('MAJ') ? [{ rule: 'katex', severity: 'major' as const, message: 'm', file: 's1' }]
     : md.includes('BLK') ? [{ rule: 'katex', severity: 'blocker' as const, message: 'b', file: 's1' }] : [];
   assert.deepEqual(applyGuardedChanges(['Vale MAJ.'], [{ block: 0, text: 'Vale BLK.' }], findings).kept, []);
+});
+
+test('a rewrite of a whole section keeps its headings, formula keys, ::: blocks and images', () => {
+  const formula = ':::formula{key="ohm" label="Legge di Ohm"}\n$$V = R i$$\n:::';
+  const image = ':::image{src="assets/rc.svg" alt="a" caption="c"}\n:::';
+  const note = ':::note\nAttenzione.\n:::';
+  const before = `### Il circuito\n\nTesto.\n\n${formula}\n\n${note}\n\n${image}\n\nFine.`;
+  assert.equal(lostStructure(before, before.replace('Testo.', 'Testo corretto.').replace('V = R i', 'V = R\\,i')), null);
+  assert.match(lostStructure(before, before.replace('### Il circuito', '### Il circuito RC'))!, /heading "### Il circuito"/);
+  assert.match(lostStructure(before, before.replace('key="ohm"', 'key="legge-ohm"'))!, /formula "ohm"/);
+  assert.match(lostStructure(before, before.replace(formula, '$$V = R i$$'))!, /formula "ohm"/);
+  assert.match(lostStructure(before, before.replace(note, 'Attenzione.'))!, /:::note block/);
+  assert.match(lostStructure(before, before.replace(image, ''))!, /:::image block/);
+  assert.match(lostStructure(before, before.replace('assets/rc.svg', 'assets/altro.svg'))!, /image "assets\/rc.svg"/);
+  assert.match(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$`)!, /fence open/);
+  assert.equal(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$\n:::`), null, 'a rewrite may add');
 });

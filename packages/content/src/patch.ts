@@ -88,6 +88,33 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
   return { blocks: out, kept: [...kept].sort((a, b) => a - b), reverted };
 }
 
+/** Opening lines of ::: blocks, by block name. */
+const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::\s*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
+const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
+
+/**
+ * Why a rewrite of a whole section must not replace the original, or null when it may. A rewrite loses structure when it
+ * drops or rewrites a heading, drops a formula key, has fewer ::: blocks of some kind than the original, drops an image
+ * or leaves a ::: fence open.
+ */
+export function lostStructure(before: string, after: string): string | null {
+  const kept = headings(after);
+  const heading = headings(before).find((h) => !kept.includes(h));
+  if (heading) return `it drops or rewrites the heading "${heading}"`;
+  const keys = formulaKeys(after);
+  const key = formulaKeys(before).find((k) => !keys.includes(k));
+  if (key) return `it drops the formula "${key}"`;
+  const blocks = directiveNames(after);
+  for (const name of new Set(directiveNames(before))) {
+    if (blocks.filter((n) => n === name).length < directiveNames(before).filter((n) => n === name).length) return `it drops a :::${name} block`;
+  }
+  const sources = imageSources(after);
+  const image = imageSources(before).find((src) => !sources.includes(src));
+  if (image) return `it drops the image "${image}"`;
+  if (fenceBalance(after) !== 0 && fenceBalance(after) !== fenceBalance(before)) return 'it leaves a ::: fence open';
+  return null;
+}
+
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** The first 60 whitespace-normalised characters of a quote: what issues are matched on. */

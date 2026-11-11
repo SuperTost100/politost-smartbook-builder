@@ -316,7 +316,8 @@ describe('exam guide', () => {
     fake.next(written({ markdown: 'Il capitolo è uscito in 2 appelli su 3.\n\n### Limiti notevoli\n\nVedi [i limiti](ref:section/s1).', figures: [{ key: 'inutile', kind: 'plot', caption: 'c', alt: 'a', plot: { xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr: 'x^2', label: null, domain: null, style: null }], points: null, asymptotes: null }, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null }], noFigureReason: null, summary: 'Guida.' }));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 'g1' }));
     assert.equal(r.status, 'current');
-    assert.equal(fake.calls.length, 1, 'no evidence call and no repair');
+    assert.equal(fake.calls.length, 1, 'no evidence call, no repair and no self-check turn');
+    assert.equal(r.selfCheck, 'skipped');
     const { prompt, system } = fake.calls[0];
     assert.match(prompt, /2 of the 3 past exam sessions/);
     assert.match(prompt, /Esame del 25 gennaio 2023 \| 2023-01-25 \| n\. 2 \| Limiti \| Calcolare il limite/);

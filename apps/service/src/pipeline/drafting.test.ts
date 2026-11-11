@@ -232,3 +232,79 @@ describe('the draft prompt goes from what every section shares to what only this
     assert.match(repair.prompt, /^SECTION:\nIl valore è \[\?\] ohm\.\n\nThe section above has these problems \(rule: message, line, text\):\nplaceholder:/);
   });
 });
+
+describe('the writer checks its own draft', () => {
+  const ohm = ':::formula{key="legge-ohm" label="Legge di Ohm"}\n$$V = R\\,i$$\n:::';
+  const first = `Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n### La legge\n\n${ohm}\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$.`;
+  const fixed = first.replace('$V = 5\\,\\mathrm{V}$', '$V = 6\\,\\mathrm{V}$');
+  const live = (id: string, answer: () => { text: string; usage: ReturnType<typeof usageOf> }) => () => { fake.live.add(id); return { ...answer(), sessionId: id }; };
+  const seed = () => { seedOutline([['c1', ['s1']]]); options({ selfCheck: true }); };
+
+  test('on by default, and OK keeps the draft', async () => {
+    seedOutline([['c1', ['s1']]]);
+    ctx.db.run(`UPDATE projects SET options = '{}' WHERE id = ?`, P);
+    fake.next(live('w1', written({ markdown: first, summary: 'Ohm.' })), plain('OK'));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'ok');
+    assert.equal(r.status, 'current');
+    assert.equal(current('s1'), first);
+    assert.equal(fake.calls.length, 2);
+    assert.equal(fake.calls[1].sessionId, 'w1', 'the question goes to the conversation that wrote the draft');
+    assert.match(fake.calls[1].prompt, /^Check the section you just wrote once more[\s\S]*every computation and numeric result with its unit and sign[\s\S]*every reference to a formula key[\s\S]*answer exactly OK/);
+    assert.doesNotMatch(fake.calls[1].prompt, /OUTPUT FORMAT/, 'the live session already has the rules');
+    assert.deepEqual(fake.closed, ['w1'], 'the conversation is closed afterwards');
+  });
+
+  test('a corrected answer in the same format replaces the draft, with its own summary', async () => {
+    seed();
+    fake.next(live('w1', written({ markdown: first, summary: 'Ohm.' })), written({ markdown: fixed, summary: 'Ohm, corretto.' }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'corrected');
+    assert.equal(r.summary, 'Ohm, corretto.');
+    assert.equal(current('s1'), fixed);
+  });
+
+  test('a correction that loses a formula key, a heading or a block is not used', async () => {
+    for (const worse of [fixed.replace(ohm, '$$V = R\\,i$$'), fixed.replace('### La legge\n\n', ''), fixed.replace('legge-ohm', 'ohm')]) {
+      ctx.db.run('DELETE FROM content_revisions');
+      seed();
+      fake.next(live('w1', written({ markdown: first })), written({ markdown: worse }));
+      const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+      assert.equal(r.selfCheck, 'kept');
+      assert.equal(current('s1'), first);
+    }
+  });
+
+  test('a correction that does not parse, or a failed follow-up, keeps the draft and the task still succeeds', async () => {
+    seed();
+    fake.next(live('w1', written({ markdown: first })), plain('Ho trovato un errore: la tensione è 6 V.'));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'kept');
+    assert.equal(current('s1'), first);
+    assert.equal(fake.calls.length, 2, 'no repair turn for a follow-up');
+
+    ctx.db.run('DELETE FROM content_revisions');
+    fake.next(live('w2', written({ markdown: first })), () => new TaskError('limit reached', 'quota', undefined, 60_000));
+    const failed = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(failed.selfCheck, 'kept');
+    assert.equal(current('s1'), first);
+  });
+
+  test('a task that is cancelled during the check stops instead of keeping the draft', async () => {
+    seed();
+    const abort = new AbortController();
+    fake.next(live('w1', written({ markdown: first })), () => { abort.abort(new Error('cancelled')); throw new Error('cancelled'); });
+    const t = { ...startTask('section.draft', { nodeId: 's1' }), signal: abort.signal };
+    await assert.rejects(sectionDraft(ctx, t));
+    assert.equal(ctx.db.all('SELECT 1 FROM content_revisions').length, 0);
+  });
+
+  test('the book option turns it off, and then the draft is the first answer', async () => {
+    seedOutline([['c1', ['s1']]]);
+    options({ selfCheck: false });
+    fake.next(written({ markdown: first }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'skipped');
+    assert.equal(fake.calls.length, 1);
+  });
+});

@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { dropUnpairedBold, lintSection, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -8,12 +8,12 @@ import { json, newId, now } from '../db/db.ts';
 import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstored, rewriteImageRefs } from '../figures/materialize.ts';
 import { photosAvailable } from '../figures/stock.ts';
 import { gatherEvidence, transcribePage } from '../evidence/index.ts';
-import { runRole } from '../llm/index.ts';
+import { FollowUpError, runRole, withRole, type RoleConversation } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
 import { chapterExamStats, examSessionTotal } from './exam.ts';
-import { draftParser, draftPrompt, examGuidePrompt, figureSetupOf, introPrompt, repairParser, repairPrompt, repairSchema } from './prompts.ts';
+import { draftParser, draftPrompt, type DraftAnswer, examGuidePrompt, figureSetupOf, introPrompt, repairParser, repairPrompt, repairSchema, selfCheckPrompt } from './prompts.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
@@ -202,7 +202,14 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     });
   }
   t.progress(`Writing "${section.title}"`);
-  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, parse: draftParser(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  // The writer checks its own draft in the conversation that wrote it. The exam guide is built from the exam questions and gets no such turn.
+  const parse = draftParser(figures);
+  const { data, route, selfCheck } = await withRole(ctx, { role: 'writer', ...prompt, parse, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal }, async (talk) => {
+    const { data: first, route } = talk.result;
+    if (guide || !project.options.selfCheck) return { data: first, route, selfCheck: 'skipped' as const };
+    t.progress(`Checking "${section.title}"`);
+    return { route, ...(await checkOwnDraft(talk, parse)) };
+  });
   t.setProvider(route.provider);
 
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
@@ -266,7 +273,31 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   discardUnstored(built, stored);
   for (const old of replaced) rmSync(resolveDataPath(ctx.config, old), { force: true });
   if (stored.length || replaced.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
-  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
+  return { revId: committed.revId, nodeId, status: committed.status, summary: data.summary, selfCheck, figures: stored.length, figureProblems: figureNotes, noFigureReason: data.noFigureReason ?? undefined, findings: findings.length, model: route.model };
+}
+
+export type SelfCheck = 'ok' | 'corrected' | 'kept' | 'skipped';
+
+/**
+ * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
+ * parses in the same format, drops no heading, formula key, ::: block or figure of the first draft, and keeps the figure keys
+ * of its image blocks. A failed follow-up (a limit, a timeout) or any other answer keeps the first draft; the author loses nothing.
+ */
+async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnType<typeof draftParser>): Promise<{ data: DraftAnswer; selfCheck: SelfCheck }> {
+  const first = talk.result.data;
+  let reply: string;
+  try {
+    reply = (await talk.send(selfCheckPrompt())).text;
+  } catch (err) {
+    if (err instanceof FollowUpError) return { data: first, selfCheck: 'kept' };
+    throw err;
+  }
+  if (/^\W*ok\W*$/i.test(reply.trim())) return { data: first, selfCheck: 'ok' };
+  const corrected = parse(sanitizeModelCode(reply));
+  if (!corrected.ok) return { data: first, selfCheck: 'kept' };
+  const keys = new Set(corrected.data.figures.map((f) => f.key));
+  if (lostStructure(first.markdown, corrected.data.markdown) || first.figures.some((f) => !keys.has(f.key))) return { data: first, selfCheck: 'kept' };
+  return { data: corrected.data, selfCheck: 'corrected' };
 }
 
 /** Puts [[nX]] citation markers back after their blocks (inverse of extractCitations). */

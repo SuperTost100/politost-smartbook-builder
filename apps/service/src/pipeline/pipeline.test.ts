@@ -1704,7 +1704,7 @@ describe('a ready exercises source that gave no questions is split again by Prep
 });
 
 describe('chemistry figures: structures and photos', () => {
-  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry', selfCheck: false }), P));
   const fig = (o: Record<string, unknown>) => ({ key: 'acqua', kind: 'structure', caption: "Struttura di Lewis dell'acqua", alt: "Molecola d'acqua", plot: null, structure: null, photo: null, levels: null, orbitals: null, cell: null, periodic: null, ...o });
   const draft = (figures: unknown[], body = ':::image{src="assets/acqua.svg" alt="x" caption="y"}\n:::') => ({
     markdown: `L'acqua ha due coppie solitarie sull'ossigeno.\n\n${body}`, figures, noFigureReason: null, summary: 'riassunto',
@@ -1788,7 +1788,7 @@ describe('chemistry figures: structures and photos', () => {
 });
 
 describe('figures pass: figures for written sections, text untouched', () => {
-  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry' }), P));
+  beforeEach(() => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ subjectArea: 'chemistry', selfCheck: false }), P));
   const levels = {
     yLabel: 'Energia', columns: [{ label: 'Reagenti' }, { label: 'Prodotti' }],
     levels: [{ key: 'r', column: 0, energy: 0, label: 'H2 + 1/2 O2', boxes: null, electrons: null }, { key: 'p', column: 1, energy: -286, label: 'H2O', boxes: null, electrons: null }],
@@ -1967,7 +1967,7 @@ describe('figures are checked where they are born', () => {
   test('the check also runs in generous mode, where it drops decorative figures', async () => {
     const s1 = newId();
     seedOutline([['c1', [s1]]]);
-    ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous' }), P);
+    ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ figurePolicy: 'generous', selfCheck: false }), P);
     fake.next(written(twoFigures()), answer(verdict(false, false)));
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: s1 }));
     assert.match(fake.calls[0].system ?? '', /Most sections have at least one place where a figure shows something faster than words/);

@@ -24,8 +24,9 @@ export function makeCtx(): { ctx: AppContext; cleanup: () => void } {
   return { ctx, cleanup: () => { ctx.db.close(); rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
+/** A book with the defaults, except that its writer does not check its own drafts: a test that wants that turn scripts it and turns the option on. */
 export function seedProject(ctx: AppContext, id = 'p1', title = 'Analisi 1') {
-  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', 'now', 'now')`, id, id, title);
+  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, options, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', '{"selfCheck":false}', 'now', 'now')`, id, id, title);
 }
 
 export function seedResource(ctx: AppContext, o: { id: string; projectId?: string; kind?: string; filename?: string; sha256?: string; path?: string; role?: string; status?: string; included?: number }) {
