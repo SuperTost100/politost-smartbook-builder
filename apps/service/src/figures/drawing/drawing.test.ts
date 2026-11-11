@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { before, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { Resvg } from '@resvg/resvg-js';
@@ -13,7 +14,7 @@ import { readRssBytes } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
 
-const here = new URL('.', import.meta.url).pathname;
+const here = fileURLToPath(new URL('.', import.meta.url));
 const fixtureDir = join(here, 'fixtures');
 const snapshotFile = join(fixtureDir, 'snapshot.json');
 const fixtureNames = readdirSync(fixtureDir).filter((f) => /\.(typ|py)$/.test(f)).sort();
@@ -324,6 +325,17 @@ describe('svg rules', () => {
     const r = normaliseSvg(wrap(path));
     assert.equal(r.ok, false);
     assert.match((r as { error: string }).error, /2 MB/);
+  });
+
+  it('refuses a strip too tall or too wide for a page, and never rasterises one to more than three times its width', () => {
+    const tall = normaliseSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 100000"><rect width="1" height="100000" fill="#000"/></svg>');
+    assert.match((tall as { error: string }).error, /tall and narrow/);
+    const wide = normaliseSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100000 10"><rect width="100000" height="1" fill="#000"/></svg>');
+    assert.match((wide as { error: string }).error, /wide and flat/);
+    assert.ok(normaliseSvg('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 100"><rect width="800" height="100" fill="#000"/></svg>').ok, 'a timing diagram is wide');
+    const strip = (h: number) => `<svg xmlns="http://www.w3.org/2000/svg" width="10" height="${h}" viewBox="0 0 10 ${h}"><rect width="10" height="${h}" fill="#000"/></svg>`;
+    assert.equal(rasterizeDrawing(strip(1000), 200).readUInt32BE(20), 600, 'the height is capped');
+    assert.throws(() => rasterizeDrawing(strip(10_000_000), 200), /size is zero/, 'an extreme strip fails without allocating its pixels');
   });
 
   it('turns black into the ink, scales strokes and rounds numbers', () => {

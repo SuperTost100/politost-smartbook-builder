@@ -18,6 +18,9 @@ export const INK_MARKER = 'data-sb-ink="dark"';
 
 /** The reader refuses files above this size. */
 export const MAX_SVG_BYTES = 2 * 1024 * 1024;
+/** The most a drawing may be taller than wide, and wider than tall. A timing diagram is wide, so that side is looser. */
+const MAX_TALL = 3;
+const MAX_WIDE = 10;
 
 /** Size above which a figure is reported as large, because it slows the reader down. */
 export const LARGE_SVG_BYTES = 300 * 1024;
@@ -79,6 +82,10 @@ export function normaliseSvg(raw: string, opts: NormaliseOptions = {}): Normalis
   const y = box.y - MARGIN;
   const width = box.width + 2 * MARGIN;
   const height = box.height + 2 * MARGIN;
+  // A figure this far from a page's shape cannot be read in a book, and a strip a few units wide would rasterise to millions of rows.
+  if (height > MAX_TALL * width || width > MAX_WIDE * height) {
+    return { ok: false, error: `The drawing is ${Math.round(width)} by ${Math.round(height)} units, too ${height > width ? 'tall and narrow' : 'wide and flat'} for a book page. Keep the height under ${MAX_TALL} times the width and the width under ${MAX_WIDE} times the height.` };
+  }
   const title = opts.title ? `<title>${xmlEscape(opts.title)}</title>` : '';
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${num(x)} ${num(y)} ${num(width)} ${num(height)}" width="${num(width)}" height="${num(height)}" role="img" ${INK_MARKER}>${title}${body}</svg>\n`;
 
@@ -103,6 +110,11 @@ function rejectReason(body: string): string | null {
 
 /** Draws an SVG to PNG for a vision model. White background, because models see a transparent PNG as black. */
 export function svgToPng(svg: string, width = 1000): Buffer {
-  const r = new Resvg(svg, { fitTo: { mode: 'width', value: width }, background: '#ffffff', font: { loadSystemFonts: false } });
+  // The size is bounded here too, because this function also takes SVG that did not pass through normaliseSvg.
+  const root = svg.match(/<svg\b[^>]*>/)?.[0] ?? '';
+  const w = Number(root.match(/\swidth="([\d.]+)"/)?.[1]);
+  const h = Number(root.match(/\sheight="([\d.]+)"/)?.[1]);
+  const fitTo = w > 0 && h > MAX_TALL * w ? { mode: 'height' as const, value: width * MAX_TALL } : { mode: 'width' as const, value: width };
+  const r = new Resvg(svg, { fitTo, background: '#ffffff', font: { loadSystemFonts: false } });
   return Buffer.from(r.render().asPng());
 }
