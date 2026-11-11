@@ -1294,6 +1294,18 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     assert.match(fake.calls.at(-1)!.prompt, /Citazione n2/);
   });
 
+  test('a batch with a cited and an uncited passage gets the whole evidence packet', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const notes = ['n1', 'n2', 'n3'].map((id) => ({ id, quote: `Citazione ${id}`, resourceId: null, page: null, url: 'https://x.example', verified: true, claim: '' }));
+    ctx.db.insert('evidence_packets', { id: newId(), project_id: P, node_id: 's1', provider: 'local', query: 'q', answer: '', notes, created_at: now() });
+    seedRevision('s1', 'Prima frase.\n\nSeconda frase.\n\nTerza frase.', { citations: { '0': ['n1'] } });
+    issue('i1', { quote: 'Prima frase.' });
+    issue('i2', { quote: 'Terza frase.' });
+    fake.next(patchAnswer({ changes: [] }));
+    await fix(['i1', 'i2']);
+    assert.match(fake.calls[0].prompt, /Citazione n1[\s\S]*Citazione n2[\s\S]*Citazione n3/);
+  });
+
   test('the new text arrives as written, backslashes included; terminal codes are removed; a malformed answer gets one repair turn', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Vale $x$.\n\nAltro.');

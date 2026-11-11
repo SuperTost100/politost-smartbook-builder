@@ -271,14 +271,19 @@ const adds = (i: { category: string }) => i.category === 'program-thin' || i.cat
 
 /**
  * The ids of the evidence notes cited by the blocks that hold the issues' quotes. Empty when it cannot be told which blocks
- * the fix touches (an issue without a quote or whose quote is in no block) or when those blocks cite nothing.
+ * the fix touches (an issue without a quote or whose quote is in no block) or when any of those blocks cites nothing, because
+ * the fix of that block would run without its sources.
  */
 function citedNotes(blocks: string[], issues: { quote: string }[]): Set<string> {
   const ids = new Set<string>();
   for (const i of issues) {
     const holding = blocks.filter((b) => quoteInBlock(i.quote, b));
     if (!holding.length) return new Set();
-    for (const b of holding) for (const m of b.matchAll(/\[\[([^\]]+)\]\]/g)) for (const id of m[1].split(/[,\s]+/)) if (id) ids.add(id);
+    for (const b of holding) {
+      const cited = [...b.matchAll(/\[\[([^\]]+)\]\]/g)].flatMap((m) => m[1].split(/[,\s]+/)).filter(Boolean);
+      if (!cited.length) return new Set();
+      for (const id of cited) ids.add(id);
+    }
   }
   return ids;
 }
