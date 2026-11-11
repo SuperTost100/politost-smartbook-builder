@@ -213,6 +213,8 @@ export class Queue {
         taskId: w.id, reason: w.wait_reason, action: json<{ action?: string }>(w.error, {}).action ?? '',
         kind: w.state === 'waiting_for_user' ? 'author' : 'quota', retryAt: w.state === 'retry_wait' && w.retry_at ? new Date(w.retry_at).toISOString() : null,
       } : null,
+      warnings: this.db.all<{ id: string; label: string; result: string }>(`SELECT id, label, result FROM tasks WHERE run_id = ? AND state = 'succeeded' AND result LIKE '%"warning":%' ORDER BY created_at, rowid`, runId)
+        .flatMap((t) => { const message = json<{ warning?: unknown }>(t.result, {}).warning; return typeof message === 'string' ? [{ taskId: t.id, label: t.label, message }] : []; }),
     };
   }
 

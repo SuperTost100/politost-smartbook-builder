@@ -8,9 +8,13 @@ Add notes, textbooks, exercise collections and past exams, and mark each as Theo
 
 - splits every file into pages and marks pages whose text layer is garbled or empty (math in LaTeX-made PDFs, handwriting, scans);
 - keeps each source's own table of contents, or reconstructs one from the page headings and labels it *inferred*;
-- splits exam files into sessions and exercises ("Esame del 25 gennaio 2023 – turno 1", "Esercizio 2") and skips duplicate copies of a session;
+- splits exam files into sessions and exercises and skips duplicate copies of a session. A session starts at "Esame di <course>", "Prova scritta", "Appello", "Compito" or "Tema d'esame" with a date (12/02/2024, 12 febbraio 2024 or 2024-02-12, on the line or in the header table after it). An exercise starts at "Esercizio", "Problema", "Quesito", "Domanda" or "Parte" with a number or letter, and sub-questions a), b), c) stay inside it. A solution section is headed "Soluzione", "Soluzioni", "Svolgimento" or "Risoluzione";
 - uploads the sources to the book's NotebookLM notebook (once per file version);
 - builds the topic map, assigns every question to its topics and counts the distinct exam sessions per topic.
+
+If the split of an exam file looks wrong, the Sources list says so and so does the Prepare run, which then shows a warning next to its completed status. The file gets a warning when no exercise was found, when the whole file came out as one session because no session heading was recognised, or when every session has at most one question. The list shows the sessions and questions found for each exam file.
+
+**Split with AI** is the way out when the text rules do not know a paper's layout. You ask for it on one exam file, and it never runs by itself. The bulk model gets the first lines of each page and answers with the sessions and exercises, each with the page and the exact line where it starts. The builder accepts the answer only when every quoted line is on the page the model names, the boundaries are in page order and every exercise lies inside its session. Then it stores the sessions and questions the same way the text rules do and the topic map classifies them. An answer that does not hold up changes nothing, and the warning stays. A file whose questions you edited or checked already is not split again, because that would replace them. If a source is not an exam, change its role in the Sources list.
 
 ## 2. Course program
 

@@ -60,7 +60,7 @@ export async function projectWithOutline(t: TestApp, slug = 'analisi-1') {
 }
 
 export function fakeRun(projectId: string, kind: RunSummary['kind']): RunSummary {
-  return { id: newId(), projectId, kind, status: 'running', createdAt: now(), finishedAt: null, counts: {}, waiting: null };
+  return { id: newId(), projectId, kind, status: 'running', createdAt: now(), finishedAt: null, counts: {}, waiting: null, warnings: [] };
 }
 
 export const cleanBook = (findings: LintFinding[] = []): CompiledBook => ({ files: { 'manifest.json': '{}' }, formulaNumbers: {}, sectionNumbers: {}, findings });

@@ -8,6 +8,7 @@ import {
   deleteResource, getPage, getResource, getSourceIndex, listPages, listResources, updateResource,
 } from '../repo/index.ts';
 import { computePriorities } from '../pipeline/prepare.ts';
+import { workedOnQuestions } from '../pipeline/examSplit.ts';
 import { deps } from './deps.ts';
 import { idParam, intParam, parse, projectOf } from './util.ts';
 
@@ -77,6 +78,15 @@ export function registerResourceRoutes(app: FastifyInstance, ctx: AppContext) {
     if (r.included !== before.included || r.role !== before.role) computePriorities(ctx, r.projectId);
     ctx.events.emit('resource.state', { resourceId: r.id, included: r.included, role: r.role }, { projectId: r.projectId });
     return r;
+  });
+
+  // "Split with AI" on a source whose split looks wrong. Only when the author asks, and never over questions they already worked on.
+  app.post('/api/resources/:rid/split', async (req) => {
+    const r = getResource(ctx, idParam(req, 'rid'));
+    if (r.role !== 'exams') throw new HttpError(409, 'not_an_exam', 'Only a source marked as Exams can be split this way.', 'Mark the source as Exams, then try again.');
+    if (r.status !== 'ready') throw new HttpError(409, 'not_ready', 'This source has not been read yet.', 'Wait until it is ready, or run Prepare.');
+    if (workedOnQuestions(ctx, r.id)) throw new HttpError(409, 'questions_in_use', 'Some questions of this source were edited or checked already, and a new split would replace them.', 'Delete those questions first, or keep the split as it is.');
+    return deps.startRun(ctx, r.projectId, 'prepare', { splitResourceId: r.id });
   });
 
   app.delete('/api/resources/:rid', async (req) => {

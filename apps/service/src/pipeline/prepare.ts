@@ -3,12 +3,13 @@ import { createHash } from 'node:crypto';
 import type { Question } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { extractResource, segmentQuestions } from '../extract/index.ts';
+import { extractResource, splitQuestions } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { classifyPrompt, classifySchema, inferIndexPrompt, inferredIndexSchema, topicsPrompt, topicsSchema } from './prompts.ts';
 import { COUNTED_QUESTION_SQL, chunk, loadProject, truncate } from './util.ts';
 import { questionsChanged } from '../repo/questions.ts';
+import { recordSplit, splitResult, storeAuthenticQuestions, summarizeSplit } from './examSplit.ts';
 
 export async function resourceExtract(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
@@ -57,38 +58,21 @@ function firstLines(text: string) {
   return text.split('\n').map((l) => l.trim()).filter((l) => l.length > 2).slice(0, 2).join(' / ').slice(0, 140);
 }
 
-/** Exams and exercise collections become authentic questions. Duplicate copies of a session are skipped. */
+/**
+ * Exams and exercise collections become authentic questions. Duplicate copies of a session are skipped.
+ * For an exam file the result also carries the sessions found, and a `warning` when the split looks wrong, so the run
+ * does not read as a plain success.
+ */
 export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
   const res = ctx.db.get<{ role: string; project_id: string }>('SELECT role, project_id FROM resources WHERE id = ?', resourceId);
   if (!res || !['exams', 'exercises', 'mixed'].includes(res.role)) return { skipped: true };
   const existing = ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE resource_id = ?', resourceId);
-  if (existing && existing.n > 0 && !t.task.input.force) return { questions: existing.n, reused: true };
-  const rows = segmentQuestions(ctx, resourceId);
-  let inserted = 0;
-  let duplicates = 0;
-  const insertedIds: string[] = [];
-  ctx.db.tx(() => {
-    ctx.db.run(`DELETE FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
-    for (const q of rows) {
-      // The same session can appear in two yearly files.
-      const dup = q.kind === 'exam' && q.examDate && q.number
-        ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND resource_id != ?`, res.project_id, q.examGroup, q.number, resourceId)
-        : undefined;
-      if (dup) { duplicates++; continue; }
-      const id = newId();
-      insertedIds.push(id);
-      ctx.db.insert('questions', {
-        id, project_id: res.project_id, kind: q.kind, origin: 'authentic', resource_id: resourceId,
-        page_from: q.pageFrom, page_to: q.pageTo, exam_group: q.examGroup, exam_date: q.examDate, number: q.number,
-        statement: q.statement, hint: q.hint ?? '', solution: q.solution ?? '', difficulty: q.difficulty ?? 'medio',
-        topic_ids: [], chapter_id: null, status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
-      });
-      inserted++;
-    }
-  });
-  questionsChanged(ctx, res.project_id, insertedIds);
-  return { questions: inserted, duplicates };
+  if (existing && existing.n > 0 && !t.task.input.force) return { questions: existing.n, reused: true, ...splitResult(ctx, resourceId) };
+  const split = splitQuestions(ctx, resourceId);
+  const { inserted, duplicates } = storeAuthenticQuestions(ctx, res.project_id, resourceId, split.rows);
+  recordSplit(ctx, resourceId, res.role, summarizeSplit(split.rows, split.noHeading), 'rules');
+  return { questions: inserted, duplicates, ...splitResult(ctx, resourceId) };
 }
 
 /** One topic-map task at a time per project: two prepare tasks must not rebuild and classify over each other. */
