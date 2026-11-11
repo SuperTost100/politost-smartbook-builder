@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { api, errorText } from '../../lib/api';
 import { qk } from '../../lib/queries';
@@ -18,6 +18,8 @@ export function FiguresDialog({ open, onClose, pid, nodeId, sectionTitle, chapte
   const [error, setError] = useState<string | null>(null);
   // Each opening starts from the open section; the dialog is mounted before the section has loaded.
   useEffect(() => { if (open) { setScope(nodeId ? 'section' : 'chapter'); setError(null); } }, [open, nodeId]);
+  // A second click can land before the re-render that disables the button, so the guard is a ref, not go.isPending.
+  const submitted = useRef(false);
   const go = useMutation({
     mutationFn: () => scope === 'section'
       ? api('POST /api/projects/:id/sections/:nodeId/figures', { params: { id: pid, nodeId: nodeId! } })
@@ -30,6 +32,7 @@ export function FiguresDialog({ open, onClose, pid, nodeId, sectionTitle, chapte
       onClose();
     },
     onError: (e) => setError(errorText(e)),
+    onSettled: () => { submitted.current = false; },
   });
   const options: { id: Scope; label: string; detail: string; disabled?: boolean }[] = [
     { id: 'section', label: 'This section', detail: sectionTitle || 'The open section', disabled: !nodeId },
@@ -43,7 +46,7 @@ export function FiguresDialog({ open, onClose, pid, nodeId, sectionTitle, chapte
       title="Add figures"
       footer={<><button type="button" className="ui-btn" onClick={onClose}>Cancel</button><button type="submit" form="fg-form" className="ui-btn ui-btn--accent" disabled={go.isPending}>{go.isPending ? 'Starting…' : 'Add figures'}</button></>}
     >
-      <form id="fg-form" className="ui-stack" onSubmit={(e) => { e.preventDefault(); go.mutate(); }}>
+      <form id="fg-form" className="ui-stack" onSubmit={(e) => { e.preventDefault(); if (submitted.current) return; submitted.current = true; go.mutate(); }}>
         <fieldset className="fg-scope">
           <legend className="ui-field__label">Where</legend>
           {options.map((o) => (

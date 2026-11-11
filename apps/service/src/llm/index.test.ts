@@ -153,7 +153,7 @@ describe('error mapping and fallback', () => {
     await assert.rejects(runRole(kit.ctx, { ...base, role: 'bulk' }), (e: unknown) => {
       assert.ok(e instanceof TaskError);
       assert.equal(e.kind, 'auth');
-      assert.equal(e.action, 'Sign in to Claude Code: run "claude auth login" in a terminal, then press Retry.');
+      assert.equal(e.action, 'Sign in to Claude Code: run "claude auth login" in a terminal, then press Continue.');
       return true;
     });
     assert.equal(fake.calls.length, 1, 'auth does not fall back');

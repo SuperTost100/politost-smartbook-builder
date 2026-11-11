@@ -28,6 +28,7 @@ export const LINT_RULES = [
   'section-ref-unknown',
   'exercise-fence',
   'placeholder',
+  'difficulty-decoration',
 ] as const;
 export type LintRule = (typeof LINT_RULES)[number];
 
@@ -54,6 +55,34 @@ export function lintSection(markdown: string, opts: LintSectionOptions): LintFin
 /** Lints for one part (statement, hint or solution) of a question written in source dialect. */
 export function lintQuestionText(markdown: string, opts: { file: string; language: string; knownFormulaKeys?: Set<string>; skipRules?: string[] }): LintFinding[] {
   return lintText(markdown, { file: opts.file, mode: 'question', language: opts.language, knownKeys: opts.knownFormulaKeys, skip: new Set(opts.skipRules ?? []) });
+}
+
+/**
+ * Difficulty marks a writer copies into an exercise: star runs, "(**)", "(facile)", "Difficoltà: ★★". Matched at the start of a
+ * line after an optional list marker. A single "*" (a bullet) and "**word" (bold) never match.
+ */
+const DECORATION_BODY = String.raw`(?:[★☆⭐]+|\(\s*\*{1,5}\s*\)|\[\s*\*{1,5}\s*\]|\*{2,5}(?=\s)|[(\[]\s*(?:difficolt[àa]\s*:?\s*)?(?:facile|medio|media|difficile|easy|medium|hard|difficult)\s*[)\]]|difficolt[àa]\s*:\s*(?:[★☆⭐]+|\*{1,5}(?!\*)|facile|medio|media|difficile))[ \t:.\-–—]*`;
+const DECORATION_LINE = new RegExp(String.raw`^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)${DECORATION_BODY}`, 'i');
+
+/** The text without difficulty decoration at the start of each line. */
+export function stripDifficultyDecoration(text: string): string {
+  return text.split('\n').map((line) => {
+    const m = DECORATION_LINE.exec(line);
+    return m ? m[1] + line.slice(m[0].length) : line;
+  }).join('\n');
+}
+
+/** Removes the last "**" of every prose line that has an odd number of them (the bold-unpaired rule), outside math and inline code. */
+export function dropUnpairedBold(markdown: string): string {
+  const src = markdown.split('\n');
+  for (const l of scan(markdown).lines) {
+    if (!['text', 'list', 'heading', 'table'].includes(l.kind)) continue;
+    const at = [...l.masked.matchAll(/\*\*/g)].map((m) => m.index!);
+    if (at.length % 2 === 0) continue;
+    const i = at[at.length - 1];
+    src[l.n - 1] = src[l.n - 1].slice(0, i) + src[l.n - 1].slice(i + 2);
+  }
+  return src.join('\n');
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -83,6 +112,7 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   'colon-dangling': 'major',
   'unicode-math': 'major',
   'bold-unpaired': 'major',
+  'difficulty-decoration': 'major',
   'language-drift': 'major',
   'duplicate-ide': 'major',
   'duplicate-graph': 'major',
@@ -302,6 +332,8 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       // bold
       const stars = (l.masked.match(/\*\*/g) ?? []).length;
       if (stars % 2 !== 0) add(mk('bold-unpaired', file, 'Unpaired ** bold marker; the reader would show it literally.', l.n, t));
+
+      if (DECORATION_LINE.test(t)) add(mk('difficulty-decoration', file, 'Difficulty marks (stars or a label such as "(facile)") at the start of the text; difficulty has its own field.', l.n, t));
 
       // unicode math
       const chars = unicodeMathChars(l.masked);

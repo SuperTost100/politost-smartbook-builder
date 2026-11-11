@@ -4,7 +4,7 @@ import { TaskError } from '../queue/queue.ts';
 import { parseJsonAnswer } from '../llm/schema.ts';
 
 export const NLM_LOGIN_COMMAND = 'NLM_BROWSER_PATH=<browser> uvx --from notebooklm-mcp-cli nlm login --storage file';
-export const NLM_LOGIN_ACTION = `Sign in to NotebookLM: run "${NLM_LOGIN_COMMAND}" in a terminal, then press Retry.`;
+export const NLM_LOGIN_ACTION = `Sign in to NotebookLM: run "${NLM_LOGIN_COMMAND}" in a terminal, then press Continue.`;
 
 export interface NlmResult { stdout: string; stderr: string; code: number }
 export interface NlmRunOptions { signal?: AbortSignal; timeoutMs?: number }

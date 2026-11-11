@@ -6,15 +6,15 @@ import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { ExtractError } from '../extract/errors.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { getProgram, getReport, insertReport, reportInputs, saveProgramInput, saveProgramItems } from '../repo/index.ts';
 import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, checkBlocker, guideFindings, validateAlignment } from './align.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
-import { chapterExamStats } from './exam.ts';
+import { chapterExamStats, examSessionTotal } from './exam.ts';
 import { outlinePlan } from './plan.ts';
 import { assignKeys, programDeps, programFingerprint, programParse, referencedProgramKeys, reserveNewKeys } from './program.ts';
-import { alignSchema } from './prompts.ts';
+import { alignPrompt, alignSchema } from './prompts.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { generateSpecs, startRun } from './runs.ts';
 
@@ -245,6 +245,17 @@ describe('outline.plan with a program', () => {
     assert.equal(r.examGuides, 1);
   });
 
+  test('the session count in the planning prompt leaves out an excluded exam source, like the exam guide', async () => {
+    seedResource(ctx, { projectId: P, id: 'gone', role: 'exams', included: 0 });
+    seedExam('Esame del 12 gennaio 2023', ['limiti']);
+    seedExam('Esame del 25 gennaio 2023', ['limiti'], { resource_id: 'gone' });
+    seedExam('Esame del 3 giugno 2023', ['limiti'], { resource_id: 'gone' });
+    fake.next(plan([chapter('limiti', [planned('Limiti', { topics: ['limiti'] })])]));
+    await outlinePlan(ctx, startTask('outline.plan', {}, 'plan'));
+    assert.match(fake.calls[0].prompt, /out of 1 \|/);
+    assert.equal(examSessionTotal(ctx, P), 1);
+  });
+
   test('without a program the planning is as before: no program text, no program keys, exam guides still follow the exams', async () => {
     seedExam('Esame del 12 gennaio 2023', ['limiti']);
     fake.next(plan([chapter('limiti', [planned('Limiti', { topics: ['limiti'], programItems: ['limiti'] })])], { programExclusions: [{ item: 'x', reason: 'y' }] }));
@@ -266,6 +277,15 @@ describe('outline.plan with a program', () => {
 });
 
 // ---------- exam statistics and the exam guide ----------
+
+describe('alignment prompt', () => {
+  test('"be selective" covers only thin and proof findings, and off-program material is reported in full', () => {
+    const { prompt } = alignPrompt({ language: 'it', program: '', exam: '', outline: '', sessions: 1 });
+    assert.doesNotMatch(prompt, /FINDINGS \(be selective/);
+    assert.match(prompt, /Be selective only with thin and proof/);
+    assert.match(prompt, /Report every off-program section or passage/);
+  });
+});
 
 describe('exam guide', () => {
   beforeEach(() => {
