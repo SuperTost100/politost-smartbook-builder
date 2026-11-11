@@ -359,6 +359,28 @@ test.describe('Sources: exam split warning', () => {
   });
 });
 
+test.describe('Sources: the notice follows the evidence setting', () => {
+  test('with local evidence the notice says nothing goes to NotebookLM, and with NotebookLM it names it', async ({ page }) => {
+    await mockApi(page, { evidenceMode: 'local' });
+    await page.goto('/books/p1/sources');
+    const notice = page.locator('.so-notice');
+    await expect(notice).toHaveText('Selected material is sent to the configured AI providers. Evidence is searched on this computer, so nothing goes to NotebookLM.');
+    await expect(notice).not.toContainText('providers and NotebookLM');
+
+    await page.unrouteAll();
+    await mockApi(page);
+    await page.goto('/books/p1/sources');
+    await expect(page.locator('.so-notice')).toHaveText('Selected material is sent to the configured AI providers and NotebookLM.');
+  });
+
+  test('while the settings are not known the notice does not rule NotebookLM out', async ({ page }) => {
+    await mockApi(page);
+    await page.route('**/api/settings', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' }));
+    await page.goto('/books/p1/sources');
+    await expect(page.locator('.so-notice')).toHaveText('Selected material is sent to the configured AI providers, and to NotebookLM if evidence is read there. The evidence setting is not known yet.');
+  });
+});
+
 test.describe('Run panel: warnings', () => {
   test('a completed Prepare run with warnings is not shown as a plain success', async ({ page }) => {
     await mockApi(page);

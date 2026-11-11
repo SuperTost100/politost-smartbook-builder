@@ -3,7 +3,7 @@ import { Link, useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Resource, ResourceRole } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
-import { qk, useResources, useTopics } from '../../lib/queries';
+import { qk, useResources, useSettings, useTopics } from '../../lib/queries';
 import { bytes, plural } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
@@ -28,6 +28,20 @@ const STATUS: Record<Resource['status'], { label: string; tone: string }> = {
   failed: { label: 'Failed', tone: 'danger' },
 };
 
+/** Where the selected material goes, which depends on the book's evidence setting: NotebookLM only when evidence is read there. */
+function destinationText(mode: 'notebooklm' | 'local' | undefined) {
+  if (mode === 'notebooklm') return 'Selected material is sent to the configured AI providers and NotebookLM.';
+  if (mode === 'local') return 'Selected material is sent to the configured AI providers. Evidence is searched on this computer, so nothing goes to NotebookLM.';
+  // Settings still loading or failed: the author may upload before the setting is known, so the notice leaves NotebookLM open.
+  return 'Selected material is sent to the configured AI providers, and to NotebookLM if evidence is read there. The evidence setting is not known yet.';
+}
+
+/** What the toast says after a delete: how many questions read from the source went, and how many stayed as the author's own. */
+function deletedText(d: { removedQuestions: number; keptQuestions: number }) {
+  const parts = [d.removedQuestions && `${plural(d.removedQuestions, 'question')} read from it removed`, d.keptQuestions && `${plural(d.keptQuestions, 'question')} whose text you edited or that a chapter uses kept`].filter(Boolean);
+  return parts.length ? `Source deleted: ${parts.join(', ')}.` : 'Source deleted';
+}
+
 export default function SourcesPage() {
   useDocumentTitle('Sources');
   const pid = useBookId();
@@ -37,6 +51,7 @@ export default function SourcesPage() {
   const toast = useToast();
   const resources = useResources(pid);
   const topics = useTopics(pid);
+  const evidenceMode = useSettings().data?.evidenceMode;
   const [role, setRole] = useState<ResourceRole>('theory');
   const [dragging, setDragging] = useState(false);
   const [linkOpen, setLinkOpen] = useState(false);
@@ -62,7 +77,7 @@ export default function SourcesPage() {
   });
   const remove = useMutation({
     mutationFn: (r: Resource) => api('DELETE /api/resources/:rid', { params: { rid: r.id } }),
-    onSuccess: (_d, r) => { toast('Source deleted'); setToDelete(null); refresh(); if (rid === r.id) navigate(`/books/${pid}/sources`); },
+    onSuccess: (d, r) => { toast(deletedText(d)); setToDelete(null); refresh(); if (rid === r.id) navigate(`/books/${pid}/sources`); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const prepare = useMutation({
@@ -98,7 +113,7 @@ export default function SourcesPage() {
         </div>
       </div>
 
-      <p className="ui-banner ui-banner--info so-notice"><Icon name="info" />Selected material is sent to the configured AI providers and NotebookLM.</p>
+      <p className="ui-banner ui-banner--info so-notice"><Icon name="info" />{destinationText(evidenceMode)}</p>
 
       <div className={`so-grid${selected ? ' has-inspector' : ''}`}>
         <div className="so-left">
@@ -173,7 +188,7 @@ export default function SourcesPage() {
       <ConfirmDialog
         open={!!toDelete}
         title="Delete source"
-        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.</>}
+        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.{' Any questions read from it are removed too, except those whose text you edited or that a chapter already uses: they stay as your own. A changed difficulty or topic alone does not keep a question.'}</>}
         confirmLabel="Delete source"
         danger
         busy={remove.isPending}

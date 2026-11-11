@@ -198,6 +198,114 @@ describe('error mapping and fallback', () => {
     assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'codex', 'codex']);
   });
 
+  describe('a provider that reported its usage limit gets no more calls until the reset', () => {
+    const full = () => Object.assign(new Error('failed'), { code: 'cli-failed', limit: { kind: 'quota', retryAfterMs: 2 * 3600_000, detail: 'Codex 5-hour window is full.' } });
+    const outcome = (p: Promise<unknown>) => p.then(() => null, (e: unknown) => e);
+    const waits = (e: unknown) => { assert.ok(e instanceof TaskError, String(e)); assert.equal(e.kind, 'quota'); return e.retryAfterMs!; };
+
+    test('a fallback on the same provider is not tried, and a later task makes no call and waits for the reset', async () => {
+      // The acceptance run: the checker role goes from Luna to Sol, both Codex, and Codex was full.
+      useRoutes('bulk', { provider: 'codex', model: 'gpt-6-luna' }, { provider: 'codex', model: 'gpt-6-sol' });
+      fake.next(full);
+      const first = await outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      assert.ok(waits(first) > 3600_000);
+      assert.equal(fake.calls.length, 1, 'the fallback is on the provider that just reported its limit');
+      const second = await outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      assert.equal(fake.calls.length, 1, 'no call for the second task');
+      assert.ok(waits(second) > 3600_000 && waits(second) <= 2 * 3600_000, 'it waits for the reset the provider reported');
+      assert.match((second as TaskError).message, /usage limit reached/);
+      assert.equal(usageRows().length, 1, 'no usage row for a call that was not made');
+      // After the reset the provider is called again.
+      const realNow = Date.now;
+      Date.now = () => realNow() + 2 * 3600_000 + 1000;
+      try {
+        fake.next(() => ({ text: 'ok' }));
+        assert.equal((await runRole(kit.ctx, { ...base, role: 'bulk' })).text, 'ok');
+      } finally {
+        Date.now = realNow;
+      }
+      assert.equal(fake.calls.length, 2);
+    });
+
+    test('tasks that wait for a slot of the provider when it reports its limit make no call of their own', async () => {
+      // Thirteen tasks each made two failed calls in 27 seconds in the acceptance run, because they were all past the cool-down check by then.
+      kit.ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, bulk: { primary: { provider: 'codex', model: 'gpt-6-luna' }, fallback: { provider: 'codex', model: 'gpt-6-sol' } } }, concurrency: { claude: 2, codex: 1, antigravity: 2, agent: 1, notebooklm: 2 } });
+      fake.next(full);
+      const results = await Promise.all(Array.from({ length: 6 }, () => outcome(runRole(kit.ctx, { ...base, role: 'bulk' }))));
+      assert.equal(fake.calls.length, 1, 'one failed call in all');
+      for (const r of results) assert.ok(waits(r) > 0);
+    });
+
+    const limit = (retryAfterMs: number) => ({ kind: 'rate' as const, retryAfterMs, detail: 'Window is full.' });
+
+    test('a repair turn is not sent to a provider whose answer reported its limit, and the fallback answers instead', async () => {
+      useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+      fake.next(() => ({ structured: { kind: 'zzz' }, text: '{"kind":"zzz"}', limit: limit(3600_000) }), () => ({ structured: { kind: 'b' }, text: '{"kind":"b"}' }));
+      const out = await runRole(kit.ctx, { ...base, role: 'bulk', schema });
+      assert.equal(out.data.kind, 'b');
+      assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['codex', 'claude']);
+    });
+
+    test('a follow-up makes no call while its provider is cooling down, and says when the limit resets', async () => {
+      useRoutes('bulk', { provider: 'codex', model: 'm' });
+      fake.next(() => ({ text: 'one' }), () => ({ text: 'two', limit: limit(3600_000) }));
+      const talk = await openRole(kit.ctx, { ...base, role: 'bulk' });
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+      const e = await outcome(talk.send('go on'));
+      assert.ok(e instanceof FollowUpError, String(e));
+      assert.equal(e.kind, 'quota');
+      assert.ok(e.retryAfterMs! > 3000_000 && e.retryAfterMs! <= 3600_000);
+      assert.equal(fake.calls.length, 2, 'no call for the follow-up');
+      talk.close();
+    });
+
+    test('a task that waited for a slot while every route reached its limit waits for the earliest reset', async () => {
+      setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, vision: { primary: route('claude') } }, { codex: 1 });
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      fake.next(async () => { await held; return { text: 'a', limit: limit(2 * 3600_000) }; }, () => ({ text: 'd', limit: limit(600_000) }));
+      const tick = () => new Promise((r) => setTimeout(r, 30));
+      const a = runRole(kit.ctx, { ...base, role: 'bulk' });
+      await tick();
+      const b = outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      await tick();
+      await runRole(kit.ctx, { ...base, role: 'vision' });
+      release();
+      await a;
+      const wait = waits(await b);
+      assert.ok(wait > 0 && wait <= 600_000, `waits ${wait} ms, for the Claude reset and not the Codex one`);
+      assert.equal(fake.calls.length, 2, 'the waiting task made no call');
+    });
+
+    test('a fallback that was already at its limit when the call started still counts for the wait', async () => {
+      setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, vision: { primary: route('claude') } }, { codex: 1 });
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      fake.next(() => ({ text: 'd', limit: limit(600_000) }), async () => { await held; return { text: 'a', limit: limit(2 * 3600_000) }; });
+      const tick = () => new Promise((r) => setTimeout(r, 30));
+      // Claude, the fallback, reports its limit first: ten minutes.
+      await runRole(kit.ctx, { ...base, role: 'vision' });
+      const a = runRole(kit.ctx, { ...base, role: 'bulk' });
+      await tick();
+      // This call starts with only Codex ready and waits for its slot. Codex then reports a two-hour limit.
+      const b = outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      await tick();
+      release();
+      await a;
+      const wait = waits(await b);
+      assert.ok(wait > 0 && wait <= 600_000, `waits ${wait} ms, for the Claude reset and not the Codex one`);
+      assert.equal(fake.calls.length, 2, 'the waiting task made no call');
+    });
+
+    test('a provider with a limit does not stop a role from using its fallback on another provider', async () => {
+      useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+      fake.next(full, () => ({ text: 'one' }), () => ({ text: 'two' }));
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+      assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['codex', 'claude', 'claude']);
+    });
+  });
+
   test('a limit cli-funnel reports sets the wait from its reset time, beyond the 10-minute cap for parsed messages', async () => {
     useRoutes('bulk', { provider: 'claude', model: 'm' }, { provider: 'codex', model: 'm' });
     const resetAt = new Date(Date.now() + 3 * 3600_000).toISOString();
@@ -786,7 +894,16 @@ describe('a conversation that continues after the first answer', () => {
     });
     assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'claude'], 'no fallback for a follow-up');
     assert.equal(talk.result.text, 'draft');
-    assert.equal((await talk.send('once more')).text, 'fine');
+    // The provider is cooling down (a wait read from a message counts at most 10 minutes), so the next follow-up makes no call until then.
+    await assert.rejects(talk.send('once more'), (e: unknown) => e instanceof FollowUpError && e.kind === 'quota');
+    assert.equal(fake.calls.length, 2);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60_000 + 1000;
+    try {
+      assert.equal((await talk.send('once more')).text, 'fine');
+    } finally {
+      Date.now = realNow;
+    }
     talk.close();
   });
 

@@ -140,3 +140,10 @@ export const written = (o: { markdown: string; figures?: unknown[]; noFigureReas
 
 /** A lab answer in the same format: the code, a separator line, then id, title, description and expectedOutput. */
 export const wroteCode = ({ code, ...meta }: { code: string; id: string; title: string; description: string; expectedOutput: string }) => () => ({ text: `${code}\n${META_SEPARATOR}\n${JSON.stringify(meta)}`, usage: usageOf(10, 10) });
+
+/** An exam reading in the plain-text format of the extraction prompts: a statement part and an optional solution part per exercise, or an unreadable line. */
+export const examText = (exercises: { number: string; statement?: string; solution?: string; readable?: boolean }[]): string => exercises
+  .map((e) => (e.readable === false ? `@@@ unreadable ${e.number}` : `@@@ statement ${e.number}\n${e.statement ?? ''}${e.solution ? `\n@@@ solution ${e.number}\n${e.solution}` : ''}`))
+  .join('\n');
+
+export const examRead = (...exercises: Parameters<typeof examText>[0]) => () => ({ text: examText(exercises), usage: usageOf(10, 10) });

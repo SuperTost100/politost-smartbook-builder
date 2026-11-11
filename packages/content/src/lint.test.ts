@@ -70,7 +70,78 @@ test('placeholder: a [?] or ??? a model left in prose or math is a blocker', () 
   assert.equal(lint('Valori: $[?]$ e $[?]$, poi ???.').filter((f) => f.rule === 'placeholder').length, 3, 'one finding per placeholder, so adding one on the same line counts');
 });
 
+// ---- literal \n and \t -------------------------------------------------------------------
+
+test('literal-escape: a backslash-n or backslash-t in prose is a blocker, in math and code it is not', () => {
+  // The two rows the exam reader stored for the July session of the acceptance run.
+  for (const c of [
+    "Un amplificatore ha $R_1 = 3{,}3\\,\\mathrm{k\\Omega}$.\\n\\na) Calcolare il guadagno $G$.\\n\\nb) Calcolare $v_{out}$.",
+    "**Problema 1.\\n\\na) $G = -R_2/R_1 = -10$.\\n\\nb) $v_{out} = -2{,}5\\,\\mathrm{V}$.**",
+    '### Problema 2.\\n\\na) $\\tau = RC = 22\\,\\mathrm{ms}$.',
+    'Colonna uno\\tcolonna due.',
+    '- primo punto\\n- secondo punto',
+    'Il valore \\ntrovato \\text{vero}.',
+  ]) {
+    const f = find(c, 'literal-escape');
+    assert.ok(f, c);
+    assert.equal(f!.severity, 'blocker', c);
+  }
+  for (const c of [
+    'Con $\\nu = 2$ e $\\neq$, poi $\\theta \\times \\tau$.',
+    '$$\n\\nabla \\cdot \\vec{E} = \\frac{\\rho}{\\varepsilon_0}\n$$',
+    'In MATLAB `fprintf("%d\\n", x)` stampa e va a capo.',
+    'Righe a capo vere.\n\na) Calcolare.',
+    'Il valore $x$ è \\text{vero} e \\tau è la costante.',
+  ]) assert.equal(find(c, 'literal-escape'), undefined, c);
+});
+
+test('literal-escape: question text is linted too, which is what the export validates', () => {
+  const f = lintQuestionText('Un resistore $R = 1\\,\\mathrm{k\\Omega}$.\\n\\na) Calcolare $I$.', { file: 'statement', language: 'it' }).find((x) => x.rule === 'literal-escape');
+  assert.equal(f?.severity, 'blocker');
+});
+
 // ---- meta-leak (F-04) --------------------------------------------------------------------
+
+test('meta-leak: a sentence that tells the reader what the author\'s notes contain is a blocker', () => {
+  for (const c of [
+    // Both sentences are from the first section of the acceptance run.
+    "Questo segue da $v_C = -R\\,i$, ed è un risultato standard non riportato nelle note.",
+    "Questi valori sono conseguenze elementari dell'esponenziale e non sono riportati come tali nelle note.",
+    'La formula vale in generale, ma non è presente negli appunti del corso.',
+    'Il risultato non è contenuto nel materiale fornito.',
+    'Qui si usa il materiale fornito per ricavare la costante.',
+    "Secondo l'evidenza fornita la costante vale 3.",
+    'This result is standard and not covered in the notes.',
+    'The provided material does not state the value of the constant.',
+    'As the supplied notes say, the time constant is RC.',
+    "The result isn't covered in the notes.",
+    "This value wasn't mentioned in the provided material.",
+    'The formula does not appear in the course notes, so it is only stated.',
+  ]) {
+    const f = find(`Testo.\n\n${c}`, 'meta-leak');
+    assert.ok(f, c);
+    assert.equal(f!.severity, 'blocker', c);
+    assert.match(f!.message, /sources/);
+  }
+  for (const c of [
+    'Le note musicali di un diapason hanno una frequenza precisa.',
+    'Come indicato nelle note a piè di pagina del manuale, il valore cambia.',
+    'Il materiale del condensatore è ceramico, e il materiale isolante tra le armature è il dielettrico.',
+    'Le fonti di tensione ideali non hanno resistenza interna.',
+    'La corrente è riportata nella figura e presente nel ramo centrale.',
+    'The notes of a scale follow a geometric progression in frequency.',
+    'An ideal source supplies a fixed voltage.',
+    // Electrical engineering: the sources are circuit elements, not the author's material.
+    'La potenza fornita dalle fonti di tensione è $P$.',
+    'La corrente fornita dalle sorgenti indipendenti è $I$.',
+    'La tensione presente ai capi dei generatori è $V$.',
+    'La potenza contenuta nelle fonti di alimentazione a disposizione è $P$.',
+    'La corrente riportata dai generatori ideali dalle fonti di corrente è costante.',
+    'Il campo elettrico non è presente nel materiale conduttore.',
+    'The power delivered by the voltage sources is $P$.',
+    "The ripple isn't included in the sources of the supply.",
+  ]) assert.equal(find(`Testo.\n\n${c}`, 'meta-leak'), undefined, c);
+});
 
 test('meta-leak: model commentary is flagged as blocker', () => {
   const cases = [

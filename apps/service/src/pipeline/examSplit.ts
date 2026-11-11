@@ -3,10 +3,11 @@ import { z } from 'zod';
 import type { SplitWarning } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
-import { findDate, isSolutionMarker, joinLines, sessionName, type QuestionRow } from '../extract/segment.ts';
+import { findDate, isSolutionMarker, joinLines, plainLines, sessionName, type QuestionRow } from '../extract/segment.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { questionsChanged } from '../repo/questions.ts';
+import { COUNTED_QUESTION_SQL } from './util.ts';
 
 // ---------- what a split found ----------
 
@@ -57,7 +58,8 @@ export function splitResult(ctx: AppContext, resourceId: string): Record<string,
 
 /**
  * Replaces the authentic questions of a file with `rows`. A session already stored from another file is not stored twice
- * (the same session can appear in two yearly files). The regex splitter and the AI split both store through here.
+ * (the same session can appear in two yearly files). Only questions that count are compared (`COUNTED_QUESTION_SQL`): one of an
+ * excluded source is not a copy, and one whose source was deleted but that stayed because the author edited it is. The regex splitter and the AI split both store through here.
  * With `keepWorkedOn` nothing is replaced when a question of the file was edited or checked, which is tested inside the
  * same transaction as the replacement so an edit made while a model call was pending is not lost.
  */
@@ -71,7 +73,7 @@ export function storeAuthenticQuestions(ctx: AppContext, projectId: string, reso
     ctx.db.run(`DELETE FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
     for (const q of rows) {
       const dup = q.kind === 'exam' && q.examDate && q.number
-        ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND resource_id != ?`, projectId, q.examGroup, q.number, resourceId)
+        ? ctx.db.get(`SELECT id FROM questions WHERE project_id = ? AND kind = 'exam' AND exam_group = ? AND number = ? AND (resource_id IS NULL OR resource_id != ?) AND ${COUNTED_QUESTION_SQL}`, projectId, q.examGroup, q.number, resourceId)
         : undefined;
       if (dup) { duplicates++; continue; }
       const id = newId();
@@ -143,13 +145,13 @@ const PAGE_HEAD_MAX = 25;
 const squash = (s: string) => s.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
 
 /**
- * The lines of a page the model is shown: the first ones, and the lines that look like a heading in any course's style:
+ * The lines of a page the model is shown, as plain text (a Markdown file loses its heading marks, emphasis and table pipes, see `plainLines`): the first ones, and the lines that look like a heading in any course's style:
  * a word, with or without a full stop, then a number, roman numeral or letter ("Es. 2", "Problema 3", "Parte B"); a line that
  * starts with a number; or a line with a date. Sub-questions "a)" do not match, so they do not use up the cap.
  * shortcut: a heading that starts with none of these shapes is not shown, upgrade when a real paper needs another shape.
  */
 function pageHeads(text: string): string[] {
-  const lines = text.split('\n').map((l) => l.trim()).filter(Boolean);
+  const lines = plainLines(text);
   const heading = (l: string) => /^(?:\p{L}[\p{L}'’.]*\s+){1,3}(?:\d{1,2}|[IVX]{1,4}|\p{L})(?![\p{L}\p{N}])/u.test(l) || /^\d{1,2}(?:\s*[.):–-]|\s+\p{L})/u.test(l) || (l.length <= 100 && !!findDate(l));
   return [...lines.slice(0, PAGE_HEAD_FIRST), ...lines.slice(PAGE_HEAD_FIRST).filter(heading)].slice(0, PAGE_HEAD_MAX).map((l) => l.slice(0, 120));
 }
@@ -161,7 +163,7 @@ function pageHeads(text: string): string[] {
  * solution the model locates for an exercise is stored as the question's solution, as the text rules do.
  */
 export function buildAiSplit(resourceId: string, pages: { idx: number; text: string }[], answer: ExamSplitAnswer, label: string): { rows: QuestionRow[] } | { reason: string } {
-  const lines: Line[] = pages.flatMap((p) => p.text.split('\n').map((t) => t.trim()).filter(Boolean).map((text) => ({ page: p.idx, text })));
+  const lines: Line[] = pages.flatMap((p) => plainLines(p.text).map((text) => ({ page: p.idx, text })));
   const locate = (page: number, quote: string, from: number) => {
     const q = squash(quote);
     if (q.length < 3) return -1;

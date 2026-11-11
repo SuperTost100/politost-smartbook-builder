@@ -1,5 +1,6 @@
 // Exam split warnings in the sources API and the run, and "Split with AI" with scripted model answers.
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
@@ -7,7 +8,7 @@ import { newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
 import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
-import { listResources, updateResource } from '../repo/index.ts';
+import { deleteResource, listResources, updateResource } from '../repo/index.ts';
 import { installFakes, projectBody, startApp, type TestApp } from '../routes/testkit.ts';
 import { splitExams } from '../extract/segment.ts';
 import { buildAiSplit, resourceSplit, splitMessage, type ExamSplitAnswer } from './examSplit.ts';
@@ -162,6 +163,25 @@ describe('Split with AI', () => {
     assert.deepEqual([split('ex1').splitSessions, split('ex1').splitQuestions, split('ex1').splitWarning], [2, 3, null]);
   });
 
+  test('a Markdown exam file: the model is shown the heading lines without their marks, and quotes them as they are shown', async () => {
+    const md = readFileSync(new URL('../extract/testdata/appelli-elettrotecnica-2024.md', import.meta.url), 'utf8');
+    resource('ex1', 'exams', [md], { filename: 'appelli-elettrotecnica-2024.md' });
+    const exercise = (n: number) => ({ number: String(n), page: 1, start: `Problema ${n} (12 punti)`, solution: { page: 1, start: `Problema ${n}.` } });
+    fake.next(answer({ sessions: [
+      { title: 'Prova scritta, Appello del 12 febbraio 2024', date: '2024-02-12', page: 1, start: 'Prova scritta, Appello del 12 febbraio 2024', exercises: [exercise(1), exercise(2)] },
+      { title: 'Prova scritta, Appello del 3 luglio 2024', date: '2024-07-03', page: 1, start: 'Prova scritta, Appello del 3 luglio 2024', exercises: [exercise(1), exercise(2)] },
+    ] }));
+    const out = await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' }));
+    const prompt = String(fake.calls[0].prompt);
+    for (const line of ['Prova scritta, Appello del 12 febbraio 2024', 'Problema 1 (12 punti)', 'Problema 2 (12 punti)']) assert.ok(prompt.includes(`  ${line}\n`), `${line} is shown`);
+    assert.doesNotMatch(prompt, /\*\*|\| /);
+    assert.deepEqual(out, { applied: true, questions: 4, duplicates: 0, sessions: 2 });
+    const rows = ctx.db.all<Record<string, any>>('SELECT exam_group, number, statement, solution FROM questions WHERE resource_id = ? ORDER BY rowid', 'ex1');
+    assert.deepEqual(rows.map((r) => `${r.exam_group} #${r.number}`), ['Prova scritta del 12 febbraio 2024 #1', 'Prova scritta del 12 febbraio 2024 #2', 'Prova scritta del 3 luglio 2024 #1', 'Prova scritta del 3 luglio 2024 #2']);
+    assert.match(rows[0].statement, /^Problema 1 \(12 punti\)\n+Un generatore/);
+    assert.match(rows[3].solution, /^Problema 2\.\n+a\) \$\\tau = RC = 22/);
+  });
+
   test('an answer that does not hold up leaves the file as it was, with the warning still shown', async () => {
     // The text rules read this paper as one session without a heading ("no heading"), three questions.
     resource('ex1', 'exams', [
@@ -255,6 +275,63 @@ describe('Split with AI', () => {
   });
 });
 
+// The two versions of the exam file of the acceptance run: the same two papers, the second with the solutions attached.
+const PAPER = (day: string, first: string) => `Prova scritta, Appello del ${day}\nProblema 1 (12 punti)\n${first}\nProblema 2 (12 punti)\nUn secondo circuito.`;
+const EXAM_FILE = [PAPER('12 febbraio 2024', 'Un condensatore si carica.'), PAPER('3 luglio 2024', 'Un amplificatore invertente.')];
+
+describe('deleting a source takes out what was read from it', () => {
+  const prepare = (id: string) => resourceQuestions(ctx, startTask('resource.questions', { resourceId: id }));
+  const count = (id: string) => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE resource_id = ?', id)!.n;
+
+  test('the corrected file uploaded after the delete is stored in full, and nothing is counted as a duplicate of the old one', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    assert.deepEqual(await prepare('v1'), { questions: 4, duplicates: 0, sessions: 2 });
+    const [q] = questionRows('v1');
+    ctx.db.insert('review_issues', { id: 'i1', project_id: P, node_id: null, question_id: q.id, source: 'verification', severity: 'blocker', category: 'solution', message: 'Il risultato è sbagliato.', status: 'open', resolution: '', created_at: now() });
+    const out = deleteResource(ctx, 'v1');
+    assert.deepEqual(out, { removedQuestions: 4, keptQuestions: 0 });
+    assert.equal(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE project_id = ?', P)!.n, 0, 'no question of the deleted file is left');
+    assert.equal(ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM review_issues WHERE id = ?', 'i1')!.n, 0, 'the problem about a removed question goes with it, or it would block the export for ever');
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 4, duplicates: 0, sessions: 2 });
+    assert.equal(count('v2'), 4);
+  });
+
+  test('a question a chapter was given but that was not read yet goes with its file, because nothing could read it afterwards', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    const [assigned] = questionRows('v1');
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id = ?`, assigned.id);
+    assert.deepEqual(deleteResource(ctx, 'v1'), { removedQuestions: 4, keptQuestions: 0 });
+    assert.equal(count('v1'), 0);
+  });
+
+  test('a question you edited, or one already read into a chapter, stays as your own and is not read again from a copy of the file', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    const [edited, inChapter] = questionRows('v1');
+    ctx.db.run(`UPDATE questions SET edited_at = ?, statement = 'Testo corretto a mano.' WHERE id = ?`, now(), edited.id);
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1', imported_at = ? WHERE id = ?`, now(), inChapter.id);
+    assert.deepEqual(deleteResource(ctx, 'v1'), { removedQuestions: 2, keptQuestions: 2 });
+    const kept = ctx.db.all<Record<string, any>>('SELECT id, resource_id, page_from, page_to, statement, exam_group, chapter_id FROM questions WHERE project_id = ? ORDER BY rowid', P);
+    assert.deepEqual(kept.map((k) => [k.id, k.resource_id, k.page_from, k.page_to]), [[edited.id, null, null, null], [inChapter.id, null, null, null]]);
+    assert.equal(kept[0].statement, 'Testo corretto a mano.');
+    assert.equal(kept[1].chapter_id, 'c1');
+    // They still count (no source says otherwise), so a new copy of the same paper does not add a second one of each.
+    assert.ok(ctx.db.get(`SELECT 1 FROM questions WHERE id = ? AND resource_id IS NULL`, edited.id));
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 2, duplicates: 2, sessions: 2 });
+  });
+
+  test('a source you excluded does not make the same paper in another file a duplicate', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    updateResource(ctx, 'v1', { included: false });
+    resource('v2', 'exams', EXAM_FILE, { filename: 'appelli-corretto.pdf' });
+    assert.deepEqual(await prepare('v2'), { questions: 4, duplicates: 0, sessions: 2 });
+  });
+});
+
 describe('the author asks for the AI split', () => {
   test('a Prepare run has no split task unless the author asked for one file', async () => {
     resource('ex1', 'exams', ES_LAYOUT);
@@ -296,6 +373,16 @@ describe('API', () => {
     assert.deepEqual([list[0].splitSessions, list[0].splitQuestions, list[0].splitWarning], [1, 0, 'no_questions']);
     const patched = (await t.req('PATCH', '/api/resources/r-exams', { role: 'theory' })).body;
     assert.deepEqual([patched.role, patched.splitSessions, patched.splitWarning], ['theory', null, null]);
+  });
+
+  test('DELETE /api/resources/:rid says how many questions went and how many stayed', async () => {
+    const projectId = await seed('exams');
+    const insert = (id: string, o: Record<string, unknown> = {}) => t.ctx.db.insert('questions', { id, project_id: projectId, kind: 'exam', origin: 'authentic', resource_id: 'r-exams', page_from: 0, page_to: 0, exam_group: 'Appello', exam_date: '2024-02-12', number: id, statement: 'Testo.', hint: '', solution: '', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(), ...o });
+    insert('q1');
+    insert('q2', { chapter_id: 'c1', imported_at: now() });
+    const res = await t.req('DELETE', '/api/resources/r-exams');
+    assert.deepEqual(res.body, { ok: true, removedQuestions: 1, keptQuestions: 1 });
+    assert.deepEqual(t.ctx.db.all<{ id: string; resource_id: string | null }>('SELECT id, resource_id FROM questions').map((q) => [q.id, q.resource_id]), [['q2', null]]);
   });
 
   test('POST /api/resources/:rid/split starts a prepare run for that one file', async () => {

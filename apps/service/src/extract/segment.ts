@@ -19,10 +19,44 @@ const LEADERS = /(?:\.\s?){4,}/;
 
 interface Line { page: number; text: string }
 
+/** Emphasis that wraps the start of a line: **bold**, __bold__, *italic*, _italic_. The closing mark must end a word, so a product "a*b" is not one. */
+const EMPHASIS = [/^\*{1,3}(?=[^\s*])([^*\n]*?[^\s*])\*{1,3}(?=\s|$|[.,:;!?)])/, /^_{1,3}(?=[^\s_])([^_\n]*?[^\s_])_{1,3}(?=\s|$|[.,:;!?)])/];
+const plainCell = (s: string) => EMPHASIS.reduce((t, re) => t.replace(re, '$1'), s.replace(/^#{1,6}\s+/, '')).trim();
+
+/**
+ * The lines of a page as plain text, so a source written in Markdown reads like the PDF of the same paper: "## Esercizio 1" and
+ * "**Problema 1** (12 punti)" lose their marks, a row of a pipe table gives one line per cell (as a PDF text layer does), and a
+ * separator row, an empty row and a rule ("---") give none. Text that is not Markdown comes back unchanged apart from trimming.
+ * A line of pipes is a table row only inside a table, which is a run of such lines that holds a separator row ("|---|---|"), so a
+ * line of math such as "| x | + | y |" stays whole.
+ */
+export function plainLines(text: string): string[] {
+  const out: string[] = [];
+  const rows = text.split('\n').map((raw) => raw.trim());
+  const isRow = (l: string) => /^\|.*\|$/.test(l);
+  const isSeparator = (l: string) => /^\|[\s:|-]*-[\s:|-]*\|$/.test(l);
+  rows.forEach((l, i) => {
+    if (!l || /^(?:-{3,}|\*{3,})$/.test(l)) return;
+    if (isRow(l)) {
+      let from = i;
+      let to = i;
+      while (from > 0 && isRow(rows[from - 1])) from--;
+      while (to < rows.length - 1 && isRow(rows[to + 1])) to++;
+      if (rows.slice(from, to + 1).some(isSeparator)) {
+        if (!isSeparator(l)) out.push(...l.slice(1, -1).split(/(?<!\\)\|/).map((c) => plainCell(c.trim())).filter(Boolean));
+        return;
+      }
+    }
+    const plain = plainCell(l);
+    if (plain) out.push(plain);
+  });
+  return out;
+}
+
 function pageLines(pages: PageText[]): Line[] {
   const out: Line[] = [];
   for (const p of pages) {
-    const raw = p.text.split('\n').map((l) => l.trim()).filter(Boolean);
+    const raw = plainLines(p.text);
     let kept = 0;
     raw.forEach((l, i) => {
       // Page numbers sit among the first lines; section numbers sit right before a session heading.
@@ -44,8 +78,16 @@ interface Heading { key: string; date: string | null; numbered: boolean; variant
 const EXERCISE = /^(?:(Soluzione|Svolgimento|Risoluzione)\s+(?:(?:dell['’]\s*)|(?:(?:del|della|dello|di)\s+))?)?(Esercizio|Problema|Quesito|Domanda|Parte)\s+(\d{1,2}|[A-Za-z]|[IVX]{2,4})\b(.*)$/iu;
 /** "Soluzione 2", "Svolgimento 2": a solution that names only the number. */
 const SOLUTION_NUMBER = /^(?:Soluzione|Svolgimento|Risoluzione|SOLUZIONE|SVOLGIMENTO|RISOLUZIONE)\s+(\d{1,2})\b(.*)$/u;
-/** A section marker on its own line. "svolgimento" is a marker in any case; the other words only capitalised, because a bare "soluzione" can be a wrapped line of prose. */
-export const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || /^(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])\s*[.:]?$/.test(t);
+const SOLUTION_WORD = String.raw`(?:Soluzion[ei]|SOLUZION[EI]|Risoluzion[ei]|RISOLUZION[EI])`;
+/** What may follow the word on the same line: text in brackets "(Appello del 12 febbraio 2024)", or the name of the session "- Appello del …", "dell'appello del …". */
+const SOLUTION_QUALIFIER = String.raw`(?:\([^()]{1,80}\)|(?:(?:dell['’]\s*|del(?:l[aeo])?\s+|di\s+)?(?:[Aa]ppello|[Ee]same|[Pp]rova|[Cc]ompito|[Tt]ema|[Tt]urno|[Ff]ila|[Vv]ersione)\b.{0,80}))`;
+const SOLUTION_HEADING = new RegExp(String.raw`^${SOLUTION_WORD}\s*(?:[.:]?$|[.:\-–—]?\s*${SOLUTION_QUALIFIER}\s*[.:]?$)`);
+/**
+ * A section marker on its own line, alone or with a qualifier ("Soluzioni (Appello del 12 febbraio 2024)"). "svolgimento" is a
+ * marker in any case; the other words only capitalised, because a bare "soluzione" can be a wrapped line of prose, and with a
+ * qualifier only the qualifiers of a session or a version, so a sentence that starts with "Soluzione di …" is no marker.
+ */
+export const isSolutionMarker = (t: string) => /^svolgimento\s*[.:]?$/i.test(t) || SOLUTION_HEADING.test(t);
 
 interface ExHead { solution: boolean; word: string; id: string; rest: string }
 
@@ -211,6 +253,9 @@ function variantOf(rest: string): string | null {
   return k ? `v${k[1]}` : null;
 }
 
+/** The letter or number after "Turno", "Versione", "Fila" or "Compito" ("Turno A" gives "A"). */
+const turnOf = (s: string) => /\b(?:turno|versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+)\b(?!['’])/i.exec(s)?.[1].toUpperCase() ?? null;
+
 const numberLabel = (e: Ex) => (e.variant ? (e.variant.startsWith('v') ? `${e.id}.${e.variant.slice(1)}` : `${e.id}${e.variant}`) : e.id);
 
 export function joinLines(lines: string[]): string {
@@ -300,7 +345,18 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
       startGroup({ key: label, date: null, numbered: false });
     }
     const g = group!;
-    if (isSolutionMarker(text)) { mode = 'solution'; cur = null; continue; }
+    if (isSolutionMarker(text)) {
+      mode = 'solution';
+      cur = null;
+      // "Soluzioni (Appello del 3 luglio 2024)" names its session: solutions printed after all the papers still reach their own.
+      // Two papers of one day are told apart by the turn the heading names. A heading that names none, or one that fits several, redirects nowhere.
+      const named = findDate(text);
+      const sameDay = named ? groups.filter((x) => x.date === isoOf(named) && x.statements.length > 0) : [];
+      const want = turnOf(text);
+      const fits = sameDay.length <= 1 ? sameDay : sameDay.filter((x) => want !== null && (x.variant ?? turnOf(x.key)) === want);
+      if (fits.length === 1) group = fits[0];
+      continue;
+    }
     if (ex) {
       // "Soluzione Esercizio 1" and "Esercizio 1 _soluzione" open a solution even without a SOLUZIONI line.
       if (ex.solution || /^\s*[_\-–:.]?\s*soluzion[ei]\b/i.test(ex.rest)) mode = 'solution';

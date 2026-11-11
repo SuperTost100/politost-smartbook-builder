@@ -263,6 +263,15 @@ test('questions with blocks the reader cannot parse are flagged', () => {
   assert.ok(book.findings.some((f) => f.rule === 'exercise-fence' && f.file === 'question:q'));
 });
 
+test('an exam solution with a literal \\n is a blocker in the export findings', () => {
+  const book = compileBook(fixtureBook({
+    questions: [question({ id: 'x', kind: 'exam', origin: 'authentic', examDate: '2024-07-03', examGroup: 'Luglio', chapterId: 'ch-cin', statement: 'Calcola $G$.', solution: '### Problema 1.\\n\\na) $G = -10$.' })],
+  }));
+  const f = book.findings.find((x) => x.rule === 'literal-escape' && x.file === 'question:x');
+  assert.equal(f?.severity, 'blocker');
+  assert.match(f!.message, /^\[solution\]/);
+});
+
 test('ide.json and grafici.json come from enrichments; [] when enabled but empty', () => {
   const book = compileBook(fixtureBook());
   const ide = JSON.parse(text(book, 'ide.json'));

@@ -87,6 +87,7 @@ describe('the compile, repair and look loop', () => {
     assert.equal(fake.calls[1].attachments?.length, 1, 'the picture of the drawing');
     assert.equal(fake.calls[1].attachments?.[0].mediaType, 'image/png');
     assert.match(fake.calls[1].prompt, /Answer exactly OK/);
+    assert.match(fake.calls[1].prompt, /5\. Every label is written as the book writes the quantity[^\n]*argument[^\n]*after the subscript, not inside it/, 'the look turn checks the labels against the formulas');
     assert.equal(r.usage.calls, 2);
     assert.equal(r.usage.inputTokens, 200);
     const rows = kit.ctx.db.all<{ role: string }>('SELECT role FROM usage');

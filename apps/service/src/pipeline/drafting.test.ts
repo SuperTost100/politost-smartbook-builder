@@ -9,6 +9,7 @@ import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf, writ
 import { Queue, TaskError, type TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
 import { evidenceText, sectionDraft } from './draft.ts';
+import { symbolsIn } from './exam.ts';
 import { draftPrompt, selfCheckPrompt } from './prompts.ts';
 import { generateSpecs } from './runs.ts';
 
@@ -372,8 +373,61 @@ describe('no padding, and examples only where they teach', () => {
     assert.equal(all.match(/Never add sentences to reach a length/g)?.length, 1);
   });
 
+  test('the writer is told once, in the static part of the prompt, never to speak of its sources to the reader', () => {
+    const rule = /The book never mentions its sources or what they contain: never write "the notes", "the material provided" or "the evidence", and never say that something is or is not in them\./;
+    const a = draftPrompt(input('standard'));
+    assert.match(a.system, rule);
+    assert.equal(a.system.match(/never mentions its sources/g)?.length, 1);
+    assert.doesNotMatch(a.prompt, /never mentions its sources/);
+    assert.equal(draftPrompt({ ...input('brief', 'en'), outside: true, section: { id: 'x', title: 'Y', objectives: ['p'], depth: 'brief', subsections: '' } }).system.match(rule)?.length, 1, 'the same text for every section and book');
+  });
+
   test('the length ranges are the same as before', () => {
     for (const [depth, range] of [['brief', '400-800'], ['standard', '800-1500'], ['deep', '1200-2200']]) assert.match(draftPrompt(input(depth)).prompt, new RegExp(`Depth: ${depth} \\(about ${range} words\\)`));
+  });
+});
+
+describe('the writer gets the symbols the exam papers use for the section\'s topics', () => {
+  const T = 'topic-filtri';
+  const exam = (statement: string, o: Record<string, unknown> = {}) => ctx.db.insert('questions', {
+    id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
+    statement, hint: '', solution: '', difficulty: 'medio', topic_ids: [T], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(), ...o,
+  });
+  const section = async () => {
+    seedOutline([['c1', ['s1']]]);
+    ctx.db.insert('topics', { id: T, project_id: P, name: 'Filtro RC', aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 1, priority: 'high' });
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[0].sections[0].topicIds', json_array(?))`, T);
+    fake.next(written({ markdown: 'Il filtro.' }));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    return fake.calls[0].prompt;
+  };
+
+  test('the symbols of the questions on the section\'s topics are in the section part of the prompt, with the rule for using them', async () => {
+    // The two exam questions of the acceptance run use f_c where the writer had written f_t.
+    exam('Calcolare la frequenza di taglio $f_c$ del filtro con $R_1 = 1\\,\\mathrm{k\\Omega}$.');
+    exam('Calcolare $|H|$ alla frequenza di taglio $f_c$ e la tensione $v_{out}$.', { number: '2' });
+    exam('Una domanda su un altro argomento con $q_p$.', { topic_ids: ['altro'], number: '3' });
+    const prompt = await section();
+    assert.match(prompt, /Topics and how often the exams test them:\n- Filtro RC: 1 of 1 exam sessions \(high priority\)\nSymbols used in the exam papers on these topics: f_c, R_1, v_\{out\}\. Use them for the same quantities, unless they conflict with the book's notation above\./);
+    assert.doesNotMatch(prompt, /q_p/, 'a question of another topic does not count');
+    assert.ok(prompt.indexOf('Symbols used in the exam papers') > prompt.indexOf('Known formula keys'), 'it is in the part that differs between sections');
+  });
+
+  test('without exam questions on the topics there is no such line, and a question of an excluded source does not count', async () => {
+    seedResource(ctx, { id: 'r-ex', projectId: P, role: 'exams', included: 0 });
+    exam('Calcolare $f_c$.', { resource_id: 'r-ex' });
+    assert.doesNotMatch(await section(), /Symbols used in the exam papers/);
+  });
+
+  test('symbolsIn: LaTeX and plain subscripts, Unicode digits, counted once per question, most frequent first', () => {
+    assert.deepEqual(symbolsIn([
+      'Calcolare $f_c$ e $f_{c}$ e f_c.', 'Il valore $V_0 = 12$ e R₁ = 3 kΩ, poi v_C(t).', '$f_c$ e $v_C$ con $\\omega_c$ e $t_{90}$.', 'Nessun simbolo con pedice, solo $x + y$ e snake_case_word.',
+    ]), ['f_c', 'v_C', 'V_0', 'R_1', '\\omega_c', 't_{90}']);
+    assert.deepEqual(symbolsIn([]), []);
+  });
+
+  test('symbolsIn: a subscript of several Unicode digits is the same symbol as its LaTeX form', () => {
+    assert.deepEqual(symbolsIn(['Il resistore R₁₀ = 3 kΩ e $R_{10}$.', 'Anche R₁₀ e V₀.']), ['R_{10}', 'V_0']);
   });
 });
 

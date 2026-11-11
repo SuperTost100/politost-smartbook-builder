@@ -29,6 +29,7 @@ export const LINT_RULES = [
   'exercise-fence',
   'placeholder',
   'difficulty-decoration',
+  'literal-escape',
 ] as const;
 export type LintRule = (typeof LINT_RULES)[number];
 
@@ -109,6 +110,7 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   image: 'blocker',
   'exercise-fence': 'blocker',
   placeholder: 'blocker',
+  'literal-escape': 'blocker',
   'colon-dangling': 'major',
   'unicode-math': 'major',
   'bold-unpaired': 'major',
@@ -171,9 +173,17 @@ const META_PATTERNS: MetaPattern[] = [
   { test: re(/\bsource text\b|\boriginal text (?:has|was) been\b/i), why: 'mentions the "source text"' },
   { test: re(/^\s*(?:\*\*)?(?:Note|Nota)(?:\*\*)?\s*:\s*(?:I\b|I'|this (?:version|text|rewrite)|the (?:source|original) text|ho\b|il testo|questa versione|le formule numerate|i blocchi)/i), why: 'note addressed to the user' },
   { test: re(/\bvincoli strutturali dello Smartbook\b|\bil paragrafo inizia con l'intestazione\b/i), why: 'commentary on the format rules' },
+  // The writer talking to the reader about the author's notes ("non riportato nelle note"): the reader has no notes, and a gap is for the alignment check.
+  // The nouns name the author's material. A bare "fonti" or "materiale" is physics (voltage sources, a conductor's material), so neither counts alone.
+  { test: re(/\b(?:riportat|present|contenut|citat|trattat|inclus|indicat|menzionat|fornit|coper)\w*(?:\s+\w+){0,3}\s+(?:nelle|dalle|nei|dai|negli|dagli|nel|dal)\s+(?:note|appunti|dispense|evidenze|evidenza|materiale\s+(?:fornito|didattico|del\s+corso)|materiali\s+(?:forniti|didattici|del\s+corso))\b(?!\s+(?:a\s+pi[eè]|a\s+margine|di\s+(?:pagina|chiusura)))/i), why: 'tells the reader what its sources contain' },
+  { test: re(/\b(?:materiale|materiali|evidenza|evidenze|appunti|note|fonti)\s+(?:fornit[oaie]|a\s+disposizione)\b|\b(?:secondo|dalle|nelle|negli)\s+(?:le\s+)?(?:note|appunti)\s+(?:del\s+corso|fornit\w+)\b/i), why: 'tells the reader what its sources contain' },
+  { test: re(/\b(?:the|these)\s+(?:provided|supplied|given|course)\s+(?:notes|material|materials|sources|evidence)\b|(?:\bnot|n't)\s+(?:\w+\s+){0,2}(?:covered|included|mentioned|stated|given|provided|reported|contained|present)\s+in\s+the\s+(?:(?:course|provided|supplied)\s+)?(?:notes|material|materials|evidence)\b/i), why: 'tells the reader what its sources contain' },
 ];
 
 const META_INLINE_CODE = /`[^`]*(?:## p\d+|:::formula|:::exercise|\{\{formula)[^`]*`/;
+
+/** A LaTeX command that starts with n or t, at the start of the text: a backslash followed by it is no escaped line break or tab. */
+const LATEX_COMMAND_N_T = /^\\(?:nu|neq?|nabla|ni|notin|not|nless|ngtr|nleq|ngeq|nmid|nparallel|nsim|ncong|nexists|nrightarrow|nleftarrow|text(?:bf|it|rm|sf|tt|normal|up)?|tau|theta|times|to|top|tan|tanh|tilde|therefore|triangle\w*|tag|tbinom|tfrac)(?![A-Za-z])/;
 
 // -- unicode math ------------------------------------------------------------------------------
 
@@ -338,6 +348,10 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       // unicode math
       const chars = unicodeMathChars(l.masked);
       if (chars.length) add(mk('unicode-math', file, `Math symbols outside $...$: ${chars.join(' ')}. Write them as LaTeX inside $...$.`, l.n, t));
+
+      // The two characters backslash and n (or t) where a line break or a tab was meant: a model wrote them inside a JSON string and they were never decoded.
+      // Math and inline code are masked, so \nu in a formula and `printf("\n")` are not caught. A LaTeX command written outside math (\text, \tau) is another mistake and is left out.
+      if ([...l.masked.matchAll(/(?<!\\)\\[nt]/g)].some((m) => !LATEX_COMMAND_N_T.test(l.masked.slice(m.index)))) add(mk('literal-escape', file, 'A literal backslash followed by n or t in the text, where a line break or a tab was meant. Write the line break itself.', l.n, t));
 
       // markdown images
       if (/!\[[^\]]*\]\([^)]*\)/.test(l.masked)) add(mk('image', file, 'Markdown images are not allowed; use a :::image block with an asset.', l.n, t));

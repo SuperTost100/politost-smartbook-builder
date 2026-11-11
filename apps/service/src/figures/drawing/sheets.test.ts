@@ -42,6 +42,22 @@ describe('cheat sheets', () => {
     assert.doesNotMatch(text, /wavy/i);
   });
 
+  it('typst: a quantity of time or frequency has its argument after the subscript, and the sheet says so with an example that compiles', async () => {
+    // The acceptance run drew the capacitor voltage as v with the subscript "C(t)": `$v_C(t)$` puts the whole call into the subscript.
+    const width = async (math: string) => {
+      const r = await renderDrawing({ engine: 'typst', source: `#import "@preview/cetz:0.5.2": canvas, draw\n#canvas({ draw.content((0, 0), ${math}) })`, symbols: 'european' });
+      assert.ok(r.ok, r.ok ? '' : r.error);
+      return Number(/viewBox="[-\d.]+ [-\d.]+ ([\d.]+) /.exec(r.svg)![1]);
+    };
+    const broken = await width('$v_C(t)$');
+    for (const right of ['$v_C (t)$', '$v_(C)(t)$']) assert.ok((await width(right)) > broken * 1.1, `${right} sets the argument at full size, outside the subscript`);
+    const sheet = readFileSync(SHEET_FILES.typst, 'utf8');
+    assert.match(sheet, /argument after the subscript, outside it/);
+    const code = blocks('typst').map((b) => b.code).join('\n');
+    assert.match(code, /\$v_C \(t\) = /, 'a compiled example shows the right form');
+    assert.doesNotMatch(code, /_(?:[A-Za-z0-9]|"[^"]*")\(/, 'no example writes the argument against the subscript');
+  });
+
   it('keeps the sheets short enough to cache cheaply', () => {
     assert.ok(readFileSync(SHEET_FILES.typst, 'utf8').split('\n').length <= 130);
     assert.ok(readFileSync(SHEET_FILES.schemdraw, 'utf8').split('\n').length <= 80);

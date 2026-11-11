@@ -19,6 +19,34 @@ function examQuestions(ctx: AppContext, projectId: string): ExamQuestionRef[] {
     .map((r) => ({ id: r.id, examGroup: r.exam_group, examDate: r.exam_date, number: r.number, topicIds: json<string[]>(r.topic_ids, []), statement: r.statement, difficulty: r.difficulty }));
 }
 
+/** A symbol with a subscript: a Latin letter or a LaTeX command, then "_c" or "_{in}", not part of a longer word. */
+const SYMBOL = /(?<![\p{L}\\\d])(\\[A-Za-z]+|[A-Za-z])_(?:\{([A-Za-z0-9]{1,6})\}|([A-Za-z0-9])(?![A-Za-z0-9]))/gu;
+const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉';
+
+/**
+ * The subscripted symbols the statements use ("f_c", "v_{out}", "V_0"), written the way a writer puts them in LaTeX, most
+ * frequent first. A symbol counts once per statement, and "$f_{c}$", "f_c" and a text layer's "R₁" are the same kind of find.
+ * shortcut: a symbol without a subscript ("R", "C") is the standard one of the field and is left out, and so is one whose base is a Greek letter written as a character, upgrade when a paper needs them.
+ */
+export function symbolsIn(texts: string[], max = 12): string[] {
+  const count = new Map<string, number>();
+  for (const text of texts) {
+    const plain = text.replace(/([A-Za-z])([₀-₉]+)/g, (_m, base: string, digits: string) => {
+      const n = [...digits].map((c) => SUBSCRIPT_DIGITS.indexOf(c)).join('');
+      return n.length > 1 ? `${base}_{${n}}` : `${base}_${n}`;
+    });
+    const here = new Set([...plain.matchAll(SYMBOL)].map((m) => `${m[1]}_${m[2] === undefined ? m[3] : m[2].length > 1 ? `{${m[2]}}` : m[2]}`));
+    for (const k of here) count.set(k, (count.get(k) ?? 0) + 1);
+  }
+  return [...count].sort((a, b) => b[1] - a[1]).map(([k]) => k).slice(0, max);
+}
+
+/** The symbols the exam papers use for these topics, from the statements of the authentic exam questions that count. */
+export function examSymbols(ctx: AppContext, projectId: string, topicIds: string[]): string[] {
+  const topics = new Set(topicIds);
+  return symbolsIn(examQuestions(ctx, projectId).filter((q) => q.topicIds.some((id) => topics.has(id))).map((q) => q.statement));
+}
+
 /** Distinct exam sessions in the archive. */
 export const examSessionTotal = (ctx: AppContext, projectId: string) => new Set(examQuestions(ctx, projectId).map((q) => q.examGroup)).size;
 
