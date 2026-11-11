@@ -98,21 +98,12 @@ export interface BuiltFigures {
 const DIAGRAMS: readonly string[] = ['levels', 'orbitals', 'cell', 'periodic'] satisfies DiagramKind[];
 
 const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
-const CAPTION_SYMBOLS: Record<string, string> = {
-  to: '→', rightarrow: '→', leftarrow: '←', cdot: '·', times: '×', infty: '∞', le: '≤', leq: '≤', ge: '≥', geq: '≥', pm: '±', approx: '≈', neq: '≠',
-  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', Delta: 'Δ', theta: 'θ', lambda: 'λ', mu: 'μ', pi: 'π', sigma: 'σ', omega: 'ω', Omega: 'Ω', epsilon: 'ε', varepsilon: 'ε', phi: 'φ', rho: 'ρ', tau: 'τ',
-};
 /**
- * A caption is plain text: no $, no LaTeX commands, no figure number (the builder numbers figures). Known commands become their
- * symbol, \text{x} becomes x, any other command loses its backslash. Underscores and carets are left alone.
+ * The builder numbers figures, so a number the model wrote in front of the caption is removed. Formulas stay as written:
+ * the compiler turns them into plain text (`latexToPlain`), fractions and roots included.
  */
 export function cleanCaption(caption: string): string {
-  return caption
-    .replace(/\\(?:text|mathrm|mathbf|mathit|textbf|textit)\{([^{}]*)\}/g, '$1')
-    .replace(/\\([A-Za-z]+)/g, (_m, name: string) => CAPTION_SYMBOLS[name] ?? name)
-    .replace(/\$/g, '')
-    .replace(/^\s*(?:fig(?:ura|ure)?\.?)\s*\d+(?:\.\d+)*\s*[:.\-–—)]?\s*/i, '')
-    .trim();
+  return caption.replace(/^\s*(?:fig(?:ura|ure)?\.?)\s*\d+(?:\.\d+)*\s*[:.\-–—)]?\s*/i, '').trim();
 }
 const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
 
