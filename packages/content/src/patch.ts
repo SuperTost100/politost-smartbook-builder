@@ -115,6 +115,26 @@ export function lostStructure(before: string, after: string): string | null {
   return null;
 }
 
+const paragraphWords = (s: string | undefined) => (s ?? '').toLowerCase().match(/\p{L}{3,}/gu) ?? [];
+const paragraphsOf = (md: string) => md.split(/\n\s*\n/).map((p) => p.trim()).filter(Boolean);
+
+/**
+ * A rewrite of a whole section sometimes starts or ends with a note about the rewrite ("I fixed the step in ..."), which would
+ * go into the book. True when the first or the last paragraph of `after` has few words in common with the same paragraph of
+ * `before` (a short one must use only words the old section has). A corrected number or formula in that paragraph passes.
+ */
+export function addsCommentary(before: string, after: string): boolean {
+  const old = paragraphsOf(before);
+  const next = paragraphsOf(after);
+  const known = new Set(paragraphWords(before));
+  return [[old[0], next[0]], [old.at(-1), next.at(-1)]].some(([x, y]) => {
+    const words = paragraphWords(y);
+    if (!words.length) return false;
+    const sameParagraph = new Set(paragraphWords(x));
+    return words.length >= 4 ? words.filter((w) => sameParagraph.has(w)).length / words.length < 0.5 : words.some((w) => !known.has(w));
+  });
+}
+
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** The first 60 whitespace-normalised characters of a quote: what issues are matched on. */

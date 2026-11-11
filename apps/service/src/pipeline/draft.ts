@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { addsCommentary, sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -285,8 +285,8 @@ export type SelfCheck = 'ok' | 'corrected' | 'kept' | 'skipped';
 
 /**
  * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
- * parses in the same format, drops no heading, formula key, ::: block or figure of the first draft, and keeps the figure keys
- * of its image blocks. A failed follow-up (a limit, a timeout) or any other answer keeps the first draft; the author loses nothing.
+ * parses in the same format, drops no heading, formula key, ::: block or figure of the first draft, and does not open or close
+ * with a note about the correction (a real run did that). A failed follow-up (a limit, a timeout) or any other answer keeps the first draft; the author loses nothing.
  */
 async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnType<typeof draftParser>): Promise<{ data: DraftAnswer; selfCheck: SelfCheck }> {
   const first = talk.result.data;
@@ -301,7 +301,7 @@ async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnT
   const corrected = parse(sanitizeModelCode(reply));
   if (!corrected.ok) return { data: first, selfCheck: 'kept' };
   const keys = new Set(corrected.data.figures.map((f) => f.key));
-  if (lostStructure(first.markdown, corrected.data.markdown) || first.figures.some((f) => !keys.has(f.key))) return { data: first, selfCheck: 'kept' };
+  if (lostStructure(first.markdown, corrected.data.markdown) || addsCommentary(first.markdown, corrected.data.markdown) || first.figures.some((f) => !keys.has(f.key))) return { data: first, selfCheck: 'kept' };
   return { data: corrected.data, selfCheck: 'corrected' };
 }
 

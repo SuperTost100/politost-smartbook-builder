@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, dropReferences, lostStructure, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { addsCommentary, applyGuardedChanges, dropReferences, lostStructure, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -134,4 +134,14 @@ test('a rewrite of a whole section keeps its headings, formula keys, ::: blocks 
   assert.match(lostStructure(before, before.replace('assets/rc.svg', 'assets/altro.svg'))!, /image "assets\/rc.svg"/);
   assert.match(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$`)!, /fence open/);
   assert.equal(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$\n:::`), null, 'a rewrite may add');
+});
+
+test('a rewrite that opens or closes with a note about itself is told from one that corrects a paragraph', () => {
+  const before = 'Il circuito è il filtro RC passa-basso, il più semplice che lascia passare le basse frequenze.\n\nCon $R = 2$ si ha $V = 5$.\n\nIl risultato finale vale $5\\,\\mathrm{V}$ ai capi del resistore.';
+  assert.equal(addsCommentary(before, before.replace('$V = 5$', '$V = 6$').replace('vale $5', 'vale $6')), false, 'a corrected result');
+  assert.equal(addsCommentary(before, before.replace('Il circuito è il filtro RC passa-basso,', 'Il circuito, ossia il filtro RC passa-basso,')), false, 'a reworded opening');
+  assert.equal(addsCommentary(before, `Ho corretto un passaggio algebrico errato e una forma grammaticale. Il resto torna.\n\n${before}`), true);
+  assert.equal(addsCommentary(before, `${before}\n\nNota: ho cambiato il risultato finale da 5 a 6 volt nel secondo paragrafo.`), true);
+  assert.equal(addsCommentary(before, `Ecco la versione corretta:\n\n${before}`), true, 'a short opening with words the section does not have');
+  assert.equal(addsCommentary('$$a = b$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$', '$$a = b + 1$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$'), false, 'a formula at either end has no words to compare');
 });

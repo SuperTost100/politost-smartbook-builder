@@ -9,7 +9,7 @@ import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf, writ
 import { Queue, TaskError, type TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
 import { evidenceText, sectionDraft } from './draft.ts';
-import { draftPrompt } from './prompts.ts';
+import { draftPrompt, selfCheckPrompt } from './prompts.ts';
 import { generateSpecs } from './runs.ts';
 
 let fake: FakeFunnel;
@@ -274,6 +274,18 @@ describe('the writer checks its own draft', () => {
       assert.equal(r.selfCheck, 'kept');
       assert.equal(current('s1'), first);
     }
+  });
+
+  test('a correction that opens with a note about itself is not used', async () => {
+    seed();
+    fake.next(live('w1', written({ markdown: first })), written({ markdown: `Ho corretto un passaggio e una forma grammaticale. Il resto torna.\n\n${fixed}` }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'kept');
+    assert.equal(current('s1'), first);
+  });
+
+  test('the follow-up says that its answer goes into the book as it is', () => {
+    assert.match(selfCheckPrompt(), /do not say what you checked or changed: no sentence before the section or after it/);
   });
 
   test('a correction that does not parse, or a failed follow-up, keeps the draft and the task still succeeds', async () => {
