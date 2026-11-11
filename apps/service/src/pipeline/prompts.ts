@@ -360,14 +360,15 @@ export function draftPrompt(p: DraftPromptInput) {
   const lang = languageName(p.language);
   const length = p.section.depth === 'deep' ? '1200-2200' : p.section.depth === 'brief' ? '400-800' : '800-1500';
   return {
-    system: `You write one section of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. You explain clearly and rigorously, state definitions and theorems with all hypotheses, give worked examples with every step, and point out the mistakes students usually make. You rely on the evidence provided; you never invent results the evidence does not support.
+    system: `You write one section of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. You explain clearly and rigorously and state definitions and theorems with all hypotheses. Where the section teaches a method or a computation, you work an example with every step and point out the mistake students usually make there. You rely on the evidence provided; you never invent results the evidence does not support.
 
 ${formatRules(p.language)}
 
 ${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}
 
 INSTRUCTIONS
-- Cover the objectives in a logical order: motivation, definitions, results with hypotheses, at least one fully worked example, typical mistakes. Use ### subsections for the planned subsections.
+- Cover the objectives in a logical order: motivation, definitions, results with hypotheses. When the section teaches a method or a computation, add at least one fully worked example and a typical-mistake box (${p.language === 'it' ? '"Errore tipico"' : '"Common mistake"'}); when it does not, leave both out. Use ### subsections for the planned subsections.
+- Never add sentences to reach a length: say what the objectives need and stop.
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `

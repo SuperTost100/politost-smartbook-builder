@@ -9,6 +9,7 @@ import { FakeFunnel, makeCtx, seedProject, usageOf, written } from '../llm/testk
 import { Queue, TaskError, type TaskContext } from '../queue/queue.ts';
 import type { AppContext } from '../context.ts';
 import { sectionDraft } from './draft.ts';
+import { draftPrompt } from './prompts.ts';
 import { generateSpecs } from './runs.ts';
 
 let fake: FakeFunnel;
@@ -306,5 +307,25 @@ describe('the writer checks its own draft', () => {
     const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
     assert.equal(r.selfCheck, 'skipped');
     assert.equal(fake.calls.length, 1);
+  });
+});
+
+describe('no padding, and examples only where they teach', () => {
+  const input = (depth: string, language = 'it') => ({
+    language, bookTitle: 'T', audience: '', notation: '', chapterTitle: 'C', chapterPlan: '', section: { id: 's', title: 'S', objectives: ['o'], depth, subsections: '' },
+    topics: '', earlier: '', knownFormulas: '', sectionIds: '', evidence: '', pages: '', summary: '', figures: null, outside: false,
+  });
+
+  test('the worked example and the typical-mistake box are for sections that teach a method, and padding is forbidden once', () => {
+    const p = draftPrompt(input('standard'));
+    const all = `${p.system}\n${p.prompt}`;
+    assert.match(p.system, /When the section teaches a method or a computation, add at least one fully worked example and a typical-mistake box \("Errore tipico"\); when it does not, leave both out/);
+    assert.match(draftPrompt(input('standard', 'en')).system, /typical-mistake box \("Common mistake"\)/);
+    assert.doesNotMatch(all, /at least one fully worked example, typical mistakes|give worked examples with every step, and point out the mistakes students usually make/);
+    assert.equal(all.match(/Never add sentences to reach a length/g)?.length, 1);
+  });
+
+  test('the length ranges are the same as before', () => {
+    for (const [depth, range] of [['brief', '400-800'], ['standard', '800-1500'], ['deep', '1200-2200']]) assert.match(draftPrompt(input(depth)).prompt, new RegExp(`Depth: ${depth} \\(about ${range} words\\)`));
   });
 });
