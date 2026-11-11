@@ -5,6 +5,7 @@ import { join } from 'node:path';
 import type { Capabilities, LiveSessionInfo, ModelInfo, ProcessOptions, ProviderOverview, RateLimits, RunInput, RunResult } from 'cli-funnel';
 import type { Config } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
+import { META_SEPARATOR } from './body.ts';
 import type { FunnelLike } from './funnel.ts';
 
 // The tests never touch the owner's logins: the private homes link to these stand-ins instead.
@@ -23,8 +24,9 @@ export function makeCtx(): { ctx: AppContext; cleanup: () => void } {
   return { ctx, cleanup: () => { ctx.db.close(); rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
+/** A book with the defaults, except that its writer does not check its own drafts: a test that wants that turn scripts it and turns the option on. */
 export function seedProject(ctx: AppContext, id = 'p1', title = 'Analisi 1') {
-  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', 'now', 'now')`, id, id, title);
+  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, options, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', '{"selfCheck":false}', 'now', 'now')`, id, id, title);
 }
 
 export function seedResource(ctx: AppContext, o: { id: string; projectId?: string; kind?: string; filename?: string; sha256?: string; path?: string; role?: string; status?: string; included?: number }) {
@@ -129,3 +131,12 @@ export function patchText(a: { changes: { block: number; text: string }[]; figur
 }
 
 export const patchAnswer = (a: Parameters<typeof patchText>[0]) => () => ({ text: patchText(a), usage: usageOf(10, 10) });
+
+/** A section answer in the writer's format: the text, a separator line, then the small JSON. */
+export const written = (o: { markdown: string; figures?: unknown[]; noFigureReason?: string | null; summary?: string }) => () => ({
+  text: `${o.markdown}\n${META_SEPARATOR}\n${JSON.stringify({ figures: o.figures ?? [], noFigureReason: o.noFigureReason ?? null, summary: o.summary ?? 'riassunto' })}`,
+  usage: usageOf(10, 10),
+});
+
+/** A lab answer in the same format: the code, a separator line, then id, title, description and expectedOutput. */
+export const wroteCode = ({ code, ...meta }: { code: string; id: string; title: string; description: string; expectedOutput: string }) => () => ({ text: `${code}\n${META_SEPARATOR}\n${JSON.stringify(meta)}`, usage: usageOf(10, 10) });

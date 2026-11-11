@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { sanitizeModelCode, sanitizeModelText, sanitizeModelValue } from './sanitize.ts';
+import { sanitizeModelCode, sanitizeModelMarkdown, sanitizeModelText, sanitizeModelValue } from './sanitize.ts';
 
 test('a control character before a letter replaces the eaten backslash', () => {
   assert.equal(sanitizeModelText('$+\u001finfty$'), '$+\\infty$');
@@ -87,4 +87,20 @@ test('rows of an array or an aligned block keep their line breaks, also when a r
   assert.equal(sanitizeModelText(aligned), aligned);
   // An eaten \n right after a space is still restored.
   assert.equal(sanitizeModelText('$$a \\\\ \nabla f$$'), '$$a \\\\ \\nabla f$$');
+});
+
+test('Markdown that never was a JSON string keeps its line breaks and its backslashes', () => {
+  // The first row after \begin{aligned} starts with i_1, and a line of a display block starts with u_1: neither is an eaten \n.
+  const aligned = '$$\n\\begin{aligned}\ni_1 &= \\frac{V}{R} \\\\\ni_2 &= 0\n\\end{aligned}\n$$';
+  assert.equal(sanitizeModelMarkdown(aligned), aligned);
+  assert.equal(sanitizeModelText(aligned), aligned.replace('\\begin{aligned}\n', '\\begin{aligned}\\n'), 'the guess for a JSON string reads that row as \\ni_1');
+  const lines = '$$\na = b\nu_1 = c\n$$';
+  assert.equal(sanitizeModelMarkdown(lines), lines);
+  const commands = 'Con $\\nu$, $a \\neq b$, $\\theta$, $\\beta$ e $\\tau$.\tFine\n\\nabla f';
+  assert.equal(sanitizeModelMarkdown(commands), commands);
+});
+
+test('Markdown still loses terminal codes, tool markup and control bytes, and gets the KaTeX names it lacks rewritten', () => {
+  assert.equal(sanitizeModelMarkdown('Testo\u001b[1;31m rosso\u001b[0m\u0007.</markdown>'), 'Testo rosso.');
+  assert.equal(sanitizeModelMarkdown('$\\cotan x + \\sen x$, $x\\in\\Q$'), '$\\operatorname{cotan} x + \\operatorname{sen} x$, $x\\in\\mathbb{Q}$');
 });

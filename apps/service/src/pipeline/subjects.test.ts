@@ -6,7 +6,7 @@ import { bookOptionsSchema, FIGURE_KINDS, inferSubjectArea, SUBJECT_AREAS, SUBJE
 import { figureSchema, figureSchemaFor } from '../figures/materialize.ts';
 import { toProviderSchema } from '../llm/schema.ts';
 import { figurePlaces } from './figureCheck.ts';
-import { draftPrompt, draftSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchParser, patchPrompt, reviewPrompt, verifyPrompt } from './prompts.ts';
+import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, figureSetupOf, outlinePrompt, patchParser, patchPrompt, reviewPrompt, verifyPrompt } from './prompts.ts';
 
 const book = (subject: string, title: string, options: Record<string, unknown> = {}) => ({ subject, title, options: bookOptionsSchema.parse(options) });
 const setupOf = (area: SubjectArea, o: { photos?: boolean; policy?: 'helpful' | 'generous' } = {}) =>
@@ -123,7 +123,7 @@ describe('figure schema per subject', () => {
 
   test('the draft carries the smaller schema; a fix reads figures with the same one, and a fix without a figure problem reads none', () => {
     const maths = setupOf('mathematics');
-    assert.doesNotMatch(JSON.stringify(toProviderSchema(draftSchemaFor(maths))), /smiles/);
+    assert.doesNotMatch(JSON.stringify(toProviderSchema(draftMetaSchemaFor(maths))), /smiles/);
     const plot = { key: 'p', kind: 'plot', caption: 'c', alt: 'a', plot: { xRange: [0, 1], yRange: [0, 1], functions: [{ expr: 'x' }] } };
     const answer = `@@@ block 0\nTesto.\n@@@ figures\n${JSON.stringify([plot])}`;
     const read = patchParser(maths, { blocks: 1, issues: 1 })(answer);
@@ -160,8 +160,8 @@ describe('prompts that name the subject', () => {
       language: 'it', bookTitle: 'T', audience: '', notation: '', chapterTitle: 'C', chapterPlan: '', section: { id: 's', title: 'S', objectives: [], depth: 'standard', subsections: '' },
       topics: '', earlier: '', knownFormulas: '', sectionIds: '', evidence: '', pages: '', summary: '', figures: null, outside: false,
     });
-    assert.match(p.prompt, /Do not add figures/);
-    assert.doesNotMatch(p.prompt, /Kinds \(/);
+    assert.match(p.system, /Do not add figures/);
+    assert.doesNotMatch(p.system, /Kinds \(/);
   });
 
   test('the reviewer does not ask for missing figures and takes its excluded cases from the subject', () => {

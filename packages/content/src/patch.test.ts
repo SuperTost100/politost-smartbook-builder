@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, dropReferences, guardRules, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { addsCommentary, applyGuardedChanges, dropReferences, guardRules, lostStructure, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -175,4 +175,44 @@ test('a malformed patch answer is refused with a problem the model can act on', 
   assert.match(problem('@@@ figures\n[not json'), /not valid JSON/);
   assert.match(problem('@@@ figures\n{"a":1}'), /JSON array/);
   assert.match(problem('@@@ banana 1\nA'), /not a valid part header/);
+});
+
+test('a rewrite of a whole section keeps its headings, formula keys, ::: blocks and images', () => {
+  const formula = ':::formula{key="ohm" label="Legge di Ohm"}\n$$V = R i$$\n:::';
+  const image = ':::image{src="assets/rc.svg" alt="a" caption="c"}\n:::';
+  const note = ':::note\nAttenzione.\n:::';
+  const before = `### Il circuito\n\nTesto.\n\n${formula}\n\n${note}\n\n${image}\n\nFine.`;
+  assert.equal(lostStructure(before, before.replace('Testo.', 'Testo corretto.').replace('V = R i', 'V = R\\,i')), null);
+  assert.match(lostStructure(before, before.replace('### Il circuito', '### Il circuito RC'))!, /heading "### Il circuito"/);
+  assert.match(lostStructure(before, before.replace('key="ohm"', 'key="legge-ohm"'))!, /formula "ohm"/);
+  assert.match(lostStructure(before, before.replace(formula, '$$V = R i$$'))!, /formula "ohm"/);
+  assert.match(lostStructure(before, before.replace(note, 'Attenzione.'))!, /:::note block/);
+  assert.match(lostStructure(before, before.replace(image, ''))!, /:::image block/);
+  assert.match(lostStructure(before, before.replace('assets/rc.svg', 'assets/altro.svg'))!, /image "assets\/rc.svg"/);
+  assert.match(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$`)!, /fence open/);
+  assert.equal(lostStructure(before, `${before}\n\n:::formula{key="nuova" label="N"}\n$$a$$\n:::`), null, 'a rewrite may add');
+});
+
+test('a rewrite that opens or closes with a note about itself is told from one that corrects a paragraph', () => {
+  const before = 'Il circuito è il filtro RC passa-basso, il più semplice che lascia passare le basse frequenze.\n\nCon $R = 2$ si ha $V = 5$.\n\nIl risultato finale vale $5\\,\\mathrm{V}$ ai capi del resistore.';
+  assert.equal(addsCommentary(before, before.replace('$V = 5$', '$V = 6$').replace('vale $5', 'vale $6')), false, 'a corrected result');
+  assert.equal(addsCommentary(before, before.replace('Il circuito è il filtro RC passa-basso,', 'Il circuito, ossia il filtro RC passa-basso,')), false, 'a reworded opening');
+  assert.equal(addsCommentary(before, `Ho corretto un passaggio algebrico errato e una forma grammaticale. Il resto torna.\n\n${before}`), true);
+  assert.equal(addsCommentary(before, `${before}\n\nNota: ho cambiato il risultato finale da 5 a 6 volt nel secondo paragrafo.`), true);
+  assert.equal(addsCommentary(before, `Ecco la versione corretta:\n\n${before}`), true, 'a short opening with words the section does not have');
+  assert.equal(addsCommentary('$$a = b$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$', '$$a = b + 1$$\n\nTesto del paragrafo centrale della sezione.\n\n$$c = d$$'), false, 'a formula at either end has no words to compare');
+});
+
+test('a corrected formula at either end of a section is not read as a note about the correction', () => {
+  const text = 'Il circuito è il filtro RC passa-basso, il più semplice che lascia passare le basse frequenze.';
+  const wrong = '$$\\frac{d}{dx}\\sin x = \\sin x$$';
+  const right = '$$\\frac{d}{dx}\\sin x = \\cos x$$';
+  assert.equal(addsCommentary(`${wrong}\n\n${text}\n\n${wrong}`, `${right}\n\n${text}\n\n${right}`), false, 'display formulas at both ends');
+  assert.equal(addsCommentary(`${wrong}\n\n${text}`, `${right}\n\n${text}`), false, 'a display formula first');
+  const block = (f: string) => `:::formula{key="derivata" label="Derivata"}\n${f}\n:::`;
+  assert.equal(addsCommentary(`${text}\n\n${block(wrong)}`, `${text}\n\n${block(right)}`), false, 'a formula block last');
+  const inline = 'La derivata vale $\\frac{d}{dx}\\sin x = \\sin x$ per ogni valore reale della variabile indipendente.';
+  assert.equal(addsCommentary(inline, inline.replace('= \\sin x', '= \\cos x')), false, 'an inline formula inside a long paragraph');
+  assert.equal(addsCommentary(`${text}\n\n${wrong}`, `${text}\n\n${wrong}\n\nNota: ho cambiato la derivata del seno nella formula precedente.`), true, 'prose after a formula is still a note');
+  assert.equal(addsCommentary(`${wrong}\n\n${text}`, `Ho corretto la derivata del seno nella formula.\n\n${right}\n\n${text}`), true, 'prose before a formula is still a note');
 });
