@@ -53,6 +53,11 @@ function locateFiles(ctx: AppContext, projectId: string, files: string[]): Recor
   return out;
 }
 
+/** The report with the section, introduction or question each finding's file id stands for, so a screen can show titles. Not stored: titles change. */
+function withFiles(ctx: AppContext, projectId: string, report: ValidationReport): ValidationReport {
+  return { ...report, files: locateFiles(ctx, projectId, [...report.errors, ...report.warnings, ...report.lint].map((f) => f.file)) };
+}
+
 /** How to fix validator findings whose message only names the rule. */
 const FIX_HINTS: Record<string, string> = {
   'exercise-fence': 'Exercises cannot hold blocks such as figures. Describe what the block showed in one or two sentences of text and keep the sentence that introduced it consistent with that, or remove both.',
@@ -93,8 +98,7 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/api/projects/:id/validate', async (req): Promise<ValidationReport> => {
     const projectId = projectOf(ctx, req);
-    const report = buildReport(deps.compileBook(loadBookInput(ctx, projectId)));
-    return { ...report, files: locateFiles(ctx, projectId, [...report.errors, ...report.warnings, ...report.lint].map((f) => f.file)) };
+    return withFiles(ctx, projectId, buildReport(deps.compileBook(loadBookInput(ctx, projectId))));
   });
 
   // Errors and warnings of the validation, sent to the same AI fix as "Fix selected issues": each finding becomes an open
@@ -178,7 +182,7 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
     const row = insertExport(ctx, { projectId, filename, path, sha256, size: bytes.byteLength, approved, report });
     if (approved) setStage(ctx, projectId, 'export');
     ctx.events.emit('export.ready', { exportId: row.id, filename, approved }, { projectId });
-    return row;
+    return { ...row, report: withFiles(ctx, projectId, row.report) };
   });
 
   app.get('/api/exports/:exportId/download', async (req, reply) => {

@@ -456,6 +456,21 @@ describe('exports', () => {
     }
   });
 
+  it('names the files in the report of an export too, so the Export screen keeps the section titles after a draft export', async () => {
+    const { projectId } = await projectWithOutline(t, 'exports-files');
+    const fake = installFakes({ compileBook: () => cleanBook([{ rule: 'unknown-formula', severity: 'blocker', message: 'Formula non trovata', file: 's1' }]) });
+    try {
+      const validated = (await t.req('POST', `/api/projects/${projectId}/validate`)).body;
+      const draft = await t.req('POST', `/api/projects/${projectId}/exports`, { approved: false });
+      assert.equal(draft.status, 200);
+      assert.deepEqual(draft.body.report.files, validated.files);
+      assert.deepEqual(draft.body.report.files.s1, { label: 'Definizione', target: { nodeId: 's1' } });
+    } finally {
+      fake.restore();
+      fakes = installFakes();
+    }
+  });
+
   it('names the files in the report and sends their errors and warnings to the AI fix', async () => {
     const { projectId } = await projectWithOutline(t, 'validate-fix');
     const qid = newId();
