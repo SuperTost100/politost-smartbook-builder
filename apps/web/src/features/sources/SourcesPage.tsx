@@ -32,7 +32,8 @@ const STATUS: Record<Resource['status'], { label: string; tone: string }> = {
 function destinationText(mode: 'notebooklm' | 'local' | undefined) {
   if (mode === 'notebooklm') return 'Selected material is sent to the configured AI providers and NotebookLM.';
   if (mode === 'local') return 'Selected material is sent to the configured AI providers. Evidence is searched on this computer, so nothing goes to NotebookLM.';
-  return 'Selected material is sent to the configured AI providers.';
+  // Settings still loading or failed: the author may upload before the setting is known, so the notice leaves NotebookLM open.
+  return 'Selected material is sent to the configured AI providers, and to NotebookLM if evidence is read there. The evidence setting is not known yet.';
 }
 
 /** What the toast says after a delete: how many questions read from the source went, and how many stayed as the author's own. */
@@ -187,7 +188,7 @@ export default function SourcesPage() {
       <ConfirmDialog
         open={!!toDelete}
         title="Delete source"
-        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.{toDelete && toDelete.role !== 'theory' ? ' Questions read from it are removed too, except those you edited or that a chapter already uses: they stay as your own.' : ''}</>}
+        message={<>Delete <strong className="ui-wrap">{toDelete?.filename}</strong>? Evidence drawn from it will no longer be available in the book.{' Any questions read from it are removed too, except those you edited or that a chapter already uses: they stay as your own.'}</>}
         confirmLabel="Delete source"
         danger
         busy={remove.isPending}

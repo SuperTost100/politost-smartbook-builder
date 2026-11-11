@@ -297,12 +297,21 @@ describe('deleting a source takes out what was read from it', () => {
     assert.equal(count('v2'), 4);
   });
 
-  test('a question you edited, or one already in a chapter, stays as your own and is not read again from a copy of the file', async () => {
+  test('a question a chapter was given but that was not read yet goes with its file, because nothing could read it afterwards', async () => {
+    resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
+    await prepare('v1');
+    const [assigned] = questionRows('v1');
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id = ?`, assigned.id);
+    assert.deepEqual(deleteResource(ctx, 'v1'), { removedQuestions: 4, keptQuestions: 0 });
+    assert.equal(count('v1'), 0);
+  });
+
+  test('a question you edited, or one already read into a chapter, stays as your own and is not read again from a copy of the file', async () => {
     resource('v1', 'exams', EXAM_FILE, { filename: 'appelli.pdf' });
     await prepare('v1');
     const [edited, inChapter] = questionRows('v1');
     ctx.db.run(`UPDATE questions SET edited_at = ?, statement = 'Testo corretto a mano.' WHERE id = ?`, now(), edited.id);
-    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id = ?`, inChapter.id);
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1', imported_at = ? WHERE id = ?`, now(), inChapter.id);
     assert.deepEqual(deleteResource(ctx, 'v1'), { removedQuestions: 2, keptQuestions: 2 });
     const kept = ctx.db.all<Record<string, any>>('SELECT id, resource_id, page_from, page_to, statement, exam_group, chapter_id FROM questions WHERE project_id = ? ORDER BY rowid', P);
     assert.deepEqual(kept.map((k) => [k.id, k.resource_id, k.page_from, k.page_to]), [[edited.id, null, null, null], [inChapter.id, null, null, null]]);
@@ -370,7 +379,7 @@ describe('API', () => {
     const projectId = await seed('exams');
     const insert = (id: string, o: Record<string, unknown> = {}) => t.ctx.db.insert('questions', { id, project_id: projectId, kind: 'exam', origin: 'authentic', resource_id: 'r-exams', page_from: 0, page_to: 0, exam_group: 'Appello', exam_date: '2024-02-12', number: id, statement: 'Testo.', hint: '', solution: '', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(), ...o });
     insert('q1');
-    insert('q2', { chapter_id: 'c1' });
+    insert('q2', { chapter_id: 'c1', imported_at: now() });
     const res = await t.req('DELETE', '/api/resources/r-exams');
     assert.deepEqual(res.body, { ok: true, removedQuestions: 1, keptQuestions: 1 });
     assert.deepEqual(t.ctx.db.all<{ id: string; resource_id: string | null }>('SELECT id, resource_id FROM questions').map((q) => [q.id, q.resource_id]), [['q2', null]]);

@@ -425,6 +425,10 @@ describe('the writer gets the symbols the exam papers use for the section\'s top
     ]), ['f_c', 'v_C', 'V_0', 'R_1', '\\omega_c', 't_{90}']);
     assert.deepEqual(symbolsIn([]), []);
   });
+
+  test('symbolsIn: a subscript of several Unicode digits is the same symbol as its LaTeX form', () => {
+    assert.deepEqual(symbolsIn(['Il resistore R₁₀ = 3 kΩ e $R_{10}$.', 'Anche R₁₀ e V₀.']), ['R_{10}', 'V_0']);
+  });
 });
 
 describe('the writer gets page text only where the quotes are not enough', () => {

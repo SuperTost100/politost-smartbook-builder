@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import { buildAiSplit, summarizeSplit } from '../pipeline/examSplit.ts';
 import { extractResource, segmentQuestions, splitQuestions, storeResource } from './index.ts';
 import { splitMarkdown } from './markdown.ts';
-import { findDate, isSolutionMarker, segmentExams, splitExams } from './segment.ts';
+import { findDate, isSolutionMarker, plainLines, segmentExams, splitExams } from './segment.ts';
 import { makeCtx } from './testkit.ts';
 import { seedPage, seedResource } from '../llm/testkit.ts';
 
@@ -332,4 +332,28 @@ test('a dated session heading at the top of a new page starts a new session, how
     ['Appello del 5 luglio 2024', 'Esercizio 1', 'Due.'],
   ));
   assert.deepEqual(summary(rows), ['Appello del 12 febbraio 2024 #1 2024-02-12 p0-0', 'Appello del 5 luglio 2024 #1 2024-07-05 p1-1']);
+});
+
+// ---------- two papers on one day ----------
+
+const TURN_A = ['Esame del 12 febbraio 2024 - Turno A', 'Problema 1 (12 punti)', 'Un resistore R = 4,7 kΩ è collegato a un generatore V₀ = 12 V. Calcolare la corrente.'];
+const TURN_B = ['Esame del 12 febbraio 2024 - Turno B', 'Problema 1 (12 punti)', 'Un condensatore C = 1 µF è carico alla tensione V₀ = 9 V. Calcolare la carica.'];
+
+test('solutions printed after two papers of one day go to the turn their heading names', () => {
+  const rows = segmentExams('r', pages([...TURN_A, ...TURN_B, 'Soluzioni (Esame del 12 febbraio 2024 - Turno A)', 'Problema 1.', 'I = V/R = 2,55 mA.', 'Soluzioni (Esame del 12 febbraio 2024 - Turno B)', 'Problema 1.', 'Q = CV = 9 µC.']));
+  assert.equal(rows.length, 2);
+  assert.match(rows[0].solution, /2,55 mA/);
+  assert.match(rows[1].solution, /9 µC/);
+});
+
+test('a solutions heading that gives only the date does not pick one of two papers of that day', () => {
+  const rows = segmentExams('r', pages([...TURN_A, ...TURN_B, 'Soluzioni (Esame del 12 febbraio 2024)', 'Problema 1.', 'Q = CV = 9 µC.']));
+  assert.equal(rows[0].solution, '');
+  assert.match(rows[1].solution, /9 µC/);
+});
+
+test('plainLines: a line of absolute values stays whole, the rows of a table with a separator line give one line per cell', () => {
+  assert.deepEqual(plainLines('Calcolare\n| x | + | y |\nper x = 1.'), ['Calcolare', '| x | + | y |', 'per x = 1.']);
+  assert.deepEqual(plainLines('| Cognome | Mario |\n|---|---|\n| Data | 12/02/2024 |'), ['Cognome', 'Mario', 'Data', '12/02/2024']);
+  assert.deepEqual(plainLines('| x | + | y |\n\n| a | b |\n| :-- | --: |\n| c | d |'), ['| x | + | y |', 'a', 'b', 'c', 'd']);
 });

@@ -372,6 +372,13 @@ test.describe('Sources: the notice follows the evidence setting', () => {
     await page.goto('/books/p1/sources');
     await expect(page.locator('.so-notice')).toHaveText('Selected material is sent to the configured AI providers and NotebookLM.');
   });
+
+  test('while the settings are not known the notice does not rule NotebookLM out', async ({ page }) => {
+    await mockApi(page);
+    await page.route('**/api/settings', (route) => route.fulfill({ status: 500, contentType: 'application/json', body: '{"error":"down"}' }));
+    await page.goto('/books/p1/sources');
+    await expect(page.locator('.so-notice')).toHaveText('Selected material is sent to the configured AI providers, and to NotebookLM if evidence is read there. The evidence setting is not known yet.');
+  });
 });
 
 test.describe('Run panel: warnings', () => {

@@ -114,6 +114,9 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     'This result is standard and not covered in the notes.',
     'The provided material does not state the value of the constant.',
     'As the supplied notes say, the time constant is RC.',
+    "The result isn't covered in the notes.",
+    "This value wasn't mentioned in the provided material.",
+    'The formula does not appear in the course notes, so it is only stated.',
   ]) {
     const f = find(`Testo.\n\n${c}`, 'meta-leak');
     assert.ok(f, c);
@@ -128,6 +131,15 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     'La corrente è riportata nella figura e presente nel ramo centrale.',
     'The notes of a scale follow a geometric progression in frequency.',
     'An ideal source supplies a fixed voltage.',
+    // Electrical engineering: the sources are circuit elements, not the author's material.
+    'La potenza fornita dalle fonti di tensione è $P$.',
+    'La corrente fornita dalle sorgenti indipendenti è $I$.',
+    'La tensione presente ai capi dei generatori è $V$.',
+    'La potenza contenuta nelle fonti di alimentazione a disposizione è $P$.',
+    'La corrente riportata dai generatori ideali dalle fonti di corrente è costante.',
+    'Il campo elettrico non è presente nel materiale conduttore.',
+    'The power delivered by the voltage sources is $P$.',
+    "The ripple isn't included in the sources of the supply.",
   ]) assert.equal(find(`Testo.\n\n${c}`, 'meta-leak'), undefined, c);
 });
 

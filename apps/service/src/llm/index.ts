@@ -209,7 +209,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
       // A call that waited for its slot may find that another call reported the provider's limit meanwhile, and a fallback may be on the provider that just did.
       if (!isReady(route)) {
         if (candidates.slice(i + 1).some(isReady)) continue;
-        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait([route]);
+        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait(candidates);
       }
       return await attemptRoute(ctx, funnel, opts, route, { calls, fallback: route === fallback });
     } catch (err) {
@@ -414,6 +414,9 @@ const errorKind = (f: Failure) => (f.timedOut ? 'timeout' : f.truncated ? 'trunc
 
 /** One turn. With `sessionId` it continues that conversation, and `images` are the ones that turn adds. */
 async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta, turn: { prompt: string; sessionId?: string; images?: Buffer[] }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+  // Every turn passes here (the first, a repair, a follow-up), so none reaches a provider that reported its limit before its reset.
+  const cooling = coolingFor(route.provider);
+  if (cooling > 0) throw new RouteFailure({ kind: 'quota', message: 'The provider reported its usage limit earlier, so no call was made.', retryAfterMs: cooling, reported: true });
   const scratch = opts.web ? webFolder(ctx) : paths.scratch(ctx.config);
   mkdirSync(scratch, { recursive: true });
   const timeoutMs = callTimeoutMs(opts.role, route);

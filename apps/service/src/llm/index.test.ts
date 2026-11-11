@@ -236,6 +236,47 @@ describe('error mapping and fallback', () => {
       for (const r of results) assert.ok(waits(r) > 0);
     });
 
+    const limit = (retryAfterMs: number) => ({ kind: 'rate' as const, retryAfterMs, detail: 'Window is full.' });
+
+    test('a repair turn is not sent to a provider whose answer reported its limit, and the fallback answers instead', async () => {
+      useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
+      fake.next(() => ({ structured: { kind: 'zzz' }, text: '{"kind":"zzz"}', limit: limit(3600_000) }), () => ({ structured: { kind: 'b' }, text: '{"kind":"b"}' }));
+      const out = await runRole(kit.ctx, { ...base, role: 'bulk', schema });
+      assert.equal(out.data.kind, 'b');
+      assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['codex', 'claude']);
+    });
+
+    test('a follow-up makes no call while its provider is cooling down, and says when the limit resets', async () => {
+      useRoutes('bulk', { provider: 'codex', model: 'm' });
+      fake.next(() => ({ text: 'one' }), () => ({ text: 'two', limit: limit(3600_000) }));
+      const talk = await openRole(kit.ctx, { ...base, role: 'bulk' });
+      await runRole(kit.ctx, { ...base, role: 'bulk' });
+      const e = await outcome(talk.send('go on'));
+      assert.ok(e instanceof FollowUpError, String(e));
+      assert.equal(e.kind, 'quota');
+      assert.ok(e.retryAfterMs! > 3000_000 && e.retryAfterMs! <= 3600_000);
+      assert.equal(fake.calls.length, 2, 'no call for the follow-up');
+      talk.close();
+    });
+
+    test('a task that waited for a slot while every route reached its limit waits for the earliest reset', async () => {
+      setRoutes({ bulk: { primary: route('codex'), fallback: route('claude') }, vision: { primary: route('claude') } }, { codex: 1 });
+      let release!: () => void;
+      const held = new Promise<void>((r) => { release = r; });
+      fake.next(async () => { await held; return { text: 'a', limit: limit(2 * 3600_000) }; }, () => ({ text: 'd', limit: limit(600_000) }));
+      const tick = () => new Promise((r) => setTimeout(r, 30));
+      const a = runRole(kit.ctx, { ...base, role: 'bulk' });
+      await tick();
+      const b = outcome(runRole(kit.ctx, { ...base, role: 'bulk' }));
+      await tick();
+      await runRole(kit.ctx, { ...base, role: 'vision' });
+      release();
+      await a;
+      const wait = waits(await b);
+      assert.ok(wait > 0 && wait <= 600_000, `waits ${wait} ms, for the Claude reset and not the Codex one`);
+      assert.equal(fake.calls.length, 2, 'the waiting task made no call');
+    });
+
     test('a provider with a limit does not stop a role from using its fallback on another provider', async () => {
       useRoutes('bulk', { provider: 'codex', model: 'm' }, { provider: 'claude', model: 'm' });
       fake.next(full, () => ({ text: 'one' }), () => ({ text: 'two' }));
@@ -833,7 +874,16 @@ describe('a conversation that continues after the first answer', () => {
     });
     assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'claude'], 'no fallback for a follow-up');
     assert.equal(talk.result.text, 'draft');
-    assert.equal((await talk.send('once more')).text, 'fine');
+    // The provider is cooling down (a wait read from a message counts at most 10 minutes), so the next follow-up makes no call until then.
+    await assert.rejects(talk.send('once more'), (e: unknown) => e instanceof FollowUpError && e.kind === 'quota');
+    assert.equal(fake.calls.length, 2);
+    const realNow = Date.now;
+    Date.now = () => realNow() + 10 * 60_000 + 1000;
+    try {
+      assert.equal((await talk.send('once more')).text, 'fine');
+    } finally {
+      Date.now = realNow;
+    }
     talk.close();
   });
 

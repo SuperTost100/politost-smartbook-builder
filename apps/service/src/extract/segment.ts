@@ -27,20 +27,29 @@ const plainCell = (s: string) => EMPHASIS.reduce((t, re) => t.replace(re, '$1'),
  * The lines of a page as plain text, so a source written in Markdown reads like the PDF of the same paper: "## Esercizio 1" and
  * "**Problema 1** (12 punti)" lose their marks, a row of a pipe table gives one line per cell (as a PDF text layer does), and a
  * separator row, an empty row and a rule ("---") give none. Text that is not Markdown comes back unchanged apart from trimming.
- * shortcut: a table row needs a space inside its outer pipes ("| a | b |"), because "|x| + |y|" is also a line of math. Upgrade when a real file writes "|a|b|".
+ * A line of pipes is a table row only inside a table, which is a run of such lines that holds a separator row ("|---|---|"), so a
+ * line of math such as "| x | + | y |" stays whole.
  */
 export function plainLines(text: string): string[] {
   const out: string[] = [];
-  for (const raw of text.split('\n')) {
-    const l = raw.trim();
-    if (!l || /^(?:-{3,}|\*{3,})$/.test(l) || /^\|[\s:|-]*-[\s:|-]*\|$/.test(l)) continue;
-    if (/^\|\s.*\s\|$/.test(l)) {
-      out.push(...l.slice(1, -1).split(/(?<!\\)\|/).map((c) => plainCell(c.trim())).filter(Boolean));
-      continue;
+  const rows = text.split('\n').map((raw) => raw.trim());
+  const isRow = (l: string) => /^\|.*\|$/.test(l);
+  const isSeparator = (l: string) => /^\|[\s:|-]*-[\s:|-]*\|$/.test(l);
+  rows.forEach((l, i) => {
+    if (!l || /^(?:-{3,}|\*{3,})$/.test(l)) return;
+    if (isRow(l)) {
+      let from = i;
+      let to = i;
+      while (from > 0 && isRow(rows[from - 1])) from--;
+      while (to < rows.length - 1 && isRow(rows[to + 1])) to++;
+      if (rows.slice(from, to + 1).some(isSeparator)) {
+        if (!isSeparator(l)) out.push(...l.slice(1, -1).split(/(?<!\\)\|/).map((c) => plainCell(c.trim())).filter(Boolean));
+        return;
+      }
     }
     const plain = plainCell(l);
     if (plain) out.push(plain);
-  }
+  });
   return out;
 }
 
@@ -244,6 +253,9 @@ function variantOf(rest: string): string | null {
   return k ? `v${k[1]}` : null;
 }
 
+/** The letter or number after "Turno", "Versione", "Fila" or "Compito" ("Turno A" gives "A"). */
+const turnOf = (s: string) => /\b(?:turno|versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+)\b(?!['’])/i.exec(s)?.[1].toUpperCase() ?? null;
+
 const numberLabel = (e: Ex) => (e.variant ? (e.variant.startsWith('v') ? `${e.id}.${e.variant.slice(1)}` : `${e.id}${e.variant}`) : e.id);
 
 export function joinLines(lines: string[]): string {
@@ -337,9 +349,12 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
       mode = 'solution';
       cur = null;
       // "Soluzioni (Appello del 3 luglio 2024)" names its session: solutions printed after all the papers still reach their own.
+      // Two papers of one day are told apart by the turn the heading names. A heading that names none, or one that fits several, redirects nowhere.
       const named = findDate(text);
-      const target = named ? groups.findLast((x) => x.date === isoOf(named) && x.statements.length > 0) : undefined;
-      if (target) group = target;
+      const sameDay = named ? groups.filter((x) => x.date === isoOf(named) && x.statements.length > 0) : [];
+      const want = turnOf(text);
+      const fits = sameDay.length <= 1 ? sameDay : sameDay.filter((x) => want !== null && (x.variant ?? turnOf(x.key)) === want);
+      if (fits.length === 1) group = fits[0];
       continue;
     }
     if (ex) {

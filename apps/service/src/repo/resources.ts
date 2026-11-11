@@ -61,7 +61,8 @@ export function updateResource(ctx: AppContext, id: string, patch: { role?: Reso
 /**
  * Deletes the resource with its pages and removes the stored file when no other resource uses it. The questions read from it
  * go too, with the review problems about them, because nothing else would take them out of the book and a corrected upload of the
- * same paper would be counted as their duplicate. A question the author edited, or one a chapter already uses, stays: it loses
+ * same paper would be counted as their duplicate. A question the author edited, or one a chapter uses that was already read from the
+ * pages, stays: a chapter's question that was not read yet could not be read any more once the pages are gone. A kept question loses
  * its source (and its page range, which pointed into the deleted pages) and is the author's own from then on.
  */
 export function deleteResource(ctx: AppContext, id: string): { removedQuestions: number; keptQuestions: number } {
@@ -70,8 +71,8 @@ export function deleteResource(ctx: AppContext, id: string): { removedQuestions:
   const gone: string[] = [];
   const kept: string[] = [];
   ctx.db.tx(() => {
-    for (const q of ctx.db.all<{ id: string; edited_at: string | null; chapter_id: string | null }>('SELECT id, edited_at, chapter_id FROM questions WHERE resource_id = ?', id)) {
-      (q.edited_at !== null || q.chapter_id !== null ? kept : gone).push(q.id);
+    for (const q of ctx.db.all<{ id: string; edited_at: string | null; chapter_id: string | null; imported_at: string | null }>('SELECT id, edited_at, chapter_id, imported_at FROM questions WHERE resource_id = ?', id)) {
+      (q.edited_at !== null || (q.chapter_id !== null && q.imported_at !== null) ? kept : gone).push(q.id);
     }
     for (const qid of kept) ctx.db.run('UPDATE questions SET resource_id = NULL, page_from = NULL, page_to = NULL WHERE id = ?', qid);
     const issues = gone.flatMap((qid) => ctx.db.all<{ id: string }>('SELECT id FROM review_issues WHERE question_id = ?', qid).map((r) => r.id));

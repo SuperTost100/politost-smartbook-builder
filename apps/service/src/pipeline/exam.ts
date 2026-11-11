@@ -31,7 +31,10 @@ const SUBSCRIPT_DIGITS = '₀₁₂₃₄₅₆₇₈₉';
 export function symbolsIn(texts: string[], max = 12): string[] {
   const count = new Map<string, number>();
   for (const text of texts) {
-    const plain = text.replace(/([A-Za-z])([₀-₉]+)/g, (_m, base: string, digits: string) => `${base}_${[...digits].map((c) => SUBSCRIPT_DIGITS.indexOf(c)).join('')}`);
+    const plain = text.replace(/([A-Za-z])([₀-₉]+)/g, (_m, base: string, digits: string) => {
+      const n = [...digits].map((c) => SUBSCRIPT_DIGITS.indexOf(c)).join('');
+      return n.length > 1 ? `${base}_{${n}}` : `${base}_${n}`;
+    });
     const here = new Set([...plain.matchAll(SYMBOL)].map((m) => `${m[1]}_${m[2] === undefined ? m[3] : m[2].length > 1 ? `{${m[2]}}` : m[2]}`));
     for (const k of here) count.set(k, (count.get(k) ?? 0) + 1);
   }
