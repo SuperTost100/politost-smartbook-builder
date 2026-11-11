@@ -11,13 +11,14 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey } from './practice.ts';
 import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
 import { patchPrompt } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
+import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
 import { acceptProposal, rejectProposal, insertProposal, saveHuman, updateQuestion } from '../repo/index.ts';
 
@@ -375,6 +376,193 @@ describe('4b. collection examples are found by search, not classified', () => {
     fake.next(answer(gen));
     await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
     assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
+  });
+});
+
+describe('4c. one extraction call per exam session', () => {
+  const T = `${P.slice(0, 8)}-limiti`;
+  const session = (extra: Record<string, unknown> = {}) => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    for (let i = 0; i < 3; i++) seedPage(ctx, 'r-exam', i, `testo ${i}`, `PAGINA ${i}: esercizio ${i + 1}`);
+    return [1, 2, 3].map((n) => q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: n - 1, page_to: n - 1, exam_group: 'Giugno', number: String(n), statement: `grezzo ${n}`, solution: `testo soluzione ${n}`, topic_ids: [T], exam_date: '2024-06-01', ...extra }));
+  };
+  const ex = (n: number, o: Record<string, unknown> = {}) => ({ number: String(n), statement: `Calcola ${n}.`, solution: `Fatto ${n}.`, readable: true, ...o });
+  const read = async (ids: string[], key: string, result: unknown) => {
+    const run = newId();
+    const out: unknown[] = [];
+    for (const id of ids) {
+      const t = startTask('question.import', { questionId: id }, { runId: run, key: `import:${id}` });
+      t.deps[key] = result;
+      out.push(await questionImport(ctx, t));
+    }
+    return out;
+  };
+  const key = sessionImportKey('r-exam', 'Giugno');
+
+  test('three exercises of one session on three pages make one call, and no import makes another', async () => {
+    const ids = session();
+    fake.next(answer({ exercises: [ex(1), ex(2), ex(3)] }));
+    const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0].prompt.match(/PAGINA \d/g)!.length, 3, 'each page is sent once');
+    assert.match(fake.calls[0].prompt, /Exercises to copy: 1, 2, 3/);
+    assert.match(fake.calls[0].prompt, /testo soluzione 2/, 'the text layer of the solutions is offered');
+    assert.equal((result as { exercises: number }).exercises, 3);
+    assert.deepEqual(await read(ids, key, result), [{ readable: true }, { readable: true }, { readable: true }]);
+    assert.equal(fake.calls.length, 1, 'the imports read their text from the session answer');
+    assert.deepEqual(ids.map((id) => [row(id).statement, row(id).solution, row(id).rev]), [['Calcola 1.', 'Fatto 1.', 2], ['Calcola 2.', 'Fatto 2.', 2], ['Calcola 3.', 'Fatto 3.', 2]]);
+    assert.ok(ids.every((id) => row(id).imported_at));
+  });
+
+  test('a chapter plans one session task that its imports wait for; a lone question has none', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: [T] });
+    ctx.db.insert('topics', { id: T, project_id: P, name: 'limiti', aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
+    const [a, b, c] = session();
+    ctx.db.run(`UPDATE questions SET exam_group = 'Luglio' WHERE id = ?`, c);
+    const task = startTask('chapter.practice', { chapterId: 'c1' });
+    await chapterPractice(ctx, task);
+    const tasks = ctx.db.all<{ kind: string; key: string; pool: string }>('SELECT kind, key, pool FROM tasks WHERE run_id = ? ORDER BY rowid', task.task.runId);
+    assert.deepEqual(tasks.filter((x) => x.kind === 'question.session').map((x) => [x.key, x.pool]), [[key, 'vision']]);
+    const dep = (id: string) => ctx.db.all<{ k: string }>(`SELECT dt.key AS k FROM task_deps d JOIN tasks t ON t.id = d.task_id JOIN tasks dt ON dt.id = d.dep_id WHERE t.key = ?`, `import:${id}`).map((r) => r.k);
+    assert.deepEqual(dep(a), [key]);
+    assert.deepEqual(dep(b), [key]);
+    assert.deepEqual(dep(c), [], 'alone in its session: read on its own, as before');
+  });
+
+  test('a question the author edited, or that was already read, is not asked for', async () => {
+    const [a, b, c] = session();
+    ctx.db.run(`UPDATE questions SET edited_at = '2024-01-01', statement = 'Testo dell''autrice' WHERE id = ?`, a);
+    fake.next(answer({ exercises: [ex(2), ex(3)] }));
+    const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    assert.match(fake.calls[0].prompt, /Exercises to copy: 2, 3/);
+    assert.ok(!fake.calls[0].prompt.includes('PAGINA 0'));
+    assert.deepEqual(Object.keys((result as { extracted: object }).extracted), [b, c]);
+    ctx.db.run(`UPDATE questions SET imported_at = '2024-01-02' WHERE id = ?`, b);
+    assert.deepEqual(await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key })), { fallback: 'fewer than two questions to read' });
+    assert.equal(fake.calls.length, 1);
+    assert.equal(row(a).statement, "Testo dell'autrice");
+  });
+
+  test('an answer that misses, invents or repeats an exercise falls back to one call per question', async () => {
+    const ids = session();
+    for (const bad of [[ex(1), ex(2)], [ex(1), ex(2), ex(4)], [ex(1), ex(2), ex(2)], [ex(1), ex(2), ex(3), ex(4)]]) {
+      fake.next(answer({ exercises: bad }));
+      const r = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+      assert.match((r as { fallback: string }).fallback, /instead of 1, 2, 3/);
+    }
+    const before = fake.calls.length;
+    fake.next(answer({ statement: 'Calcola 1.', solution: 'Fatto 1.', readable: true }));
+    await read([ids[0]], key, { fallback: 'x' });
+    assert.equal(fake.calls.length, before + 1, 'the import made its own call');
+    assert.match(fake.calls.at(-1)!.prompt, /Exercise number: 1/);
+    assert.equal(row(ids[0]).statement, 'Calcola 1.');
+  });
+
+  test('a session over the page limit, or two questions with one number, is not sent to the model', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    for (let i = 0; i < 15; i++) seedPage(ctx, 'r-exam', i, `testo ${i}`, `PAGINA ${i}`);
+    const mk = (n: string, from: number, to: number) => q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: from, page_to: to, exam_group: 'Giugno', number: n, solution: '' });
+    // Each question reads at most 4 pages from its first.
+    mk('1', 0, 5); mk('2', 4, 9); mk('3', 8, 12); mk('4', 12, 14);
+    const r = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    assert.equal((r as { fallback: string }).fallback, 'the session spans 15 pages, more than 12');
+    ctx.db.run(`DELETE FROM questions`);
+    mk('1', 0, 0); mk('1', 1, 1);
+    assert.match(((await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }))) as { fallback: string }).fallback, /distinct numbers/);
+    assert.equal(fake.calls.length, 0);
+  });
+
+  test('a model that cannot give a valid answer falls back, and a failure a retry can cure is thrown', async () => {
+    session();
+    fake.next(answer({ nothing: true }), answer({ nothing: true }));
+    const r = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }));
+    assert.match((r as { fallback: string }).fallback, /invalid answer/);
+    const hangUp = () => new Error('socket hang up');
+    fake.next(hangUp, hangUp, hangUp);
+    await assert.rejects(sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key })), (e: unknown) => e instanceof TaskError && e.kind === 'temporary');
+  });
+
+  test('an unreadable exercise leaves the book with an issue, and one without an official solution gets a worked one', async () => {
+    const ids = session();
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id IN (?, ?)`, ids[1], ids[2]);
+    const result = { extracted: { [ids[1]]: ex(2, { readable: false, statement: '', solution: '' }), [ids[2]]: ex(3, { solution: '' }) } };
+    fake.next(answer({ markdown: 'Soluzione scritta.' }));
+    await read([ids[1], ids[2]], key, result);
+    assert.equal(row(ids[1]).status, 'issue');
+    assert.equal(row(ids[1]).chapter_id, null);
+    assert.equal(issues(`question_id = '${ids[1]}'`)[0].category, 'unreadable');
+    assert.equal(row(ids[2]).solution, 'Soluzione scritta.');
+    assert.equal(fake.calls.length, 1, 'the solution call is the only one');
+  });
+
+  test('an edit made after the session was read wins over the session answer', async () => {
+    const ids = session();
+    ctx.db.run(`UPDATE questions SET edited_at = '2024-02-02', statement = 'Testo dell''autrice' WHERE id = ?`, ids[0]);
+    const out = await read([ids[0]], key, { extracted: { [ids[0]]: ex(1) } });
+    assert.deepEqual(out, [{ skipped: 'edited by the author' }]);
+    assert.equal(row(ids[0]).statement, "Testo dell'autrice");
+  });
+
+  test('a chapter planned after the session task already ran waits for it too', async () => {
+    seedOutline([['c1', ['s1']], ['c2', ['s2']]], { topicIds: [T] });
+    ctx.db.insert('topics', { id: T, project_id: P, name: 'limiti', aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
+    const [a, b, c] = session();
+    ctx.db.run(`UPDATE questions SET chapter_id = 'c1' WHERE id = ?`, a);
+    const runId = newId();
+    await chapterPractice(ctx, startTask('chapter.practice', { chapterId: 'c1' }, { runId, key: 'practice:c1' }));
+    // The first chapter read the session; one question is done by now, so only one is left to read for the second chapter.
+    ctx.db.run(`UPDATE questions SET imported_at = '2024-01-02' WHERE id IN (?, ?)`, a, b);
+    ctx.db.run(`UPDATE questions SET chapter_id = NULL WHERE id = ?`, c);
+    ctx.db.run(`UPDATE outline_revisions SET outline = json_set(outline, '$.chapters[1].sections[0].topicIds', json_array(?))`, T);
+    await chapterPractice(ctx, startTask('chapter.practice', { chapterId: 'c2' }, { runId, key: 'practice:c2' }));
+    const deps = ctx.db.all<{ k: string }>(`SELECT dt.key AS k FROM task_deps d JOIN tasks t ON t.id = d.task_id JOIN tasks dt ON dt.id = d.dep_id WHERE t.key = ?`, `import:${c}`).map((r) => r.k);
+    assert.deepEqual(deps, [key]);
+    assert.equal(ctx.db.all(`SELECT 1 FROM tasks WHERE run_id = ? AND kind = 'question.session'`, runId).length, 1);
+  });
+
+  test('through the real queue: the session task runs first, its imports read nothing more, and the chapter practice completes', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: [T] });
+    ctx.db.insert('topics', { id: T, project_id: P, name: 'limiti', aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
+    const ids = session();
+    // Which answer a call needs depends on its prompt, because the pools run side by side.
+    const dispatch = (input: { prompt: string }) => {
+      const body = /Exercises to copy/.test(input.prompt)
+        ? { exercises: [ex(1), ex(2), ex(3)] }
+        : /^STATEMENT:/.test(input.prompt) ? { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }
+          : { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'Esercizio nuovo.', hint: 'h', solution: 's', finalAnswer: '1' }] };
+      return { structured: body as never, text: JSON.stringify(body), usage: usageOf(1, 1) };
+    };
+    for (let i = 0; i < 20; i++) fake.next(dispatch);
+    registerHandlers(ctx);
+    const runId = ctx.queue.createRun(P, 'generate', [{ kind: 'chapter.practice', key: 'practice:c1', label: 'Plan practice', input: { chapterId: 'c1' } }]);
+    ctx.queue.start();
+    const start = Date.now();
+    while (ctx.queue.runSummary(runId)!.status !== 'completed' && Date.now() - start < 20_000) await new Promise((r) => setTimeout(r, 25));
+    await ctx.queue.stop();
+    assert.equal(ctx.queue.runSummary(runId)!.status, 'completed');
+    assert.equal(fake.calls.filter((c) => /Exercises to copy/.test(c.prompt)).length, 1);
+    assert.equal(fake.calls.filter((c) => /Exercise number/.test(c.prompt)).length, 0);
+    assert.deepEqual(ids.map((id) => row(id).statement), ['Calcola 1.', 'Calcola 2.', 'Calcola 3.']);
+    assert.deepEqual(ids.map((id) => row(id).status), ['verified', 'verified', 'verified']);
+  });
+
+  test('model calls for the reading of exam questions, three sessions of three exercises: 9 before, 3 now', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    const groups = ['Gennaio', 'Giugno', 'Luglio'];
+    const ids: string[][] = groups.map((g, gi) => [1, 2, 3].map((n) => {
+      seedPage(ctx, 'r-exam', gi * 3 + n - 1, `testo`, `PAGINA ${g} ${n}`);
+      return q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: gi * 3 + n - 1, page_to: gi * 3 + n - 1, exam_group: g, number: String(n), solution: '' });
+    }));
+    for (const [gi, g] of groups.entries()) {
+      fake.next(answer({ exercises: [ex(1, { solution: '' }), ex(2, { solution: '' }), ex(3, { solution: '' })] }));
+      const result = await sessionImport(ctx, startTask('question.session', { resourceId: 'r-exam', examGroup: g }, { key: sessionImportKey('r-exam', g) }));
+      fake.next(answer({ markdown: 's' }), answer({ markdown: 's' }), answer({ markdown: 's' }));
+      await read(ids[gi], sessionImportKey('r-exam', g), result);
+    }
+    // 3 extraction calls instead of 9 (the per-exercise kind, "Exercise number"), plus 9 worked solutions that both versions write.
+    assert.equal(fake.calls.filter((c) => /Exercises to copy/.test(c.prompt)).length, 3);
+    assert.equal(fake.calls.filter((c) => /Exercise number/.test(c.prompt)).length, 0);
+    assert.equal(fake.calls.filter((c) => /^EXERCISE:/.test(c.prompt)).length, 9);
   });
 });
 

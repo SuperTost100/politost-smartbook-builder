@@ -9,7 +9,7 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, verifyPrompt, verifySchema } from './prompts.ts';
+import { authenticExtractPrompt, authenticExtractSchema, exercisesPrompt, formatRules, generatedQuestionsSchema, sessionExtractPrompt, sessionExtractSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
@@ -21,8 +21,15 @@ const AUTHENTIC_PER_CHAPTER = 8;
 /** Items from uploaded exercise collections shown to the writer of a chapter's exercises. They are never put in the book. */
 const COLLECTION_EXAMPLES = 6;
 const MAX_PAGES_PER_QUESTION = 4;
+/**
+ * One extraction call reads a whole exam session when the pages of its exercises (each question's own window of
+ * MAX_PAGES_PER_QUESTION) add up to at most this many pages and this many characters of transcript. A longer session is read
+ * exercise by exercise, as before. The longest session in the Analisi, Fisica and Chimica books spans 6 pages by this count.
+ */
+const MAX_SESSION_PAGES = 12;
+const MAX_SESSION_CHARS = 60_000;
 /** Pages of the exercise collections the full-text search returns when looking for examples for one chapter. */
-const COLLECTION_SEARCH_PAGES = 12;
+const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
@@ -92,9 +99,23 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   // Text the author typed or corrected is verified as it is: it is never read from the source pages again.
   const editedIds = new Set(ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND edited_at IS NOT NULL`, projectId).map((r) => r.id));
   const imported = authentic.filter((q) => !editedIds.has(q.id));
+  // A session with two or more questions still to read is read in one call, by a task of its own that the imports wait for.
+  const sessionTasks = new Map<string, boolean>();
+  const sessionKeyOf = new Map<string, string>();
+  for (const q of imported) {
+    if (q.resourceId === null || q.pageFrom === null) continue;
+    const key = sessionImportKey(q.resourceId, q.examGroup);
+    if (!sessionTasks.has(key)) {
+      // A session task another chapter already made in this run holds the reading of every question it listed, so wait for it too.
+      const several = questionsToRead(ctx, q.resourceId, q.examGroup).length >= 2 || !!ctx.db.get('SELECT 1 FROM tasks WHERE run_id = ? AND key = ?', t.task.runId, key);
+      sessionTasks.set(key, several);
+      if (several) specs.push({ kind: 'question.session', key, label: `Read exam session ${q.examGroup ?? ''}`.trim(), input: { resourceId: q.resourceId, examGroup: q.examGroup }, pool: 'vision' });
+    }
+    if (sessionTasks.get(key)) sessionKeyOf.set(q.id, key);
+  }
   for (const q of authentic) {
     const label = `${q.examGroup ?? 'exam question'} n. ${q.number ?? ''}`.trim();
-    if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision' });
+    if (!editedIds.has(q.id)) specs.push({ kind: 'question.import', key: `import:${q.id}`, label: `Read exam question ${q.examGroup ?? ''} n. ${q.number ?? ''}`.trim(), input: { questionId: q.id }, pool: 'vision', deps: sessionKeyOf.has(q.id) ? [sessionKeyOf.get(q.id)!] : [] });
     specs.push({ kind: 'question.verify', key: `verify:${q.id}`, label: `Check solution of ${label}`, input: { questionId: q.id }, deps: editedIds.has(q.id) ? [] : [`import:${q.id}`], pool: 'checker' });
   }
   const imports = imported.map((q) => `import:${q.id}`);
@@ -106,7 +127,73 @@ export async function chapterPractice(ctx: AppContext, t: TaskContext) {
   return { authentic: authentic.length, language: project.language };
 }
 
-/** Clean statement and official solution from vision transcripts of the question's pages. */
+/** What one import reads for a question: its cleaned statement and official solution, or that it is not readable. */
+type ImportRead = { statement: string; solution: string; readable: boolean };
+
+/** The key of the task that reads a whole session. Questions of one source file with the same session name share it. */
+export const sessionImportKey = (resourceId: string, examGroup: string | null) => `import-session:${resourceId}:${examGroup ?? ''}`;
+
+/** The pages a question's import reads: its own range, at most MAX_PAGES_PER_QUESTION from its first page. */
+function importPages(q: { pageFrom: number | null; pageTo: number | null }): number[] {
+  if (q.pageFrom === null) return [];
+  const last = Math.min(q.pageTo ?? q.pageFrom, q.pageFrom + MAX_PAGES_PER_QUESTION - 1);
+  return Array.from({ length: last - q.pageFrom + 1 }, (_, i) => q.pageFrom! + i);
+}
+
+/** The questions of a session that an import would still read: not edited by the author, not read from the pages yet, with a page range. */
+function questionsToRead(ctx: AppContext, resourceId: string, examGroup: string | null): Question[] {
+  return ctx.db.all(`SELECT * FROM questions WHERE resource_id = ? AND exam_group IS ? AND kind = 'exam' AND edited_at IS NULL AND page_from IS NOT NULL ORDER BY rowid`, resourceId, examGroup)
+    .filter((r) => !(r.imported_at && String(r.solution).trim())).map(rowToQuestion);
+}
+
+const pageText = (p: { label: string; transcript: string | null; text: string }) => `--- page ${p.label} ---\n${p.transcript ?? p.text}`;
+
+/**
+ * Reads every question of a session that still needs reading in one call, so the pages are sent once and the fixed cost of a
+ * call is paid once. The answer is used only when it lists exactly the questions' numbers: none missing, none invented, none
+ * twice. In every other case (a session too long for one call, an answer that does not match, a model that cannot give a valid
+ * one) the result says `fallback` and each question's import reads its own pages, as it did before. Errors that a retry can
+ * cure (a limit, a login, a timeout) are thrown, so the queue retries this task like any other.
+ */
+export async function sessionImport(ctx: AppContext, t: TaskContext) {
+  const resourceId = t.task.input.resourceId as string;
+  const examGroup = (t.task.input.examGroup as string | null) ?? null;
+  const questions = questionsToRead(ctx, resourceId, examGroup);
+  if (questions.length < 2) return { fallback: 'fewer than two questions to read' };
+  const numbers = questions.map((q) => (q.number ?? '').trim());
+  if (numbers.some((n) => !n) || new Set(numbers.map((n) => n.toLowerCase())).size !== numbers.length) return { fallback: 'the questions of the session have no distinct numbers' };
+  const pageIdx = [...new Set(questions.flatMap(importPages))].sort((a, b) => a - b);
+  if (pageIdx.length > MAX_SESSION_PAGES) return { fallback: `the session spans ${pageIdx.length} pages, more than ${MAX_SESSION_PAGES}` };
+  try {
+    const pages: string[] = [];
+    for (const idx of pageIdx) pages.push(pageText(await transcribePage(ctx, resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
+    const text = pages.join('\n\n');
+    if (text.length > MAX_SESSION_CHARS) return { fallback: `the pages hold ${text.length} characters, more than ${MAX_SESSION_CHARS}` };
+    t.progress(`Reading ${questions.length} exercises of ${examGroup ?? 'the session'} together`);
+    const project = loadProject(ctx, t.task.projectId);
+    const { data } = await runRole(ctx, {
+      role: 'bulk', ...sessionExtractPrompt({ language: project.language, examGroup: examGroup ?? '', exercises: questions.map((q, i) => ({ number: numbers[i]!, solutionText: truncate(q.solution, 4000) })), pages: text }),
+      schema: sessionExtractSchema, projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+    const byNumber = new Map(data.exercises.map((e) => [e.number.trim().toLowerCase(), e]));
+    if (data.exercises.length !== questions.length || byNumber.size !== questions.length || numbers.some((n) => !byNumber.has(n.toLowerCase()))) {
+      return { fallback: `the answer lists ${data.exercises.map((e) => e.number).join(', ') || 'nothing'} instead of ${numbers.join(', ')}` };
+    }
+    return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = byNumber.get(numbers[i]!.toLowerCase())!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
+  } catch (err) {
+    if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
+    throw err;
+  }
+}
+
+/** The session task's reading of this question, when the question waited for one and it gave a usable answer. */
+function sessionRead(t: TaskContext, q: Question): ImportRead | null {
+  if (q.resourceId === null) return null;
+  const result = t.deps[sessionImportKey(q.resourceId, q.examGroup)] as { extracted?: Record<string, ImportRead> } | null | undefined;
+  return result?.extracted?.[q.id] ?? null;
+}
+
+/** Clean statement and official solution from vision transcripts of the question's pages: from its session's single reading, or else one call of its own. */
 export async function questionImport(ctx: AppContext, t: TaskContext) {
   const q = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!q) return { skipped: true };
@@ -119,17 +206,16 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   // Every update below applies only if the author has not edited the question since this read.
   const rev = question.rev;
   const project = loadProject(ctx, question.projectId);
-  const last = Math.min(question.pageTo ?? question.pageFrom, question.pageFrom + MAX_PAGES_PER_QUESTION - 1);
-  const pages: string[] = [];
-  for (let idx = question.pageFrom; idx <= last; idx++) {
-    const p = await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id });
-    pages.push(`--- page ${p.label} ---\n${p.transcript ?? p.text}`);
+  let data = sessionRead(t, question);
+  if (!data) {
+    const pages: string[] = [];
+    for (const idx of importPages(question)) pages.push(pageText(await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
+    const solutionPages = question.solution ? `(text layer, math may be garbled)\n${truncate(question.solution, 6000)}` : '(same pages)';
+    ({ data } = await runRole(ctx, {
+      role: 'bulk', ...authenticExtractPrompt({ language: project.language, examGroup: question.examGroup ?? '', number: question.number ?? '', statementPages: pages.join('\n\n'), solutionPages }),
+      schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    }));
   }
-  const solutionPages = question.solution ? `(text layer, math may be garbled)\n${truncate(question.solution, 6000)}` : '(same pages)';
-  const { data } = await runRole(ctx, {
-    role: 'bulk', ...authenticExtractPrompt({ language: project.language, examGroup: question.examGroup ?? '', number: question.number ?? '', statementPages: pages.join('\n\n'), solutionPages }),
-    schema: authenticExtractSchema, projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  });
   if (!data.readable) {
     // Out of the book until the author types it in: its raw text-layer statement is garbled.
     const changed = ctx.db.run(`UPDATE questions SET status = 'issue', chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?`, now(), question.id, rev).changes;

@@ -587,6 +587,30 @@ Return JSON with the statement of "Esercizio ${p.number}" of this session (all i
   };
 }
 
+export const sessionExtractSchema = z.object({
+  exercises: z.array(z.object({
+    number: z.string().describe('the exercise number exactly as listed'),
+    statement: z.string(),
+    solution: z.string().describe('empty when the pages print no official solution for it'),
+    readable: z.boolean().describe('false if the pages do not contain this exercise or it cannot be read'),
+  })),
+});
+
+/** All the listed exercises of one exam session in a single call, from the same pages. `exercises` carries each stored question's number and its text-layer solution, if any. */
+export function sessionExtractPrompt(p: { language: string; examGroup: string; exercises: { number: string; solutionText: string }[]; pages: string }) {
+  const layer = p.exercises.filter((e) => e.solutionText.trim()).map((e) => `Esercizio ${e.number} (text layer, math may be garbled):\n${e.solutionText}`).join('\n\n');
+  return {
+    system: `You copy the exercises of one exam session and their official solutions from transcribed exam pages, faithfully, in the original language. You fix only obvious transcription glitches.\n\n${formatRules(p.language)}`,
+    prompt: `Session: ${p.examGroup}
+Exercises to copy: ${p.exercises.map((e) => e.number).join(', ')}
+
+Pages of the session (statements and solutions):
+${p.pages}
+${layer ? `\nText layer of the official solutions, which may help where the page transcription is unclear:\n${layer}\n` : ''}
+Return JSON {"exercises": [...]} with exactly one entry for each listed exercise number, in that order and with the number exactly as listed. Each entry has the statement of "Esercizio <number>" of this session (all its parts, without the points), its official solution (empty when the pages print none), and readable=true; readable=false if the exercise is not on the pages. Never add an exercise that is not listed.`,
+  };
+}
+
 export const verifySchema = z.object({
   independentAnswer: z.string(),
   resultsAgree: z.boolean().describe('the final results of the given solution match yours'),
