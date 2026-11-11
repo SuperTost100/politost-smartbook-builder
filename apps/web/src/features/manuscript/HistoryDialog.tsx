@@ -13,13 +13,19 @@ const SITTING_MS = 10 * 60 * 1000;
 /** Newest first; each group is a run of consecutive human revisions, the latest first. Everything else stands alone. */
 function groupRevisions(revs: HistoryRevision[]): HistoryRevision[][] {
   const groups: HistoryRevision[][] = [];
-  const mine = (r: HistoryRevision) => r.origin === 'human' && (r.status === 'current' || r.status === 'superseded');
+  const mine = (r: HistoryRevision) => r.origin === 'human' && !r.restoredFromId && (r.status === 'current' || r.status === 'superseded');
   for (const r of revs) {
     const prev = groups.at(-1)?.at(-1);
     if (prev && mine(prev) && mine(r) && Date.parse(prev.createdAt) - Date.parse(r.createdAt) <= SITTING_MS) groups.at(-1)!.push(r);
     else groups.push([r]);
   }
   return groups;
+}
+
+/** A version made by Restore says which version it copied, by the time that one was written. */
+function restoredNote(fromId: string, revs: HistoryRevision[]): string {
+  const from = revs.find((r) => r.id === fromId);
+  return from ? `Restored the version of ${dateTime(from.createdAt)}` : 'Restored an earlier version';
 }
 
 const ORIGIN: Record<string, string> = { ai: 'AI', human: 'You', repair: 'Repair' };
@@ -48,7 +54,9 @@ export function HistoryDialog({ open, onClose, pid, nodeId, currentId, onRestore
         <span className="ui-muted hi-time">{dateTime(r.createdAt)}</span>
       </div>
       {r.model && <div className="ui-mono ui-muted">{r.model}</div>}
-      {r.figureNote && <p className="hi-note">{r.figureNote}</p>}
+      {r.restoredFromId
+        ? <p className="hi-note">{restoredNote(r.restoredFromId, revs)}</p>
+        : r.figureNote && <p className="hi-note">{r.figureNote}</p>}
       <p className="hi-snippet">{r.markdown.replace(/\s+/g, ' ').slice(0, 180)}{r.markdown.length > 180 ? '…' : ''}</p>
       <div className="ui-row">
         <button type="button" className="ui-btn ui-btn--sm" disabled={r.id === currentId || restore.isPending} onClick={() => restore.mutate(r.id)}>Restore</button>

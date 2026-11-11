@@ -10,6 +10,17 @@ const SRC = /:::image\{[^}]*src="assets\/([^"]+)"/g;
 const filesOf = (markdown: string): string[] => [...markdown.matchAll(SRC)].map((m) => m[1]);
 const quote = (s: string, max: number) => `"${s.length > max ? `${s.slice(0, max - 1)}…` : s}"`;
 
+const CAPTION_QUOTE = 60;
+
+/** The caption's new text when it fits or when the first words show what changed. A long caption that changed at its end would be cut off before the change, so the note only says it changed. */
+function captionNote(was: string, is: string): string {
+  const next = is.trim();
+  const prev = was.trim();
+  let same = 0;
+  while (same < prev.length && same < next.length && prev[same] === next[same]) same++;
+  return next.length <= CAPTION_QUOTE || same < CAPTION_QUOTE * 2 / 3 ? `caption changed to ${quote(next, CAPTION_QUOTE)}` : 'caption changed';
+}
+
 /** One sentence about the figure that changed between a revision and its parent, or null when no single figure changed. */
 export function figureNote(before: string, after: string, assets: Map<string, Asset>, o: { origin: string; instruction?: string | null }): string | null {
   const was = filesOf(before);
@@ -29,7 +40,7 @@ export function figureNote(before: string, after: string, assets: Map<string, As
   // The caption and the alt text are all a copy of an image can change, so a new image with both unchanged is a replacement.
   if (!was1 && !is1 && now.caption === old.caption && now.alt === old.alt) return `${label(old)}: the image was replaced`;
   const parts: string[] = [];
-  if (now.caption !== old.caption) parts.push(`caption changed to ${quote(now.caption.trim(), 60)}`);
+  if (now.caption !== old.caption) parts.push(captionNote(old.caption, now.caption));
   if (now.alt !== old.alt) parts.push('alt text changed');
   if (was1 && is1) {
     if (is1.shows !== was1.shows) parts.push('description changed');
@@ -45,7 +56,8 @@ export function figureNotes(ctx: AppContext, projectId: string, revisions: Conte
   const out = new Map<string, string>();
   for (const r of revisions) {
     const parent = r.parentRevId ? byId.get(r.parentRevId) : undefined;
-    if (!parent) continue;
+    // A restore is a copy of an older version, so what differs from the version before it is the other way round from what the author did: History says it was a restore instead.
+    if (!parent || r.restoredFromId) continue;
     const task = r.origin === 'ai'
       ? ctx.db.get<{ input: string }>(`SELECT t.input FROM content_revisions c JOIN tasks t ON t.id = c.task_id WHERE c.id = ? AND t.kind = 'figure.redraw'`, r.id)
       : undefined;

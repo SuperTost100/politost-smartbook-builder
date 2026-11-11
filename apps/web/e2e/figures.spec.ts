@@ -82,6 +82,21 @@ test.describe('History, figure versions', () => {
   });
 });
 
+test.describe('History, a Restore', () => {
+  test('says it is a restore and which version it restored, and its own note does not describe the difference', async ({ page }) => {
+    const fm = await open(page);
+    fm.restored = true;
+    await page.getByRole('button', { name: 'History' }).click();
+    const history = page.getByRole('dialog', { name: 'History' });
+    const when = await page.evaluate((ms) => new Date(Date.now() - ms).toLocaleString('en', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), 30 * 60_000);
+    await expect(history.getByText(`Restored the version of ${when}`)).toBeVisible();
+    // The version that was restored keeps its own note, and the restore stands in the list on its own, not inside a group of earlier edits.
+    await expect(history.getByText('Figure "Amplificatore invertente": source rendered')).toHaveCount(1);
+    await expect(history.getByText(/earlier edit/)).toHaveCount(0);
+    await shot(page, 'history-restore');
+  });
+});
+
 test.describe('figure dialog, edits that must not be lost', () => {
   const saveButton = (dialog: ReturnType<Page['locator']>) => dialog.getByRole('button', { name: 'Save figure' });
 

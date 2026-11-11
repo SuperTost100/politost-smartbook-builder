@@ -546,6 +546,43 @@ describe('history notes', () => {
     assert.equal(note(afterRemove.id), 'Figure "Nuova didascalia" removed');
   });
 
+  it('a version made by Restore says which version it restored and gets no figure note, whatever differs from the version before it', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova didascalia' });
+    const afterCaption = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('POST', url(s, `/${shown().id}/render`), { baseRevId: afterCaption.id, source: '#rect(width: 20pt, height: 10pt)' });
+    const afterRender = headOf(s);
+    const restore = async (revId: string) => { assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId })).status, 200); return headOf(s); };
+    const first = await restore(afterCaption.id);
+    const second = await restore(s.headId);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null; restoredFromId: string | null }[];
+    const row = (id: string) => history.find((r) => r.id === id)!;
+    assert.equal(row(first.id).restoredFromId, afterCaption.id);
+    assert.equal(row(first.id).figureNote, null, 'restoring the caption version is not "source rendered"');
+    assert.equal(row(second.id).restoredFromId, s.headId);
+    assert.equal(row(second.id).figureNote, null);
+    // The versions the author made by hand are labelled as before, and say nothing about a restore.
+    assert.equal(row(afterRender.id).restoredFromId, null);
+    assert.equal(row(afterRender.id).figureNote, 'Figure "Nuova didascalia": source rendered');
+    assert.equal(row(afterCaption.id).restoredFromId, null);
+  });
+
+  it('a long caption is quoted only when the part that changed is in the quote, and otherwise the note just says the caption changed', async () => {
+    const s = await seed();
+    const long = 'Circuito RC serie: la sorgente V0 è collegata a R e C attraverso un interruttore che si chiude al tempo zero.';
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: long });
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: headOf(s).id, caption: `${long} (v2)` });
+    const atEnd = headOf(s);
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: atEnd.id, caption: `Schema RC serie: ${long.slice(19)}` });
+    const atStart = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    const note = (id: string) => history.find((r) => r.id === id)!.figureNote;
+    assert.equal(note(atEnd.id), 'Figure "Circuito RC serie: la sorgente V0 è col…": caption changed');
+    assert.match(note(atStart.id)!, /caption changed to "Schema RC serie: la sorgente V0 è collegata a R e C attrave…"$/);
+  });
+
   it('says an alt text changed, also on an uploaded image, where a new copy with the same caption is otherwise a replacement', async () => {
     const s = await seed();
     const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
