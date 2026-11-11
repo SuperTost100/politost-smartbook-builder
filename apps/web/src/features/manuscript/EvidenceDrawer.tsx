@@ -28,7 +28,7 @@ interface Props {
   onClose: () => void;
   onEdit: (index: number) => void;
   /** Set for a figure block: the drawer is what covers the block's own buttons on a narrow screen. */
-  onEditFigure?: () => void;
+  onEditFigure?: (opener: HTMLElement) => void;
 }
 
 export function EvidenceDrawer({ pid, section, block, notes, issues, resources, focusNote, onClose, onEdit, onEditFigure }: Props) {
@@ -53,7 +53,7 @@ export function EvidenceDrawer({ pid, section, block, notes, issues, resources, 
       </header>
 
       <div className="ev-body">
-        {onEditFigure && <div className="ui-row"><button type="button" className="ui-btn ui-btn--sm" onClick={onEditFigure} aria-haspopup="dialog"><Icon name="image" />Edit figure</button></div>}
+        {onEditFigure && <div className="ui-row"><button type="button" className="ui-btn ui-btn--sm" onClick={(e) => onEditFigure(e.currentTarget)} aria-haspopup="dialog"><Icon name="image" />Edit figure</button></div>}
         {notes.length === 0 && (
           <p className="ev-none">This block cites no source. If it states a fact from your material, ask for a regeneration that cites it, or edit it and add the source by hand.</p>
         )}

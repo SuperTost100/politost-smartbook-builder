@@ -27,24 +27,26 @@ export interface FigureMock {
   runError: string;
   /** Every write answers 409, as when the text moved on. */
   stale: boolean;
+  /** How long a save of the section text (PUT) takes to answer. The text is written when the request arrives, as in the service. */
+  putMs: number;
   head: () => string;
   figures: () => MockFigure[];
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
 
-export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Promise<FigureMock> {
+export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail?: boolean } = {}): Promise<FigureMock> {
   let n = 1;
   let headId = 'rvf1';
   const figs = new Map<string, MockFigure>([['a1', { id: 'a1', filename: 'fig-opamp.svg', caption: FIG_CAPTION, origin: 'generated-svg', shows: FIG_SHOWS, source: FIG_SOURCE, createdAt: ago(40) }]]);
   // Block texts of the section; an entry that is a figure id is that figure's block.
   let blocks: string[] = ['### Amplificatore invertente', 'Poiché la tensione tra i due morsetti è nulla (massa virtuale), la corrente in $R_1$ vale $V_{in}/R_1$.', 'fig:a1', 'Ne segue la relazione tra uscita e ingresso:'];
-  let pending: { kind: 'redraw'; id: string } | { kind: 'draw'; afterBlock: number; caption: string } | null = null;
+  let pending: { kind: 'redraw'; id: string; shows?: string } | { kind: 'draw'; afterBlock: number; caption: string } | null = null;
   const fm: FigureMock = {
-    writes: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, head: () => headId, figures: () => [...figs.values()],
+    writes: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, head: () => headId, figures: () => [...figs.values()],
     complete: () => {
       fm.runStatus = 'completed';
-      if (pending?.kind === 'redraw') swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn` });
+      if (pending?.kind === 'redraw') swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn`, ...(pending.shows ? { shows: pending.shows } : {}) });
       if (pending?.kind === 'draw') {
         const id = `a${++n}`;
         figs.set(id, { id, filename: `drawn-${n}.svg`, caption: pending.caption, origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
@@ -70,7 +72,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Pr
   const run = (status: string) => ({ id: 'r-fig', projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: [] });
   const swap = (id: string, make: Partial<MockFigure>) => {
     const old = figs.get(id)!;
-    const fresh: MockFigure = { ...old, ...make, id: `a${++n}`, filename: `fig-r${n}.svg`, createdAt: new Date().toISOString() };
+    const fresh: MockFigure = { ...old, ...make, id: `a${++n}`, filename: `fig-r${n}.svg`, createdAt: make.createdAt ?? new Date().toISOString() };
     figs.set(fresh.id, fresh);
     blocks = blocks.map((b) => (b === `fig:${id}` ? `fig:${fresh.id}` : b));
     newHead();
@@ -86,7 +88,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Pr
     const stale = () => json({ error: { code: 'conflict', message: 'This text changed since you opened it.', action: 'Reload to see the latest version, then reapply your edit.' } }, 409);
 
     if (method === 'GET' && path === '/api/projects/p1/sections/s1') return json(sectionView());
-    if (method === 'GET' && path === '/api/projects/p1/assets') return json(assetRows());
+    if (method === 'GET' && path === '/api/projects/p1/assets') return o.assetsFail ? json({ error: { code: 'internal', message: 'The asset list could not be read.' } }, 500) : json(assetRows());
     if (method === 'GET' && path === '/api/projects/p1/chapters/c1/preview') return json({ markdown: compiled(), number: 1, assets: Object.fromEntries([...figs.values()].flatMap((f) => [[`assets/${f.filename}`, `/api/assets/${f.id}/file`], [f.filename, `/api/assets/${f.id}/file`]])) });
     if (method === 'GET' && /^\/api\/assets\/[^/]+\/file$/.test(path)) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: DRAWING_SVG });
     if (method === 'GET' && path === '/api/runs/r-fig') return json({ ...run(fm.runStatus), tasks: [{ id: 'tk-fig', runId: 'r-fig', kind: 'figure.redraw', label: 'Redraw', state: fm.runStatus === 'completed' ? 'succeeded' : fm.runStatus === 'running' ? 'running' : 'failed', attempts: 1, provider: 'codex', error: fm.runStatus === 'failed' ? { message: fm.runError, action: 'The figure is unchanged. Change the instruction and try again.' } : null, waitReason: null, startedAt: ago(1), finishedAt: null }], usage: [] });
@@ -101,8 +103,10 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Pr
       write(fig[2] === 'replace' ? { name: 'upload' } : b);
       if (fm.stale) return stale();
       if (method === 'PATCH') {
-        if (b.caption !== undefined && b.caption !== f.caption) { f.caption = b.caption; newHead(); }
-        if (b.shows !== undefined) f.shows = b.shows;
+        // A caption or description change is a copy of the figure and a new revision, as in the service.
+        if ((b.caption !== undefined && b.caption !== f.caption) || (b.shows !== undefined && b.shows !== f.shows)) {
+          swap(f.id, { caption: b.caption ?? f.caption, shows: b.shows ?? f.shows, createdAt: f.createdAt });
+        }
         return json(sectionView());
       }
       if (fig[2] === 'render') {
@@ -111,7 +115,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Pr
         swap(f.id, { source: b.source });
         return json(sectionView());
       }
-      if (fig[2] === 'redraw') { fm.runStatus = 'running'; pending = { kind: 'redraw', id: f.id }; return json(run('running')); }
+      if (fig[2] === 'redraw') { fm.runStatus = 'running'; pending = { kind: 'redraw', id: f.id, shows: b.shows }; return json(run('running')); }
       if (fig[2] === 'replace') { swap(f.id, { origin: 'imported', source: '', shows: '' }); return json(sectionView()); }
       if (fig[2] === 'remove') { blocks = blocks.filter((x) => x !== `fig:${f.id}`); newHead(); return json(sectionView()); }
     }
@@ -147,9 +151,12 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean } = {}): Pr
     }
     if (method === 'PUT' && path === '/api/projects/p1/sections/s1') {
       const b = body(); write(b);
+      if (b.baseRevId !== headId) return stale();
       blocks = (b.markdown as string).split('\n\n').map((t) => { const m = /src="assets\/([^"]+)"/.exec(t); const f = m && [...figs.values()].find((x) => x.filename === m[1]); return f ? `fig:${f.id}` : t; });
       newHead();
-      return json(sectionView());
+      const out = sectionView();
+      if (fm.putMs) await new Promise((r) => setTimeout(r, fm.putMs));
+      return json(out);
     }
     return route.fallback();
   });

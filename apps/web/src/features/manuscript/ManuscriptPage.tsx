@@ -76,7 +76,7 @@ export default function ManuscriptPage() {
   const editor = useSectionEditor(pid, nodeId ?? '', section);
   useDocumentTitle(section?.title ?? 'Manuscript');
 
-  useEffect(() => { setSel(null); setFocusIdx(0); setFocusNote(undefined); }, [nodeId]);
+  useEffect(() => { setSel(null); setFocusIdx(0); setFocusNote(undefined); setFigureAt(null); }, [nodeId]);
 
   const mapped = useMemo(() => (section ? mapSection(section) : null), [section]);
   const blocks = mapped?.blocks ?? [];
@@ -93,12 +93,16 @@ export default function ManuscriptPage() {
     }
     return out;
   }, [blocks, assetsQ.data]);
-  const onEditFigure = useCallback((i: number) => setFigureAt(i), []);
-  // The dialog is removed from the page when it closes, so the browser cannot return focus: do it here, to the button that opened it.
+  const figureOpener = useRef<HTMLElement | null>(null);
+  const onEditFigure = useCallback((i: number, opener: HTMLElement) => { figureOpener.current = opener; setFigureAt(i); }, []);
+  // The dialog is removed from the page when it closes, so the browser cannot return focus: do it here, to the button that opened it
+  // (on a narrow screen that is the one in the evidence drawer, because the drawer covers the block's own buttons).
   const closeFigure = useCallback(() => {
     const at = figureAt;
+    const opener = figureOpener.current;
+    figureOpener.current = null;
     setFigureAt(null);
-    if (at !== null) requestAnimationFrame(() => (blocksRef.current?.querySelector<HTMLElement>(`[data-block="${at}"] .ms-actions button`) ?? blocksRef.current?.querySelector<HTMLElement>(`[data-block="${at}"]`))?.focus());
+    if (at !== null) requestAnimationFrame(() => (opener?.isConnected ? opener : blocksRef.current?.querySelector<HTMLElement>(`[data-block="${at}"]`))?.focus());
   }, [figureAt]);
 
   // Chapter-wide formula index and figure URLs, from the compiled chapter.
@@ -356,7 +360,7 @@ export default function ManuscriptPage() {
             focusNote={focusNote}
             onClose={closeEvidence}
             onEdit={startEdit}
-            onEditFigure={figureOf.has(selBlock.index) ? () => onEditFigure(selBlock.index) : undefined}
+            onEditFigure={figureOf.has(selBlock.index) ? (opener) => onEditFigure(selBlock.index, opener) : undefined}
           />
         </div>
       )}

@@ -162,8 +162,8 @@ export interface Api {
   'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; shows?: string }; res: SectionView };
   /** Compiles edited source. When it compiles, the figure shows the new drawing; otherwise 422 with the compiler's message and nothing changes. */
   'POST /api/projects/:id/sections/:nodeId/figures/:assetId/render': { body: { baseRevId: string; source: string }; res: SectionView };
-  /** Starts a task that asks the illustrator for a new drawing from the one-line instruction. */
-  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw': { body: { baseRevId: string; instruction: string }; res: RunSummary };
+  /** Starts a task that asks the illustrator for a new drawing from the one-line instruction. An edited `shows` (the description) is saved on the new drawing. */
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw': { body: { baseRevId: string; instruction: string; shows?: string }; res: RunSummary };
   /** multipart/form-data: file (PNG, JPEG, SVG or WebP, up to 2 MB), baseRevId. The figure becomes an uploaded image and its drawing source is dropped. */
   'POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace': { res: SectionView };
   /** Takes the figure out of the text. Its picture stays in the section history. */

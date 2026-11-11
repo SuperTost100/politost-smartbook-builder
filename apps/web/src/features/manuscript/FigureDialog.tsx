@@ -34,6 +34,21 @@ export const errorLineOf = (message: string | null): number | null => {
   return n ? Number(n) : null;
 };
 
+/**
+ * A text field that follows the service: when the stored value changes (a render writes new source, a save writes the caption) the
+ * field takes it, unless the author changed the field since it was loaded. Text they typed is never replaced by a refresh.
+ */
+function useField(stored: string): [string, (v: string) => void] {
+  const [value, setValue] = useState(stored);
+  const last = useRef(stored);
+  useEffect(() => {
+    const before = last.current;
+    last.current = stored;
+    if (stored !== before) setValue((now) => (now === before ? stored : now));
+  }, [stored]);
+  return [value, setValue];
+}
+
 interface Props {
   open: boolean;
   onClose: () => void;
@@ -68,8 +83,8 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   const gone = !!section && !filename && !!headId;
   return (
     <Dialog open onClose={onClose} title={title} footer={<button type="button" className="ui-btn" onClick={onClose}>Close</button>}>
-      {gone || details.error
-        ? <div className="ui-banner ui-banner--warning" role="alert">{details.error ? errorText(details.error) : 'This figure is not in the section any more.'}</div>
+      {gone || details.error || assets.error
+        ? <div className="ui-banner ui-banner--warning" role="alert">{details.error || assets.error ? errorText(details.error ?? assets.error) : 'This figure is not in the section any more.'}</div>
         : <div className="ui-skeleton" style={{ height: 220 }} role="status" aria-label="Loading the figure" />}
     </Dialog>
   );
@@ -81,9 +96,9 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const drawing = details.drawing;
   const route = { id: pid, nodeId, assetId: details.assetId };
 
-  const [caption, setCaption] = useState(details.caption);
-  const [shows, setShows] = useState(drawing?.shows ?? '');
-  const [source, setSource] = useState(drawing?.source ?? '');
+  const [caption, setCaption] = useField(details.caption);
+  const [shows, setShows] = useField(drawing?.shows ?? '');
+  const [source, setSource] = useField(drawing?.source ?? '');
   const [instruction, setInstruction] = useState('');
   const [asked, setAsked] = useState('');
   const [srcOpen, setSrcOpen] = useState(false);
@@ -93,11 +108,8 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const [removing, setRemoving] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
-  // A field follows the service only when its own stored value changes (a redraw writes new source, a save writes the caption),
-  // so text the author typed is never replaced by an unrelated change.
-  useEffect(() => setCaption(details.caption), [details.caption]);
-  useEffect(() => setShows(drawing?.shows ?? ''), [drawing?.shows]);
-  useEffect(() => { setSource(drawing?.source ?? ''); setCompileError(null); }, [drawing?.source]);
+  // The compiler's message belongs to the source it was given, so it goes when the stored source changes.
+  useEffect(() => setCompileError(null), [drawing?.source]);
   useEffect(() => { if (compileError) setSrcOpen(true); }, [compileError]);
 
   // ----- the redraw task -----
@@ -129,7 +141,7 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
     onError: (e) => { if (e instanceof ApiRequestError && e.code === 'does_not_compile') { setCompileError(e.message); setError(null); } else setError(errorText(e)); },
   });
   const redraw = useMutation({
-    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw', { params: route, body: { baseRevId: details.headRevId, instruction: instruction.trim() } }),
+    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw', { params: route, body: { baseRevId: details.headRevId, instruction: instruction.trim(), ...(drawing && shows.trim() && shows !== drawing.shows ? { shows } : {}) } }),
     onMutate: () => { setFailure(null); setError(null); setAsked(instruction.trim()); },
     onSuccess: (r) => { setRunId(r.id); setInstruction(''); },
     onError: (e) => setError(errorText(e)),

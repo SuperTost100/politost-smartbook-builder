@@ -76,6 +76,8 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
   // What the author is leaving the block for; it happens once the block is saved (or found to need no saving).
   const [leave, setLeave] = useState<{ kind: 'close' } | { kind: 'open'; index: number; text: string } | null>(null);
   const failedText = useRef<string | null>(null);
+  // The save that is on its way, so a second write for the same draft waits for it instead of racing it.
+  const inflight = useRef<{ vars: SaveVars; done: Promise<SectionView> } | null>(null);
   const live = useRef({ nodeId, draft: null as Draft | null, savable: false, latestBlocks: [] as Block[], saving: false });
 
   // Drafts are kept per section; only the transient save feedback resets when moving to another one.
@@ -114,7 +116,14 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
   // `draftId`, `text` and `auto` describe the draft text being saved; they are not sent. An autosave keeps the editor open.
   // The section is named in the variables because a flush can run while the page moves to another one.
   const write = useMutation({
-    mutationFn: ({ nodeId: nid, markdown, baseRevId }: SaveVars) => api('PUT /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId: nid }, body: { markdown, baseRevId } }),
+    mutationFn: (vars: SaveVars) => {
+      const done = api('PUT /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId: vars.nodeId }, body: { markdown: vars.markdown, baseRevId: vars.baseRevId } });
+      const entry = { vars, done };
+      inflight.current = entry;
+      const clear = () => { if (inflight.current === entry) inflight.current = null; };
+      done.then(clear, clear);
+      return done;
+    },
     onMutate: (v) => { if (v.nodeId === live.current.nodeId) setState({ kind: 'saving' }); },
     onSuccess: (sv, saved) => {
       qc.setQueryData(qk.section(pid, saved.nodeId), sv);
@@ -270,15 +279,27 @@ export function useSectionEditor(pid: string, nodeId: string, section: SectionVi
   const prepareInsert = useCallback(async (): Promise<{ baseRevId: string; afterBlock: number }> => {
     if (!draft || !section?.current) throw new Error('Open the block the figure goes after first.');
     if (changedElsewhere) throw new Error('The section changed while you were editing. Choose how to continue in the notice above the text, then add the figure.');
+    // A save of this draft may be on its way (the autosave): wait for it and go on from the revision it wrote, because a second
+    // write on the old base would be refused as stale.
+    let d = draft;
     let revId = currentId;
-    if (draft.text !== draft.baseText) {
-      if (!draft.text.trim()) throw new Error('This block is empty. Write its text, or delete it, before adding a figure.');
-      if (draft.index >= latestBlocks.length) throw new Error('This block is no longer in the section.');
-      const sv = await write.mutateAsync({ nodeId, markdown: joinBlocks(applyDraft(latestBlocks, draft.index, draft.text, false, draft.span)), baseRevId: draft.baseRevId, draftId: draft.id, text: draft.text, auto: true });
+    let blocks = latestBlocks;
+    const saving = inflight.current;
+    if (saving) {
+      const sv = await saving.done.catch(() => null);
+      if (!sv?.current || saving.vars.nodeId !== nodeId || saving.vars.draftId !== draft.id || saving.vars.text === undefined) throw new Error('The section was being saved. Try adding the figure again.');
+      d = { ...draft, baseText: saving.vars.text, baseRevId: sv.current.id, span: splitBlocks(saving.vars.text).length };
+      revId = sv.current.id;
+      blocks = splitBlocks(sv.current.markdown);
+    }
+    if (d.text !== d.baseText) {
+      if (!d.text.trim()) throw new Error('This block is empty. Write its text, or delete it, before adding a figure.');
+      if (d.index >= blocks.length) throw new Error('This block is no longer in the section.');
+      const sv = await write.mutateAsync({ nodeId, markdown: joinBlocks(applyDraft(blocks, d.index, d.text, false, d.span)), baseRevId: d.baseRevId, draftId: d.id, text: d.text, auto: true });
       revId = sv.current?.id ?? null;
     }
     if (!revId) throw new Error('This section has no text yet.');
-    return { baseRevId: revId, afterBlock: (located?.index ?? draft.index) + Math.max(1, splitBlocks(draft.text).length) - 1 };
+    return { baseRevId: revId, afterBlock: (saving ? d.index : located?.index ?? d.index) + Math.max(1, splitBlocks(d.text).length) - 1 };
   }, [draft, section?.current, changedElsewhere, currentId, latestBlocks, write, nodeId, located]);
 
   const discard = useCallback(() => { setDraft(null); setConflict(null); setLeave(null); setState({ kind: 'idle' }); }, [setDraft]);

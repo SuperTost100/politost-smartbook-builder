@@ -8,10 +8,10 @@ import { FIG_COMPILE_ERROR, mockFigureApi, type FigureMock } from './figures-moc
 const SHOTS = process.env.FIGURE_SHOTS;
 const PNG = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAHnOcQAAAAABJRU5ErkJggg==', 'base64');
 
-async function open(page: Page, o: { theme?: 'light' | 'dark'; stock?: boolean } = {}): Promise<FigureMock> {
+async function open(page: Page, o: { theme?: 'light' | 'dark'; stock?: boolean; assetsFail?: boolean } = {}): Promise<FigureMock> {
   await page.addInitScript((t) => localStorage.setItem('smartbuilder.theme', t), o.theme ?? 'light');
   await mockApi(page);
-  const fm = await mockFigureApi(page, { stock: o.stock });
+  const fm = await mockFigureApi(page, { stock: o.stock, assetsFail: o.assetsFail });
   await page.goto('/books/p1/manuscript/s1');
   await expect(page.locator('.ms-block').first()).toBeVisible();
   return fm;
@@ -404,6 +404,95 @@ test.describe('Add figure', () => {
     await pop.getByRole('button', { name: 'Add figure' }).click();
     await expect(pop.getByRole('alert')).toContainText('This text changed since you opened it.');
     await expect(pop).toBeVisible();
+  });
+});
+
+
+test.describe('review findings of the figure dialog', () => {
+  test('source typed while a render runs is kept when the rendered source arrives', async ({ page }) => {
+    const fm = await open(page);
+    fm.renderMs = 900;
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 8pt)');
+    const before = await dialog.locator('.fd-preview img').getAttribute('src');
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(dialog.getByText('Rendering the source…').first()).toBeVisible();
+    await page.locator('.fd-code .cm-content').click();
+    await page.keyboard.press('ControlOrMeta+End');
+    await page.keyboard.insertText(' // still typing');
+    // The new picture is the figure's new asset: its details have arrived.
+    await expect.poll(async () => dialog.locator('.fd-preview img').getAttribute('src'), { timeout: 12_000 }).not.toBe(before);
+    await expect(dialog.locator('.fd-code .cm-content')).toContainText('// still typing');
+    await expect(dialog.getByText('Not rendered yet. The figure still shows the last render.')).toBeVisible();
+  });
+
+  test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('What it shows').fill('An op-amp with a 10 kΩ feedback resistor.');
+    await dialog.getByLabel('Instruction for the redraw').fill('Draw it again');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    expect(fm.writes.find((w) => w.call.endsWith('/redraw'))!.body).toEqual({ baseRevId: 'rvf1', instruction: 'Draw it again', shows: 'An op-amp with a 10 kΩ feedback resistor.' });
+    fm.complete();
+    await expect(page.getByText('Redrawn. The earlier drawing is in the section history.')).toBeVisible({ timeout: 12_000 });
+    await expect(dialog.getByLabel('What it shows')).toHaveValue('An op-amp with a 10 kΩ feedback resistor.');
+    await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
+  });
+
+  test('when the asset list fails the dialog says so instead of showing a skeleton forever', async ({ page }) => {
+    await open(page, { assetsFail: true });
+    await figureBlock(page).click();
+    await page.locator('.ms-actions').getByRole('button', { name: 'Edit figure' }).click();
+    const dialog = page.getByRole('dialog', { name: /^Figure/ });
+    await expect(dialog.getByRole('alert')).toContainText('The asset list could not be read.', { timeout: 15_000 });
+    await expect(dialog.getByRole('status', { name: 'Loading the figure' })).toHaveCount(0);
+  });
+
+  test('browser Back to another section closes the dialog', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('smartbuilder.theme', 'light'));
+    await mockApi(page);
+    await mockFigureApi(page);
+    await page.goto('/books/p1/manuscript/s2');
+    await expect(page.locator('.ms-block').first()).toBeVisible();
+    // An in-app move to s1, so Back is a move inside the page.
+    await page.evaluate(() => { history.pushState({}, '', '/books/p1/manuscript/s1'); dispatchEvent(new PopStateEvent('popstate')); });
+    await expect(page.locator('.ms-block', { has: page.locator('.sb-figure') })).toBeVisible();
+    const dialog = await openDialog(page);
+    await page.goBack();
+    await expect(page).toHaveURL(/manuscript\/s2$/);
+    await expect(dialog).toBeHidden();
+  });
+
+  test('on a narrow screen focus goes back to the Edit figure button of the drawer that opened the dialog', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(page.locator('.ev-drawer').getByRole('button', { name: 'Edit figure' })).toBeFocused();
+  });
+
+  test('Add figure waits for the autosave that is on its way and goes on from the revision it wrote', async ({ page }) => {
+    const fm = await open(page);
+    fm.putMs = 1500;
+    await page.locator('.ms-block').nth(1).focus();
+    await page.keyboard.press('Enter');
+    await expect(page.locator('.ms-edit .cm-editor')).toBeVisible();
+    await page.locator('.ms-edit .cm-content').click();
+    await page.keyboard.press('End');
+    await page.keyboard.insertText(' Un periodo aggiunto.');
+    // The autosave starts about three seconds after the last key and is slow to answer.
+    await expect.poll(() => fm.writes.filter((w) => w.call.startsWith('PUT')).length, { timeout: 8_000 }).toBe(1);
+    await page.getByRole('button', { name: 'Add figure', exact: true }).click();
+    const pop = page.getByRole('dialog', { name: 'Add a figure' });
+    await pop.getByRole('button', { name: /Describe a drawing/ }).click();
+    await pop.getByLabel('What should the drawing show?').fill('An op-amp.');
+    await pop.getByRole('button', { name: 'Draw it' }).click();
+    await expect(page.locator('.ms-ghost-fig')).toBeVisible({ timeout: 12_000 });
+    expect(fm.writes.filter((w) => w.call.startsWith('PUT')).length).toBe(1);
+    expect((fm.writes.find((w) => w.call.endsWith('/figures/draw'))!.body as { baseRevId: string }).baseRevId).toBe(fm.head());
   });
 });
 

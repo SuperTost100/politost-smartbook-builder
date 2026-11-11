@@ -45,7 +45,7 @@ interface Props {
   tabbable: boolean;
   edit?: BlockEdit;
   figure?: FigureInfo;
-  onEditFigure?: (index: number) => void;
+  onEditFigure?: (index: number, opener: HTMLElement) => void;
   onSelect: (index: number, note?: string) => void;
   onEdit: (index: number) => void;
   onRegenerate: (index: number) => void;
@@ -111,7 +111,7 @@ export const BlockView = memo(function BlockView(p: Props) {
           {p.figure?.badge && <span className={`ui-badge${p.figure.badge.accent ? ' ui-badge--accent' : ''} ms-fig-badge`}>{p.figure.badge.label}</span>}
           {selected && (
             <div className="ms-actions" role="group" aria-label={`Actions for block ${block.index + 1}`}>
-              {p.figure && p.onEditFigure && <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEditFigure!(block.index); }} aria-haspopup="dialog"><Icon name="image" />Edit figure</button>}
+              {p.figure && p.onEditFigure && <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEditFigure!(block.index, e.currentTarget); }} aria-haspopup="dialog"><Icon name="image" />Edit figure</button>}
               <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onEdit(block.index); }}><Icon name="edit" />Edit</button>
               <button type="button" className="ui-btn ui-btn--sm" onClick={(e) => { e.stopPropagation(); p.onRegenerate(block.index); }}><Icon name="sparkle" />Regenerate selection</button>
             </div>
