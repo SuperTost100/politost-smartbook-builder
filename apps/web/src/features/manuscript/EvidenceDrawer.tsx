@@ -84,7 +84,9 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
   const ref = useRef<HTMLElement>(null);
   useEffect(() => { if (highlighted) ref.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }); }, [highlighted]);
 
-  const src = located
+  // Markdown files and saved web links are text only: there is no page to draw, so nothing is requested and no retry is offered.
+  const textOnly = resource?.kind === 'md' || resource?.kind === 'url';
+  const src = located && !textOnly
     ? apiUrl('GET /api/resources/:rid/pages/:idx/image', { params: { rid: note.resourceId!, idx: note.page! }, query: { scale: 1.5, highlight: note.quote.slice(0, 700), t: tries || undefined } })
     : null;
 
@@ -104,6 +106,7 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
           <img className={`ev-img${loaded ? ' is-in' : ''}`} src={src} alt={`Source page ${label} of ${resource?.filename ?? 'the source'}, with the quoted lines marked`} onLoad={() => setLoaded(true)} onError={() => setFailed(true)} />
         </figure>
       )}
+      {located && textOnly && <p className="ev-page__none ui-muted">This kind of source has no page picture. The quoted text is below.</p>}
       {src && failed && (
         <div className="ev-page__fail">
           <span>The page image did not load.</span>
