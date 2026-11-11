@@ -3,6 +3,7 @@ import { sampleFunctionGraph } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
+import { setIssuesStatus } from '../repo/issues.ts';
 import type { TaskContext, TaskSpec } from '../queue/queue.ts';
 import { runMatlab } from './matlab.ts';
 import { runPython } from './python.ts';
@@ -67,6 +68,19 @@ function existingEnrichment(ctx: AppContext, projectId: string, nodeId: string, 
   return ctx.db.get('SELECT id FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = ?', projectId, nodeId, kind);
 }
 
+/** What an enrichment row holds that an edit changes. shortcut: the row has no revision column, so a comparison of the stored texts stands in for one, upgrade by adding an updated_at column. */
+function enrichmentState(ctx: AppContext, id: string) {
+  return ctx.db.get<{ payload: string; status: string; checks: string }>('SELECT payload, status, checks FROM enrichments WHERE id = ?', id);
+}
+
+/** Why a graph can no longer be replaced: it was deleted, or its stored state is not what it was when the model started. */
+function changedSince(before: ReturnType<typeof enrichmentState>, now: ReturnType<typeof enrichmentState>): string | undefined {
+  if (!now) return 'the author deleted the graph while it was being redrawn';
+  if (!before) return 'the graph was no longer there when the redraw started';
+  if (before.payload !== now.payload || before.status !== now.status || before.checks !== now.checks) return 'the author edited the graph while it was being redrawn';
+  return undefined;
+}
+
 /** One graph for one section. Idempotent: skipped when the section already has a graph. */
 export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
@@ -75,6 +89,9 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const head = headRevision(ctx, projectId, nodeId);
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
+  // A redraw replaces one graph. What it looked like before the model ran is what the author's edits are measured against.
+  const replaceId = t.task.input.replaceId as string | undefined;
+  const before = replaceId ? enrichmentState(ctx, replaceId) : undefined;
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const main = g.data;
   const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
@@ -84,11 +101,41 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.functions), description: main.description }];
   // A pair (the phase under a Bode magnitude) shares the first graph's x axis, so the two line up when read one after the other.
   if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.functions), description: main.pair.description });
-  for (const { spec, description } of graphs) {
+  const built = graphs.map(({ spec, description }) => {
     const sampled = sampleFunctionGraph(spec);
-    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }]);
+    return { sampled, checks: [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }] };
+  });
+  // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
+  // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
+  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
+  if (issueIds.length) {
+    // A redraw answers issues about one graph, so it uses the first graph of the answer and leaves a pair aside.
+    const { sampled, checks } = built[0]!;
+    if (!sampled.ok) {
+      setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
+      return { made: 0, failed: sampled.detail };
+    }
+    if (replaceId) {
+      // Work done while the author changed the same graph is never applied over it: the check and the write are one transaction.
+      const stale = ctx.db.tx(() => {
+        const reason = changedSince(before, enrichmentState(ctx, replaceId));
+        if (!reason) ctx.db.update('enrichments', replaceId, { payload: sampled.payload, status: 'verified', checks });
+        return reason;
+      });
+      if (stale) {
+        setIssuesStatus(ctx, projectId, issueIds, 'open', `The redrawn graph was not applied: ${stale}`);
+        return { made: 0, skipped: stale };
+      }
+      ctx.events.emit('enrichment.updated', { enrichmentId: replaceId, nodeId, kind: 'graph' }, { projectId });
+      setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
+      return { made: 1, replaced: true };
+    }
+    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+    setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
+    return { made: 1, replaced: false };
   }
-  return { made: graphs.length };
+  for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+  return { made: built.length };
 }
 
 /** One lab example (Python or MATLAB) for one section, run in its sandbox. Idempotent: skipped when the section already has one. */

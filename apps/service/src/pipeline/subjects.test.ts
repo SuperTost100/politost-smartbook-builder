@@ -6,7 +6,7 @@ import { bookOptionsSchema, FIGURE_KINDS, inferSubjectArea, SUBJECT_AREAS, SUBJE
 import { figureSchema, figureSchemaFor } from '../figures/materialize.ts';
 import { toProviderSchema } from '../llm/schema.ts';
 import { figurePlaces } from './figureCheck.ts';
-import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, graphPrompt, figureSetupOf, outlinePrompt, patchPrompt, patchSchemaFor, reviewPrompt, verifyPrompt } from './prompts.ts';
+import { draftPrompt, draftMetaSchemaFor, figureCheckPrompt, figureRules, graphPrompt, figureSetupOf, outlinePrompt, patchParser, patchPrompt, reviewPrompt, verifyPrompt } from './prompts.ts';
 
 const book = (subject: string, title: string, options: Record<string, unknown> = {}) => ({ subject, title, options: bookOptionsSchema.parse(options) });
 const setupOf = (area: SubjectArea, o: { photos?: boolean; policy?: 'helpful' | 'generous' } = {}) =>
@@ -139,11 +139,17 @@ describe('figure schema per subject', () => {
     assert.ok(maths.length < chem.length / 2);
   });
 
-  test('the draft and the fix carry the same smaller schema, and a fix without a figure problem carries none', () => {
+  test('the draft carries the smaller schema; a fix reads figures with the same one, and a fix without a figure problem reads none', () => {
     const maths = setupOf('mathematics');
     assert.doesNotMatch(JSON.stringify(toProviderSchema(draftMetaSchemaFor(maths))), /smiles/);
-    assert.match(JSON.stringify(toProviderSchema(patchSchemaFor(maths))), /xRange/);
-    assert.doesNotMatch(JSON.stringify(toProviderSchema(patchSchemaFor(null))), /figures|xRange/);
+    const plot = { key: 'p', kind: 'plot', caption: 'c', alt: 'a', plot: { xRange: [0, 1], yRange: [0, 1], functions: [{ expr: 'x' }] } };
+    const answer = `@@@ block 0\nTesto.\n@@@ figures\n${JSON.stringify([plot])}`;
+    const read = patchParser(maths, { blocks: 1, issues: 1 })(answer);
+    assert.ok(read.ok && read.data.figures.length === 1, 'a plot figure with its nullable fields left out parses');
+    const structure = { ...plot, kind: 'structure', structure: { smiles: 'O', style: 'lewis', lonePairs: true, formula: 'H2O' } };
+    assert.equal(patchParser(maths, { blocks: 1, issues: 1 })(`@@@ figures\n${JSON.stringify([structure])}`).ok, false, 'a maths book cannot add a structure');
+    const none = patchParser(null, { blocks: 1, issues: 1 })(answer);
+    assert.ok(none.ok && none.data.figures.length === 0, 'without figure rules a figures part is ignored');
   });
 
   test('a stored figure request of another kind still parses with the full schema', () => {
@@ -159,11 +165,11 @@ describe('prompts that name the subject', () => {
   test('a fix gets the figure rules only when it may add a figure', () => {
     const without = patchPrompt(base);
     assert.doesNotMatch(without.system, /FIGURES|:::image blocks? in the block|Kinds \(/);
-    assert.doesNotMatch(without.prompt, /"figures"/);
+    assert.doesNotMatch(without.prompt, /@@@ figures/);
     const withRules = patchPrompt({ ...base, figures: setupOf('mathematics') });
     assert.match(withRules.system, /Add a figure only when a problem or the author's instruction asks for one/);
     assert.match(withRules.system, /- plot:/);
-    assert.match(withRules.prompt, /"figures": \[\]/);
+    assert.match(withRules.prompt, /@@@ figures\n<a JSON array/);
     assert.doesNotMatch(withRules.system, /Find those places|Most sections/);
   });
 
