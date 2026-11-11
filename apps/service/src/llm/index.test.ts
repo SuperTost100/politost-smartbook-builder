@@ -7,7 +7,7 @@ import { DEFAULT_ROUTES, ROLES, type Role } from '@smartbuilder/domain';
 import { z } from 'zod';
 import { TaskError } from '../queue/queue.ts';
 import { setNlmRunner } from '../evidence/nlm.ts';
-import { callTimeoutMs, classifyError, getConnections, llmTuning, parseRetryAfter, probeRole, resetConnectionsCache, resetLlmState, runRole, setFunnel } from './index.ts';
+import { callTimeoutMs, classifyError, FollowUpError, getConnections, llmTuning, openRole, parseRetryAfter, probeRole, resetConnectionsCache, resetLlmState, runRole, setFunnel, withRole } from './index.ts';
 import { FakeFunnel, makeCtx, seedProject, usageOf } from './testkit.ts';
 
 const schema = z.object({ kind: z.enum(['a', 'b']), note: z.string().optional() });
@@ -681,6 +681,257 @@ describe('a book that must not continue on a replacement for Claude', () => {
     setRoutes({ editor: { primary: route('codex'), fallback: route('claude') } });
     fake.next(() => new Error('usage limit reached'), () => ({ text: 'ok' }));
     assert.equal((await runRole(kit.ctx, { ...base, role: 'editor', projectId: 'p1' })).route.provider, 'claude');
+  });
+});
+
+/** The step of a provider that keeps its process: the session is live after the turn. */
+const live = (id: string, text: string, extra: Record<string, unknown> = {}) => () => { fake.live.add(id); return { text, sessionId: id, ...extra }; };
+
+describe('a conversation that continues after the first answer', () => {
+  const png = Buffer.from('fakepng');
+  const b64 = png.toString('base64');
+
+  test('a follow-up in a live session sends only the message, and the session stays open until the handle is closed', async () => {
+    setRoutes({ writer: { primary: route('claude'), fallback: route('codex') } });
+    fake.next(live('s1', 'draft'), live('s1', 'OK'));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    assert.equal(talk.result.text, 'draft');
+    assert.deepEqual(fake.closed, [], 'open after the first answer');
+    const back = await talk.send('check it');
+    assert.equal(back.text, 'OK');
+    const [first, second] = fake.calls;
+    assert.equal(second.sessionId, 's1');
+    assert.equal(second.prompt, 'check it');
+    assert.equal(second.attachments, undefined);
+    assert.equal(second.selection.provider, 'claude');
+    assert.equal(first.sessionId, undefined);
+    assert.deepEqual(fake.closed, []);
+    talk.close();
+    talk.close();
+    assert.deepEqual(fake.closed, ['s1'], 'closed once');
+  });
+
+  test('without a live session the follow-up replays the first prompt, the last answer and the message in a new conversation', async () => {
+    setRoutes({ writer: { primary: route('antigravity') } });
+    fake.next(() => ({ text: 'x'.repeat(13_000), sessionId: 'old' }), () => ({ text: 'second', sessionId: 'new' }), () => ({ text: 'third' }));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    await talk.send('check it');
+    const replay = fake.calls[1];
+    assert.equal(replay.sessionId, undefined);
+    assert.match(replay.prompt, /the prompt/);
+    assert.match(replay.prompt, /x{12000}\n\[truncated\]/);
+    assert.doesNotMatch(replay.prompt, /x{12001}/);
+    assert.match(replay.prompt, /check it$/);
+    assert.equal(replay.system, 'sys');
+    // The last answer is now the second one.
+    await talk.send('again');
+    assert.match(fake.calls[2].prompt, /second/);
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['antigravity', 'antigravity', 'antigravity']);
+    talk.close();
+    assert.deepEqual(fake.closed.sort(), ['new', 'old'], 'a session started by a replay is closed too');
+  });
+
+  test('a session that died is replayed on the same route', async () => {
+    setRoutes({ writer: { primary: route('codex') } });
+    fake.next(live('s1', 'first'), () => ({ text: 'second', sessionId: 's2' }));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    fake.live.delete('s1');
+    assert.equal((await talk.send('go on')).text, 'second');
+    assert.equal(fake.calls[1].sessionId, undefined);
+    assert.match(fake.calls[1].prompt, /first/);
+    talk.close();
+  });
+
+  test('images on a follow-up go with it in a live session, and with the first images in a replay', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'draft'), live('s1', 'red'), () => ({ text: 'again', sessionId: 's3' }));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer', images: [Buffer.from('first')] });
+    await talk.send('what colour?', { images: [png] });
+    assert.deepEqual(fake.calls[1].attachments, [{ type: 'image', mediaType: 'image/png', data: b64 }]);
+    assert.equal(fake.calls[1].sessionId, 's1');
+    fake.live.delete('s1');
+    await talk.send('and now?', { images: [png] });
+    assert.equal(fake.calls[2].sessionId, undefined);
+    assert.deepEqual(fake.calls[2].attachments?.map((a) => a.data), [Buffer.from('first').toString('base64'), b64]);
+    talk.close();
+  });
+
+  test('a route that cannot read images refuses a follow-up with images before any call', async () => {
+    setRoutes({ writer: { primary: route('antigravity') } });
+    fake.next(() => ({ text: 'draft' }));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    await assert.rejects(talk.send('look', { images: [png] }), (e: unknown) => e instanceof FollowUpError && e.kind === 'input');
+    assert.equal(fake.calls.length, 1);
+    assert.equal(talk.result.text, 'draft');
+    talk.close();
+  });
+
+  test('a failed follow-up throws a FollowUpError, does not leave the route, and leaves the first result usable', async () => {
+    setRoutes({ writer: { primary: route('claude'), fallback: route('codex') } });
+    fake.next(live('s1', 'draft'), () => new Error("You've hit your usage limit. Try again in 2 hours."), live('s1', 'fine'));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    await assert.rejects(talk.send('check it'), (e: unknown) => {
+      assert.ok(e instanceof FollowUpError && e instanceof TaskError);
+      assert.equal(e.kind, 'quota');
+      assert.equal(e.retryAfterMs, 2 * 3_600_000);
+      return true;
+    });
+    assert.deepEqual(fake.calls.map((c) => c.selection.provider), ['claude', 'claude'], 'no fallback for a follow-up');
+    assert.equal(talk.result.text, 'draft');
+    assert.equal((await talk.send('once more')).text, 'fine');
+    talk.close();
+  });
+
+  test('a follow-up that times out is a temporary FollowUpError, and a caller abort passes through unchanged', async () => {
+    setRoutes({ writer: { primary: route('codex') } });
+    const hang = (input: { signal?: AbortSignal }) => new Promise<never>((_res, rej) => input.signal!.addEventListener('abort', () => rej(new FunnelError('aborted', 'aborted'))));
+    fake.next(() => ({ text: 'draft' }), hang, hang);
+    const abort = new AbortController();
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer', signal: abort.signal });
+    llmTuning.callTimeoutMs = 30;
+    await assert.rejects(talk.send('slow'), (e: unknown) => e instanceof FollowUpError && e.kind === 'temporary' && /Timed out/.test(e.message));
+    llmTuning.callTimeoutMs = 10 * 60_000;
+    const pending = talk.send('stop me');
+    setTimeout(() => abort.abort(new Error('stopped by the author')), 10);
+    await assert.rejects(pending, (e: unknown) => !(e instanceof TaskError) && /stopped by the author/.test(String(e)));
+    assert.deepEqual(usageRows().map((r) => r.error_kind), [null, 'timeout', 'aborted']);
+  });
+
+  test('withRole closes the session when the callback succeeds and when it throws', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'draft'), live('s1', 'OK'), live('s2', 'draft'));
+    const out = await withRole(kit.ctx, { ...base, role: 'writer' }, async (talk) => (await talk.send('check')).text);
+    assert.equal(out, 'OK');
+    assert.deepEqual(fake.closed, ['s1']);
+    await assert.rejects(withRole(kit.ctx, { ...base, role: 'writer' }, async () => { throw new Error('the caller broke'); }), /the caller broke/);
+    assert.deepEqual(fake.closed, ['s1', 's2']);
+  });
+
+  test('a first call that fails or does not validate leaves no open session, and a closed handle refuses messages', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'not json'), live('s1', 'still not'));
+    await assert.rejects(openRole(kit.ctx, { ...base, role: 'writer', schema }), (e: unknown) => e instanceof TaskError && e.kind === 'input');
+    assert.deepEqual(fake.closed, ['s1']);
+    fake.next(live('s3', 'draft'));
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    talk.close();
+    await assert.rejects(talk.send('late'), (e: unknown) => e instanceof FollowUpError && /closed/.test(e.message));
+    assert.equal(fake.calls.length, 3);
+  });
+
+  test('every turn is a usage row with the next attempt number on the route that answered', async () => {
+    setRoutes({ writer: { primary: route('claude'), fallback: route('codex') } });
+    fake.next(
+      () => new Error('usage limit reached'),
+      live('s1', '{"kind":"zzz"}', { usage: usageOf(10, 2) }),
+      live('s1', '{"kind":"a"}', { usage: usageOf(11, 3) }),
+      live('s1', 'OK', { usage: usageOf(5, 1) }),
+      () => new Error('socket hang up'),
+    );
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer', schema, taskId: 't1' });
+    await talk.send('check');
+    await talk.send('and again').catch(() => undefined);
+    talk.close();
+    assert.deepEqual(usageRows().map((r) => [r.provider, r.attempt, r.fallback, r.ok, r.error_kind, r.role, r.task_id]), [
+      ['claude', 1, 0, 0, 'quota', 'writer', 't1'],
+      ['codex', 2, 1, 1, null, 'writer', 't1'],
+      ['codex', 3, 1, 1, null, 'writer', 't1'],
+      ['codex', 4, 1, 1, null, 'writer', 't1'],
+      ['codex', 5, 1, 0, 'temporary', 'writer', 't1'],
+    ]);
+    assert.equal(usageRows()[3].input_tokens, 5);
+  });
+
+  test('the provider slot is held for one call at a time, not while the caller works between turns', async () => {
+    setRoutes({ writer: { primary: route('codex') } }, { codex: 1 });
+    let release!: () => void;
+    fake.next(
+      live('s1', 'draft'),
+      () => ({ text: 'other' }),
+      () => new Promise<{ text: string }>((r) => { release = () => r({ text: 'checked' }); }),
+      () => ({ text: 'last' }),
+    );
+    const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
+    // The conversation is open and idle: another call on the same provider runs at once.
+    assert.equal((await runRole(kit.ctx, { ...base, role: 'writer' })).text, 'other');
+    // While a follow-up runs, another call waits for its slot.
+    const follow = talk.send('check');
+    await new Promise((r) => setTimeout(r, 10));
+    const other = runRole(kit.ctx, { ...base, role: 'writer' });
+    await new Promise((r) => setTimeout(r, 10));
+    assert.equal(fake.calls.length, 3, 'the other call has not started');
+    release();
+    assert.equal((await follow).text, 'checked');
+    assert.equal((await other).text, 'last');
+    talk.close();
+  });
+});
+
+describe('a parse function instead of a schema', () => {
+  type Parsed = { title: string; body: string };
+  const parse = (text: string) => {
+    const m = /^TITLE: (.+)\n\n([\s\S]+)$/.exec(text);
+    return m ? { ok: true as const, data: { title: m[1], body: m[2] } } : { ok: false as const, problem: 'The answer must start with a TITLE: line, then an empty line, then the text.' };
+  };
+
+  test('an accepted answer: the parser gets the text without terminal codes and control characters, no JSON schema is sent, and nothing else is cleaned', async () => {
+    setRoutes({ writer: { primary: route('codex') } });
+    // A real newline right before "u" inside math is what the schema cleaner would turn into "\nu". The parser must see it unchanged.
+    fake.next(() => ({ text: 'TITLE: A\u001b[31m\u0001\n\nx\t$a\nu$ </markdown>\r\n' }));
+    let seen = '';
+    const out = await runRole<Parsed>(kit.ctx, { ...base, role: 'writer', parse: (t) => { seen = t; return parse(t); } });
+    assert.equal(seen, 'TITLE: A\n\nx\t$a\nu$ \r\n', 'terminal codes, control bytes and tool markup removed; tab, newline and the rest kept');
+    assert.deepEqual(out.data, { title: 'A', body: 'x\t$a\nu$ \r\n' });
+    assert.equal(out.text, seen);
+    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls[0].responseSchema, undefined);
+  });
+
+  test('a rejected answer gets one repair turn with the problem and a request for the full answer, not for JSON', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'no header here'), live('s1', 'TITLE: B\n\ntext'));
+    const out = await runRole<Parsed>(kit.ctx, { ...base, role: 'writer', parse });
+    assert.deepEqual(out.data, { title: 'B', body: 'text' });
+    const repair = fake.calls[1];
+    assert.equal(repair.sessionId, 's1');
+    assert.match(repair.prompt, /must start with a TITLE: line/);
+    assert.match(repair.prompt, /full corrected answer in the same format/);
+    assert.doesNotMatch(repair.prompt, /JSON/);
+    assert.equal(repair.responseSchema, undefined);
+    assert.deepEqual(usageRows().map((r) => r.attempt), [1, 2]);
+    assert.deepEqual(fake.closed, ['s1']);
+  });
+
+  test('without a live session the repair replays the prompt and the rejected answer', async () => {
+    setRoutes({ writer: { primary: route('antigravity') } });
+    fake.next(() => ({ text: 'no header here' }), () => ({ text: 'TITLE: B\n\ntext' }));
+    await runRole<Parsed>(kit.ctx, { ...base, role: 'writer', parse });
+    assert.match(fake.calls[1].prompt, /the prompt[\s\S]*no header here[\s\S]*must start with a TITLE/);
+  });
+
+  test('rejected twice: TaskError input with the problem, two calls, nothing left open', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'bad'), live('s1', 'worse'));
+    await assert.rejects(runRole<Parsed>(kit.ctx, { ...base, role: 'writer', parse }), (e: unknown) => {
+      assert.ok(e instanceof TaskError);
+      assert.equal(e.kind, 'input');
+      assert.match(e.message, /invalid answer twice: The answer must start with a TITLE/);
+      return true;
+    });
+    assert.equal(fake.calls.length, 2);
+    assert.deepEqual(fake.closed, ['s1']);
+  });
+
+  test('the conversation of an accepted parsed answer can continue', async () => {
+    setRoutes({ writer: { primary: route('claude') } });
+    fake.next(live('s1', 'TITLE: A\n\nbody'), live('s1', 'OK'));
+    const text = await withRole<Parsed, string>(kit.ctx, { ...base, role: 'writer', parse }, async (talk) => (await talk.send('check your computations')).text);
+    assert.equal(text, 'OK');
+  });
+
+  test('a schema and a parse function together are a programming error', async () => {
+    await assert.rejects(runRole(kit.ctx, { ...base, role: 'writer', schema, parse: () => ({ ok: false, problem: 'x' }) }), /schema or a parse function/);
+    assert.equal(fake.calls.length, 0);
   });
 });
 
