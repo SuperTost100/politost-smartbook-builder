@@ -28,7 +28,14 @@ A one-chapter Elettrotecnica book was built on a clean data folder with the defa
 - Exam sessions were read with one call each instead of one per question, and a small Codex call carried about 11.7k input tokens, 29% less than the 16.5k measured before the lean Codex home.
 - The run stopped in Generate when the Codex 5-hour window filled. It surfaced problems that the next pull request fixed, among them exam text stored with a literal `\n`, Markdown exam files that did not split, a solutions heading with a qualifier, questions left behind by a deleted source, sentences about "the notes" in the book text, a renamed symbol, and 26 failed calls in 27 seconds on a provider at its limit.
 
-The second part (Review, Fix, the second Review, Check alignment and an approved export) was still running when this was written, so nothing is claimed here about how many rounds it takes to converge on this book.
+The second part ran on the code of PR #84, with the same data folder and the same routes. It went through Review, Fix, a second Review, Check alignment and an approved export, and measured this:
+
+- **The loop converged in one fix round.** After the second Review the book had no open issue, and the approved export passed the validator with no finding.
+- **Cost of the chapter.** The whole chapter took 93 successful model calls and about 1.26M input tokens, and Generate took 72 of those calls and 1.01M. The checks of the 40 exercises and exam questions were 47% of Generate's input, more than drafting and the first chapter review together.
+- **The convergence came from lint and the solution checks.** The chapter review reported no issue in either round. It did not see the stray word a fix had left at the end of an exam solution, the symbol `f_t` where the papers write `f_c`, or the wrong cut-off label in a circuit figure.
+- **What the run covers.** It is one small chapter of an electrical engineering book with three sections, so the number of rounds and the cost say little about a larger book.
+
+The problems this run found were fixed afterwards in PR #84 and PR #86. Neither fix has been through a second real run.
 
 ## What 0.4.0 added
 
@@ -38,7 +45,7 @@ The second part (Review, Fix, the second Review, Check alignment and an approved
 - **Review and fix loop.** A review of changed text reports only blockers and majors. Fixes apply directly, after guards. A review says when it left nothing serious open.
 - **Cost.** Exam sessions are read in one call, numeric answers are recomputed in a sandbox, only exams are classified, and Codex and web calls run in lean private homes.
 - **Screens.** Book setup (course program, subject area, figure policy, circuit symbols, generation options), Sources (the exam split result with Split with AI), Review (alignment with the program), Connections (usage per provider, Codex usage windows) and the Manuscript's figure dialog and **Add figure**.
-- **Existing books.** They need no migration. A book without a subject area gets one inferred from its subject and title, and figures stored before 0.4.0 look right on the light plate.
+- **Existing books.** They need no migration. A book without a subject area gets one inferred from its subject and title, and figures stored before 0.4.0 look right on the light plate. A Markdown exam file prepared before 0.4.0 keeps the questions it was split into, because Prepare reuses the questions of a file that has any and does not split it again. To get the new split, delete the file and upload it again, or press **Split with AI** on it, which replaces its questions but is refused when any of them was edited or checked. A deleted file takes its questions with it, except the ones you edited and the ones a chapter uses that were already read from the pages. Those stay in the book without a source, and the new upload stores its own copies of them.
 
 ## Decisions that still explain the design
 
@@ -67,7 +74,9 @@ Not working or not tested:
 - **Quiz items** are examples of level and style, not book content, because the reader has no multiple-choice format. The Fisica quiz file splits into 573 items but has no answers: its right options are only highlighted in the PDF.
 - **Outside research** is a per-section action ("Find outside sources") and not part of Generate. AI image generation is not implemented.
 - **A book with Python on may get no lab example.** The picker chose none in the acceptance run, although a Python book is meant to get one per chapter.
-- **The number of rounds to a clean review** was measured on Analisi (three rounds after the fix change) and is not known for the other books yet.
+- **The number of rounds to a clean review** was measured on Analisi (three rounds after the fix change) and on the small Elettrotecnica chapter (one fix round), and is not known for the other books yet.
+- **The exam header clean-up knows a fixed list of labels**: Corso, Corso di Laurea, Prova, Durata, Nome e cognome, Matricola, Data, Docente and Anno accademico. A paper whose header table uses other labels keeps those cells at the end of the previous paper's last solution.
+- **The new plain-text exam reader has not read a real session yet.** Its parser and its guard have tests, but the acceptance run used sessions read before the change.
 - **The NotebookLM login** on the owner's server lives in a Chrome profile that a cron job refreshes every 6 hours. If Google forces a new sign-in, repeat the steps in [Setup](docs/SETUP.md#notebooklm).
 
 Small shortcuts, each with a comment in the code that says how to upgrade it: a proof is recognised by its label (`pipeline/align.ts`), a symbol without a subscript is left out of the exam symbols (`pipeline/exam.ts`), a heading of an unusual shape is not shown to Split with AI (`pipeline/examSplit.ts`), a figure issue that quotes a paragraph counts as asking for a missing figure (`pipeline/review.ts`), and enrichment edits are told apart by comparing stored texts (`pipeline/enrich.ts`).

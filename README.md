@@ -98,7 +98,7 @@ Closing the browser does not stop generation. Stopping the service pauses it, an
 
 Everything lives in one folder: the database, your original files, rendered pages, figures and exports. On Linux that's `~/.local/share/politost-smart-builder`. [Setup](docs/SETUP.md#data) lists the other systems, and `--data-dir` or `SMARTBUILDER_DATA_DIR` moves it. `npm run backup` writes the whole folder to one archive, and it's safe to run while the service is running.
 
-Your sources go to the AI tools you configured and, if you use it, to the book's NotebookLM notebook. Exclude a source on the Sources screen to keep it out. The models run with every tool disabled, so they only read the text Smart Builder sends and can't run commands or touch your files. For Codex, and for Claude Code's web research, the service creates a private config folder inside the data folder that holds only a link to your login, so your own instructions and skills aren't sent with every call.
+Your sources go to the AI tools you configured and, if you use it, to the book's NotebookLM notebook. Exclude a source on the Sources screen to keep it out. The models run with every tool disabled, except that the web research of **Find outside sources** lets Claude Code use WebSearch and WebFetch. So they only read the text Smart Builder sends (and, for that one call, pages on the web) and can't run commands or touch your files. For Codex, and for Claude Code's web research, the service creates a private config folder inside the data folder that holds only a link to your login, so your own instructions and skills aren't sent with every call.
 
 ## Configuration
 
