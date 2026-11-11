@@ -43,6 +43,9 @@ export function startDraw(ctx: AppContext, projectId: string, o: { nodeId: strin
   return ctx.queue.runSummary(runId)!;
 }
 
+/** A redraw that changed nothing in the book. The warning reaches the run, so the dialog does not say the figure was redrawn. */
+const unused = (why: string) => ({ skipped: why, warning: `The new drawing was not used, because ${why}.` });
+
 /**
  * Task `figure.redraw`: the redraw is made on a copy of the figure, and the text is pointed at the copy once it exists. If the
  * author changed that figure meanwhile (a caption, a render, a replacement), the text no longer names the asset the redraw
@@ -53,7 +56,7 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
   const { nodeId, assetId, instruction, shows } = t.task.input as { nodeId: string; assetId: string; instruction: string; shows?: string };
   const old = getAsset(ctx, assetId);
   if (!drawingSpec(old)) throw new TaskError('This figure was not drawn from source code, so it cannot be redrawn.', 'input');
-  if (!showsFigure(currentHead(ctx, projectId, nodeId)?.markdown ?? '', old.filename)) return { skipped: 'the figure is not in the text any more' };
+  if (!showsFigure(currentHead(ctx, projectId, nodeId)?.markdown ?? '', old.filename)) return unused('the figure is not in the text any more');
 
   t.progress(`Redrawing: ${old.caption || old.filename}`);
   const copy = copyAsset(ctx, old);
@@ -78,7 +81,7 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
   const rev = rewriteHead(ctx, projectId, nodeId, (md) => swapSrc(md, old.filename, copy.filename), { origin: 'ai', model: drawn.model ?? null, taskId: t.task.id });
   if (!rev) {
     discardAsset(ctx, copy);
-    return { skipped: 'the figure was changed or left the text while it was being redrawn' };
+    return unused('the figure was changed or left the text while it was being redrawn');
   }
   announce(ctx, projectId, nodeId, rev);
   return { assetId: copy.id, revId: rev.id, look: drawn.look };

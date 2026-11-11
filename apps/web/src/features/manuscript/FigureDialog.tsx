@@ -103,11 +103,11 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   lastShown.current = shown;
   const title = `Figure${number ? ` ${number}` : ''}`;
   if (!open) return null;
-  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
-  // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
-  const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
   const failed = details.error ?? assets.error;
   const retry = () => { void assets.refetch(); if (asset) void details.refetch(); };
+  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} loadError={details.data ? null : failed} retry={retry} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
+  // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
+  const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
   return (
     <Dialog open onClose={onClose} title={title} footer={<button type="button" className="ui-btn" onClick={onClose}>Close</button>}>
       {failed
@@ -119,7 +119,7 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   );
 }
 
-function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
+function FigureEditor({ details, stale, loadError, retry, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; loadError: Error | null; retry: () => void; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const drawing = details.drawing;
@@ -138,6 +138,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const [srcOpen, setSrcOpen] = useState(false);
   const [compileError, setCompileError] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
+  /** The redraw ran but its drawing was dropped, because the figure changed or left the text meanwhile. */
+  const [dropped, setDropped] = useState(false);
   const [error, setError] = useState<string | null>(null);
   /** Why an image was refused: shown next to the button that chose it, because the general error line sits at the end of a dialog that scrolls. */
   const [replaceError, setReplaceError] = useState<string | null>(null);
@@ -150,6 +152,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   /** Said inside the dialog because a toast would sit behind its scrim. */
   const [rendered, setRendered] = useState(false);
   const [replaced, setReplaced] = useState(false);
+  /** This dialog replaced the drawing with an image, so the source went with it by the author's choice. */
+  const [sourceGone, setSourceGone] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
   const replaceErrorRef = useRef<HTMLDivElement>(null);
   useEffect(() => { if (replaceError) replaceErrorRef.current?.scrollIntoView({ block: 'nearest' }); }, [replaceError]);
@@ -169,8 +173,14 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
     if (!runId || !run.data || !finished || handled.current.has(runId)) return;
     handled.current.add(runId);
     setRunId(null);
+    const unused = run.data.status === 'completed' ? run.data.warnings[0]?.message : undefined;
+    if (unused) {
+      setDropped(true);
+      setFailure(unused);
+      setInstruction((now) => now || asked);
+    }
     if (run.data.status === 'completed') {
-      setRedrawn(true);
+      if (!unused) setRedrawn(true);
       // No ['figure'] here: the figure's details are keyed by the section head and the asset, so the new picture is fetched under its own key, and asking again for the one the text left would answer 404.
       for (const key of [['section', pid, nodeId], ['assets', pid], ['preview', pid], ['history', pid, nodeId]]) void qc.invalidateQueries({ queryKey: key });
     } else if (run.data.status === 'failed') {
@@ -193,7 +203,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const startRender = () => { if (renderSent.current) return; renderSent.current = true; render.mutate(); };
   const redraw = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw', { params: route, body: { baseRevId: details.headRevId, instruction: instruction.trim(), ...(drawing && shows.trim() && shows !== drawing.shows ? { shows } : {}) } }),
-    onMutate: () => { setFailure(null); setError(null); setRedrawn(false); setAsked(instruction.trim()); },
+    onMutate: () => { setFailure(null); setDropped(false); setError(null); setRedrawn(false); setAsked(instruction.trim()); },
     onSuccess: (r) => { setRunId(r.id); setInstruction(''); },
     onError: (e) => setError(errorText(e)),
   });
@@ -216,7 +226,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const replace = useMutation({
     mutationFn: (file: File) => { const form = new FormData(); form.set('baseRevId', details.headRevId); form.set('file', file, file.name); return api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace', { params: route, form }); },
     onMutate: () => { setError(null); setReplaceError(null); setReplaced(false); },
-    onSuccess: (sv) => { setApplied(true); setReplaced(true); done(sv); },
+    // The author chose to replace the drawing, so a source edit they had not rendered goes with it.
+    onSuccess: (sv) => { setApplied(true); setReplaced(true); if (drawing) setSourceGone(true); done(sv); },
     onError: (e) => setReplaceError(errorText(e)),
   });
   const remove = useMutation({
@@ -231,14 +242,16 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   // The lint blocks an image without alt text, so an empty one is not saved.
   const altMissing = !alt.trim();
   const unrendered = !!drawing && source !== drawing.source;
+  // The drawing became an image somewhere else while its source was being edited here: the edit has nowhere to go, and it stays until the author lets it go.
+  const lostSource = !drawing && sourceField.theirs !== null && !sourceGone;
   // Someone else saved a field the author has edited: nothing is written until they choose which text stays.
   const conflicts = [
     { field: captionField, what: 'caption', code: false },
     { field: altField, what: 'alt text', code: false },
     ...(drawing ? [{ field: showsField, what: 'description', code: false }, { field: sourceField, what: 'source', code: true }] : []),
   ].filter((c) => c.field.theirs !== null);
-  const held = busy || conflicts.length > 0;
-  const unsaved = dirty || unrendered;
+  const held = busy || conflicts.length > 0 || lostSource;
+  const unsaved = dirty || unrendered || lostSource;
   // The discard question replaces the footer buttons: focus goes to its safe answer, and back to where the author was typing when they keep editing.
   const keepBtn = useRef<HTMLButtonElement>(null);
   const cameFrom = useRef<HTMLElement | null>(null);
@@ -278,6 +291,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
       onClose={requestClose}
       holdEscape={redrawing}
       wrapTab
+      inertBody={leaving}
       className="fd"
       title={<>{title} <span className={`ui-badge${details.kind === 'drawing' ? ' ui-badge--accent' : ''} fd-kind`}>{KIND_LABEL[details.kind]}</span></>}
       footer={leaving ? (
@@ -316,6 +330,21 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
           </div>
         </div>
       ))}
+      {lostSource && (
+        <div className="ui-banner ui-banner--warning fd-conflict" role="alert">
+          <div className="ui-banner__body">
+            <span className="ui-banner__title">This figure was replaced with an image while you were editing its source</span>
+            <span>An image has no source, so your edit cannot be rendered here. The drawing it belonged to is in the section history. Copy the source below if you need it.</span>
+            <textarea className="ui-textarea fd-conflict__code" rows={6} readOnly value={source} aria-label="Your unrendered source" />
+            <div className="ui-banner__actions">
+              <button type="button" className="ui-btn ui-btn--sm" onClick={sourceField.takeTheirs}>Discard my source</button>
+            </div>
+          </div>
+        </div>
+      )}
+      {stale && loadError && (
+        <div className="ui-banner ui-banner--warning fd-conflict" role="alert">{errorText(loadError)} <button type="button" className="ui-btn ui-btn--link" onClick={retry}>Try again</button></div>
+      )}
       <p className="ui-field__hint fd-note">Render and Replace change the figure in the book at once, and the earlier one stays in the section history. A caption, alt text or description is saved with Save figure.</p>
       <div className="fd-grid">
         {/* The picture column stays in view while the form scrolls. With a message in it the column scrolls with the form instead, so a message below the fold of a short window can be reached. */}
@@ -340,13 +369,13 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
         <div className="fd-col">
           <div className="ui-field">
             <label className="ui-field__label" htmlFor="fd-caption">Caption</label>
-            <input id="fd-caption" className="ui-input" value={caption} onChange={(e) => setCaption(e.target.value)} disabled={redrawing} />
+            <input id="fd-caption" className="ui-input" value={caption} onChange={(e) => setCaption(e.target.value)} disabled={redrawing || save.isPending} />
             <span className="ui-field__hint">{number && <><span className="fd-caption-id">Fig. {number}</span> is</>}{!number && 'The figure number is'} added in front of the caption automatically.{details.kind === 'photo' ? ' The credit line is part of the caption: keep it.' : ''}{!showCaption ? ' Without a caption the figure shows no text under it.' : ''}</span>
           </div>
 
           <div className="ui-field">
             <label className="ui-field__label" htmlFor="fd-alt">Alt text</label>
-            <textarea id="fd-alt" className="ui-textarea fd-alt" rows={2} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={redrawing} aria-invalid={altMissing} aria-describedby="fd-alt-hint" />
+            <textarea id="fd-alt" className="ui-textarea fd-alt" rows={2} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={redrawing || save.isPending} aria-invalid={altMissing} aria-describedby="fd-alt-hint" />
             <span id="fd-alt-hint" className={`ui-field__hint${altMissing ? ' fd-alt-missing' : ''}`}>{altMissing ? 'Alt text is needed: a figure without it does not pass the check. ' : ''}What a reader who cannot see the figure is told in its place. A double quote is saved as ”.</span>
           </div>
 
@@ -354,7 +383,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
             <>
               <div className="ui-field">
                 <label className="ui-field__label" htmlFor="fd-shows">What it shows</label>
-                <textarea id="fd-shows" className="ui-textarea fd-shows" rows={4} value={shows} onChange={(e) => setShows(e.target.value)} disabled={redrawing} />
+                <textarea id="fd-shows" className="ui-textarea fd-shows" rows={4} value={shows} onChange={(e) => setShows(e.target.value)} disabled={redrawing || save.isPending} />
                 <span className="ui-field__hint">The writer's description of the drawing. Redraw with AI starts from it. Changing it does not change the picture until you redraw.</span>
               </div>
 
@@ -406,7 +435,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
                 {failure && (
                   <div className="ui-banner ui-banner--danger" role="alert">
                     <div className="ui-banner__body">
-                      <span className="ui-banner__title">The redraw failed. The figure is unchanged.</span>
+                      <span className="ui-banner__title">{dropped ? 'The redraw was not used.' : 'The redraw failed. The figure is unchanged.'}</span>
                       <span className="fd-failure">{failure}</span>
                       <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => setFailure(null)}>Dismiss</button></div>
                     </div>

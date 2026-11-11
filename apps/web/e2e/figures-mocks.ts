@@ -26,6 +26,12 @@ export interface FigureMock {
   /** The status the redraw or draw run reports. */
   runStatus: 'running' | 'completed' | 'failed' | 'cancelled';
   runError: string;
+  /** The warning a completed redraw carries when the service dropped its drawing. */
+  runWarning: string;
+  /** How long a save of the figure's caption, alt text or description takes to answer. */
+  saveMs: number;
+  /** A figure's details answer 500, as when the service cannot read them. */
+  detailsFail: boolean;
   /** Every write answers 409, as when the text moved on. */
   stale: boolean;
   /** History lists a version the author made by Restore (of version rvf0) on top, as the service does. */
@@ -39,7 +45,7 @@ export interface FigureMock {
   /** Ids the page asked for that the text no longer shows (the service answers 404 to them). */
   notFound: string[];
   /** Another tab changes the figure the text shows now (a copy and a new head, as a save does), and this page is told unless `quiet`. */
-  elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string }, o?: { quiet?: boolean }) => void;
+  elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string; origin?: 'imported' }, o?: { quiet?: boolean }) => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -56,7 +62,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
   let release!: () => void;
   const gate = new Promise<void>((r) => { release = r; });
   const fm: FigureMock = {
-    writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, readMs: 0, restored: false, head: () => headId, figures: () => [...figs.values()],
+    writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', runWarning: '', detailsFail: false, saveMs: 0, stale: false, putMs: 0, readMs: 0, restored: false, head: () => headId, figures: () => [...figs.values()],
     elsewhere: (change, opts) => {
       const id = [...figs.keys()].find((k) => blocks.includes(`fig:${k}`))!;
       swap(id, change);
@@ -64,7 +70,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     },
     complete: () => {
       fm.runStatus = 'completed';
-      if (pending?.kind === 'redraw') swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn`, ...(pending.shows ? { shows: pending.shows } : {}) });
+      if (pending?.kind === 'redraw' && !fm.runWarning) swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn`, ...(pending.shows ? { shows: pending.shows } : {}) });
       if (pending?.kind === 'draw') {
         const id = `a${++n}`;
         figs.set(id, { id, filename: `drawn-${n}.svg`, caption: pending.caption, alt: 'Schema', origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
@@ -87,7 +93,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     assetId: f.id, filename: f.filename, kind: f.origin === 'generated-svg' ? 'drawing' : f.origin === 'stock' ? 'photo' : 'image', caption: f.caption, alt: f.alt, createdAt: f.createdAt,
     drawing: f.origin === 'generated-svg' ? { shows: f.shows, engine: 'typst', source: f.source, family: 'circuit' } : null, headRevId: headId, redrawRunId: null,
   });
-  const run = (status: string) => ({ id: 'r-fig', projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: [] });
+  const run = (status: string) => ({ id: 'r-fig', projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: status === 'completed' && fm.runWarning ? [{ taskId: 'tk-fig', label: 'Redraw', message: fm.runWarning }] : [] });
   const swap = (id: string, make: Partial<MockFigure>) => {
     const old = figs.get(id)!;
     const fresh: MockFigure = { ...old, ...make, id: `a${++n}`, filename: `fig-r${n}.svg`, createdAt: make.createdAt ?? new Date().toISOString() };
@@ -132,11 +138,12 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       const f = figs.get(fig[1]);
       if (!f) return json({ error: { code: 'not_found', message: 'This figure was not found.' } }, 404);
       if (!blocks.includes(`fig:${f.id}`)) { fm.notFound.push(f.id); return json({ error: { code: 'not_found', message: 'This figure was not found.' } }, 404); }
-      if (method === 'GET') return json(details(f));
+      if (method === 'GET') return fm.detailsFail ? json({ error: { code: 'internal', message: 'The figure could not be read.' } }, 500) : json(details(f));
       const b = body();
       write(fig[2] === 'replace' ? { name: 'upload' } : b);
       if (fm.stale) return stale();
       if (method === 'PATCH') {
+        if (fm.saveMs) await new Promise((r) => setTimeout(r, fm.saveMs));
         // A caption, alt text or description change is a copy of the figure and a new revision, as in the service.
         if ((b.caption !== undefined && b.caption !== f.caption) || (b.alt !== undefined && b.alt !== f.alt) || (b.shows !== undefined && b.shows !== f.shows)) {
           swap(f.id, { caption: b.caption ?? f.caption, alt: b.alt ?? f.alt, shows: b.shows ?? f.shows, createdAt: f.createdAt });

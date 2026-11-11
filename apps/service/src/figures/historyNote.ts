@@ -44,7 +44,8 @@ export function figureNote(before: string, after: string, assets: Map<string, As
   if (now.alt !== old.alt) parts.push('alt text changed');
   if (was1 && is1) {
     if (is1.shows !== was1.shows) parts.push('description changed');
-    if (is1.source !== was1.source) parts.push(o.origin === 'ai' ? `redrawn${o.instruction ? `: ${quote(o.instruction, 80)}` : ''}` : 'source rendered');
+    // A redraw can give back the same source: the task that made the revision still says it was one.
+    if (o.instruction || is1.source !== was1.source) parts.push(o.origin === 'ai' ? `redrawn${o.instruction ? `: ${quote(o.instruction, 80)}` : ''}` : 'source rendered');
   }
   return parts.length ? `${label(old)}: ${parts.join(', ')}` : null;
 }

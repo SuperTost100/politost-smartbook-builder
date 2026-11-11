@@ -172,8 +172,9 @@ describe('redraw task', () => {
       saveHuman(ctx(), P, N, h.markdown.replace(/:::image\{[^}]*\}\n:::\n\n/, ''), h.id);
       return { text: GOOD_2, usage: usageOf(10, 10) };
     }, say('OK'));
-    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'x' })) as { skipped?: string };
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'x' })) as { skipped?: string; warning?: string };
     assert.match(out.skipped ?? '', /left the text/);
+    assert.match(out.warning ?? '', /^The new drawing was not used, because /, 'the run carries a warning, so the dialog does not say "Redrawn"');
     assert.ok(!currentHead(ctx(), P, N)!.markdown.includes(':::image'));
     assert.equal(listAssets(ctx(), P).length, 1, 'the copy was deleted');
     assert.ok(file);
@@ -187,8 +188,9 @@ describe('redraw task', () => {
       saved = saveFigureDetails(ctx(), P, N, getAsset(ctx(), assetId), { caption: 'Caption from another tab' }, h.id)!.id;
       return { text: GOOD_2, usage: usageOf(10, 10) };
     }, say('OK'));
-    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' })) as { skipped?: string };
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' })) as { skipped?: string; warning?: string };
     assert.match(out.skipped ?? '', /changed or left the text/);
+    assert.match(out.warning ?? '', /^The new drawing was not used, because /);
     const now = currentHead(ctx(), P, N)!;
     assert.equal(now.id, saved);
     assert.match(now.markdown, /caption="Caption from another tab"/);
