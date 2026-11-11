@@ -664,6 +664,27 @@ test.describe('figure dialog, a drawn figure', () => {
     await shot(page, '2e-refused');
   });
 
+  test('a refused replacement says so next to the button, in view even when the dialog scrolls', async ({ page }) => {
+    const fm = await open(page);
+    await page.setViewportSize({ width: 1440, height: 560 });
+    const dialog = await openDialog(page);
+    const input = dialog.locator('input[type=file]');
+    const here = dialog.locator('.fd-col').first().getByRole('alert');
+    await input.setInputFiles({ name: 'grande.png', mimeType: 'image/png', buffer: Buffer.alloc(2 * 1024 * 1024 + 10) });
+    await expect(here).toContainText('The limit is 2 MB');
+    await expect(here).toBeInViewport();
+    // The service's own refusal (here: the text moved on) shows in the same place, and a new attempt clears the old message.
+    fm.stale = true;
+    await input.setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    await expect(here).toContainText('This text changed since you opened it');
+    await expect(here).toBeInViewport();
+    await expect(dialog.locator('.fd-error')).toHaveCount(0);
+    fm.stale = false;
+    await input.setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    await expect(page.getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(here).toHaveCount(0);
+  });
+
   test('remove asks first, Keep backs out, and Remove figure takes the block out of the text (2f)', async ({ page }) => {
     const fm = await open(page);
     const dialog = await openDialog(page);

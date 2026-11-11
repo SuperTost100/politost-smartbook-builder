@@ -47,7 +47,7 @@
 .fd-conflict__code { font: 400 12.5px/18px var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
 .fd-caption-id { font: 400 13px/1 var(--font-mono); color: var(--ink-subtle); }
 /* With two columns the picture stays in view while the form scrolls, so a render or a redraw can be watched from the button that started it. */
-@media (min-width: 761px) { .fd-grid > .fd-col:first-child { position: sticky; top: 0; } }
+@media (min-width: 761px) { .fd-grid > .fd-col--pin { position: sticky; top: 0; } }
 @media (max-width: 760px) {
   .fd-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .fd-preview { min-height: 180px; }

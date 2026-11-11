@@ -139,6 +139,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const [compileError, setCompileError] = useState<string | null>(null);
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Why an image was refused: shown next to the button that chose it, because the general error line sits at the end of a dialog that scrolls. */
+  const [replaceError, setReplaceError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
   /** The author asked to close with unsaved fields and is being asked whether to discard them. */
   const [leaving, setLeaving] = useState(false);
@@ -146,6 +148,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const [applied, setApplied] = useState(false);
   const [redrawn, setRedrawn] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+  const replaceErrorRef = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (replaceError) replaceErrorRef.current?.scrollIntoView({ block: 'nearest' }); }, [replaceError]);
 
   // The compiler's message belongs to the source it was given, so it goes when the stored source changes.
   useEffect(() => setCompileError(null), [drawing?.source]);
@@ -208,8 +212,9 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   });
   const replace = useMutation({
     mutationFn: (file: File) => { const form = new FormData(); form.set('baseRevId', details.headRevId); form.set('file', file, file.name); return api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace', { params: route, form }); },
-    onSuccess: (sv) => { setError(null); setApplied(true); done(sv); toast('Image replaced. The earlier figure is in the section history.'); },
-    onError: (e) => setError(errorText(e)),
+    onMutate: () => { setError(null); setReplaceError(null); },
+    onSuccess: (sv) => { setApplied(true); done(sv); toast('Image replaced. The earlier figure is in the section history.'); },
+    onError: (e) => setReplaceError(errorText(e)),
   });
   const remove = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove', { params: route, body: { baseRevId: details.headRevId } }),
@@ -251,7 +256,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
   const onFile = (file: File | undefined) => {
     if (!file) return;
     const problem = uploadProblem(file);
-    if (problem) { setError(problem); return; }
+    if (problem) { setReplaceError(problem); return; }
     replace.mutate(file);
   };
 
@@ -300,7 +305,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
       ))}
       <p className="ui-field__hint fd-note">Render and Replace change the figure in the book at once, and the earlier one stays in the section history. A caption, alt text or description is saved with Save figure.</p>
       <div className="fd-grid">
-        <div className="fd-col">
+        {/* The picture column stays in view while the form scrolls. With a message in it the column scrolls with the form instead, so a message below the fold of a short window can be reached. */}
+        <div className={`fd-col${replaceError ? '' : ' fd-col--pin'}`}>
           <div className={`sb-figure-frame fd-preview${rendering || showRedraw ? ' is-busy' : ''}${compileError ? ' is-stale' : ''}`}>
             <img src={preview} alt={details.alt || `Figure: ${details.caption}`} />
             {rendering && <div className="fd-over" role="status"><span className="fd-over__chip"><span className="ui-spinner" aria-hidden="true" />Rendering the source…</span></div>}
@@ -312,6 +318,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
             <button type="button" className="ui-btn ui-btn--sm" onClick={() => fileRef.current?.click()} disabled={busy}><Icon name="upload" size={14} />Replace with an image…</button>
             <input ref={fileRef} type="file" accept={IMAGE_ACCEPT} className="ui-sr" tabIndex={-1} aria-label="Choose an image to replace this figure" onChange={(e) => { onFile(e.target.files?.[0]); e.target.value = ''; }} />
           </div>
+          {replaceError && <div ref={replaceErrorRef} className="ui-banner ui-banner--danger" role="alert">{replaceError}</div>}
           <p className="ui-field__hint">PNG, JPEG, SVG or WebP, up to 2 MB.{drawing ? ' The figure then stops being a drawing and its source is removed from the section. The drawing stays in the section history.' : ' The new image takes the place of this one. This one stays in the section history.'}</p>
           {replace.isPending && <p className="fd-meta" role="status"><span className="ui-spinner" aria-hidden="true" /> Uploading…</p>}
         </div>
