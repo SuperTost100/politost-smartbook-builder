@@ -91,6 +91,8 @@ export const bookOptionsSchema = z.object({
   offProgram: z.enum(['delete', 'mark']).default('delete'),
   /** A role that starts on Claude has no fallback for this book: when Claude usage runs out, its tasks wait for the reset instead of continuing on the replacement model. */
   noClaudeFallback: z.boolean().default(false),
+  /** After a section is drafted, its writer checks it once more in the same conversation (hypotheses, steps, computations, formula keys) and may correct it. No screen yet: set it through the project options API. */
+  selfCheck: z.boolean().default(true),
 });
 export type BookOptions = z.infer<typeof bookOptionsSchema>;
 

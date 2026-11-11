@@ -3,7 +3,8 @@
 import { z } from 'zod';
 import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
-import { codeString } from '../llm/schema.ts';
+import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
+import { codeString, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
 export const PROMPT_VERSION = 18;
@@ -239,12 +240,25 @@ export function figureSetupOf(book: Parameters<typeof subjectProfileOf>[0] & { o
 /** The kinds a schema is built for. A book that draws no figures gets the smallest schema, with the field the answer needs. */
 const schemaKinds = (figures: FigureSetup | null): readonly FigureKind[] => figures?.kinds ?? ['plot'];
 
-export const draftSchemaFor = (figures: FigureSetup | null) => z.object({
-  markdown: z.string().describe('the section body in PoliTost source Markdown, with [[nX]] citation markers'),
+/** The small fields of a draft. The section body itself is the plain text before them (see `draftParser`). */
+export const draftMetaSchemaFor = (figures: FigureSetup | null) => z.object({
   figures: z.array(figureSchemaFor(schemaKinds(figures))),
   noFigureReason: z.string().nullable().optional().describe('leave null'),
   summary: z.string().describe('2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections'),
 });
+
+export type DraftAnswer = z.output<ReturnType<typeof draftMetaSchemaFor>> & { markdown: string };
+
+/** Parses a section answer into `{ markdown, figures, noFigureReason, summary }`: the body, a separator line, then the JSON. */
+export const draftParser = (figures: FigureSetup | null) => bodyParser('markdown', 'markdown', draftMetaSchemaFor(figures));
+
+/** What the writer is told about the form of its answer. Without a provider schema, the JSON object is described here. */
+function draftAnswerFormat(figures: FigureSetup | null) {
+  const json = figures
+    ? `The JSON object must satisfy this JSON schema: ${JSON.stringify(toProviderSchema(draftMetaSchemaFor(figures)))}`
+    : 'The JSON object is {"figures": [], "noFigureReason": null, "summary": "..."}, with "summary" as described below.';
+  return `${bodyFormatRule('the section body (without the section title) in PoliTost source Markdown, with the [[nX]] markers', true)} ${json} The summary is 2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections.`;
+}
 
 export interface DraftPromptInput {
   language: string;
@@ -337,36 +351,50 @@ ${f.kinds.map((k) => KIND_BLOCKS[k](f)).join('\n')}${markup}
   Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0"${f.kinds.includes('structure') ? ', "H2O"' : ''}); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
 
+/**
+ * The draft prompt is ordered from what is the same for every section of the book to what is specific to this one, so the
+ * provider can reuse the start of the prompt (its cache) from one section to the next. The system prompt holds the role, the
+ * format rules, the figure rules and the writing instructions, which depend only on the book. The user prompt goes from the book
+ * (notation, section ids) to the chapter (plan, formula keys known so far), to what was written before, the program items, the
+ * evidence and, last, the task.
+ */
 export function draftPrompt(p: DraftPromptInput) {
   const lang = languageName(p.language);
   const length = p.section.depth === 'deep' ? '1200-2200' : p.section.depth === 'brief' ? '400-800' : '800-1500';
   return {
-    system: `You write one section of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. You explain clearly and rigorously, state definitions and theorems with all hypotheses, give worked examples with every step, and point out the mistakes students usually make. You rely on the evidence provided; you never invent results the evidence does not support.
+    system: `You write one section of a university textbook in ${lang}: "${p.bookTitle}". Audience: ${p.audience || 'university students preparing the exam'}. You explain clearly and rigorously and state definitions and theorems with all hypotheses. Where the section teaches a method or a computation, you work an example with every step and point out the mistake students usually make there. You rely on the evidence provided; you never invent results the evidence does not support.
 
-${formatRules(p.language)}`,
-    prompt: `CHAPTER: ${p.chapterTitle}
-Chapter plan (sections in order; yours is marked ►):
-${p.chapterPlan}
+${formatRules(p.language)}
 
-YOUR SECTION: ${p.section.title}  (section id ${p.section.id})
-Objectives:
-${p.section.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
-Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
-Depth: ${p.section.depth} (about ${length} words)
-Topics and how often the exams test them:
-${p.topics}
-${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
+${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}
+
+INSTRUCTIONS
+- Cover the objectives in a logical order: motivation, definitions, results with hypotheses. When the section teaches a method or a computation, add at least one fully worked example and a typical-mistake box (${p.language === 'it' ? '"Errore tipico"' : '"Common mistake"'}); when it does not, leave both out. Use ### subsections for the planned subsections.
+- Never add sentences to reach a length: say what the objectives need and stop.
+- After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
+- ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
+- Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
+- This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
+- ${draftAnswerFormat(p.figures)}`,
+    prompt: `BOOK
 Notation to follow:
 ${p.notation || '(standard notation of the field)'}
 
-Already written earlier in the book (do not repeat, refer back with links when useful):
-${p.earlier || '(nothing yet)'}
+Section ids you may link to:
+${p.sectionIds}
+
+CHAPTER: ${p.chapterTitle}
+Chapter plan (sections in order):
+${p.chapterPlan}
 
 Known formula keys from other sections (reference them with {{formula:@key}}; never define a formula block with one of these keys again):
 ${p.knownFormulas || '(none)'}
 
-Section ids you may link to:
-${p.sectionIds}
+Already written earlier in the book (do not repeat, refer back with links when useful):
+${p.earlier || '(nothing yet)'}
+${p.figures && p.bookFigures ? `\nFigures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}\n` : ''}${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
+Topics and how often the exams test them:
+${p.topics}
 
 EVIDENCE NOTES (verbatim passages from the course sources; cite them):
 ${p.evidence || '(no notes)'}
@@ -377,14 +405,12 @@ ${p.summary || '(none)'}
 SOURCE PAGES (clean transcriptions of the pages the notes come from; use them for exact formulas and statements):
 ${p.pages || '(none)'}
 
-INSTRUCTIONS
-- Cover the objectives in a logical order: motivation, definitions, results with hypotheses, at least one fully worked example, typical mistakes. Use ### subsections for the planned subsections.
-- After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
-- ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
-- Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
-- This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
-- ${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
-- Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
+Write the section "${p.section.title}" (section id ${p.section.id}).
+Objectives:
+${p.section.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
+Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
+Depth: ${p.section.depth} (about ${length} words)
+Answer in the format of the instructions: the section, a line holding only ${META_SEPARATOR}, then the JSON object.`,
   };
 }
 
@@ -453,7 +479,7 @@ INSTRUCTIONS
 - Link each method to the chapter section that teaches the underlying result with [testo](ref:section/<sectionId>), using only the ids above.
 - A type that appears in one session only is mentioned briefly, not given a subsection.
 - Do not add figures. Return an empty "figures" array and null "noFigureReason".
-- Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
+- ${draftAnswerFormat(null)}`,
   };
 }
 
@@ -504,19 +530,33 @@ FINDINGS (every finding is about one place. Be selective only with thin and proo
   };
 }
 
-/** One repair round after lint findings. */
+/** One repair round after lint findings. The static text is in the system prompt, then the section, then the problems. */
 export function repairPrompt(p: { language: string; markdown: string; findings: string }) {
   return {
-    system: `You fix formatting problems in a textbook section written in ${languageName(p.language)} without changing its content or its [[nX]] markers.\n\n${formatRules(p.language)}`,
-    prompt: `The section below has these problems (rule: message, line, text):
-${p.findings}
+    system: `You fix formatting problems in a textbook section written in ${languageName(p.language)} without changing its content or its [[nX]] markers.
 
-Return the full corrected section as JSON {"markdown": "..."}; change only what the problems require.
+${formatRules(p.language)}
 
-SECTION:
-${p.markdown}`,
+You are given a section and the problems found in it (rule: message, line, text). Return the full corrected section; change only what the problems require. ${bodyFormatRule('the corrected section', false)}`,
+    prompt: `SECTION:
+${p.markdown}
+
+The section above has these problems (rule: message, line, text):
+${p.findings}`,
   };
 }
+/**
+ * The writer's second look at its own section, sent as a follow-up in the conversation that wrote it. An answer of exactly OK
+ * keeps the draft, and anything else must be the whole answer again, in the format of the first one.
+ */
+export function selfCheckPrompt() {
+  return `Check the section you just wrote once more, as a strict reviewer would. Look at every statement for a missing hypothesis, every derivation step, every computation and numeric result with its unit and sign, and every reference to a formula key (the key must be defined in your text or be one of the known keys). Where a result could differ, recompute it.
+If everything is right, answer exactly OK and nothing else. If something is wrong, answer with the full corrected answer in the same format as before (the section, the line ${META_SEPARATOR}, then the JSON object), changing only what is wrong and keeping every heading, formula key and ::: block. Keep every [[n…]] marker where it is. The answer goes into the book as it is, so do not say what you checked or changed: no sentence before the section or after it, and the first line of your answer is the first line of the section.`;
+}
+
+/** The corrected section as plain text. */
+export const repairParser = bodyParser('markdown', 'markdown');
+/** The chapter introduction is a short JSON answer. */
 export const repairSchema = z.object({ markdown: z.string() });
 
 // ---------- chapter introduction ----------
@@ -680,13 +720,15 @@ Return JSON: id (kebab-case), title and description in ${languageName(p.language
   };
 }
 
-export const ideSchema = z.object({
+/** The lab example's small fields. Its code is the plain text before them (see `ideParser`). */
+export const ideMetaSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  code: codeString(),
   expectedOutput: z.string().describe('what the program prints, exactly or approximately'),
 });
+/** Parses a lab answer into `{ id, title, description, expectedOutput, code }`. */
+export const ideParser = bodyParser('code', 'code', ideMetaSchema);
 
 /** What the MATLAB lab (numbl in the reader) can run. Functions it lacks make the check fail, so the writer avoids them. */
 const MATLAB_LAB_RULES = `It runs in numbl, a MATLAB-compatible interpreter in the browser: core MATLAB only, no toolboxes (no syms, no Optimization or Statistics toolbox), no input(), no files, no network. Available: scalars, vectors and matrices, : and end indexing, element-wise operators, A\\b, lu, qr, chol, inv, det, norm, cond, eig, rank, linspace, zeros, ones, eye, diag, triu, tril, rand, size, length, numel, sum, cumsum, prod, max, min, abs, sort, find, any, all, mod, floor, round, the elementary functions, polyval, polyfit, roots, interp1, trapz, diff, meshgrid, fzero, integral, hilb, vander, magic, anonymous functions with @, for, while, if/elseif/else, switch, break, logical operators, fprintf, disp, sprintf, num2str, error, tic/toc, and 2-D plots (plot, semilogy, semilogx, loglog, bar, subplot, hold on, figure, xlabel, ylabel, title, legend, grid on, axis). Not available: format long or format short (print digits with fprintf instead), eval, fminsearch, fminbnd, spline, pchip, ode45, quad, 3-D plots (surf, mesh, plot3, contour), text annotations, input(). Define your own functions as local functions at the end of the script, after the code that calls them; a script never starts with a function. Do not rely on how MATLAB displays a value without a semicolon beyond the variable name and its value: show results with fprintf or disp.`;
@@ -701,7 +743,7 @@ export function idePrompt(p: { language: string; purpose: string; section: strin
 Section text:
 ${p.section}
 
-Return JSON: id (kebab-case), title, description (what the student should try changing), code, expectedOutput.`,
+${bodyFormatRule('the program code', true)} The JSON object has id (kebab-case), title, description (what the student should try changing) and expectedOutput (what the program prints, exactly or approximately).`,
   };
 }
 

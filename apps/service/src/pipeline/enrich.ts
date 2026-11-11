@@ -6,7 +6,7 @@ import { runRole } from '../llm/index.ts';
 import type { TaskContext, TaskSpec } from '../queue/queue.ts';
 import { runMatlab } from './matlab.ts';
 import { runPython } from './python.ts';
-import { enrichPickPrompt, enrichPickSchema, graphPrompt, graphSchema, idePrompt, ideSchema } from './prompts.ts';
+import { enrichPickPrompt, enrichPickSchema, graphPrompt, graphSchema, idePrompt, ideParser } from './prompts.ts';
 import { headRevision, loadOutline, loadProject, truncate } from './util.ts';
 
 const ENRICH_KINDS = ['enrich.graph', 'enrich.ide'];
@@ -93,7 +93,7 @@ export async function enrichIde(ctx: AppContext, t: TaskContext) {
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
   const lab = project.options.labLanguage;
-  const g = await runRole(ctx, { role: 'editor', ...idePrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000), lab }), schema: ideSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const g = await runRole(ctx, { role: 'editor', ...idePrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000), lab }), parse: ideParser, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const payload = { id: g.data.id, title: g.data.title, language: lab, description: g.data.description, code: g.data.code };
   t.progress(`Running the ${LAB_NAME[lab]} example`);
   saveEnrichment(ctx, projectId, nodeId, 'ide', payload, [await checkLabCode(lab, g.data.code)]);
