@@ -42,6 +42,46 @@ async function typeSource(page: Page, text: string) {
   await page.keyboard.insertText(text);
 }
 
+test.describe('Extras, Figures tab', () => {
+  test('lists the figures the text uses once each, with no editing, and a link into the Manuscript', async ({ page }) => {
+    await open(page);
+    // Two saves leave two older copies of the figure behind (the service keeps them for History).
+    for (const caption of ['Prima didascalia nuova.', 'Seconda didascalia nuova.']) {
+      const dialog = await openDialog(page);
+      await dialog.getByLabel('Caption').fill(caption);
+      await dialog.getByRole('button', { name: 'Save figure' }).click();
+      await expect(dialog).toBeHidden();
+    }
+    await page.goto('/books/p1/extras');
+    await expect(page.getByRole('tab', { name: 'Figures (1)' })).toBeVisible();
+    await expect(page.locator('.ex-card')).toHaveCount(1);
+    const card = page.locator('.ex-card');
+    await expect(card).toContainText('Seconda didascalia nuova.');
+    await expect(card).toContainText('Fig. 1.2 in 1. Definizione di limite');
+    await expect(page.getByRole('button', { name: 'Save figure' })).toHaveCount(0);
+    await expect(page.getByLabel('Caption')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Import file' })).toHaveCount(0);
+    await noOverflow(page);
+    await shot(page, 'extras-figures');
+    await card.getByRole('link', { name: 'Edit in the Manuscript' }).click();
+    await expect(page).toHaveURL(/\/manuscript\/s1$/);
+    await expect(page.getByRole('dialog', { name: /^Figure/ })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByLabel('Caption')).toHaveValue('Seconda didascalia nuova.');
+  });
+});
+
+test.describe('History, figure versions', () => {
+  test('a version made by a figure action says what it did', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Nuova didascalia');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'History' }).click();
+    await expect(page.getByRole('dialog', { name: 'History' }).getByText('Figure "Amplificatore invertente": caption changed to "Nuova didascalia"')).toBeVisible();
+  });
+});
+
 test.describe('figure block (2g)', () => {
   test('a drawn figure shows its badge and an Edit figure entry once selected', async ({ page }) => {
     await open(page);

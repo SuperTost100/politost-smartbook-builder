@@ -32,7 +32,7 @@ const RAIL_KEY = 'smartbuilder.rail';
 export default function ManuscriptPage() {
   const pid = useBookId();
   const { nodeId } = useParams();
-  const [search] = useSearchParams();
+  const [search, setSearch] = useSearchParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
@@ -80,6 +80,15 @@ export default function ManuscriptPage() {
 
   const mapped = useMemo(() => (section ? mapSection(section) : null), [section]);
   const blocks = mapped?.blocks ?? [];
+
+  // Extras links here with ?figure=<file>: open that figure's dialog once, then drop the parameter so a reload does not open it again.
+  const wantedFigure = search.get('figure');
+  useEffect(() => {
+    if (!wantedFigure || !mapped || section?.sectionId !== nodeId) return;
+    const at = mapped.blocks.find((b) => b.kind === 'image' && imageFilename(b.source) === wantedFigure);
+    if (at) setFigureAt(at.index);
+    setSearch((p) => { p.delete('figure'); return p; }, { replace: true });
+  }, [wantedFigure, mapped, section?.sectionId, nodeId, setSearch]);
 
   // Figure blocks: the badge of their kind and the entry to the figure dialog.
   const figureOf = useMemo(() => {

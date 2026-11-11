@@ -645,9 +645,8 @@ describe('review fixes (server)', () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('asset-events'));
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
     const up = multipart({}, [{ name: 'file', filename: 'c.svg', type: 'image/svg+xml', data: svg }]);
-    const asset = (await t.req('POST', `/api/projects/${p.id}/assets`, up.payload, up.headers)).body;
-    await t.req('PATCH', `/api/assets/${asset.id}`, { caption: 'Cerchio' });
-    assert.equal(eventTypes(p.id, 'asset.updated').length, 2);
+    await t.req('POST', `/api/projects/${p.id}/assets`, up.payload, up.headers);
+    assert.equal(eventTypes(p.id, 'asset.updated').length, 1);
     const eid = newId();
     t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'ide', payload: { id: 'x', title: 'x', language: 'python', code: 'print(1)' }, status: 'draft', checks: [], created_at: now() });
     await t.req('PATCH', `/api/enrichments/${eid}`, { payload: { id: 'x', title: 'y', language: 'python', code: 'print(2)' } });

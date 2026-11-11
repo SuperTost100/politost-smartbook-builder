@@ -2,7 +2,7 @@ import assert from 'node:assert/strict';
 import { afterEach, beforeEach, test } from 'node:test';
 import { newId, now } from '../db/db.ts';
 import { compileBook } from '@smartbuilder/content';
-import { loadBookInput } from '../repo/index.ts';
+import { currentHead, loadBookInput } from '../repo/index.ts';
 import { multipart, projectBody, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -29,7 +29,7 @@ test('preview numbers other chapters\' sections the way the compiler does, intro
   assert.doesNotMatch(preview.markdown, /ref:chapter\/1#p1/);
 });
 
-test('figures: preview keys are the compiled paths, and the asset record is canonical for caption and alt in preview and export', async () => {
+test('figures: preview keys are the compiled paths, and the asset record the text points at is canonical for caption and alt in preview and export', async () => {
   const p = (await t.req('POST', '/api/projects', projectBody('figures'))).body;
   const outline = { chapters: [{ id: 'c1', slug: 'uno', title: 'Uno', sections: [{ id: 's1', title: 'Prima' }] }] };
   const rev = (await t.req('PUT', `/api/projects/${p.id}/outline`, { outline, baseRevId: null })).body;
@@ -47,18 +47,19 @@ test('figures: preview keys are the compiled paths, and the asset record is cano
   assert.equal(preview.assets['cerchio.svg'], `/api/assets/${asset.id}/file`, 'the bare name stays for older clients');
   assert.match(preview.markdown, /alt="Vecchio alt" caption="Fig\. 1\.1 — Vecchia didascalia"/);
 
-  // The author corrects them in Extras ("Save figure"): preview and export follow.
-  await t.req('PATCH', `/api/assets/${asset.id}`, { caption: 'Cerchio di raggio $r$', alt: 'Un cerchio' });
+  // The author corrects them in the figure dialog: it makes a copy the text points at, and preview and export follow the copy.
+  const head = currentHead(t.ctx, p.id, 's1')!;
+  assert.equal((await t.req('PATCH', `/api/projects/${p.id}/sections/s1/figures/${asset.id}`, { baseRevId: head.id, caption: 'Cerchio di raggio $r$' })).status, 200);
   const after = (await t.req('GET', `/api/projects/${p.id}/chapters/c1/preview`)).body;
-  assert.match(after.markdown, /alt="Un cerchio" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
+  assert.match(after.markdown, /alt="Vecchio alt" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
   const input = loadBookInput(t.ctx, p.id);
-  assert.deepEqual(input.assets.map((a) => [a.filename, a.caption, a.alt]), [['cerchio.svg', 'Cerchio di raggio $r$', 'Un cerchio']]);
+  assert.deepEqual(input.assets.map((a) => [a.caption, a.alt]), [['Cerchio di raggio $r$', 'Vecchio alt']]);
   // A figure no current text uses stays in the project but not in the package.
   const extra = multipart({ caption: 'Vecchia', alt: 'Vecchia' }, [{ name: 'file', filename: 'orfana.svg', type: 'image/svg+xml', data: svg }]);
   await t.req('POST', `/api/projects/${p.id}/assets`, extra.payload, extra.headers);
-  assert.deepEqual(loadBookInput(t.ctx, p.id).assets.map((a) => a.filename), ['cerchio.svg']);
+  assert.deepEqual(loadBookInput(t.ctx, p.id).assets.map((a) => a.filename), input.assets.map((a) => a.filename));
   const chapter = compileBook(input).files['chapters/01-uno.md'] as string;
-  assert.match(chapter, /alt="Un cerchio" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
+  assert.match(chapter, /alt="Vecchio alt" caption="Fig\. 1\.1 — Cerchio di raggio r"/);
   assert.ok(!chapter.includes('Vecchia'));
 });
 

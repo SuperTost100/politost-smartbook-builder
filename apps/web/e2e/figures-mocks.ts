@@ -88,6 +88,12 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     const stale = () => json({ error: { code: 'conflict', message: 'This text changed since you opened it.', action: 'Reload to see the latest version, then reapply your edit.' } }, 409);
 
     if (method === 'GET' && path === '/api/projects/p1/sections/s1') return json(sectionView());
+    if (method === 'GET' && path === '/api/projects/p1/manuscript') return json([{ chapterId: 'c1', number: 1, title: 'Limiti', intro: null, sections: [sectionView()] }]);
+    if (method === 'GET' && path === '/api/projects/p1/sections/s1/history') {
+      // Newest first. Every figure action left a version, and the service says in a note what each one did.
+      const head = sectionView().current;
+      return json([{ ...head, figureNote: fm.writes.length ? 'Figure "Amplificatore invertente": caption changed to "Nuova didascalia"' : null }, { ...head, id: 'rvf0', status: 'superseded', createdAt: ago(30), figureNote: null }]);
+    }
     if (method === 'GET' && path === '/api/projects/p1/assets') return o.assetsFail ? json({ error: { code: 'internal', message: 'The asset list could not be read.' } }, 500) : json(assetRows());
     if (method === 'GET' && path === '/api/projects/p1/chapters/c1/preview') return json({ markdown: compiled(), number: 1, assets: Object.fromEntries([...figs.values()].flatMap((f) => [[`assets/${f.filename}`, `/api/assets/${f.id}/file`], [f.filename, `/api/assets/${f.id}/file`]])) });
     if (method === 'GET' && /^\/api\/assets\/[^/]+\/file$/.test(path)) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: DRAWING_SVG });

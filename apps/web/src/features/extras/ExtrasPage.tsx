@@ -1,8 +1,10 @@
-import { useRef, useState } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useMemo, useState } from 'react';
+import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { Asset, Enrichment, QuestionCheck } from '@smartbuilder/domain';
+import { splitBlocks } from '@smartbuilder/content/blocks';
+import type { Asset, ChapterView, Enrichment, QuestionCheck } from '@smartbuilder/domain';
 import { api, apiUrl, errorText } from '../../lib/api';
+import { figureNumber, imageFilename, mapSection } from '../../lib/blocks';
 import { qk, useManuscript } from '../../lib/queries';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
@@ -19,6 +21,8 @@ export default function ExtrasPage() {
   const [params, setParams] = useSearchParams();
   const tab = (['figures', 'ide', 'graphs'].includes(params.get('tab') ?? '') ? params.get('tab') : 'figures') as Tab;
   const assets = useQuery({ queryKey: qk.assets(pid), queryFn: () => api('GET /api/projects/:id/assets', { params: { id: pid } }) });
+  const manuscript = useManuscript(pid);
+  const placed = useMemo(() => placedFigures(manuscript.data ?? [], assets.data ?? []), [manuscript.data, assets.data]);
   const enr = useQuery({ queryKey: qk.enrichments(pid), queryFn: () => api('GET /api/projects/:id/enrichments', { params: { id: pid } }) });
   const ide = (enr.data ?? []).filter((e) => e.kind === 'ide');
   const graphs = (enr.data ?? []).filter((e) => e.kind === 'graph');
@@ -32,11 +36,11 @@ export default function ExtrasPage() {
         </div>
       </div>
       <div className="ui-tabs" role="tablist" aria-label="Extras">
-        {([['figures', `Figures (${assets.data?.length ?? 0})`], ['ide', `IDE examples (${ide.length})`], ['graphs', `Graphs (${graphs.length})`]] as const).map(([t, l]) => (
+        {([['figures', `Figures (${placed.length})`], ['ide', `IDE examples (${ide.length})`], ['graphs', `Graphs (${graphs.length})`]] as const).map(([t, l]) => (
           <button key={t} type="button" role="tab" className="ui-tab" aria-selected={tab === t} onClick={() => setParams({ tab: t }, { replace: true })}>{l}</button>
         ))}
       </div>
-      {tab === 'figures' && <Figures pid={pid} assets={assets.data ?? []} loading={assets.isLoading} error={assets.error} />}
+      {tab === 'figures' && <Figures pid={pid} placed={placed} loading={assets.isLoading || manuscript.isLoading} error={assets.error ?? manuscript.error} />}
       {tab === 'ide' && <EnrichmentList pid={pid} items={ide} loading={enr.isLoading} error={enr.error} kind="ide" />}
       {tab === 'graphs' && <EnrichmentList pid={pid} items={graphs} loading={enr.isLoading} error={enr.error} kind="graph" />}
     </div>
@@ -54,55 +58,46 @@ function Checks({ checks }: { checks: QuestionCheck[] }) {
   );
 }
 
-function Figures({ pid, assets, loading, error }: { pid: string; assets: Asset[]; loading: boolean; error: unknown }) {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const file = useRef<HTMLInputElement>(null);
-  const manuscript = useManuscript(pid);
-  const sections = (manuscript.data ?? []).flatMap((c) => c.sections.map((s) => ({ id: s.sectionId, label: `${c.number}. ${s.title}` })));
-  const imp = useMutation({
-    mutationFn: (f: File) => { const form = new FormData(); form.set('file', f, f.name); return api('POST /api/projects/:id/assets', { params: { id: pid }, form }); },
-    onSuccess: () => { toast('Figure imported'); void qc.invalidateQueries({ queryKey: qk.assets(pid) }); },
-    onError: (e) => toast(errorText(e), { tone: 'danger' }),
-  });
+interface Placed { key: string; asset: Asset; nodeId: string; where: string; number: string | null }
+
+/** The figures the current text of the book shows, one entry for each image block. An older copy of a figure, or one no text uses, is not a figure of the book. */
+function placedFigures(chapters: ChapterView[], assets: Asset[]): Placed[] {
+  const byFile = new Map(assets.map((a) => [a.filename, a]));
+  const out: Placed[] = [];
+  const add = (nodeId: string, where: string, source: string, compiled: string | null, at: number) => {
+    const asset = byFile.get(imageFilename(source) ?? '');
+    if (asset) out.push({ key: `${nodeId}:${at}`, asset, nodeId, where, number: figureNumber(compiled) });
+  };
+  for (const c of chapters) {
+    splitBlocks(c.intro?.markdown ?? '').forEach((b, i) => { if (b.kind === 'image') add(c.chapterId, `${c.number}. ${c.title}, introduction`, b.text, null, i); });
+    for (const s of c.sections) for (const b of mapSection(s).blocks) if (b.kind === 'image') add(s.sectionId, `${c.number}. ${s.title}`, b.source, b.compiled, b.index);
+  }
+  return out;
+}
+
+function Figures({ pid, placed, loading, error }: { pid: string; placed: Placed[]; loading: boolean; error: unknown }) {
   return (
     <div className="ui-stack">
-      <div className="ui-row">
-        <input ref={file} type="file" accept="image/svg+xml,image/png,image/jpeg,.svg,.png,.jpg,.jpeg" className="ui-sr" tabIndex={-1} aria-label="Choose a figure file" onChange={(e) => { const f = e.target.files?.[0]; if (f) imp.mutate(f); e.target.value = ''; }} />
-        <button type="button" className="ui-btn" onClick={() => file.current?.click()} disabled={imp.isPending}><Icon name="upload" />Import file</button>
-        <span className="ui-muted">SVG, PNG or JPEG. The file is copied into the book's assets.</span>
-      </div>
+      <p className="ui-muted">The figures the text of the book shows now. To change one, open it in the Manuscript: every change there is a version of the section, so History and Restore keep working.</p>
       {loading && <div className="ui-skeleton" style={{ height: 160 }} />}
       {!!error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(error)}</div>}
-      {!loading && assets.length === 0 && <div className="ui-empty"><p className="ui-empty__text">No figures yet. Drafting adds plots and diagrams where the text needs them, or import your own.</p></div>}
-      <ul className="ex-grid">{assets.map((a) => <li key={a.id}><FigureCard a={a} sections={sections} /></li>)}</ul>
+      {!loading && !error && placed.length === 0 && <div className="ui-empty"><p className="ui-empty__text">No figures in the text yet. Drafting adds plots and diagrams where the text needs them, and Add figure in the Manuscript adds your own.</p></div>}
+      <ul className="ex-grid">{placed.map((f) => <li key={f.key}><FigureCard pid={pid} f={f} /></li>)}</ul>
     </div>
   );
 }
 
-function FigureCard({ a, sections }: { a: Asset; sections: { id: string; label: string }[] }) {
-  const qc = useQueryClient();
-  const toast = useToast();
-  const [caption, setCaption] = useState(a.caption);
-  const [alt, setAlt] = useState(a.alt);
-  const [nodeId, setNodeId] = useState(a.nodeId ?? '');
-  const dirty = caption !== a.caption || alt !== a.alt || nodeId !== (a.nodeId ?? '');
-  const save = useMutation({
-    mutationFn: () => api('PATCH /api/assets/:assetId', { params: { assetId: a.id }, body: { caption, alt, nodeId: nodeId || null } }),
-    onSuccess: () => { toast('Figure saved'); void qc.invalidateQueries({ queryKey: qk.assets(a.projectId) }); },
-    onError: (e) => toast(errorText(e), { tone: 'danger' }),
-  });
+function FigureCard({ pid, f }: { pid: string; f: Placed }) {
+  const a = f.asset;
   return (
     <article className="ex-card ui-card">
       <div className="sb-figure-frame ex-fig"><img src={apiUrl('GET /api/assets/:assetId/file', { params: { assetId: a.id } })} alt={a.alt || a.filename} loading="lazy" /></div>
       <div className="ex-card__body">
-        <div className="ui-row"><span className="ui-mono ui-wrap ex-fname">{a.filename}</span><span className="ui-badge">{ORIGIN_LABEL[a.origin]}</span></div>
-        <div className="ui-field"><label className="ui-field__label" htmlFor={`cap-${a.id}`}>Caption</label><input id={`cap-${a.id}`} className="ui-input ui-input--sm" value={caption} onChange={(e) => setCaption(e.target.value)} /></div>
-        <div className="ui-field"><label className="ui-field__label" htmlFor={`alt-${a.id}`}>Alt text</label><input id={`alt-${a.id}`} className="ui-input ui-input--sm" value={alt} onChange={(e) => setAlt(e.target.value)} /></div>
-        <div className="ui-field"><label className="ui-field__label" htmlFor={`sec-${a.id}`}>Section</label>
-          <select id={`sec-${a.id}`} className="ui-select ui-select--sm" value={nodeId} onChange={(e) => setNodeId(e.target.value)}><option value="">Not placed</option>{sections.map((s) => <option key={s.id} value={s.id}>{s.label}</option>)}</select></div>
+        <div className="ui-row"><span className="ex-where ui-wrap">{f.number ? `Fig. ${f.number}` : 'No number'} in {f.where}</span><span className="ui-badge">{ORIGIN_LABEL[a.origin]}</span></div>
+        <p className={`ex-caption${a.caption.trim() ? '' : ' ui-muted'}`}>{a.caption.trim() || 'No caption'}</p>
+        <span className="ui-mono ui-wrap ex-fname">{a.filename}</span>
         <Checks checks={a.checks} />
-        <div><button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save figure</button></div>
+        <div><Link className="ui-btn ui-btn--sm" to={`/books/${pid}/manuscript/${f.nodeId}?figure=${encodeURIComponent(a.filename)}`}>Edit in the Manuscript</Link></div>
       </div>
     </article>
   );

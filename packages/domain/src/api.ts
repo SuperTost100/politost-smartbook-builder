@@ -200,7 +200,6 @@ export interface Api {
   /** Raw asset bytes. */
   'GET /api/assets/:assetId/file': { res: Blob };
   'POST /api/projects/:id/assets': { res: Asset };
-  'PATCH /api/assets/:assetId': { body: Partial<Pick<Asset, 'caption' | 'alt' | 'nodeId'>>; res: Asset };
   'GET /api/projects/:id/enrichments': { res: Enrichment[] };
   'PATCH /api/enrichments/:eid': { body: { payload: Record<string, unknown> }; res: Enrichment };
   'DELETE /api/enrichments/:eid': { res: { ok: true } };

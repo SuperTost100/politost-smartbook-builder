@@ -5,6 +5,8 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ensureFigurePackages, missingFigurePackages } from '../../../../scripts/fetch-figure-packages.mjs';
 import { assetPath, currentHead, getAsset, listAssets, saveHuman, storeAsset } from '../repo/index.ts';
 import { commitAiRevision } from '../pipeline/draft.ts';
+import { compileBook } from '@smartbuilder/content';
+import { loadBookInput } from '../repo/index.ts';
 import { fakeRun, installFakes, multipart, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -434,5 +436,25 @@ describe('history notes', () => {
     assert.equal(note(afterCaption.id), 'Figure "Un cerchio": caption changed to "Nuova didascalia"');
     assert.equal(note(afterReplace.id), 'Figure "Nuova didascalia": the drawing was replaced with an image');
     assert.equal(note(afterRemove.id), 'Figure "Nuova didascalia" removed');
+  });
+});
+
+describe('a figure is changed only through its section', () => {
+  const exportedCaptions = (s: Seed) => {
+    const files = compileBook(loadBookInput(t.ctx, s.projectId)).files;
+    return Object.entries(files).filter(([name]) => name.startsWith('chapters/')).flatMap(([, text]) => [...String(text).matchAll(/caption="([^"]+)"/g)].map((m) => m[1]));
+  };
+
+  it('no route edits an asset in place, so a copy the text does not use cannot change what a Restore brings back or what is exported', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Didascalia nuova' });
+    // The first asset is the copy an older revision shows. Extras used to write to it directly.
+    const r = await t.req('PATCH', `/api/assets/${s.drawn}`, { caption: 'Scritta da Extras', alt: 'Alt da Extras' });
+    assert.equal(r.status, 404, 'the in-place edit is gone');
+    assert.equal(getAsset(t.ctx, s.drawn).caption, 'Un cerchio');
+    assert.deepEqual(exportedCaptions(s), ['Fig. 1.1 — Didascalia nuova']);
+    // Restoring the first revision brings back its own caption.
+    assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId: s.headId })).status, 200);
+    assert.deepEqual(exportedCaptions(s), ['Fig. 1.1 — Un cerchio']);
   });
 });
