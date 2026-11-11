@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { compareValues, parseQuantity, recomputeFinalValues } from './numeric.ts';
+import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues } from './numeric.ts';
 import type { PythonResult } from './python.ts';
 
 const ran = (stdout: string, ok = true): (() => Promise<PythonResult>) => async () => ({ ok, stdout, version: 'test' });
@@ -109,4 +109,10 @@ describe('recomputeFinalValues', () => {
     const bad = await recomputeFinalValues(code, [{ name: 'R_eq', value: '5.0 kΩ' }]);
     assert.equal(bad!.mismatches.length, 1);
   });
+});
+
+test('the blocker text of a numeric mismatch can be read back value by value', () => {
+  const found = [{ name: 'f_c', stated: '21,28 kHz', computed: '3386.2754 Hz' }, { name: 'G', stated: '-10', computed: '-9.9' }];
+  assert.deepEqual(readMismatches(mismatchMessage(found)), found);
+  assert.deepEqual(readMismatches('The independent solution reaches a different result: 2'), []);
 });

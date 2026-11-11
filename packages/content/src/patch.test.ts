@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lintSection } from './lint.ts';
-import { addsCommentary, applyGuardedChanges, dropReferences, guardRules, lostStructure, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { lintSection, UNICODE_MATH } from './lint.ts';
+import { MATH_SYMBOLS, addsCommentary, applyGuardedChanges, changedWords, dropReferences, guardRules, lostStructure, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -225,4 +225,82 @@ test('a corrected formula at either end of a section is not read as a note about
   assert.equal(addsCommentary(inline, inline.replace('= \\sin x', '= \\cos x')), false, 'an inline formula inside a long paragraph');
   assert.equal(addsCommentary(`${text}\n\n${wrong}`, `${text}\n\n${wrong}\n\nNota: ho cambiato la derivata del seno nella formula precedente.`), true, 'prose after a formula is still a note');
   assert.equal(addsCommentary(`${wrong}\n\n${text}`, `Ho corretto la derivata del seno nella formula.\n\n${right}\n\n${text}`), true, 'prose before a formula is still a note');
+});
+
+// The July 2024 solution from the acceptance run: the stored text had literal backslash-n sequences, and the repair added "acu".
+const BEFORE = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.\n\nb) $v_C(44\,\mathrm{ms}) = 9 e^{-2}\,\mathrm{V} = 1{,}218\,\mathrm{V}$.\n\nc) $E(0) = \frac{1}{2} C V_0^2 = 40{,}5\,\mu\mathrm{J}$ e $E(44\,\mathrm{ms}) = \frac{1}{2} C v_C^2 = 0{,}742\,\mu\mathrm{J}$.`;
+const REPAIRED = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.
+
+b) $v_C(44\,\mathrm{ms}) = 9 e^{-2}\,\mathrm{V} = 1{,}218\,\mathrm{V}$.
+
+c) $E(0) = \frac{1}{2} C V_0^2 = 40{,}5\,\mu\mathrm{J}$ e $E(44\,\mathrm{ms}) = \frac{1}{2} C v_C^2 = 0{,}742\,\mu\mathrm{J}$.`;
+
+test('changedWords: real line breaks for literal \\n sequences change no word', () => {
+  assert.equal(changedWords(BEFORE, REPAIRED), null);
+});
+
+test('changedWords: a stray word at the end of a repaired solution is named', () => {
+  assert.match(changedWords(BEFORE, `${REPAIRED} acu`)!, /adds "acu"/);
+});
+
+test('changedWords: markup, math delimiters, spacing and decimal commas are set aside', () => {
+  assert.equal(changedWords('Il valore è **0,742** V e $x1$.', 'Il   valore è\n$0{,}742$ V\n\ne $x_1$.'), null);
+  assert.equal(changedWords('Calcola $a+b$ e $c$', 'Calcola\n\n$$a+b$$\n\ne $c$'), null);
+  assert.equal(changedWords(String.raw`Se $\nu = 2$ allora\ndurata`, 'Se $\\nu = 2$ allora\ndurata'), null, 'a literal \\n outside math is a break, \\nu inside math is a letter');
+});
+
+test('changedWords: a changed or missing number or word is reported', () => {
+  assert.match(changedWords('Vale $3{,}386\\,\\mathrm{kHz}$.', 'Vale $21{,}28\\,\\mathrm{kHz}$.')!, /replaces/);
+  assert.match(changedWords('Primo passo. Secondo passo.', 'Primo passo.')!, /removes "secondo passo"/);
+  assert.match(changedWords('Uno due tre', 'Uno tre due')!, /./, 'a reordering is a change');
+});
+
+test('changedWords: a sign, a decimal separator or an exponent that changes is a change, however the value is typeset', () => {
+  assert.match(changedWords('Vale $-2$ V.', 'Vale $2$ V.')!, /./, 'a dropped minus');
+  assert.match(changedWords('Vale −2 V.', 'Vale 2 V.')!, /./, 'a dropped Unicode minus in prose');
+  assert.match(changedWords('Vale $2$ V.', 'Vale $-2$ V.')!, /./, 'an added minus');
+  assert.match(changedWords('Vale $+2$ V.', 'Vale $-2$ V.')!, /./, 'plus turned into minus');
+  assert.match(changedWords('Vale 2,5 V.', 'Vale 25 V.')!, /./, 'a decimal comma dropped');
+  assert.match(changedWords('Vale $2{,}5$ V.', 'Vale $25$ V.')!, /./, 'a decimal comma in braces dropped');
+  assert.match(changedWords('Vale $10^{-3}$ V.', 'Vale $10^{3}$ V.')!, /./, 'an exponent loses its sign');
+  assert.match(changedWords('Vale $10^3$ V.', 'Vale $10^2$ V.')!, /./, 'an exponent changes');
+  assert.match(changedWords('Vale $10^3$ V.', 'Vale $103$ V.')!, /./, 'an exponent becomes a digit');
+  assert.match(changedWords('Vale $x-2$.', 'Vale $x 2$.')!, /./, 'a binary minus dropped');
+});
+
+test('changedWords: re-typesetting the same value passes', () => {
+  assert.equal(changedWords('Vale −2 V.', 'Vale $-2$ V.'), null);
+  assert.equal(changedWords('Vale -2 V.', 'Vale $-2$ V.'), null);
+  assert.equal(changedWords('Vale 3,386 kHz.', 'Vale $3{,}386\\,\\mathrm{kHz}$.'), null);
+  assert.equal(changedWords('Vale 3.386 kHz.', 'Vale $3{,}386\\,\\mathrm{kHz}$.'), null);
+  assert.equal(changedWords('Vale $10^{-3}$ A.', 'Vale $10^{−3}$ A.'), null);
+  assert.equal(changedWords('Vale $x-2$.', 'Vale $x - 2$.'), null);
+  assert.equal(changedWords('Dal 3-4 maggio.', 'Dal $3-4$ maggio.'), null);
+  assert.equal(changedWords('- 2 resistori\n- 3 diodi', '- 2 resistori\n\n- 3 diodi'), null, 'a list marker is no sign');
+});
+
+test('changedWords: a Unicode symbol and its LaTeX command are the same token', () => {
+  assert.equal(changedWords('La costante τ vale 2.', 'La costante $\\tau$ vale 2.'), null);
+  assert.equal(changedWords('Con ω = 2π f e Δt piccolo.', 'Con $\\omega = 2\\pi f$ e $\\Delta t$ piccolo.'), null);
+  assert.equal(changedWords('Vale 10 \u2126 e 5 \u00b5m.', 'Vale $10\\,\\Omega$ e $5\\,\\mu\\mathrm{m}$.'), null, 'the ohm and micro signs');
+  assert.equal(changedWords('Vale 10 Ω e 5 μm.', 'Vale $10\\,\\Omega$ e $5\\,\\mu\\mathrm{m}$.'), null);
+  assert.equal(changedWords('Se x ≤ 3 e y ≠ 0 allora x × y → ∞ e A ⊂ B.', 'Se $x \\le 3$ e $y \\neq 0$ allora $x \\times y \\to \\infty$ e $A \\subset B$.'), null);
+  assert.equal(changedWords('In ℝ vale ±2.', 'In $\\mathbb{R}$ vale $\\pm 2$.'), null);
+  assert.match(changedWords('Vale τ.', 'Vale $\\theta$.')!, /./, 'another letter is a change');
+  assert.match(changedWords('Vale Δ.', 'Vale $\\delta$.')!, /./, 'a capital is another letter');
+});
+
+const range = (from: number, to: number) => Array.from({ length: to - from + 1 }, (_, i) => from + i);
+
+test('changedWords: every Greek letter and every symbol of the table is a symbol the lint rule flags', () => {
+  const flagged = new RegExp(`^(?:${UNICODE_MATH.source})$`, 'u');
+  for (const [, ch] of Object.entries(MATH_SYMBOLS)) assert.match(ch, flagged, `${ch} is not flagged by the unicode-math lint rule`);
+  const symbols = new Set(Object.values(MATH_SYMBOLS));
+  const greek = [...range(0x391, 0x3a9), ...range(0x3b1, 0x3c9)].filter((c) => c !== 0x3a2 && c !== 0x3c2); // not the unassigned slot and not the final sigma, which reads as σ
+  for (const c of greek) {
+    const ch = String.fromCharCode(c);
+    assert.ok(symbols.has(ch), `${ch} (U+${c.toString(16)}) has no LaTeX command in MATH_SYMBOLS`);
+  }
 });

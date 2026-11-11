@@ -183,11 +183,12 @@ const META_PATTERNS: MetaPattern[] = [
 const META_INLINE_CODE = /`[^`]*(?:## p\d+|:::formula|:::exercise|\{\{formula)[^`]*`/;
 
 /** A LaTeX command that starts with n or t, at the start of the text: a backslash followed by it is no escaped line break or tab. */
-const LATEX_COMMAND_N_T = /^\\(?:nu|neq?|nabla|ni|notin|not|nless|ngtr|nleq|ngeq|nmid|nparallel|nsim|ncong|nexists|nrightarrow|nleftarrow|text(?:bf|it|rm|sf|tt|normal|up)?|tau|theta|times|to|top|tan|tanh|tilde|therefore|triangle\w*|tag|tbinom|tfrac)(?![A-Za-z])/;
+export const LATEX_COMMAND_N_T = /^\\(?:nu|neq?|nabla|ni|notin|not|nless|ngtr|nleq|ngeq|nmid|nparallel|nsim|ncong|nexists|nrightarrow|nleftarrow|text(?:bf|it|rm|sf|tt|normal|up)?|tau|theta|times|to|top|tan|tanh|tilde|therefore|triangle\w*|tag|tbinom|tfrac)(?![A-Za-z])/;
 
 // -- unicode math ------------------------------------------------------------------------------
 
-const UNICODE_MATH =
+/** The characters the unicode-math rule flags in prose. Exported so that the repair guard in patch.ts reads the same set. */
+export const UNICODE_MATH =
   /[Ͱ-Ͽἀ-῿←-⇿∀-⋿⟀-⟯⦀-⧿⨀-⫿⃐-⃿ℂℏℑℓℕℚℜℝℤℵ×÷±]/gu;
 const UNIT_SYMBOLS = new Set(['Ω', 'μ', 'Ω', 'µ']);
 

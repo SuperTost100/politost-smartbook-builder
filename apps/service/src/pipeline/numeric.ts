@@ -13,6 +13,18 @@ interface Printed { name: string; value: number; unit: string | null; text: stri
 export interface Comparison { name: string; stated: string; computed: string }
 export interface NumericCheck { compared: Comparison[]; mismatches: Comparison[] }
 
+const MISMATCH_PREFIX = 'Recomputing the final values in Python gives a different result: ';
+/** The text of the blocker the numeric check raises, one clause per value. `readMismatches` reads it back when the fix is recorded. */
+export const mismatchMessage = (mismatches: Comparison[]) =>
+  `${MISMATCH_PREFIX}${mismatches.map((m) => `${m.name} is ${m.computed} by the computation and ${m.stated} in the solution`).join('; ')}.`;
+export function readMismatches(message: string): Comparison[] {
+  if (!message.startsWith(MISMATCH_PREFIX)) return [];
+  return message.slice(MISMATCH_PREFIX.length).replace(/\.$/, '').split('; ').flatMap((part) => {
+    const m = /^(.+?) is (.+) by the computation and (.+) in the solution$/.exec(part);
+    return m ? [{ name: m[1], computed: m[2], stated: m[3] }] : [];
+  });
+}
+
 // Prefixes that are unambiguous next to the units below. T, P, E, d and h are left out because they are also units or rare.
 // NFKC turns the micro sign (U+00B5) into the Greek mu (U+03BC) and the ohm sign (U+2126) into the Greek capital omega (U+03A9).
 const MU = '\u03bc';
