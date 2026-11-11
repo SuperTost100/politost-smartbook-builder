@@ -550,6 +550,18 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(page.locator('.ms-block .sb-figure img')).toHaveAttribute('src', await dialog.locator('.fd-preview img').getAttribute('src') as string);
   });
 
+  test('a double click on Render sends one request, so there is no conflict with the author\'s own render', async ({ page }) => {
+    const fm = await open(page);
+    fm.renderMs = 500;
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await dialog.getByRole('button', { name: 'Render' }).dblclick();
+    await expect(dialog.getByText('Rendered just now')).toBeVisible();
+    expect(fm.writes.filter((w) => w.call.endsWith('/render'))).toHaveLength(1);
+    await expect(dialog.locator('.fd-error')).toHaveCount(0);
+  });
+
   test('a source that does not compile shows the compiler line under the editor and keeps the last drawing (2c)', async ({ page }) => {
     await open(page);
     const dialog = await openDialog(page);

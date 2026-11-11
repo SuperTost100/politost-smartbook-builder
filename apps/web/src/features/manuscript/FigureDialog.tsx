@@ -175,11 +175,15 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
 
   // ----- writes -----
   const done = (sv: SectionView) => applySectionView(qc, pid, sv);
+  // A second click lands before the first one has made the button busy, so the request is claimed on the click.
+  const renderSent = useRef(false);
   const render = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/render', { params: route, body: { baseRevId: details.headRevId, source } }),
     onSuccess: (sv) => { setCompileError(null); setError(null); setApplied(true); done(sv); toast('Rendered. The figure in the section is updated.'); },
     onError: (e) => { if (e instanceof ApiRequestError && e.code === 'does_not_compile') { setCompileError(e.message); setError(null); } else setError(errorText(e)); },
+    onSettled: () => { renderSent.current = false; },
   });
+  const startRender = () => { if (renderSent.current) return; renderSent.current = true; render.mutate(); };
   const redraw = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw', { params: route, body: { baseRevId: details.headRevId, instruction: instruction.trim(), ...(drawing && shows.trim() && shows !== drawing.shows ? { shows } : {}) } }),
     onMutate: () => { setFailure(null); setError(null); setRedrawn(false); setAsked(instruction.trim()); },
@@ -342,14 +346,14 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
                 <div className="fd-details__body">
                   {srcOpen && (
                     <div className="fd-code">
-                      <SourceEditor code value={source} onChange={setSource} onSave={() => { if (source.trim() && !held) render.mutate(); }} label="Drawing source" minRows={6} errorLine={errLine} />
+                      <SourceEditor code value={source} onChange={setSource} onSave={() => { if (source.trim() && !held) startRender(); }} label="Drawing source" minRows={6} errorLine={errLine} />
                     </div>
                   )}
                   {compileError && (
                     <div className="fd-err" role="alert"><Icon name="alert" size={14} /><span>{compileError}</span></div>
                   )}
                   <div className="ui-row">
-                    <button type="button" className="ui-btn ui-btn--sm" onClick={() => render.mutate()} disabled={held || !source.trim()}>
+                    <button type="button" className="ui-btn ui-btn--sm" onClick={startRender} disabled={held || !source.trim()}>
                       {rendering ? <><span className="ui-spinner" />Rendering…</> : <><Icon name="play" size={14} />Render</>}
                     </button>
                     <span className="fd-ok" role="status">
