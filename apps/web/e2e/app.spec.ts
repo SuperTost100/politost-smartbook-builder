@@ -415,6 +415,23 @@ test('manuscript figures resolve whether the map is keyed by assets/<file> or th
   }
 });
 
+test('double-clicking Add figures starts one run and shows one toast', async ({ page }) => {
+  let posts = 0;
+  await page.route(`**/api/projects/${bookId}/sections/s1/figures`, async (route) => {
+    posts++;
+    await new Promise((r) => setTimeout(r, 400));
+    await route.fulfill({ json: { id: 'run-figs', counts: { figures: 1 } } });
+  });
+  await page.goto(`/books/${bookId}/manuscript/s1`);
+  await page.getByRole('button', { name: 'Add figures' }).click();
+  const dialog = page.getByRole('dialog', { name: 'Add figures' });
+  await dialog.getByRole('button', { name: 'Add figures' }).dblclick();
+  await page.waitForTimeout(900);
+  expect(posts).toBe(1);
+  await expect(page.getByText('Adding figures to this section')).toHaveCount(1);
+  await page.unroute(`**/api/projects/${bookId}/sections/s1/figures`);
+});
+
 // Autosave runs on its own section (s2) so the tests above keep their text. It saves about 3 s after the last keystroke.
 const AUTO_MD = 'Primo paragrafo.\n\nSecondo paragrafo.\n\nTerzo paragrafo.';
 
