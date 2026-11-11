@@ -171,3 +171,26 @@ test.describe('reader preview', () => {
     await expect(page.locator('#p2')).toBeInViewport();
   });
 });
+
+test.describe('wording and tone', () => {
+  test('the cancel-run confirmation offers Keep running and Cancel run, not two buttons that both say Cancel', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/books/p1/run');
+    await page.getByRole('button', { name: 'Cancel', exact: true }).click();
+    const dialog = page.getByRole('dialog', { name: 'Cancel this run' });
+    await expect(dialog.getByRole('button', { name: 'Keep running' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Cancel run' })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Keep running' }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('skipping a file that is not a source is a notice, not an error', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/books/p1/sources');
+    await page.getByTestId('source-file-input').setInputFiles({ name: 'vuoto.txt', mimeType: 'text/plain', buffer: Buffer.from('x') });
+    const toast = page.locator('.ui-toast', { hasText: 'Skipped 1 file' });
+    await expect(toast).toBeVisible();
+    await expect(toast).not.toHaveClass(/ui-toast--danger/);
+  });
+});
