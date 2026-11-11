@@ -1,6 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
-import { lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
+import { changedWords, lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
 import { subjectProfileOf, type Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -33,6 +33,17 @@ const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
+/** Why a formatting repair of question text must not replace the original: it changed a word or a number, in the first part that did. Null when it may. */
+function wordsChanged(before: QuestionText, after: QuestionText): string | null {
+  for (const part of ['statement', 'hint', 'solution'] as const) {
+    const why = changedWords(before[part], after[part]);
+    if (why) return `${part}: ${why}`;
+  }
+  return null;
+}
+/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language). Every other rule is formatting. */
+const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift']);
+
 /**
  * One formatting repair for question text that would not render or reads broken (unbalanced $, LaTeX KaTeX rejects,
  * a colon leading nowhere): the editor fixes only the listed problems, and its text is kept when it has fewer of them.
@@ -52,7 +63,10 @@ async function repairQuestionFormat(ctx: AppContext, t: TaskContext, projectId: 
       prompt: `PROBLEMS:\n${found.join('\n')}\n\nSTATEMENT:\n${text.statement}\n\nHINT:\n${text.hint}\n\nSOLUTION:\n${text.solution}\n\nReturn JSON with the statement, hint and solution; change only what the problems require and keep an empty hint empty.`,
       schema: questionReviseSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
-    if (problems(data).length < found.length) return { ...data, hint: text.hint ? data.hint : '' };
+    const next = { ...data, hint: text.hint ? data.hint : '' };
+    const why = wordsChanged(text, next);
+    if (why) t.progress(`A formatting repair was not applied: ${why}`);
+    else if (problems(data).length < found.length) return next;
   } catch (err) {
     if (err instanceof TaskError && err.kind !== 'input') throw err;
   }
@@ -447,7 +461,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   const q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
-  const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string }>(`SELECT id, message, suggestion FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string }>(`SELECT id, message, suggestion, source, category FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
   const project = loadProject(ctx, q.projectId);
   const { data, route } = await runRole(ctx, {
     role: 'editor',
@@ -455,6 +469,14 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
+  // A fix of formatting findings may change line breaks, spacing and markup, never a word or a number.
+  const formatting = issues.length > 0 && issues.every((i) => i.source === 'lint' && !WORD_RULES.has(i.category.replace(/^compile:/, '')));
+  const why = formatting ? wordsChanged(q, data) : null;
+  if (why) {
+    ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `The AI fix was not applied: ${why}`, ...issues.map((i) => i.id));
+    issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
+    return { skipped: 'the repair changed words or numbers' };
+  }
   return ctx.db.tx(() => {
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
       layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;

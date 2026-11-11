@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { addsCommentary, applyGuardedChanges, dropReferences, guardRules, lostStructure, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { addsCommentary, applyGuardedChanges, changedWords, dropReferences, guardRules, lostStructure, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -225,4 +225,34 @@ test('a corrected formula at either end of a section is not read as a note about
   assert.equal(addsCommentary(inline, inline.replace('= \\sin x', '= \\cos x')), false, 'an inline formula inside a long paragraph');
   assert.equal(addsCommentary(`${text}\n\n${wrong}`, `${text}\n\n${wrong}\n\nNota: ho cambiato la derivata del seno nella formula precedente.`), true, 'prose after a formula is still a note');
   assert.equal(addsCommentary(`${wrong}\n\n${text}`, `Ho corretto la derivata del seno nella formula.\n\n${right}\n\n${text}`), true, 'prose before a formula is still a note');
+});
+
+// The July 2024 solution from the acceptance run: the stored text had literal backslash-n sequences, and the repair added "acu".
+const BEFORE = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.\n\nb) $v_C(44\,\mathrm{ms}) = 9 e^{-2}\,\mathrm{V} = 1{,}218\,\mathrm{V}$.\n\nc) $E(0) = \frac{1}{2} C V_0^2 = 40{,}5\,\mu\mathrm{J}$ e $E(44\,\mathrm{ms}) = \frac{1}{2} C v_C^2 = 0{,}742\,\mu\mathrm{J}$.`;
+const REPAIRED = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.
+
+b) $v_C(44\,\mathrm{ms}) = 9 e^{-2}\,\mathrm{V} = 1{,}218\,\mathrm{V}$.
+
+c) $E(0) = \frac{1}{2} C V_0^2 = 40{,}5\,\mu\mathrm{J}$ e $E(44\,\mathrm{ms}) = \frac{1}{2} C v_C^2 = 0{,}742\,\mu\mathrm{J}$.`;
+
+test('changedWords: real line breaks for literal \\n sequences change no word', () => {
+  assert.equal(changedWords(BEFORE, REPAIRED), null);
+});
+
+test('changedWords: a stray word at the end of a repaired solution is named', () => {
+  assert.match(changedWords(BEFORE, `${REPAIRED} acu`)!, /adds "acu"/);
+});
+
+test('changedWords: markup, math delimiters, spacing and decimal commas are set aside', () => {
+  assert.equal(changedWords('Il valore è **0,742** V e $x1$.', 'Il   valore è\n$0{,}742$ V\n\ne $x_1$.'), null);
+  assert.equal(changedWords('Calcola $a+b$ e $c$', 'Calcola\n\n$$a+b$$\n\ne $c$'), null);
+  assert.equal(changedWords(String.raw`Se $\nu = 2$ allora\ndurata`, 'Se $\\nu = 2$ allora\ndurata'), null, 'a literal \\n outside math is a break, \\nu inside math is a letter');
+});
+
+test('changedWords: a changed or missing number or word is reported', () => {
+  assert.match(changedWords('Vale $3{,}386\\,\\mathrm{kHz}$.', 'Vale $21{,}28\\,\\mathrm{kHz}$.')!, /replaces/);
+  assert.match(changedWords('Primo passo. Secondo passo.', 'Primo passo.')!, /removes "secondo passo"/);
+  assert.match(changedWords('Uno due tre', 'Uno tre due')!, /./, 'a reordering is a change');
 });

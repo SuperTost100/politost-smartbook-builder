@@ -160,6 +160,60 @@ describe('1. question updates do not overwrite author edits', () => {
     assert.equal(row(id).hint, '');
     assert.equal(fake.calls.length, 2);
   });
+
+  test('import: a formatting repair that adds a word is not applied', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: '', solution: 'Vale $1$. acu' }));
+    await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x).', 'the text before the repair stays');
+    assert.equal(row(id).solution, 'Vale $1$.');
+  });
+});
+
+describe('1b. a formatting fix of question text changes no word or number', () => {
+  const broken = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.\n\nc) $E = 0{,}742\,\mu\mathrm{J}$.`;
+  const clean = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.
+
+c) $E = 0{,}742\,\mu\mathrm{J}$.`;
+  const lintIssue = (qid: string, category = 'compile:literal-escape') => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'lint', severity: 'blocker', category, quote: '', message: 'A literal backslash followed by n', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+
+  test('a fix that appends a word leaves the text as it was and the issue open with the reason', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: `${clean} acu` }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal(row(id).solution, broken);
+    assert.equal(row(id).origin, 'authentic');
+    const [issue] = issues(`id = '${iid}'`);
+    assert.equal(issue.status, 'open');
+    assert.match(issue.resolution, /^The AI fix was not applied: .*solution: it adds "acu"/);
+  });
+
+  test('a fix that only sets line breaks is applied', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: clean }));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.equal(row(id).solution, clean);
+    assert.equal(issues(`id = '${iid}'`)[0].status, 'fixed');
+  });
+
+  test('a fix for a rule that is about words (a leaked comment) may remove them', async () => {
+    const id = q({ statement: 'Calcola. Come riportato nelle note.', solution: 'Vale 1.' });
+    const iid = lintIssue(id, 'compile:meta-leak');
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: 'Vale 1.' }));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.equal(row(id).statement, 'Calcola.');
+  });
 });
 
 describe('15. disagreement is a blocker', () => {

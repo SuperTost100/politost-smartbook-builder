@@ -1,4 +1,5 @@
 // Guards for model patches: block changes are applied one at a time and a change that would damage the section is dropped. Pure.
+import { LATEX_COMMAND_N_T } from './lint.ts';
 import { rewriteLatexNames } from './sanitize.ts';
 import type { LintFinding } from './types.ts';
 
@@ -245,6 +246,51 @@ export function addsCommentary(before: string, after: string): boolean {
     const sameParagraph = new Set(paragraphWords(x));
     return words.length >= 4 ? words.filter((w) => sameParagraph.has(w)).length / words.length < 0.5 : words.some((w) => !known.has(w));
   });
+}
+
+/** Math spans: display and inline. */
+const MATH_SPAN = /\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g;
+
+/**
+ * The words and numbers of a text, in order and lower case. Markup, math delimiters, LaTeX commands and spacing are not
+ * words, and neither is a literal backslash-n or backslash-t outside math (a line break or tab a model wrote as two
+ * characters). Letters and digits count separately, so "x1" and "x_1" give the same sequence, and a decimal comma
+ * written as "{,}" or "," gives the same digits.
+ */
+function wordSequence(text: string): string[] {
+  const out: string[] = [];
+  let last = 0;
+  const math = (s: string) => s.replace(/\\[A-Za-z]+/g, ' ').replace(/\\./g, ' ');
+  // A backslash-n or -t that starts a LaTeX command (\nu, \to) is no line break, also in a fragment with an unbalanced $.
+  const prose = (s: string) => math(s.replace(/(?<!\\)\\[nt]/g, (m, at: number) => (LATEX_COMMAND_N_T.test(s.slice(at)) ? m : ' ')));
+  const take = (s: string) => { out.push(...(s.toLowerCase().match(/\p{L}+|\p{N}+/gu) ?? [])); };
+  for (const m of text.matchAll(MATH_SPAN)) {
+    take(prose(text.slice(last, m.index)));
+    take(math(m[0]));
+    last = m.index + m[0].length;
+  }
+  take(prose(text.slice(last)));
+  return out;
+}
+
+/**
+ * How a formatting repair changed the words and numbers of a text, or null when it changed none. A repair may change line
+ * breaks, spacing, math delimiters and markup, and must neither add nor remove a word or a number.
+ */
+export function changedWords(before: string, after: string): string | null {
+  const a = wordSequence(before);
+  const b = wordSequence(after);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const removed = a.slice(head, a.length - tail);
+  const added = b.slice(head, b.length - tail);
+  if (!removed.length && !added.length) return null;
+  const list = (w: string[]) => `"${w.slice(0, 6).join(' ')}${w.length > 6 ? ' …' : ''}"`;
+  if (!removed.length) return `it adds ${list(added)}`;
+  if (!added.length) return `it removes ${list(removed)}`;
+  return `it replaces ${list(removed)} with ${list(added)}`;
 }
 
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
