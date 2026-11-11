@@ -243,6 +243,8 @@ test('changedWords: real line breaks for literal \\n sequences change no word', 
 
 test('changedWords: a stray word at the end of a repaired solution is named', () => {
   assert.match(changedWords(BEFORE, `${REPAIRED} acu`)!, /adds "acu"/);
+  assert.equal(changedWords('$\\bot$', ''), 'it removes all the text', 'text without words still may not be emptied');
+  assert.equal(changedWords('', ''), null);
 });
 
 test('changedWords: markup, math delimiters, spacing and decimal commas are set aside', () => {

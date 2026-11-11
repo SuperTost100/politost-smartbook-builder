@@ -314,6 +314,8 @@ function wordSequence(text: string): string[] {
  * breaks, spacing, math delimiters and markup, and must neither add nor remove a word or a number.
  */
 export function changedWords(before: string, after: string): string | null {
+  // Text made only of symbols the comparison sets aside (a lone "$\bot$") has no words, so its loss is checked by itself.
+  if (before.trim() && !after.trim()) return 'it removes all the text';
   const a = wordSequence(before);
   const b = wordSequence(after);
   let head = 0;
