@@ -2,6 +2,7 @@
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
 import type { ExamFormat, ProgramItem } from '@smartbuilder/domain';
+import { codeString } from '../llm/schema.ts';
 import { figureSchema } from '../figures/materialize.ts';
 
 export const PROMPT_VERSION = 16;
@@ -431,7 +432,7 @@ Return JSON {"coverage": [...], "findings": [...]}.
 
 COVERAGE: one entry per program item key, with the ids of the sections that teach it substantially (empty when none does).
 
-FINDINGS (be selective: a few solid findings beat a long list of doubtful ones; every finding is about one place)
+FINDINGS (every finding is about one place. Be selective only with thin and proof, which are judgement calls: a few solid findings beat a long list of doubtful ones. Report every off-program section or passage you find, in full)
 - missing: a program item that no section teaches. Give item, chapterId, afterSectionId (the section it should follow so prerequisites come first; null for the start of the chapter), title, 1-4 objectives and depth, all in ${lang} for title and objectives. Never suggest a position after an exam-guide section.
 - thin: a section teaches a program item but too briefly for what the exam asks (many sessions test it, yet the section is brief or short and has few statements). Give item and nodeId.
 - proof: the program or the exam format asks for a proof ("proofs asked", or the exam format says proofs are asked) that the section does not contain (its digest shows no proof or no matching statement). Give item and nodeId.
@@ -501,7 +502,7 @@ ${p.collection ? `Items from the exercise collections students practise with, on
 Known formula keys you may cite in hints and solutions with {{formula:@key}}:
 ${p.knownFormulas || '(none)'}
 
-Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (${p.kind === 'exam' ? 'always empty: exams have no hints' : 'one or two sentences that point the way without solving'}) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
+Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (${p.kind === 'exam' ? 'always empty: exams have no hints' : 'one or two sentences that point the way without solving'}) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Difficulty goes only in its own field: never write stars or labels such as (**) or (facile) in a statement. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
   };
 }
 
@@ -571,7 +572,7 @@ export const graphSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  functions: z.array(z.object({ fn: z.string(), label: z.string() })),
+  functions: z.array(z.object({ fn: codeString(), label: z.string() })),
   xDomain: z.tuple([z.number(), z.number()]),
   yDomain: z.tuple([z.number(), z.number()]),
   xLabel: z.string(),
@@ -593,7 +594,7 @@ export const ideSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  code: z.string(),
+  code: codeString(),
   expectedOutput: z.string().describe('what the program prints, exactly or approximately'),
 });
 

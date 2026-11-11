@@ -1,6 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
-import { lintQuestionText, separateDisplayMath as layout } from '@smartbuilder/content';
+import { lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
 import type { Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -223,7 +223,7 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
       });
       const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));
       const written: typeof data.questions = [];
-      for (const g of data.questions) written.push({ ...g, ...await repairQuestionFormat(ctx, t, projectId, project.language, { statement: g.statement, hint: kind === 'exam' ? '' : g.hint, solution: g.solution }) });
+      for (const g of data.questions) written.push({ ...g, ...await repairQuestionFormat(ctx, t, projectId, project.language, { statement: stripDifficultyDecoration(g.statement), hint: kind === 'exam' ? '' : g.hint, solution: g.solution }) });
       ids = ctx.db.tx(() => written.map((g) => {
         const id = newId();
         ctx.db.insert('questions', {

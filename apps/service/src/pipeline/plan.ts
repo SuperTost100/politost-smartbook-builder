@@ -6,7 +6,7 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, WaitForUser, type TaskContext } from '../queue/queue.ts';
 import { outlinePrompt, plannedOutlineSchema } from './prompts.ts';
 import { readyProgram } from '../repo/program.ts';
-import { appendExamGuides } from './exam.ts';
+import { appendExamGuides, examSessionTotal } from './exam.ts';
 import { sourceIndexesText } from './prepare.ts';
 import { loadOutline, loadProject, loadTopics, slugify } from './util.ts';
 
@@ -20,7 +20,7 @@ export async function outlinePlan(ctx: AppContext, t: TaskContext) {
   const project = loadProject(ctx, projectId);
   const topics = loadTopics(ctx, projectId);
   if (!topics.length) throw new TaskError('There is no topic map yet.', 'input', 'Run Prepare on the sources first.');
-  const sessions = ctx.db.get<{ n: number }>(`SELECT COUNT(DISTINCT exam_group) AS n FROM questions WHERE project_id = ? AND kind = 'exam'`, projectId)?.n ?? 0;
+  const sessions = examSessionTotal(ctx, projectId);
   const keyOf = (id: string) => id.slice(9);
   const topicText = topics.map((tp) => `${keyOf(tp.id)} | ${tp.name} | ${tp.examSessions} | ${tp.prerequisites.map(keyOf).join(', ') || '-'}`).join('\n');
   const resources = ctx.db.all<{ id: string; filename: string }>(`SELECT id, filename FROM resources WHERE project_id = ? AND included = 1 AND role IN ('theory', 'mixed') ORDER BY created_at`, projectId);

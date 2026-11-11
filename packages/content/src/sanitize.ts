@@ -25,10 +25,23 @@ export function stripGeneratorMarkup(s: string): string {
  * Tool-call markup the model wrapped its answer in is removed.
  */
 export function sanitizeModelText(s: string): string {
+  return stripLatexRepairs(cleanTerminal(s));
+}
+
+/** Code (lab programs, expressions, SMILES) keeps its backslashes and whitespace: only markup, terminal codes and control bytes go. */
+export function sanitizeModelCode(s: string): string {
+  return cleanTerminal(s).replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+}
+
+function cleanTerminal(s: string): string {
   return stripGeneratorMarkup(s)
     .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
     // A terminal mode code ("[?25l" hides the cursor) whose escape byte the CLI already dropped; never valid text.
-    .replace(/\[\?\d+[hl]/g, '')
+    .replace(/\[\?\d+[hl]/g, '');
+}
+
+function stripLatexRepairs(s: string): string {
+  return s
     .replace(/\t(?=[a-z])/g, (c, at: number, all: string) => (TAB_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\t' : c))
     .replace(/\n(?=[a-z])/g, (c, at: number, all: string) => (NEWLINE_COMMANDS.test(all.slice(at + 1)) && inMath(all, at) ? '\\n' : c))
     .replace(/[\x00-\x08\x0b-\x1f]/g, (c, at: number, all: string) => {
@@ -54,10 +67,27 @@ function inMath(all: string, at: number): boolean {
   return (line.match(/\$/g) ?? []).length % 2 === 1;
 }
 
-/** sanitizeModelText on every string of a parsed JSON value. */
-export function sanitizeModelValue<T>(value: T): T {
-  if (typeof value === 'string') return sanitizeModelText(value) as T;
-  if (Array.isArray(value)) return value.map(sanitizeModelValue) as T;
-  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, sanitizeModelValue(v)])) as T;
+/** JSON-schema keyword that marks a string field as code. `codeString()` in the service sets it. */
+export const CODE_KEYWORD = 'x-code';
+
+type Schema = Record<string, unknown> | undefined;
+const asSchema = (v: unknown): Schema => (v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined);
+const branches = (s: Schema) => ['anyOf', 'oneOf', 'allOf'].flatMap((k) => (Array.isArray(s?.[k]) ? (s![k] as unknown[]).map(asSchema) : []));
+const isCode = (s: Schema): boolean => !!s && (s[CODE_KEYWORD] === true || branches(s).some(isCode));
+const child = (s: Schema, key: string): Schema[] => [s, ...branches(s)].map((b) => asSchema(asSchema(b?.properties)?.[key]) ?? undefined).filter(Boolean);
+const items = (s: Schema): Schema[] => [s, ...branches(s)].map((b) => asSchema(b?.items)).filter(Boolean);
+
+/**
+ * sanitizeModelText on every string of a parsed JSON value. With the answer's raw JSON schema, strings the schema marks as
+ * code (`CODE_KEYWORD`) get sanitizeModelCode instead, so the LaTeX repairs never touch them.
+ */
+export function sanitizeModelValue<T>(value: T, schema?: Record<string, unknown>): T {
+  return walk(value, schema ? [schema] : []) as T;
+}
+
+function walk(value: unknown, schemas: Schema[]): unknown {
+  if (typeof value === 'string') return schemas.some(isCode) ? sanitizeModelCode(value) : sanitizeModelText(value);
+  if (Array.isArray(value)) return value.map((v) => walk(v, schemas.flatMap(items)));
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, walk(v, schemas.flatMap((s) => child(s, k)))]));
   return value;
 }

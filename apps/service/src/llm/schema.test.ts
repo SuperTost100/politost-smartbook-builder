@@ -75,3 +75,19 @@ test('tuples become plain arrays that strict validators accept', async () => {
   assert.ok(!out.includes('prefixItems'), out);
   assert.ok(out.includes('"items":{"type":"number"}'), out);
 });
+
+test('every model field that carries code is marked, and the marker never reaches the provider schema', async () => {
+  const { ideSchema, graphSchema } = await import('../pipeline/prompts.ts');
+  const { figureSchema } = await import('../figures/materialize.ts');
+  const { sanitizeModelValue } = await import('@smartbuilder/content');
+  const ide = rawJsonSchema(ideSchema);
+  const out = sanitizeModelValue({ id: 'a', title: 'b', description: 'c', code: 'x = A\\C;', expectedOutput: 'd' }, ide) as { code: string };
+  assert.equal(out.code, 'x = A\\C;');
+  const graph = sanitizeModelValue({ functions: [{ fn: 'x\\Q', label: 'l' }] }, rawJsonSchema(graphSchema)) as { functions: { fn: string }[] };
+  assert.equal(graph.functions[0].fn, 'x\\Q');
+  const fig = rawJsonSchema(figureSchema);
+  const figOut = sanitizeModelValue({ structure: { smiles: 'C/C=C\\C' }, plot: { functions: [{ expr: 'x\\C' }] } }, fig) as { structure: { smiles: string }; plot: { functions: { expr: string }[] } };
+  assert.equal(figOut.structure.smiles, 'C/C=C\\C');
+  assert.equal(figOut.plot.functions[0].expr, 'x\\C');
+  assert.ok(!JSON.stringify(toProviderSchema(ideSchema)).includes('x-code'));
+});
