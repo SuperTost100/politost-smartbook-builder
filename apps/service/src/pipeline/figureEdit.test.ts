@@ -11,6 +11,7 @@ import { buildFigures, commitFigures, type FigureRequest } from '../figures/mate
 import { copyAsset, saveFigureDetails, swapSrc, writeFigureRevision } from '../figures/author.ts';
 import { renderEditedDrawing } from '../figures/drawing/edit.ts';
 import { currentHead, getAsset, listAssets, listRevisions, saveHuman } from '../repo/index.ts';
+import { figureNotes } from '../figures/historyNote.ts';
 import { activeRedraw, figureDraw, figureRedraw, startRedraw } from './figureEdit.ts';
 
 const P = 'p1';
@@ -104,6 +105,25 @@ describe('redraw task', () => {
     const rows = ctx().db.all<{ role: string; run_id: string | null; task_id: string | null }>("SELECT role, run_id, task_id FROM usage WHERE role = 'illustrator'");
     assert.ok(rows.length >= 2, 'the drawing and the look turn');
     for (const r of rows) assert.deepEqual([r.run_id, r.task_id], [t.task.runId, t.task.id]);
+  });
+
+  test('History says what each figure action did: a caption, a render, a redraw with its instruction and model', async () => {
+    const { assetId } = await sectionWithDrawing();
+    const first = currentHead(ctx(), P, N)!;
+    const caption = saveFigureDetails(ctx(), P, N, getAsset(ctx(), assetId), { caption: 'Un cerchio più grande' }, first.id)!;
+    const shownNow = () => listAssets(ctx(), P).find((a) => currentHead(ctx(), P, N)!.markdown.includes(`assets/${a.filename}"`))!;
+    const copy = copyAsset(ctx(), shownNow());
+    assert.ok((await renderEditedDrawing(ctx(), copy.id, GOOD_2)).ok);
+    const render = writeFigureRevision(ctx(), P, N, (md) => swapSrc(md, shownNow().filename, copy.filename))!;
+    fake.next(say(GOOD), say('OK'));
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId: shownNow().id, instruction: 'Make the capacitor label C bigger' }));
+    const redraw = currentHead(ctx(), P, N)!;
+    const notes = figureNotes(ctx(), P, listRevisions(ctx(), P, N));
+    assert.equal(notes.get(first.id), undefined);
+    assert.equal(notes.get(caption.id), 'Figure "Un cerchio": caption changed to "Un cerchio più grande"');
+    assert.equal(notes.get(render.id), 'Figure "Un cerchio più grande": source rendered');
+    assert.equal(notes.get(redraw.id), 'Figure "Un cerchio più grande": redrawn: "Make the capacitor label C bigger"');
+    assert.ok(redraw.model, 'the revision names the model that drew it');
   });
 
   test('a redraw that never compiles fails the task with the reason, keeps the figure and leaves no copy', async () => {

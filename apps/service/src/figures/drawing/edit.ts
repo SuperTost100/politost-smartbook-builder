@@ -22,7 +22,7 @@ const specSchema = z.object({
 export type DrawingSpec = z.infer<typeof specSchema>;
 
 export type EditResult =
-  | { ok: true; asset: Asset; /** A redraw: what the look turn did. */ look?: LookOutcome }
+  | { ok: true; asset: Asset; /** A redraw: what the look turn did, and the model that drew it. */ look?: LookOutcome; model?: string }
   | { ok: false; error: string };
 
 /** The drawing spec of an asset the illustrator made, or null for any other figure. */
@@ -70,5 +70,5 @@ export async function redrawDrawing(ctx: AppContext, assetId: string, instructio
   });
   if (!drawn.ok) return { ok: false, error: drawn.reason };
   const detail = `Redrawn by the illustrator in ${spec.engine} at the author's request (look turn: ${drawn.look}).`;
-  return { ok: true, asset: replaceDrawing(ctx, asset, { ...spec, source: drawn.source }, drawn.svg, detail), look: drawn.look };
+  return { ok: true, asset: replaceDrawing(ctx, asset, { ...spec, source: drawn.source }, drawn.svg, detail), look: drawn.look, model: drawn.model };
 }

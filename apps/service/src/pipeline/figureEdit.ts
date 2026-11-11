@@ -75,7 +75,7 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
     throw t.signal.reason ?? new Error('cancelled');
   }
   // The head is read now: the author may have saved text meanwhile, and that text keeps what they wrote.
-  const rev = rewriteHead(ctx, projectId, nodeId, (md) => swapSrc(md, old.filename, copy.filename), { origin: 'ai' });
+  const rev = rewriteHead(ctx, projectId, nodeId, (md) => swapSrc(md, old.filename, copy.filename), { origin: 'ai', model: drawn.model ?? null, taskId: t.task.id });
   if (!rev) {
     discardAsset(ctx, copy);
     return { skipped: 'the figure was changed or left the text while it was being redrawn' };

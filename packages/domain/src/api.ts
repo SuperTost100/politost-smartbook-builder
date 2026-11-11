@@ -48,6 +48,11 @@ export interface SectionView {
   compiled: string;
 }
 
+/** A revision in the History list, with what its figure action did when it changed one figure. */
+export interface HistoryRevision extends ContentRevision {
+  figureNote: string | null;
+}
+
 export interface ChapterView {
   chapterId: string;
   number: number;
@@ -152,7 +157,7 @@ export interface Api {
   'GET /api/projects/:id/sections/:nodeId': { res: SectionView };
   /** Saves a human edit. 409 when baseRevId is not the current revision. */
   'PUT /api/projects/:id/sections/:nodeId': { body: { markdown: string; baseRevId: string | null }; res: SectionView };
-  'GET /api/projects/:id/sections/:nodeId/history': { res: ContentRevision[] };
+  'GET /api/projects/:id/sections/:nodeId/history': { res: HistoryRevision[] };
   'POST /api/projects/:id/sections/:nodeId/restore': { body: { revId: string }; res: SectionView };
   'POST /api/projects/:id/sections/:nodeId/regenerate': { body: { instruction?: string; selection?: string }; res: RunSummary };
   'POST /api/projects/:id/sections/:nodeId/research': { res: RunSummary };

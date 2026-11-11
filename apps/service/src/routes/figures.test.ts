@@ -416,3 +416,23 @@ describe('an inserted figure counts as an author edit', () => {
     assert.ok(headOf(s).markdown.includes('assets/mia.png'));
   });
 });
+
+describe('history notes', () => {
+  it('the History list says what each figure action did, including a replacement and a removal', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova didascalia' });
+    const afterCaption = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
+    await t.req('POST', url(s, `/${shown().id}/replace`), form.payload, form.headers);
+    const afterReplace = headOf(s);
+    await t.req('POST', url(s, `/${shown().id}/remove`), { baseRevId: afterReplace.id });
+    const afterRemove = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    const note = (id: string) => history.find((r) => r.id === id)?.figureNote;
+    assert.equal(note(s.headId), null);
+    assert.equal(note(afterCaption.id), 'Figure "Un cerchio": caption changed to "Nuova didascalia"');
+    assert.equal(note(afterReplace.id), 'Figure "Nuova didascalia": the drawing was replaced with an image');
+    assert.equal(note(afterRemove.id), 'Figure "Nuova didascalia" removed');
+  });
+});
