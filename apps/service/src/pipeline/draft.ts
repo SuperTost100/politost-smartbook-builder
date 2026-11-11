@@ -12,7 +12,7 @@ import { FollowUpError, runRole, withRole, type RoleConversation } from '../llm/
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
-import { chapterExamStats, examSessionTotal } from './exam.ts';
+import { chapterExamStats, examSessionTotal, examSymbols } from './exam.ts';
 import { draftParser, draftPrompt, type DraftAnswer, examGuidePrompt, figureSetupOf, introPrompt, repairParser, repairPrompt, repairSchema, selfCheckPrompt } from './prompts.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
@@ -199,6 +199,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
       chapterTitle: chapter.title, chapterPlan: chapterPlanText(chapter),
       section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
       topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
+      examSymbols: examSymbols(ctx, projectId, section.topicIds),
       earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
       evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures, outside: project.options.outsideMaterial,
       bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',

@@ -274,6 +274,8 @@ export interface DraftPromptInput {
   sectionIds: string;
   evidence: string;
   pages: string;
+  /** Subscripted symbols the exam papers use on this section's topics ('f_c', 'v_{out}'); empty or absent when no paper has any. */
+  examSymbols?: string[];
   /** The evidence reader's answer: clean formulas, unverified wording. */
   summary: string;
   /** The figures the writer may add; null when the book has none. */
@@ -395,7 +397,8 @@ Already written earlier in the book (do not repeat, refer back with links when u
 ${p.earlier || '(nothing yet)'}
 ${p.figures && p.bookFigures ? `\nFigures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}\n` : ''}${p.program ? `\n${examFocus(p.program, p.language)}\n` : ''}
 Topics and how often the exams test them:
-${p.topics}
+${p.topics}${p.examSymbols?.length ? `
+Symbols used in the exam papers on these topics: ${p.examSymbols.join(', ')}. Use them for the same quantities, unless they conflict with the book's notation above.` : ''}
 
 EVIDENCE NOTES (verbatim passages from the course sources; cite them):
 ${p.evidence || '(no notes)'}
