@@ -22,7 +22,9 @@ jobs:
       - run: npm run build -w @smartbuilder/web
       - name: End-to-end tests (no model calls)
         run: |
-          npx playwright install --with-deps chromium
+          # No --with-deps: it runs apt, which fails the job whenever the runner cannot reach Ubuntu's package servers.
+          # The runner image already has the libraries Chromium needs.
+          npx playwright install chromium
           npm run test:e2e
       - uses: actions/upload-artifact@v4
         if: failure()
