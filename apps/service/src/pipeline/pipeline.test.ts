@@ -785,6 +785,67 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
   });
 });
 
+describe('Auto Fix redraws each failing graph of a Bode pair for its own issues', () => {
+  const mag = (over = {}) => ({ id: 'bode', title: 'Modulo', description: 'Modulo in dB', functions: [{ fn: '-10*log10(1+(x/1000)^2)', label: '|H|' }], xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB', ...over });
+  const phase = (over = {}) => ({ id: 'bode', title: 'Fase', description: 'Fase in gradi', functions: [{ fn: '-atan(x/1000)*180/pi', label: 'fase' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi', ...over });
+  /** Both graphs of the pair fail: their y ranges are far from the curves. */
+  const failingPair = async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ yDomain: [500, 600] }) }));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    const rows = ctx.db.all<{ id: string; payload: string }>(`SELECT id, payload FROM enrichments ORDER BY rowid`).map((r) => ({ id: r.id, graphId: json<{ id: string }>(r.payload, { id: '' }).id }));
+    const issues = ctx.db.all<{ id: string; quote: string }>(`SELECT id, quote FROM review_issues ORDER BY rowid`);
+    return { magRow: rows[0]!.id, phaseRow: rows[1]!.id, magIssue: issues[0]!.id, phaseIssue: issues[1]!.id, issues, rows };
+  };
+  const redrawInputs = () => ctx.db.all<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%' ORDER BY rowid`).map((r) => json<Record<string, unknown>>(r.input, {}));
+  const redrawsOf = (f: { magRow: string; phaseRow: string }) => [f.magRow, f.phaseRow].map((id) => redrawInputs().find((i) => i.replaceId === id)!);
+  const statusOf = (id: string) => ctx.db.get<{ status: string }>('SELECT status FROM review_issues WHERE id = ?', id)!.status;
+
+  test('each failing graph gets its own redraw for its own issue', async () => {
+    const f = await failingPair();
+    assert.deepEqual(f.rows.map((r) => r.graphId), ['bode', 'bode-2']);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] })), { skipped: 'routed', routed: { graphs: 2 } });
+    const inputs = redrawInputs();
+    assert.deepEqual(inputs.map((i) => [i.replaceId, i.issueIds]).sort(), [[f.magRow, [f.magIssue]], [f.phaseRow, [f.phaseIssue]]].sort());
+  });
+
+  test('the answer graph with the failing row\'s id replaces that row, and only its issue closes', async () => {
+    const f = await failingPair();
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] }));
+    const [magInput, phaseInput] = redrawsOf(f);
+    // The redraw of the phase row answers with a good magnitude as the graph and a good phase as its pair.
+    fake.next(answer({ ...mag(), pair: phase() }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', phaseInput!)), { made: 1, replaced: true });
+    const rows = ctx.db.all<{ id: string; payload: string; status: string }>('SELECT id, payload, status FROM enrichments ORDER BY rowid');
+    assert.equal(rows.length, 2, 'no duplicate graph appears');
+    assert.deepEqual(rows.map((r) => [r.id, json<{ title: string }>(r.payload, { title: '' }).title, r.status]), [[f.magRow, 'Modulo', 'issue'], [f.phaseRow, 'Fase', 'verified']]);
+    assert.deepEqual([statusOf(f.magIssue), statusOf(f.phaseIssue)], ['open', 'fixed']);
+    // The magnitude row is still failing, and its own redraw fixes it.
+    fake.next(answer({ ...mag(), pair: phase() }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', magInput!)), { made: 1, replaced: true });
+    assert.deepEqual(ctx.db.all<{ status: string }>('SELECT status FROM enrichments ORDER BY rowid').map((r) => r.status), ['verified', 'verified']);
+    assert.deepEqual([statusOf(f.magIssue), statusOf(f.phaseIssue)], ['fixed', 'fixed']);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 2);
+  });
+
+  test('an answer with a single graph of another id still replaces the failing row, and an answer with none of its id leaves the issues open', async () => {
+    const f = await failingPair();
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] }));
+    const [magInput, phaseInput] = redrawsOf(f);
+    fake.next(answer(phase({ id: 'fase', xDomain: [10, 100000], xScale: 'log', xLabel: 'f (Hz)' })));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', phaseInput!)), { made: 1, replaced: true });
+    assert.equal(statusOf(f.phaseIssue), 'fixed');
+    // Two graphs, neither with the id of the magnitude row: nothing in the answer is for that row.
+    fake.next(answer({ ...mag({ id: 'one' }), pair: phase({ id: 'two' }) }));
+    const r = await enrichGraph(ctx, startTask('enrich.graph', magInput!));
+    assert.equal(r.made, 0);
+    assert.equal(statusOf(f.magIssue), 'open');
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', f.magIssue)!.resolution, /no graph with the id "bode"/);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM enrichments WHERE id = ?', f.magRow)!.status, 'issue');
+  });
+});
+
 describe('2. figure files are scoped to their section', () => {
   const plot = (expr: string) => ({ xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr, label: null, domain: null, style: null }], points: null, asymptotes: null });
   const draft = (expr: string) => ({

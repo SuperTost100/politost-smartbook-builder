@@ -109,8 +109,16 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
   if (issueIds.length) {
-    // A redraw answers issues about one graph, so it uses the first graph of the answer and leaves a pair aside.
-    const { sampled, checks } = built[0]!;
+    // A redraw answers the issues of one graph row. Its replacement is the graph of the answer with that row's id, or the only
+    // graph of the answer when none has the id. A pair has two rows, and each gets its own redraw.
+    const wanted = before ? json<{ id?: string }>(before.payload, {}).id : undefined;
+    const pick = built.find((_, k) => graphs[k]!.spec.id === wanted) ?? (built.length === 1 ? built[0] : undefined);
+    if (!pick) {
+      const reason = `The redrawn answer has no graph with the id "${wanted ?? ''}" and holds ${built.length} graphs, so none of them is taken for this one.`;
+      setIssuesStatus(ctx, projectId, issueIds, 'open', reason);
+      return { made: 0, skipped: reason };
+    }
+    const { sampled, checks } = pick;
     if (!sampled.ok) {
       setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
       return { made: 0, failed: sampled.detail };
