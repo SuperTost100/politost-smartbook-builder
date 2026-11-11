@@ -88,3 +88,24 @@ test('a real failure to load a page image keeps the retry', async ({ page, reque
   await expect(note.getByText('The page image did not load.')).toBeVisible();
   await expect(note.getByRole('button', { name: 'Try again' })).toBeVisible();
 });
+
+test.describe('on a phone', () => {
+  test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
+
+  test('the evidence sheet has the block\'s Edit button, and it opens the editor above a closed sheet', async ({ page, request }) => {
+    const book = await makeBook(request);
+    await page.goto(`/books/${book}/manuscript/s1`);
+    await page.locator('.ms-block').nth(1).tap();
+    const sheet = page.locator('.ev-drawer');
+    await expect(sheet).toBeVisible();
+    // The sheet covers the block's own Edit button, so a touch on it lands on the sheet.
+    const own = page.locator('.ms-actions').getByRole('button', { name: 'Edit', exact: true });
+    const box = (await own.boundingBox())!;
+    expect(await page.evaluate(([x, y]) => !!document.elementFromPoint(x, y)?.closest('.ev-drawer'), [box.x + box.width / 2, box.y + box.height / 2])).toBe(true);
+    await sheet.getByRole('button', { name: 'Edit', exact: true }).tap();
+    await expect(page.getByRole('textbox', { name: /Source of block 2$/ })).toBeVisible();
+    await expect(sheet).toHaveCount(0);
+    await expect(page.getByRole('textbox', { name: /Source of block 2$/ })).toBeFocused();
+  });
+});
+

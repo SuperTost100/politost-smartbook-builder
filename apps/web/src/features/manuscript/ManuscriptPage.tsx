@@ -163,6 +163,8 @@ export default function ManuscriptPage() {
   const startEdit = useCallback((i: number) => { setFocusIdx(i); beginEdit(i); }, [beginEdit]);
   // Focus returns to the block once the editor has closed (effect below), which can be after a save.
   const endEdit = cancelEdit;
+  // From the evidence drawer: on a narrow screen it would cover the editor, so it closes as the editor opens (focus goes to the editor).
+  const editFromDrawer = useCallback((i: number) => { setSel(null); setFocusNote(undefined); startEdit(i); }, [startEdit]);
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
   const [compareOpen, setCompareOpen] = useState(false);
   // Leaving a block whose section changed elsewhere does nothing but point the author at the notice's choices.
@@ -363,7 +365,7 @@ export default function ManuscriptPage() {
             resources={resources.data ?? []}
             focusNote={focusNote}
             onClose={closeEvidence}
-            onEdit={startEdit}
+            onEdit={editFromDrawer}
             onEditFigure={figureOf.has(selBlock.index) ? (opener) => onEditFigure(selBlock.index, opener) : undefined}
           />
         </div>
