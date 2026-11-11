@@ -8,7 +8,8 @@ import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import { newId, now } from '../db/db.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { buildFigures, commitFigures, type FigureRequest } from '../figures/materialize.ts';
-import { saveFigureDetails } from '../figures/author.ts';
+import { copyAsset, saveFigureDetails, swapSrc, writeFigureRevision } from '../figures/author.ts';
+import { renderEditedDrawing } from '../figures/drawing/edit.ts';
 import { currentHead, getAsset, listAssets, listRevisions, saveHuman } from '../repo/index.ts';
 import { activeRedraw, figureDraw, figureRedraw, startRedraw } from './figureEdit.ts';
 
@@ -76,6 +77,33 @@ describe('redraw task', () => {
     assert.ok(first.markdown.includes(`assets/${file}"`));
     assert.equal(sourceOf(assetId), GOOD);
     assert.match(fake.calls[0].prompt, /asks for this change: Use a rectangle\./);
+  });
+
+  test('a redraw of a figure the author rendered gets the rendered source, not the one the figure was first drawn with, and is told to keep the rest', async () => {
+    const { assetId } = await sectionWithDrawing();
+    // The author renders an edit in the figure dialog: a copy with the new source, and the text points at it (routes/figures.ts).
+    const copy = copyAsset(ctx(), getAsset(ctx(), assetId));
+    const rendered = await renderEditedDrawing(ctx(), copy.id, GOOD_2);
+    assert.ok(rendered.ok);
+    writeFigureRevision(ctx(), P, N, (md) => swapSrc(md, getAsset(ctx(), assetId).filename, copy.filename));
+    fake.next(say(GOOD_2), say('OK'));
+    // The dialog names the asset the text shows now, which is the copy.
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId: copy.id, instruction: 'Make it bigger.' }));
+    const prompt = fake.calls[0].prompt;
+    assert.ok(prompt.includes(`The figure is drawn by this source now:\n${GOOD_2}\n`), 'the prompt carries the rendered source');
+    assert.ok(!prompt.includes(GOOD), 'and not the first one');
+    assert.match(prompt, /Everything the instruction does not mention stays exactly as in the current source: the same elements, positions, labels and values\./);
+  });
+
+  test('the usage rows of a redraw carry its run and task', async () => {
+    const { assetId } = await sectionWithDrawing();
+    ctx().db.run('DELETE FROM usage'); // the setup drew the first figure outside any run
+    fake.next(say(GOOD_2), say('OK'));
+    const t = task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' });
+    await figureRedraw(ctx(), t);
+    const rows = ctx().db.all<{ role: string; run_id: string | null; task_id: string | null }>("SELECT role, run_id, task_id FROM usage WHERE role = 'illustrator'");
+    assert.ok(rows.length >= 2, 'the drawing and the look turn');
+    for (const r of rows) assert.deepEqual([r.run_id, r.task_id], [t.task.runId, t.task.id]);
   });
 
   test('a redraw that never compiles fails the task with the reason, keeps the figure and leaves no copy', async () => {

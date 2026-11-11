@@ -49,7 +49,7 @@ export function illustratorPrompt(b: IllustratorBrief): string {
   const symbols = b.symbols === 'american' ? 'American (a zigzag resistor)' : 'European (a rectangular resistor)';
   const head = `Book language: ${languageName(b.language)}. Circuit symbols: ${symbols}.\nCaption: ${b.caption}\nFamily: ${b.family}\nWhat the figure shows:\n${b.shows}`;
   if (!b.redraw) return `${head}\n\nWrite the source now.`;
-  return `${head}\n\nThe figure is drawn by this source now:\n${b.redraw.source}\n\nThe author asks for this change: ${b.redraw.instruction}\nMake that change and keep everything else as it is. Reply with the full new source.`;
+  return `${head}\n\nThe figure is drawn by this source now:\n${b.redraw.source}\n\nThe author asks for this change: ${b.redraw.instruction}\nMake that change. Everything the instruction does not mention stays exactly as in the current source: the same elements, positions, labels and values. Reply with the full new source.`;
 }
 
 /** The message that sends a compile error back. */

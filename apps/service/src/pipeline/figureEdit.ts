@@ -61,7 +61,7 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
   if (shows) ctx.db.update('assets', copy.id, { spec: { ...drawingSpec(old), shows } });
   let drawn: Awaited<ReturnType<typeof redrawDrawing>>;
   try {
-    drawn = await redrawDrawing(ctx, copy.id, instruction, { signal: t.signal });
+    drawn = await redrawDrawing(ctx, copy.id, instruction, { signal: t.signal, runId: t.task.runId, taskId: t.task.id });
   } catch (err) {
     discardAsset(ctx, copy);
     throw err;
