@@ -5,8 +5,12 @@ export const SUBJECT_AREAS = ['mathematics', 'physics', 'chemistry', 'electronic
 export type SubjectArea = (typeof SUBJECT_AREAS)[number];
 
 /** Every kind a figure request can have. A kind added here also needs a block in the figure rules and a spec in the figure schema (service). */
-export const FIGURE_KINDS = ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'photo'] as const;
+export const FIGURE_KINDS = ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'drawing', 'photo'] as const;
 export type FigureKind = (typeof FIGURE_KINDS)[number];
+
+/** What a `drawing` figure is of. It picks the drawing engine (see `ENGINE_OF_FAMILY` in the service) and tells the illustrator what to expect. */
+export const DRAWING_FAMILIES = ['circuit', 'logic', 'timing', 'karnaugh', 'state-machine', 'block-diagram', 'plot', 'sketch', 'tree-graph', 'other'] as const;
+export type DrawingFamily = (typeof DRAWING_FAMILIES)[number];
 
 export interface SubjectProfile {
   /** Figure kinds offered to the writer, in the order their blocks appear in the rules. */
@@ -25,7 +29,7 @@ export interface SubjectProfile {
 
 export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
   mathematics: {
-    figureKinds: ['plot'],
+    figureKinds: ['plot', 'drawing'],
     plotExamples: 'a limit or an asymptote, a derivative as slope, the area under a curve, a family of curves for several values of a parameter, a sequence as points',
     photoExamples: 'a geometric object or a model the student should recognise',
     notation: 'how to write the domain, intervals, derivatives, limits, sets and vectors',
@@ -33,7 +37,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed, a function the text already assumes continuous',
   },
   physics: {
-    figureKinds: ['plot', 'photo'],
+    figureKinds: ['plot', 'drawing', 'photo'],
     plotExamples: 'x(t) or v(t) of a motion, p(V) isotherms, a potential against distance, a wave profile, a decay curve',
     photoExamples: 'an experimental apparatus, a measuring instrument, a natural phenomenon',
     notation: 'the symbol and unit of each quantity, how vectors and components are written, the sign conventions and the axes',
@@ -41,7 +45,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'a positive angular frequency in a period, a frictionless or point-like model the text declared, a sign convention the text fixed',
   },
   chemistry: {
-    figureKinds: ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'photo'],
+    figureKinds: ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'drawing', 'photo'],
     plotExamples: 'a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time, a periodic trend against atomic number (as points); write charges with Unicode superscripts ("Ca²⁺")',
     photoExamples: 'lab equipment, a precipitate, a flame test, crystals, minerals, corrosion, an industrial plant',
     notation: 'how to write species, charges, states of matter, concentrations, equilibrium constants and units',
@@ -49,7 +53,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'an open system in a chapter about closed ones, ideal behaviour the text declared, a standard state the text fixed',
   },
   electronics: {
-    figureKinds: ['plot', 'photo'],
+    figureKinds: ['plot', 'drawing', 'photo'],
     plotExamples: 'a characteristic curve (diode, transistor), a transfer function, a response against time or frequency, a waveform, a load line',
     photoExamples: 'a component, a board, a measuring instrument, a laboratory setup',
     notation: 'units written in upright type with SI prefixes, the sign conventions for voltage and current, how phasors, small-signal quantities and logic levels are written',
@@ -57,7 +61,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'an ideal component the text declared, steady state in a chapter about the steady state, a sign convention the text fixed',
   },
   'computer-science': {
-    figureKinds: ['plot'],
+    figureKinds: ['plot', 'drawing'],
     plotExamples: 'running time against input size, the growth of two complexity classes, a probability distribution',
     photoExamples: 'a piece of hardware the student should recognise',
     notation: 'how to write complexity bounds, sets, sequences, indices and pseudocode',
@@ -65,7 +69,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'inputs the text restricts, a model of computation the text fixed, a sorted input where the algorithm requires one',
   },
   mechanics: {
-    figureKinds: ['plot', 'photo'],
+    figureKinds: ['plot', 'drawing', 'photo'],
     plotExamples: 'a stress-strain curve, a bending moment diagram, a displacement against time, a force against displacement',
     photoExamples: 'a machine, a mechanism, a structure, a test specimen',
     notation: 'the symbol and unit of each quantity, how forces, vectors and components are written, the sign conventions and the reference frame',
@@ -73,7 +77,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     excluded: 'a rigid body or small deformations the text declared, a sign convention the text fixed',
   },
   other: {
-    figureKinds: ['plot', 'photo'],
+    figureKinds: ['plot', 'drawing', 'photo'],
     plotExamples: 'a relation between two quantities, a trend, a distribution',
     photoExamples: 'an object, an apparatus or a phenomenon the student should recognise',
     notation: 'the conventions to use throughout (symbols, units, how the main objects are written)',

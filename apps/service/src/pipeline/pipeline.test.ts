@@ -2110,6 +2110,28 @@ describe('chemistry figures: structures and photos', () => {
     assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'g1'`)!.status, 'fixed');
   });
 
+  test('a figure issue on a drawn figure is fixed by a new "shows": the fix returns a new drawing and the image block points at it', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const old = ':::image{src="assets/s1-partitore.svg" alt="Partitore" caption="Partitore di tensione"}\n:::';
+    seedRevision('s1', `Un partitore con R1 e R2 divide la tensione.\n\n${old}\n\nAltro.`);
+    ctx.db.insert('assets', { id: 'old-drawing', project_id: P, node_id: 's1', filename: 's1-partitore.svg', mime: 'image/svg+xml', path: 'none.svg', origin: 'generated-svg', spec: { kind: 'drawing', engine: 'typst', source: '#circle(radius: 4pt)', shows: 'A divider without labels.', family: 'circuit', symbols: 'american' }, caption: 'Partitore di tensione', alt: 'Partitore', checks: [], created_at: now() });
+    ctx.db.insert('review_issues', { id: 'd1', project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'figure', quote: 'Partitore di tensione', message: 'La figura non mostra la tensione V2 su R2.', suggestion: 'Disegnare V2.', status: 'open', resolution: '', created_at: now() });
+    const shows = 'A voltage divider: a source Vs in series with R1 and R2, the ground, and the voltage V2 across R2 drawn as an arrow.';
+    fake.next(patchAnswer({
+      figures: [{ ...fig({ key: 'partitore-v2', kind: 'drawing', caption: 'Partitore con V2', alt: 'Partitore con V2' }), drawing: { shows, family: 'circuit' } }],
+      changes: [{ block: 1, text: ':::image{src="assets/partitore-v2.svg" alt="Partitore con V2" caption="Partitore con V2"}\n:::' }],
+    }), answer(keepFigures(1)), () => ({ text: '#circle(radius: 8pt)', usage: usageOf(10, 10) }), () => ({ text: 'OK', usage: usageOf(10, 10) }), answer(checkGood([1])));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['d1'] }));
+    assert.equal(r.status, 'current');
+    const a = ctx.db.get<{ filename: string; origin: string; spec: string }>(`SELECT * FROM assets WHERE filename <> 's1-partitore.svg'`)!;
+    assert.equal(a.origin, 'generated-svg');
+    assert.equal(JSON.parse(a.spec).shows, shows);
+    assert.match(current('s1'), new RegExp(`src="assets/${a.filename}"`));
+    assert.doesNotMatch(current('s1'), /s1-partitore\.svg/);
+    assert.equal(fake.calls[2].selection.model, 'gpt-6-sol', 'the third call is the illustrator');
+    assert.match(fake.calls[2].prompt, /What the figure shows:\nA voltage divider/);
+  });
+
   test('a fix for a problem with an existing figure can add another; an image block pointing at nothing is removed', async () => {
     seedOutline([['c1', ['s1']]]);
     const old = ':::image{src="assets/vecchia.svg" alt="Vecchia" caption="Figura vecchia"}\n:::';

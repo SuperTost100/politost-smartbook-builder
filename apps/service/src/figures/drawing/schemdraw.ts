@@ -27,6 +27,13 @@ import schemdraw.elements as __sb_elm
 schemdraw.use('svg')
 schemdraw.svgconfig.text = 'path'
 schemdraw.config(fontsize=12, lw=2)
+# schemdraw writes the signal names of a timing diagram in blue. A book figure keeps them in the ink of every other label.
+import schemdraw.logic.timing as __sb_timing
+__sb_timing_init = __sb_timing.TimingDiagram.__init__
+def __sb_timing_ink(self, wave, **kwargs):
+    kwargs.setdefault('namecolor', 'black')
+    __sb_timing_init(self, wave, **kwargs)
+__sb_timing.TimingDiagram.__init__ = __sb_timing_ink
 ${symbols === 'european' ? '__sb_elm.style(__sb_elm.STYLE_IEC)' : ''}
 
 def __sb_render(source):

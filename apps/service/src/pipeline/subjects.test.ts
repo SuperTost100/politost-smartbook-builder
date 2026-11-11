@@ -47,6 +47,7 @@ describe('subject area inference', () => {
     for (const area of SUBJECT_AREAS) {
       const p = SUBJECT_PROFILES[area];
       assert.ok(p.figureKinds.includes('plot'), area);
+      assert.ok(p.figureKinds.includes('drawing'), `${area} offers drawings`);
       assert.ok(p.figureKinds.every((k) => FIGURE_KINDS.includes(k)), area);
       for (const text of [p.notation, p.hypotheses, p.excluded, p.plotExamples, p.photoExamples]) assert.ok(text.length > 10, area);
     }
@@ -105,7 +106,9 @@ describe('figure rules per subject', () => {
   });
 
   test('the rules are shorter for a mathematics book than for a chemistry book', () => {
-    assert.ok(figureRules(setupOf('mathematics')).length < figureRules(setupOf('chemistry')).length / 2);
+    // Both carry the drawing block, which is the same in every subject, so the ratio is a little above one half.
+    assert.ok(figureRules(setupOf('mathematics')).length < figureRules(setupOf('chemistry')).length * 0.6);
+    assert.doesNotMatch(figureRules(setupOf('mathematics')), /SMILES|salt bridge/);
   });
 });
 

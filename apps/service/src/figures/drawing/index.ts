@@ -30,10 +30,12 @@
 // same advice applies: simplify. 'setup' means `npm run figure-packages` has not run, which a model cannot fix.
 //
 // Each render is a new child process under Node's permission model (see sandbox.ts for what that does and does not give).
-// A render takes about 0.2 s for Typst and 2 s for schemdraw, most of it Pyodide starting.
+// A render takes about 0.2 s for Typst and 2 s for schemdraw, most of it Pyodide starting. At most MAX_PARALLEL_RENDERS run at once; the others wait.
+// The model half is illustrator.ts, which calls this.
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ProviderSlots } from '../../llm/slots.ts';
 import { missingFigurePackages } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { compileSchemdraw } from './schemdraw.ts';
 import { INK, MAX_SVG_BYTES, isInkDrawing, normaliseSvg, svgToPng } from './svg.ts';
@@ -46,6 +48,14 @@ export { INK, MAX_SVG_BYTES, isInkDrawing };
 
 export const DEFAULT_TIMEOUT_MS = 20_000;
 
+/**
+ * Renders running at once, across every caller. Each one is a child process that uses a CPU core (schemdraw for about
+ * 2 s), and sections drafted at the same time, fixes and the figures pass all draw. The wait for a slot is not part of a
+ * render's timeout.
+ */
+export const MAX_PARALLEL_RENDERS = 2;
+const renderSlots = new ProviderSlots(() => MAX_PARALLEL_RENDERS);
+
 /** Typst draws 1 pt lines where the existing drawers use 2 px, so strokes are scaled once here. */
 const TYPST_STROKE_SCALE = 1.6;
 
@@ -56,6 +66,15 @@ export function drawingPackagesStatus(): { ready: boolean; missing: string[] } {
 }
 
 export async function renderDrawing(req: DrawingRequest): Promise<DrawingResult> {
+  const release = await renderSlots.acquire('render');
+  try {
+    return await renderNow(req);
+  } finally {
+    release();
+  }
+}
+
+async function renderNow(req: DrawingRequest): Promise<DrawingResult> {
   const started = Date.now();
   const status = drawingPackagesStatus();
   if (!status.ready) return { ok: false, kind: 'setup', error: `The figure packages are not installed (${status.missing.length} missing). Run "npm run figure-packages" once, with a network connection.` };
