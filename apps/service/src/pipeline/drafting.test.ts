@@ -215,7 +215,7 @@ describe('the draft prompt goes from what every section shares to what only this
     const at = ['Notation to follow', 'Section ids you may link to', 'CHAPTER:', 'Known formula keys', 'Already written earlier', 'Topics and how often', 'EVIDENCE NOTES', 'SOURCE PAGES', 'Write the section "Sezione 1.1"'].map((h) => a.prompt.indexOf(h));
     assert.ok(at.every((n) => n >= 0), String(at));
     assert.deepEqual([...at].sort((x, y) => x - y), at);
-    assert.match(a.prompt, /Write the section "Sezione 1\.1" \(section id s1\)\.\nObjectives:\n- Obiettivo 1\.1\n[\s\S]*Depth: standard \(about 800-1500 words\)$/);
+    assert.match(a.prompt, /Write the section "Sezione 1\.1" \(section id s1\)\.\nObjectives:\n- Obiettivo 1\.1\n[\s\S]*Depth: standard \(about 800-1500 words\)\nAnswer in the format of the instructions: the section, a line holding only <<<META>>>, then the JSON object\.$/);
   });
 
   test('section 2 reads the summary and the formula keys of section 1', async () => {

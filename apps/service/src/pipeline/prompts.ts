@@ -407,7 +407,8 @@ Write the section "${p.section.title}" (section id ${p.section.id}).
 Objectives:
 ${p.section.objectives.map((o) => `- ${o}`).join('\n') || '- (none given)'}
 Planned subsections: ${p.section.subsections || '(choose 0-4 yourself)'}
-Depth: ${p.section.depth} (about ${length} words)`,
+Depth: ${p.section.depth} (about ${length} words)
+Answer in the format of the instructions: the section, a line holding only ${META_SEPARATOR}, then the JSON object.`,
   };
 }
 
