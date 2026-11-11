@@ -169,12 +169,12 @@ describe('1. question updates do not overwrite author edits', () => {
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
     fake.next(
-      examRead({ number: '1', statement: 'Calcola $\\nu + 1.', solution: 'Vale $1$.' }),
+      examRead({ number: '1', statement: 'Calcola $\\nu = 1. a) il valore.', solution: 'Vale $1$.' }),
       () => ({ text: 'Ecco il testo corretto.', usage: usageOf(10, 10) }),
-      questionText('Calcola $\\nu + 1$.\n\na) il valore.', '', 'Vale $1$.'),
+      questionText('Calcola $\\nu = 1$.\n\na) il valore.', '', 'Vale $1$.'),
     );
     await questionImport(ctx, startTask('question.import', { questionId: id }));
-    assert.equal(row(id).statement, 'Calcola $\\nu + 1$.\n\na) il valore.', 'the backslash before n is not read as a line break');
+    assert.equal(row(id).statement, 'Calcola $\\nu = 1$.\n\na) il valore.', 'the backslash before n is not read as a line break');
     assert.equal(fake.calls.length, 3);
     assert.match(fake.calls[2].prompt, /text before the first/, 'the repair turn names the problem');
   });
@@ -192,9 +192,21 @@ describe('1. question updates do not overwrite author edits', () => {
     seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
-    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: '', solution: 'Vale $1$. acu' }));
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), questionText('Calcola $\\lim_{x\\to 0} f(x)$.', '', 'Vale $1$. acu'));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(fake.calls.length, 2, 'the editor answered in the plain-text format, so no repair turn was needed');
     assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x).', 'the text before the repair stays');
+    assert.equal(row(id).solution, 'Vale $1$.');
+  });
+
+  test('import: a formatting repair that answers with an empty solution keeps the worked solution', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), questionText('Calcola $\\lim_{x\\to 0} f(x)$.', '', ''));
+    await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(fake.calls.length, 2, 'the empty part parses, so only the word guard can refuse it');
+    assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x).', 'the repair is refused as a whole');
     assert.equal(row(id).solution, 'Vale $1$.');
   });
 });
@@ -223,6 +235,18 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
     const [issue] = issues(`id = '${iid}'`);
     assert.equal(issue.status, 'open');
     assert.match(issue.resolution, /^The AI fix was not applied: .*solution: it adds "acu"/);
+  });
+
+  test('a fix that returns an empty solution leaves the text and the issue open with the reason', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: '' }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal(row(id).solution, broken);
+    const [issue] = issues(`id = '${iid}'`);
+    assert.equal(issue.status, 'open');
+    assert.match(issue.resolution, /^The AI fix was not applied: solution: it removes /);
   });
 
   test('a fix that only sets line breaks is applied', async () => {
