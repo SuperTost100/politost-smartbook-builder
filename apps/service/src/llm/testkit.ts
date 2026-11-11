@@ -1,11 +1,20 @@
 // Helpers shared by the llm and evidence tests. Not used at runtime.
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { Capabilities, LiveSessionInfo, ModelInfo, ProviderOverview, RateLimits, RunInput, RunResult } from 'cli-funnel';
+import type { Capabilities, LiveSessionInfo, ModelInfo, ProcessOptions, ProviderOverview, RateLimits, RunInput, RunResult } from 'cli-funnel';
 import type { Config } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import type { FunnelLike } from './funnel.ts';
+
+// The tests never touch the owner's logins: the private homes link to these stand-ins instead.
+export const fakeLogins = mkdtempSync(join(tmpdir(), 'sb-logins-'));
+process.env.CODEX_HOME = join(fakeLogins, 'codex');
+process.env.CLAUDE_CONFIG_DIR = join(fakeLogins, 'claude');
+for (const [dir, file] of [['codex', 'auth.json'], ['claude', '.credentials.json']]) {
+  mkdirSync(join(fakeLogins, dir), { recursive: true });
+  writeFileSync(join(fakeLogins, dir, file), '{}');
+}
 
 export function makeCtx(): { ctx: AppContext; cleanup: () => void } {
   const dataDir = mkdtempSync(join(tmpdir(), 'sb-test-'));
@@ -56,6 +65,8 @@ export class FakeFunnel implements FunnelLike {
   closed: string[] = [];
   /** What rateLimits() answers per provider. Others throw, as in cli-funnel. */
   usage: Record<string, RateLimits> = {};
+  /** The options each rateLimits() call got. */
+  rateLimitOptions: (ProcessOptions | undefined)[] = [];
 
   next(...steps: Step[]) {
     this.steps.push(...steps);
@@ -80,7 +91,8 @@ export class FakeFunnel implements FunnelLike {
     return this.live.delete(sessionId);
   }
 
-  async rateLimits(id: never): Promise<RateLimits> {
+  async rateLimits(id: never, opts?: ProcessOptions): Promise<RateLimits> {
+    this.rateLimitOptions.push(opts);
     const u = this.usage[id];
     if (!u) throw Object.assign(new Error(`${String(id)} cannot report its usage windows.`), { code: 'unsupported' });
     return u;

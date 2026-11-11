@@ -1,15 +1,17 @@
 // Model routing through cli-funnel. Callers name a role; settings map roles to provider/model with a fallback.
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import type { ConnectionsResponse, ProbeResult, Role, Route } from '@smartbuilder/domain';
+import { bookOptionsSchema, type BookOptions, type ConnectionsResponse, type ProbeResult, type Role, type Route } from '@smartbuilder/domain';
 import { sanitizeModelValue } from '@smartbuilder/content';
 import { z } from 'zod';
 import { TaskError } from '../queue/queue.ts';
 import { paths } from '../config.ts';
 import type { AppContext } from '../context.ts';
-import { now } from '../db/db.ts';
+import { json, now } from '../db/db.ts';
 import { classifyError, DEFAULT_QUOTA_WAIT_MS, limitFailure, limitWaitMs, loginAction, type Failure } from './errors.ts';
 import { accountUsage, getFunnel, type FunnelLike } from './funnel.ts';
+import { claudeWebEnv, codexEnv } from './homes.ts';
+import { ProviderSlots } from './slots.ts';
 import { describeIssues, dropOptionalNulls, parseJsonAnswer, rawJsonSchema, strictify } from './schema.ts';
 
 export { getConnections, resetConnectionsCache } from './connections.ts';
@@ -42,6 +44,38 @@ export interface RunRoleResult<T> { text: string; data: T; route: Route; usage: 
 /** Tunables that tests change. */
 export const llmTuning = { callTimeoutMs: 10 * 60_000 };
 
+/**
+ * Roles whose calls are short: p99 of 29 to 110 s on Codex (checker, bulk, vision, editor), and the longest healthy call in
+ * the usage table is 254 s. A hung one used to hold a Codex slot for 10 minutes, 23 times in 30 days.
+ */
+const SHORT_CALL_ROLES: readonly Role[] = ['checker', 'bulk', 'vision', 'evidence', 'editor'];
+const SHORT_CALL_MS = 3 * 60_000;
+
+/**
+ * How long one call may run. Antigravity runs a whole agent per call (344 to 603 s at the median), so it keeps the long limit
+ * in every role.
+ */
+export function callTimeoutMs(role: Role, route: Route): number {
+  return SHORT_CALL_ROLES.includes(role) && route.provider !== 'antigravity' ? Math.min(llmTuning.callTimeoutMs, SHORT_CALL_MS) : llmTuning.callTimeoutMs;
+}
+
+/** One limiter per app context: the provider's concurrency setting counts every call, whichever role pool or fallback it comes from. */
+const slotsByContext = new WeakMap<AppContext, ProviderSlots>();
+function slotsFor(ctx: AppContext): ProviderSlots {
+  let slots = slotsByContext.get(ctx);
+  if (!slots) {
+    slots = new ProviderSlots((provider) => ctx.settings().concurrency[provider] ?? 1);
+    slotsByContext.set(ctx, slots);
+  }
+  return slots;
+}
+
+/** The book's options, which decide how its calls are routed. Defaults for a call without a book. */
+function bookOptions(ctx: AppContext, projectId: string | null | undefined): BookOptions {
+  const row = projectId ? ctx.db.get<{ options: string }>('SELECT options FROM projects WHERE id = ?', projectId) : undefined;
+  return bookOptionsSchema.parse(json(row?.options, {}));
+}
+
 /** Providers that hit a quota stay out of the first position until this time (epoch ms). */
 const cooldown = new Map<string, number>();
 export function resetLlmState() {
@@ -67,7 +101,9 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
 
   const configured = ctx.settings().routes[opts.role];
   const primary = opts.route ?? configured.primary;
-  const fallback = opts.route ? undefined : configured.fallback;
+  // A book that must not continue on a replacement when Claude runs out: a role that starts on Claude waits for the reset instead.
+  const stayOnClaude = primary.provider === 'claude' && bookOptions(ctx, opts.projectId).noClaudeFallback;
+  const fallback = opts.route || stayOnClaude ? undefined : configured.fallback;
 
   let candidates: Route[];
   if (!needsImages) candidates = [primary, ...(fallback ? [fallback] : [])];
@@ -82,12 +118,12 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
 
   // A task that timed out on its first route in an earlier run (a review of the same chapter, say) tends to time out
   // there again, so it starts on the next route instead of waiting for the timeout once more.
-  if (opts.taskId && candidates.length > 1 && timedOutBefore(ctx, opts.taskId, candidates[0])) candidates = [...candidates.slice(1), candidates[0]];
+  if (opts.taskId && candidates.length > 1 && timedOutBefore(ctx, opts.taskId, opts.role, candidates[0])) candidates = [...candidates.slice(1), candidates[0]];
 
   // Codex reports its usage windows, so a full one sends the role to the next route without a failed call first.
   if (candidates.length > 1) {
     await Promise.all(candidates.map(async (c) => {
-      const limit = (await accountUsage(c.provider))?.limit;
+      const limit = (await accountUsage(c.provider, ctx.config))?.limit;
       if (limit) coolDown(c.provider, { retryAfterMs: limitWaitMs(limit), reported: true });
     }));
   }
@@ -98,10 +134,13 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
 
   let firstQuota: Failure | undefined;
   let lastFailure: Failure | undefined;
+  const calls = { n: 0 };
   for (let i = 0; i < candidates.length; i++) {
     const route = candidates[i];
+    // The provider's slot is taken for the route actually used, and the call's timeout starts only after it.
+    const release = await slotsFor(ctx).acquire(route.provider, opts.signal);
     try {
-      return await attemptRoute(ctx, funnel, opts, route);
+      return await attemptRoute(ctx, funnel, opts, route, { calls, fallback: route === fallback });
     } catch (err) {
       if (!(err instanceof RouteFailure)) throw err;
       const f = err.failure;
@@ -114,18 +153,20 @@ export async function runRole<T = string>(ctx: AppContext, opts: RunRoleOptions<
       const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut || !!f.truncated);
       if (canFallBack) continue;
       throw toTaskError(f, route, firstQuota, candidates.length > 1);
+    } finally {
+      release();
     }
   }
   throw new TaskError(lastFailure?.message ?? 'No route available', 'temporary');
 }
 
 /** The same task key, in an earlier run within the last two weeks, hit the call timeout on this route. */
-function timedOutBefore(ctx: AppContext, taskId: string, route: Route): boolean {
+function timedOutBefore(ctx: AppContext, taskId: string, role: Role, route: Route): boolean {
   return !!ctx.db.get(
     `SELECT 1 FROM usage u JOIN tasks t ON t.id = u.task_id
      WHERE t.key = (SELECT key FROM tasks WHERE id = ?) AND t.project_id = (SELECT project_id FROM tasks WHERE id = ?) AND t.id <> ?
-       AND u.provider = ? AND u.model = ? AND u.ok = 0 AND u.ms >= ? AND u.created_at > ? LIMIT 1`,
-    taskId, taskId, taskId, route.provider, route.model, llmTuning.callTimeoutMs, new Date(Date.now() - 14 * 86_400_000).toISOString());
+       AND u.role = ? AND u.provider = ? AND u.model = ? AND u.ok = 0 AND u.ms >= ? AND u.created_at > ? LIMIT 1`,
+    taskId, taskId, taskId, role, route.provider, route.model, callTimeoutMs(role, route), new Date(Date.now() - 14 * 86_400_000).toISOString());
 }
 
 class RouteFailure extends Error {
@@ -150,7 +191,10 @@ function toTaskError(f: Failure, route: Route, firstQuota: Failure | undefined, 
   }
 }
 
-async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route): Promise<RunRoleResult<T>> {
+/** What a usage row records besides the call itself: its number within the runRole call, and whether the route is the fallback. */
+interface CallMeta { calls: { n: number }; fallback: boolean }
+
+async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta): Promise<RunRoleResult<T>> {
   const raw = opts.schema ? rawJsonSchema(opts.schema) : undefined;
   const jsonSchema = opts.jsonSchema ?? (raw ? strictify(raw) : undefined);
   const total: Usage = { inputTokens: null, outputTokens: null };
@@ -176,7 +220,7 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     return parsed.success ? { ok: true, data: parsed.data } : { ok: false, problem: describeIssues(parsed.error) };
   };
 
-  const first = await callOnce(ctx, funnel, opts, route, { prompt: opts.prompt }, jsonSchema);
+  const first = await callOnce(ctx, funnel, opts, route, meta, { prompt: opts.prompt }, jsonSchema);
   add(first.usage);
   try {
     if (!opts.schema) return { text: first.text, data: first.text as T, route, usage: total };
@@ -190,7 +234,7 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     const repair = live
       ? { prompt: fix.join('\n'), sessionId: first.sessionId }
       : { prompt: [opts.prompt, '', '---', fix[0], '', 'Previous answer:', first.text.length > 12_000 ? `${first.text.slice(0, 12_000)}\n[truncated]` : first.text, '', ...fix.slice(2)].join('\n') };
-    const second = await callOnce(ctx, funnel, opts, route, repair, jsonSchema);
+    const second = await callOnce(ctx, funnel, opts, route, meta, repair, jsonSchema);
     add(second.usage);
     const again = check(second);
     if (again.ok) return { text: second.text, data: again.data, route, usage: total };
@@ -203,15 +247,30 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
 
 interface CallOutput { text: string; structured: unknown; usage: Usage; sessionId?: string }
 
+/** The environment of a call: Codex runs in the service's own home, and a web call runs Claude Code in one without the owner's setup. */
+function callEnv(ctx: AppContext, route: Route, web: boolean | undefined): Record<string, string> | undefined {
+  if (route.provider === 'codex') return codexEnv(ctx.config);
+  if (route.provider === 'claude' && web) return claudeWebEnv(ctx.config);
+  return undefined;
+}
+
+/** The short word stored with a failed call. */
+const errorKind = (f: Failure) => (f.timedOut ? 'timeout' : f.truncated ? 'truncated' : f.kind);
+
 /** One turn. With `sessionId` it continues that conversation, which already has the images. */
-async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, turn: { prompt: string; sessionId?: string }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
+async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOptions<T>, route: Route, meta: CallMeta, turn: { prompt: string; sessionId?: string }, jsonSchema: Record<string, unknown> | undefined): Promise<CallOutput> {
   const scratch = opts.web ? webFolder(ctx) : paths.scratch(ctx.config);
   mkdirSync(scratch, { recursive: true });
-  const timeout = AbortSignal.timeout(llmTuning.callTimeoutMs);
+  const timeoutMs = callTimeoutMs(opts.role, route);
+  const timeout = AbortSignal.timeout(timeoutMs);
   const signal = opts.signal ? AbortSignal.any([opts.signal, timeout]) : timeout;
+  const env = callEnv(ctx, route, opts.web);
+  const attempt = ++meta.calls.n;
   const started = Date.now();
   let ok = false;
+  let failure: string | null = null;
   let usage: Usage = { inputTokens: null, outputTokens: null };
+  let cached: { read: number | null; created: number | null } = { read: null, created: null };
   try {
     const result = await funnel.run({
       selection: {
@@ -222,6 +281,8 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
         access: opts.web ? 'supervised' : 'none',
       },
       ...(opts.web ? { onApproval: webOnly } : {}),
+      ...(opts.web && route.provider === 'claude' ? { providerOptions: { claude: { disallowedTools: NON_WEB_TOOLS } } } : {}),
+      ...(env ? { env } : {}),
       system: opts.system,
       prompt: turn.prompt,
       ...(turn.sessionId ? { sessionId: turn.sessionId } : {}),
@@ -229,8 +290,11 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
       ...(jsonSchema ? { responseSchema: { name: 'response', schema: jsonSchema } } : {}),
       signal,
     });
-    if (result.usage && result.usage.totalTokens > 0) usage = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens };
-    if (result.finishReason === 'cancelled') throw cancelled(opts.signal, timeout);
+    if (result.usage && result.usage.totalTokens > 0) {
+      usage = { inputTokens: result.usage.inputTokens, outputTokens: result.usage.outputTokens };
+      cached = { read: result.usage.cachedInputTokens ?? null, created: result.usage.cacheCreationInputTokens ?? null };
+    }
+    if (result.finishReason === 'cancelled') throw cancelled(opts.signal, timeout, timeoutMs);
     if (result.limit) {
       const f = limitFailure(result.limit, `The model stopped early (${result.finishReason}).`);
       if (result.finishReason !== 'stop') throw new RouteFailure(f);
@@ -243,13 +307,30 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
     ok = true;
     return { text: result.text, structured: result.structured, usage, sessionId: result.sessionId };
   } catch (err) {
-    if (err instanceof RouteFailure || isAbort(err)) throw err;
-    if (opts.signal?.aborted) throw opts.signal.reason ?? abortError();
-    if (timeout.aborted) throw new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.`, timedOut: true });
+    if (err instanceof RouteFailure) {
+      failure = errorKind(err.failure);
+      throw err;
+    }
+    if (isAbort(err)) {
+      failure = 'aborted';
+      throw err;
+    }
+    if (opts.signal?.aborted) {
+      failure = 'aborted';
+      throw opts.signal.reason ?? abortError();
+    }
+    if (timeout.aborted) {
+      failure = 'timeout';
+      throw new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(timeoutMs / 1000)} s.`, timedOut: true });
+    }
     const f = classifyError(err);
+    failure = errorKind(f);
     if (f.kind === 'aborted') throw opts.signal?.reason ?? abortError();
     throw new RouteFailure(f);
   } finally {
+    // A CLI that refreshed its token may have replaced the login link with a file. Putting that login back now, and not
+    // only before the next call, keeps the time in which the owner's own CLI holds a stale token to this one call.
+    if (env) callEnv(ctx, route, opts.web);
     ctx.db.insert('usage', {
       project_id: opts.projectId ?? null,
       run_id: opts.runId ?? null,
@@ -259,6 +340,11 @@ async function callOnce<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRoleOpt
       role: opts.role,
       input_tokens: usage.inputTokens,
       output_tokens: usage.outputTokens,
+      cached_input_tokens: cached.read,
+      cache_creation_tokens: cached.created,
+      error_kind: failure,
+      attempt,
+      fallback: meta.fallback ? 1 : 0,
       ms: Date.now() - started,
       ok,
       created_at: now(),
@@ -279,6 +365,19 @@ function webFolder(ctx: AppContext) {
   return dir;
 }
 
+/**
+ * Claude Code's other built-in tools. A denied tool is not offered to the model at all, so its definition costs no input
+ * tokens. A tool added in a later Claude Code version is not on this list: the project settings and the approval callback
+ * still refuse it, it just costs its definition.
+ */
+const NON_WEB_TOOLS = [
+  'Agent', 'Task', 'TaskOutput', 'TaskStop', 'TaskCreate', 'TaskGet', 'TaskList', 'TaskUpdate', 'AskUserQuestion', 'Bash', 'BashOutput', 'KillShell',
+  'Edit', 'MultiEdit', 'Write', 'Read', 'NotebookEdit', 'Glob', 'Grep', 'LS', 'TodoWrite', 'EnterPlanMode', 'ExitPlanMode', 'EnterWorktree', 'ExitWorktree',
+  'Skill', 'SlashCommand', 'ToolSearch', 'Monitor', 'CronCreate', 'CronDelete', 'CronList', 'ScheduleWakeup', 'PushNotification', 'RemoteTrigger',
+  'SendMessage', 'ListAgents', 'Workflow', 'Artifact', 'ArtifactComments', 'ArtifactData', 'ArtifactCheck', 'DesignSync', 'ReportFindings',
+  'SendToProject', 'SendToProjectContext', 'ListMcpResourcesTool', 'ReadMcpResourceTool', 'ReadMcpResourceDirTool',
+];
+
 /** Approval policy for web runs: searching and reading pages, nothing that touches this machine. */
 const WEB_TOOLS = /^(WebSearch|WebFetch|web_search|web_fetch)$/;
 export const webOnly = (req: { tool: string }) => (WEB_TOOLS.test(req.tool) ? 'allow' as const : 'deny' as const);
@@ -287,9 +386,9 @@ class AbortedByCaller extends Error {}
 const abortError = () => Object.assign(new AbortedByCaller('Aborted'), { name: 'AbortError' });
 const isAbort = (e: unknown) => e instanceof AbortedByCaller || (e instanceof Error && e.name === 'AbortError');
 
-function cancelled(external: AbortSignal | undefined, timeout: AbortSignal): Error {
+function cancelled(external: AbortSignal | undefined, timeout: AbortSignal, timeoutMs: number): Error {
   if (external?.aborted) return (external.reason as Error) ?? abortError();
-  if (timeout.aborted) return new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(llmTuning.callTimeoutMs / 1000)} s.`, timedOut: true });
+  if (timeout.aborted) return new RouteFailure({ kind: 'temporary', message: `Timed out after ${Math.round(timeoutMs / 1000)} s.`, timedOut: true });
   return new RouteFailure({ kind: 'temporary', message: 'The model run was cancelled.' });
 }
 

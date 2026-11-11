@@ -95,6 +95,8 @@ export interface Api {
   'GET /api/projects/:id/resources': { res: Resource[] };
   'PATCH /api/resources/:rid': { body: { role?: ResourceRole; included?: boolean }; res: Resource };
   'DELETE /api/resources/:rid': { res: { ok: true } };
+  /** Asks the bulk model where the sessions and exercises of one exam file start. Starts a prepare run; the answer replaces the file's questions only when it is valid. */
+  'POST /api/resources/:rid/split': { res: RunSummary };
   'GET /api/resources/:rid/pages': { res: Pick<Page, 'id' | 'idx' | 'label' | 'quality'>[] };
   'GET /api/resources/:rid/pages/:idx': { res: Page };
   /** PNG of the page. Query: scale (default 1.5), highlight (text to mark). */
