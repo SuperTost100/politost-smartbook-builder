@@ -18,6 +18,8 @@ import type { Events } from '../events.ts';
 export type ErrorKind = 'temporary' | 'quota' | 'auth' | 'input' | 'fatal' | 'later';
 
 const LATER_MS = 10_000;
+/** The error stored on a task that never ran because the run failed before its turn. */
+const BLOCKED = JSON.stringify({ message: 'Not run: an earlier task failed.', blocked: true });
 
 /** Throw from a handler to control retry behaviour. */
 export class TaskError extends Error {
@@ -169,7 +171,9 @@ export class Queue {
         ? taskIds.map((id) => ({ id }))
         : this.db.all<{ id: string }>(`SELECT id FROM tasks WHERE run_id = ? AND state IN ('failed', 'cancelled', 'interrupted')`, runId);
       // Only this run's tasks: an id from another run must not be requeued under a run that stays finished.
-      for (const r of rows) this.db.run(`UPDATE tasks SET state = 'queued', attempts = 0, error = NULL, retry_at = NULL, wait_reason = NULL WHERE id = ? AND run_id = ? AND state != 'running'`, r.id, runId);
+      for (const r of rows) this.db.run(`UPDATE tasks SET state = 'queued', attempts = 0, error = NULL, finished_at = NULL, retry_at = NULL, wait_reason = NULL WHERE id = ? AND run_id = ? AND state != 'running'`, r.id, runId);
+      // Tasks that never ran because a task they depend on failed wait for it again, so they run once it succeeds.
+      this.db.run(`UPDATE tasks SET state = 'queued', error = NULL, finished_at = NULL WHERE run_id = ? AND state = 'cancelled' AND json_extract(error, '$.blocked') = 1`, runId);
       this.db.run(`UPDATE runs SET status = 'running', finished_at = NULL WHERE id = ?`, runId);
     });
     this.events.emit('run.state', { status: 'running' }, { runId, projectId: this.runProject(runId) });
@@ -235,6 +239,8 @@ export class Queue {
       }
       // Interrupted tasks of active runs run again; their handlers skip work that was already committed.
       this.db.run(`UPDATE tasks SET state = 'queued' WHERE state = 'interrupted' AND run_id IN (SELECT id FROM runs WHERE status IN ('running', 'waiting'))`);
+      // A run that failed for good never starts the tasks behind its failure (older versions left them queued).
+      this.db.run(`UPDATE tasks SET state = 'cancelled', finished_at = ?, error = ? WHERE state = 'queued' AND run_id IN (SELECT id FROM runs WHERE status = 'failed')`, now(), BLOCKED);
       this.db.run(`UPDATE runs SET status = 'paused' WHERE status = 'pausing'`);
       this.db.run(`UPDATE runs SET status = 'cancelled', finished_at = ? WHERE status = 'cancelling'`, now());
     });
@@ -408,7 +414,11 @@ export class Queue {
         continue;
       }
       // Nothing can run and nobody is asked: finished, or stuck behind failures for good.
-      this.setRunStatus(r.id, active === 0 && !c.failed ? 'completed' : 'failed');
+      const failed = !(active === 0 && !c.failed);
+      // Tasks stuck behind the failure end with the run instead of staying queued. Retry puts them back.
+      // A task waiting to retry counts too: its timer would otherwise put it back in the queue of a run that has ended.
+      if (failed) this.db.run(`UPDATE tasks SET state = 'cancelled', finished_at = ?, error = ?, retry_at = NULL, wait_reason = NULL WHERE run_id = ? AND state IN ('queued', 'retry_wait')`, now(), BLOCKED, r.id);
+      this.setRunStatus(r.id, failed ? 'failed' : 'completed');
     }
   }
 

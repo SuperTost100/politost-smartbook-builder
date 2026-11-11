@@ -1,5 +1,7 @@
 // One cli-funnel instance per process, created on first use. Tests inject a fake.
-import { createFunnel, type Capabilities, type LiveSessionInfo, type ModelInfo, type ProviderOverview, type RateLimits, type RunInput, type RunResult } from 'cli-funnel';
+import type { Config } from '../config.ts';
+import { codexEnv } from './homes.ts';
+import { createFunnel, type Capabilities, type LiveSessionInfo, type ModelInfo, type ProcessOptions, type ProviderOverview, type RateLimits, type RunInput, type RunResult } from 'cli-funnel';
 
 /** The slice of cli-funnel this app uses. The real Funnel satisfies it. */
 export interface FunnelLike {
@@ -9,7 +11,7 @@ export interface FunnelLike {
   models(id: never): Promise<ModelInfo[]>;
   sessions(): LiveSessionInfo[];
   closeSession(sessionId: string, provider?: never): boolean;
-  rateLimits(id: never): Promise<RateLimits>;
+  rateLimits(id: never, opts?: ProcessOptions): Promise<RateLimits>;
 }
 
 let instance: FunnelLike | null = null;
@@ -30,12 +32,12 @@ export function setFunnel(fake: FunnelLike | null) {
   usageCache = new Map();
 }
 
-/** The account's usage windows, read at most once a minute. Null for providers that cannot report them (only Codex can). */
-export function accountUsage(provider: string): Promise<RateLimits | null> {
+/** The account's usage windows, read at most once a minute. Null for providers that cannot report them (only Codex can). Read through the same Codex home as the calls. */
+export function accountUsage(provider: string, config: Config): Promise<RateLimits | null> {
   if (provider !== 'codex') return Promise.resolve(null);
   const hit = usageCache.get(provider);
   if (hit && Date.now() - hit.at < USAGE_CACHE_MS) return hit.value;
-  const value = getFunnel().rateLimits(provider as never).catch(() => null);
+  const value = getFunnel().rateLimits(provider as never, { env: codexEnv(config) }).catch(() => null);
   usageCache.set(provider, { at: Date.now(), value });
   return value;
 }

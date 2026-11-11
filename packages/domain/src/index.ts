@@ -41,14 +41,14 @@ export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
   vision: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'low' } },
   evidence: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'low' }, fallback: { provider: 'antigravity', model: 'gemini-3.8-flash' } },
   planner: { primary: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'high' } },
-  writer: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
-  editor: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'low' } },
-  exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
+  writer: { primary: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
+  editor: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'low' } },
+  exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
   checker: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
-  reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' } },
-  verifier: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
+  reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
+  verifier: { primary: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   // Claude only: it is the CLI whose tools the builder can switch off for web runs.
-  research: { primary: { provider: 'claude', model: 'claude-sonnet-5', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' } },
+  research: { primary: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' } },
 };
 
 // ---------- Settings ----------
@@ -86,6 +86,8 @@ export const bookOptionsSchema = z.object({
   chapterScope: z.array(z.string()).default([]),
   /** What Align book does with a section outside the course program: remove it from the outline, or keep it with a note. */
   offProgram: z.enum(['delete', 'mark']).default('delete'),
+  /** A role that starts on Claude has no fallback for this book: when Claude usage runs out, its tasks wait for the reset instead of continuing on the replacement model. */
+  noClaudeFallback: z.boolean().default(false),
 });
 export type BookOptions = z.infer<typeof bookOptionsSchema>;
 
@@ -478,6 +480,8 @@ export interface UsageRow {
   calls: number;
   inputTokens: number | null;
   outputTokens: number | null;
+  /** Part of the input tokens that came from the provider's cache, as far as calls reported it. Null when none did. */
+  cachedInputTokens: number | null;
 }
 
 // ---------- Review ----------

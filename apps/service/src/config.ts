@@ -57,6 +57,10 @@ export const paths = {
   tmp: (c: Config) => join(c.dataDir, 'tmp'),
   /** Empty folder used as cwd for model CLIs. */
   scratch: (c: Config) => join(c.dataDir, 'scratch'),
+  /** The service's own Codex home: the real login, without the owner's AGENTS.md and skills. See llm/homes.ts. */
+  codexHome: (c: Config) => join(c.dataDir, 'codex-home'),
+  /** Same for Claude Code web calls. */
+  claudeHome: (c: Config) => join(c.dataDir, 'claude-home'),
   lanToken: (c: Config) => join(c.dataDir, 'lan-token'),
   /** PID of the service using the data directory. */
   lock: (c: Pick<Config, 'dataDir'>) => join(c.dataDir, 'service.pid'),
