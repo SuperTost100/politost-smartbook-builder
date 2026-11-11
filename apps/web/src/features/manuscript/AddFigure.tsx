@@ -97,8 +97,8 @@ export function AddFigure({ pid, nodeId, drawing, prepare, onDrawing }: Props) {
     onError: (e) => setError(errorText(e)),
   });
 
-  // The chooser opens below the button: bring all of it into view, also when a panel makes it taller.
-  useEffect(() => { if (open) pop.current?.scrollIntoView({ block: 'nearest' }); }, [open, mode, search.data]);
+  // The chooser opens below the button: bring all of it into view, also when a panel or an error line makes it taller.
+  useEffect(() => { if (open) pop.current?.scrollIntoView({ block: 'nearest' }); }, [open, mode, search.data, error]);
 
   const chooseFile = (f: File | undefined) => {
     if (!f) return;
