@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { lintSection, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { dropUnpairedBold, lintSection, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -12,7 +12,7 @@ import { runRole } from '../llm/index.ts';
 import { carryCitations, currentHead, insertProposal } from '../repo/content.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
-import { chapterExamStats } from './exam.ts';
+import { chapterExamStats, examSessionTotal } from './exam.ts';
 import { draftPrompt, draftSchema, examGuidePrompt, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
@@ -152,7 +152,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   if (!found) return { skipped: 'section not in the approved outline' };
   const { chapter, section } = found;
   const topics = loadTopics(ctx, projectId).filter((tp) => section.topicIds.includes(tp.id));
-  const sessions = ctx.db.get<{ n: number }>(`SELECT COUNT(DISTINCT exam_group) AS n FROM questions WHERE project_id = ? AND kind = 'exam'`, projectId)?.n ?? 0;
+  const sessions = examSessionTotal(ctx, projectId);
   const ev = evidenceText(ctx, latestPacket(ctx, projectId, nodeId));
 
   // Continuity: summaries of earlier sections (recorded by their draft tasks) and outline titles.
@@ -215,7 +215,8 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   markdown = rewriteImageRefs(markdown, built, new Set());
   const figureNotes = built.notes;
 
-  // One repair round for problems that break rendering or meaning.
+  // A stray ** is dropped here, so it does not cost a repair round. One repair round for problems that break rendering or meaning.
+  markdown = dropUnpairedBold(markdown);
   let findings = lintSection(markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
   const serious = findings.filter((f) => f.severity !== 'minor');
   if (serious.length) {

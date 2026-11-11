@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { lintCompiled, lintSection } from './lint.ts';
+import { dropUnpairedBold, lintCompiled, lintQuestionText, lintSection, stripDifficultyDecoration } from './lint.ts';
 import type { LintFinding } from './types.ts';
 
 const lint = (md: string, opts: { language?: string; keys?: string[] } = {}): LintFinding[] =>
@@ -421,4 +421,24 @@ test('real book esempio has no findings', () => {
   files['grafici.json'] = readFileSync(`${base}grafici.json`, 'utf8');
   files['assets/cosa-trovi.svg'] = 'x';
   assert.deepEqual(lintCompiled(files), []);
+});
+
+test('difficulty decoration at the start of a line is flagged and stripped, bold and bullets are not touched', () => {
+  const lint = (s: string) => lintQuestionText(s, { file: 'statement', language: 'it' }).filter((f) => f.rule === 'difficulty-decoration');
+  for (const bad of ['(**) Calcolare il limite.', '★★ Calcolare il limite.', '(facile) Calcolare.', '[Difficile] Calcolare.', 'Difficoltà: ★★★ Calcolare.', '** Calcolare.', '- (*) Calcolare.']) {
+    assert.equal(lint(bad).length, 1, bad);
+  }
+  for (const ok of ['**Esercizio 2.** Calcolare.', '* Calcolare il limite.', '- Una funzione facile da derivare.', 'Il metodo è (facile) da usare.', '1. Calcolare $2*3$.']) {
+    assert.equal(lint(ok).length, 0, ok);
+  }
+  assert.equal(stripDifficultyDecoration('(**) Calcolare il limite.\n\n- ★★ a) primo\n* b) secondo\n**Nota.** resta'), 'Calcolare il limite.\n\n- a) primo\n* b) secondo\n**Nota.** resta');
+  assert.equal(stripDifficultyDecoration('(facile): Sia $f(x)=1$.'), 'Sia $f(x)=1$.');
+});
+
+test('dropUnpairedBold removes the last ** of a line with an odd count, outside math and code, and leaves paired bold alone', () => {
+  assert.equal(dropUnpairedBold('Un **termine** e un altro** qui.'), 'Un **termine** e un altro qui.');
+  const untouched = 'Riga **ok**.\n\n$a**b$ e `x**y` e **ok**';
+  assert.equal(dropUnpairedBold(untouched), untouched);
+  const fixed = dropUnpairedBold('Testo **aperto');
+  assert.deepEqual(lintSection(fixed, { sectionId: 's', language: 'it' }).filter((f) => f.rule === 'bold-unpaired'), []);
 });

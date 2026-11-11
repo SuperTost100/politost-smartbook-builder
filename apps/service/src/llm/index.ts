@@ -172,7 +172,7 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
       }
     }
     // Control characters (eaten backslashes, ANSI colours) are removed from every string before validation.
-    const parsed = opts.schema!.safeParse(sanitizeModelValue(raw ? dropOptionalNulls(value, raw) : value));
+    const parsed = opts.schema!.safeParse(sanitizeModelValue(raw ? dropOptionalNulls(value, raw) : value, raw));
     return parsed.success ? { ok: true, data: parsed.data } : { ok: false, problem: describeIssues(parsed.error) };
   };
 

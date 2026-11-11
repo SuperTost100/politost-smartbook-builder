@@ -1,5 +1,6 @@
 // JSON schema derivation and answer parsing for provider calls.
 import { z } from 'zod';
+import { CODE_KEYWORD } from '@smartbuilder/content';
 
 type Json = Record<string, unknown>;
 const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -13,6 +14,12 @@ const isObj = (v: unknown): v is Json => typeof v === 'object' && v !== null && 
 export function toProviderSchema(schema: z.ZodType): Json {
   return strictify(rawJsonSchema(schema));
 }
+
+/**
+ * A string field that carries code (a lab program, a function expression, SMILES). The LaTeX repairs of `sanitizeModelValue`
+ * skip it, so every such field must be declared with this instead of `z.string()`.
+ */
+export const codeString = () => z.string().meta({ [CODE_KEYWORD]: true });
 
 /** The schema as zod describes it for input, before strict post-processing. */
 export function rawJsonSchema(schema: z.ZodType): Json {
@@ -31,7 +38,7 @@ function walk(node: unknown): unknown {
   if (!isObj(node)) return node;
   const out: Json = {};
   for (const [k, v] of Object.entries(node)) {
-    if (k === 'default' || k === 'propertyNames' || k === '$schema') continue;
+    if (k === 'default' || k === 'propertyNames' || k === '$schema' || k === CODE_KEYWORD) continue;
     // Tuples (z.tuple) become "prefixItems", which Claude Code's strict validator rejects. Send a plain array schema;
     // zod still checks the exact length when the answer is validated.
     if (k === 'prefixItems' && Array.isArray(v)) {
