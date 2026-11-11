@@ -28,25 +28,44 @@ const KIND_LABEL: Record<FigureKindName, string> = { drawing: 'Drawn', photo: 'P
 const MADE: Record<FigureKindName, string> = { drawing: 'Drawn', photo: 'Photo added', image: 'Uploaded', plot: 'Drawn by the builder', structure: 'Drawn by the builder', diagram: 'Drawn by the builder' };
 const FINISHED = ['completed', 'failed', 'cancelled'];
 
+/** A value shown in a notice: long ones are cut. */
+const shorten = (v: string) => (!v.trim() ? '(empty)' : v.length > 240 ? `${v.slice(0, 240)}…` : v);
+
 /** "error at line 9, column 3: …" from the compiler: the line to mark in the editor. */
 export const errorLineOf = (message: string | null): number | null => {
   const n = message ? /^error at line (\d+)/.exec(message)?.[1] : null;
   return n ? Number(n) : null;
 };
 
+/** A field of the dialog and what happened to its stored value while the author was typing. */
+interface Field {
+  value: string;
+  set: (v: string) => void;
+  /** The stored value, when it changed to something else after the author started editing the field: someone else saved it. */
+  theirs: string | null;
+  keepMine: () => void;
+  takeTheirs: () => void;
+}
+
 /**
  * A text field that follows the service: when the stored value changes (a render writes new source, a save writes the caption) the
- * field takes it, unless the author changed the field since it was loaded. Text they typed is never replaced by a refresh.
+ * field takes it, unless the author changed the field since it was loaded. Text they typed is never replaced by a refresh. When the
+ * stored value then differs from both what they started from and what they typed, `theirs` holds it until they choose.
  */
-function useField(stored: string): [string, (v: string) => void] {
-  const [value, setValue] = useState(stored);
-  const last = useRef(stored);
-  useEffect(() => {
-    const before = last.current;
-    last.current = stored;
-    if (stored !== before) setValue((now) => (now === before ? stored : now));
-  }, [stored]);
-  return [value, setValue];
+function useField(stored: string): Field {
+  const [s, setS] = useState({ value: stored, base: stored });
+  useEffect(() => setS((cur) => {
+    if (cur.base === stored) return cur;
+    if (cur.value === cur.base || cur.value === stored) return { value: stored, base: stored };
+    return cur;
+  }), [stored]);
+  return {
+    value: s.value,
+    set: (v) => setS((cur) => ({ ...cur, value: v })),
+    theirs: s.base !== stored && s.value !== stored ? stored : null,
+    keepMine: () => setS((cur) => ({ ...cur, base: stored })),
+    takeTheirs: () => setS({ value: stored, base: stored }),
+  };
 }
 
 interface Props {
@@ -101,9 +120,12 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const drawing = details.drawing;
   const route = { id: pid, nodeId, assetId: details.assetId };
 
-  const [caption, setCaption] = useField(details.caption);
-  const [shows, setShows] = useField(drawing?.shows ?? '');
-  const [source, setSource] = useField(drawing?.source ?? '');
+  const captionField = useField(details.caption);
+  const showsField = useField(drawing?.shows ?? '');
+  const sourceField = useField(drawing?.source ?? '');
+  const { value: caption, set: setCaption } = captionField;
+  const { value: shows, set: setShows } = showsField;
+  const { value: source, set: setSource } = sourceField;
   const [instruction, setInstruction] = useState('');
   const [asked, setAsked] = useState('');
   const [srcOpen, setSrcOpen] = useState(false);
@@ -111,6 +133,11 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const [failure, setFailure] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
+  /** The author asked to close with unsaved fields and is being asked whether to discard them. */
+  const [leaving, setLeaving] = useState(false);
+  /** A Render or a Replace already changed the figure in the book, so closing the dialog undoes nothing. */
+  const [applied, setApplied] = useState(false);
+  const [redrawn, setRedrawn] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
 
   // The compiler's message belongs to the source it was given, so it goes when the stored source changes.
@@ -129,25 +156,26 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
     handled.current.add(runId);
     setRunId(null);
     if (run.data.status === 'completed') {
-      toast('Redrawn. The earlier drawing is in the section history.');
-      for (const key of [['section', pid, nodeId], ['figure', pid], ['assets', pid], ['preview', pid], ['history', pid, nodeId]]) void qc.invalidateQueries({ queryKey: key });
+      setRedrawn(true);
+      // No ['figure'] here: the figure's details are keyed by the section head and the asset, so the new picture is fetched under its own key, and asking again for the one the text left would answer 404.
+      for (const key of [['section', pid, nodeId], ['assets', pid], ['preview', pid], ['history', pid, nodeId]]) void qc.invalidateQueries({ queryKey: key });
     } else if (run.data.status === 'failed') {
       const e = run.data.tasks.find((t) => t.error)?.error;
       setFailure(e ? `${e.message}${e.action ? ` ${e.action}` : ''}` : 'The drawing model could not redraw this figure.');
       setInstruction((now) => now || asked);
     }
-  }, [runId, run.data, finished, toast, qc, pid, nodeId, asked]);
+  }, [runId, run.data, finished, qc, pid, nodeId, asked]);
 
   // ----- writes -----
   const done = (sv: SectionView) => applySectionView(qc, pid, sv);
   const render = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/render', { params: route, body: { baseRevId: details.headRevId, source } }),
-    onSuccess: (sv) => { setCompileError(null); setError(null); done(sv); toast('Rendered. The figure in the section is updated.'); },
+    onSuccess: (sv) => { setCompileError(null); setError(null); setApplied(true); done(sv); toast('Rendered. The figure in the section is updated.'); },
     onError: (e) => { if (e instanceof ApiRequestError && e.code === 'does_not_compile') { setCompileError(e.message); setError(null); } else setError(errorText(e)); },
   });
   const redraw = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/redraw', { params: route, body: { baseRevId: details.headRevId, instruction: instruction.trim(), ...(drawing && shows.trim() && shows !== drawing.shows ? { shows } : {}) } }),
-    onMutate: () => { setFailure(null); setError(null); setAsked(instruction.trim()); },
+    onMutate: () => { setFailure(null); setError(null); setRedrawn(false); setAsked(instruction.trim()); },
     onSuccess: (r) => { setRunId(r.id); setInstruction(''); },
     onError: (e) => setError(errorText(e)),
   });
@@ -165,7 +193,7 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   });
   const replace = useMutation({
     mutationFn: (file: File) => { const form = new FormData(); form.set('baseRevId', details.headRevId); form.set('file', file, file.name); return api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace', { params: route, form }); },
-    onSuccess: (sv) => { setError(null); done(sv); toast('Image replaced. The earlier figure is in the section history.'); },
+    onSuccess: (sv) => { setError(null); setApplied(true); done(sv); toast('Image replaced. The earlier figure is in the section history.'); },
     onError: (e) => setError(errorText(e)),
   });
   const remove = useMutation({
@@ -178,6 +206,13 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const busy = rendering || redrawing || save.isPending || replace.isPending || remove.isPending;
   const dirty = caption !== details.caption || (!!drawing && shows !== drawing.shows);
   const unrendered = !!drawing && source !== drawing.source;
+  // Someone else saved a field the author has edited: nothing is written until they choose which text stays.
+  const conflicts = [
+    { field: captionField, what: 'caption', code: false },
+    ...(drawing ? [{ field: showsField, what: 'description', code: false }, { field: sourceField, what: 'source', code: true }] : []),
+  ].filter((c) => c.field.theirs !== null);
+  const held = busy || conflicts.length > 0;
+  const requestClose = () => { if (dirty || unrendered) setLeaving(true); else onClose(); };
   const errLine = errorLineOf(compileError);
   const preview = apiUrl('GET /api/assets/:assetId/file', { params: { assetId: details.assetId } });
   const showCaption = caption.trim();
@@ -193,11 +228,17 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   return (
     <Dialog
       open
-      onClose={onClose}
+      onClose={requestClose}
       holdEscape={redrawing}
       className="fd"
       title={<>{title} <span className={`ui-badge${details.kind === 'drawing' ? ' ui-badge--accent' : ''} fd-kind`}>{KIND_LABEL[details.kind]}</span></>}
-      footer={(
+      footer={leaving ? (
+        <>
+          <div className="fd-foot-l"><span role="alert">Discard your changes to this figure?</span></div>
+          <button type="button" className="ui-btn" onClick={() => setLeaving(false)} autoFocus>Keep editing</button>
+          <button type="button" className="ui-btn ui-btn--danger-solid" onClick={onClose}>Discard</button>
+        </>
+      ) : (
         <>
           <div className="fd-foot-l">
             {removing ? (
@@ -208,11 +249,26 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
               </span>
             ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setRemoving(true)} disabled={busy}><Icon name="trash" />Remove figure</button>}
           </div>
-          <button type="button" className="ui-btn" onClick={onClose}>Cancel</button>
-          <button type="button" className="ui-btn ui-btn--accent" onClick={() => save.mutate()} disabled={busy || !dirty}>{save.isPending ? <><span className="ui-spinner" />Saving…</> : 'Save figure'}</button>
+          <button type="button" className="ui-btn" onClick={requestClose}>{applied ? 'Close' : 'Cancel'}</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => save.mutate()} disabled={held || !dirty}>{save.isPending ? <><span className="ui-spinner" />Saving…</> : 'Save figure'}</button>
         </>
       )}
     >
+      {conflicts.map(({ field, what, code }) => (
+        <div key={what} className="ui-banner ui-banner--warning fd-conflict" role="alert">
+          <div className="ui-banner__body">
+            <span className="ui-banner__title">The {what} changed while you were editing</span>
+            <span>
+              It is now: {code ? <code className="fd-conflict__code">{shorten(field.theirs!)}</code> : <>“{shorten(field.theirs!)}”</>}. Your unsaved text is still in the field and nothing was overwritten. Keeping your version saves it over the new one.
+            </span>
+            <div className="ui-banner__actions">
+              <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={field.keepMine}>Keep my version</button>
+              <button type="button" className="ui-btn ui-btn--sm" onClick={field.takeTheirs}>Use the other version</button>
+            </div>
+          </div>
+        </div>
+      ))}
+      <p className="ui-field__hint fd-note">Render and Replace change the figure in the book at once, and the earlier one stays in the section history. A caption or description is saved with Save figure.</p>
       <div className="fd-grid">
         <div className="fd-col">
           <div className={`sb-figure-frame fd-preview${rendering || showRedraw ? ' is-busy' : ''}${compileError ? ' is-stale' : ''}`}>
@@ -254,14 +310,14 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
                 <div className="fd-details__body">
                   {srcOpen && (
                     <div className="fd-code">
-                      <SourceEditor code value={source} onChange={setSource} onSave={() => { if (source.trim() && !busy) render.mutate(); }} label="Drawing source" minRows={6} errorLine={errLine} />
+                      <SourceEditor code value={source} onChange={setSource} onSave={() => { if (source.trim() && !held) render.mutate(); }} label="Drawing source" minRows={6} errorLine={errLine} />
                     </div>
                   )}
                   {compileError && (
                     <div className="fd-err" role="alert"><Icon name="alert" size={14} /><span>{compileError}</span></div>
                   )}
                   <div className="ui-row">
-                    <button type="button" className="ui-btn ui-btn--sm" onClick={() => render.mutate()} disabled={busy || !source.trim()}>
+                    <button type="button" className="ui-btn ui-btn--sm" onClick={() => render.mutate()} disabled={held || !source.trim()}>
                       {rendering ? <><span className="ui-spinner" />Rendering…</> : <><Icon name="play" size={14} />Render</>}
                     </button>
                     <span className="fd-ok" role="status">
@@ -283,12 +339,13 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
                     {runId && <button type="button" className="ui-btn ui-btn--sm" onClick={() => cancelRedraw.mutate()} disabled={cancelRedraw.isPending}>Cancel</button>}
                   </div>
                 ) : (
-                  <form className="fd-redraw__row" onSubmit={(e) => { e.preventDefault(); if (instruction.trim() && shows.trim()) redraw.mutate(); }}>
+                  <form className="fd-redraw__row" onSubmit={(e) => { e.preventDefault(); if (instruction.trim() && shows.trim() && !held) redraw.mutate(); }}>
                     <label className="ui-sr" htmlFor="fd-instr">Instruction for the redraw</label>
                     <input id="fd-instr" className="ui-input" placeholder="Move the labels off the wires" value={instruction} onChange={(e) => setInstruction(e.target.value)} disabled={busy} />
-                    <button type="submit" className="ui-btn" disabled={busy || !instruction.trim() || !shows.trim()}><Icon name="sparkle" size={14} />Redraw with AI</button>
+                    <button type="submit" className="ui-btn" disabled={held || !instruction.trim() || !shows.trim()}><Icon name="sparkle" size={14} />Redraw with AI</button>
                   </form>
                 )}
+                {redrawn && !failure && <p className="fd-ok" role="status">Redrawn. The earlier drawing is in the section history.</p>}
                 {failure && (
                   <div className="ui-banner ui-banner--danger" role="alert">
                     <div className="ui-banner__body">

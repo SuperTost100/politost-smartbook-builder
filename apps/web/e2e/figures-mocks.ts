@@ -31,6 +31,10 @@ export interface FigureMock {
   putMs: number;
   head: () => string;
   figures: () => MockFigure[];
+  /** Ids the page asked for that the text no longer shows (the service answers 404 to them). */
+  notFound: string[];
+  /** Another tab changes the figure the text shows now (a copy and a new head, as a save does), and this page is told. */
+  elsewhere: (change: { caption?: string; shows?: string; source?: string }) => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -42,8 +46,17 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
   // Block texts of the section; an entry that is a figure id is that figure's block.
   let blocks: string[] = ['### Amplificatore invertente', 'Poiché la tensione tra i due morsetti è nulla (massa virtuale), la corrente in $R_1$ vale $V_{in}/R_1$.', 'fig:a1', 'Ne segue la relazione tra uscita e ingresso:'];
   let pending: { kind: 'redraw'; id: string; shows?: string } | { kind: 'draw'; afterBlock: number; caption: string } | null = null;
+  // The event stream stays silent until another tab "saves": then it reports a saved section, as the service does.
+  let told = false;
+  let release!: () => void;
+  const gate = new Promise<void>((r) => { release = r; });
   const fm: FigureMock = {
-    writes: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, head: () => headId, figures: () => [...figs.values()],
+    writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, head: () => headId, figures: () => [...figs.values()],
+    elsewhere: (change) => {
+      const id = [...figs.keys()].find((k) => blocks.includes(`fig:${k}`))!;
+      swap(id, change);
+      release();
+    },
     complete: () => {
       fm.runStatus = 'completed';
       if (pending?.kind === 'redraw') swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn`, ...(pending.shows ? { shows: pending.shows } : {}) });
@@ -87,6 +100,13 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     const write = (b: unknown = null) => { fm.writes.push({ call: `${method} ${path}`, body: b }); };
     const stale = () => json({ error: { code: 'conflict', message: 'This text changed since you opened it.', action: 'Reload to see the latest version, then reapply your edit.' } }, 409);
 
+    if (method === 'GET' && path === '/api/events') {
+      const sent = told;
+      told = true;
+      if (!sent) await gate;
+      const saved = 'event: content.saved\ndata: {"type":"content.saved","data":{}}\n\nevent: asset.updated\ndata: {"type":"asset.updated","data":{}}\n\n';
+      return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }, body: `retry: 600000\n\n${sent ? ': connected\n\n' : saved}` });
+    }
     if (method === 'GET' && path === '/api/projects/p1/sections/s1') return json(sectionView());
     if (method === 'GET' && path === '/api/projects/p1/manuscript') return json([{ chapterId: 'c1', number: 1, title: 'Limiti', intro: null, sections: [sectionView()] }]);
     if (method === 'GET' && path === '/api/projects/p1/sections/s1/history') {
@@ -104,6 +124,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     if (fig && fig[1] !== 'draw' && fig[1] !== 'upload' && fig[1] !== 'photo') {
       const f = figs.get(fig[1]);
       if (!f) return json({ error: { code: 'not_found', message: 'This figure was not found.' } }, 404);
+      if (!blocks.includes(`fig:${f.id}`)) { fm.notFound.push(f.id); return json({ error: { code: 'not_found', message: 'This figure was not found.' } }, 404); }
       if (method === 'GET') return json(details(f));
       const b = body();
       write(fig[2] === 'replace' ? { name: 'upload' } : b);
