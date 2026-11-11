@@ -304,7 +304,7 @@ test.describe('figure dialog, alt text', () => {
     const alt = dialog.getByLabel('Alt text');
     await expect(alt).toHaveValue(FIG_ALT);
     await expect(dialog.getByText('what a reader who cannot see the figure is told', { exact: false })).toBeVisible();
-    await expect(alt).toHaveAccessibleDescription(/A double quote is saved as ”\./);
+    await expect(alt).toHaveAccessibleDescription(/A double quote is saved as\s”\./);
     const below = await dialog.evaluate((d) => d.querySelector('#fd-alt')!.getBoundingClientRect().top - d.querySelector('#fd-caption')!.getBoundingClientRect().bottom);
     expect(below).toBeGreaterThan(0);
     await expect(saveButton(dialog)).toBeDisabled();
