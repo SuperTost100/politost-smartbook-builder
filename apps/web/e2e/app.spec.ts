@@ -347,6 +347,15 @@ test('Practice shows a question status change without reloading', async ({ page,
   await expect(item.locator('.ui-badge').first()).toHaveText('verified', { timeout: 10_000 });
 });
 
+test('Practice summaries replace every kind of formula instead of showing LaTeX', async ({ page, request }) => {
+  const statement = 'Calcola $$\\lim_{x \\to 0} \\frac{1-\\cos x}{x^2}$$ poi \\(\\sqrt{2}\\) poi \\[\\int_0^1 t\\,dt\\] poi $\\alpha$ fine.';
+  const created = await request.post(`/api/projects/${bookId}/questions`, { headers: H, data: { kind: 'exercise', origin: 'adapted', statement, hint: '', solution: 'Vale 1.', difficulty: 'medio', topicIds: [] } });
+  expect(created.ok(), await created.text()).toBeTruthy();
+  await page.goto(`/books/${bookId}/practice`);
+  const item = page.locator('.pr-item').filter({ hasText: 'Calcola' }).filter({ hasText: 'fine' });
+  await expect(item.locator('.pr-item__text')).toHaveText('Calcola … poi … poi … poi … fine.');
+});
+
 test('a proposal is accepted against the head that was shown; a 409 shows the message and Reload', async ({ page, request }) => {
   const head = await (await request.get(`/api/projects/${bookId}/sections/s1`)).json();
   const proposal = { ...head.current, id: 'prop-e2e', origin: 'ai', status: 'proposal', markdown: head.current.markdown.replace('Il limite', 'Il limite (proposto)'), parentId: head.current.id };
