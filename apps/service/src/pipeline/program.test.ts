@@ -6,7 +6,7 @@ import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { ExtractError } from '../extract/errors.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, patchAnswer, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { getProgram, getReport, insertReport, reportInputs, saveProgramInput, saveProgramItems } from '../repo/index.ts';
 import { alignApply, restoreRemoved, alignCheck, applyBlocker, bookDigest, checkBlocker, guideFindings, validateAlignment } from './align.ts';
@@ -1042,7 +1042,7 @@ describe('fixes for program issues may add material', () => {
 
   test('thin coverage: the writer role gets "[add material]" and the permission to grow; the check does not call the added text harmful', async () => {
     issue('i1', 'program-thin');
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: `Seconda.\n\n${longAdd}` }] }), answer(checkGood([1])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: `Seconda.\n\n${longAdd}` }] }), answer(checkGood([1])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
     assert.equal(r.status, 'current');
     assert.equal(fake.calls[0].selection.model, ctx.settings().routes.writer.primary.model);
@@ -1058,7 +1058,7 @@ describe('fixes for program issues may add material', () => {
   test('the check sees a long added proof whole, so it never rejects it as cut off', async () => {
     issue('i1', 'program-proof');
     const proof = `Dimostrazione. ${'Passaggio della dimostrazione con tutti i dettagli. '.repeat(80)}Fine della dimostrazione.`;
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: `Seconda.\n\n${proof}` }] }), answer(checkGood([1])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: `Seconda.\n\n${proof}` }] }), answer(checkGood([1])));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
     assert.ok(proof.length > 3000);
     assert.ok(fake.calls[1].prompt.includes('Fine della dimostrazione.'), 'the end of the new text reaches the check');
@@ -1070,7 +1070,7 @@ describe('fixes for program issues may add material', () => {
     seedRevision('s1', 'Prima.\n\n### Formula di Binet\n\n:::formula{key="binet" label="Formula di Binet"}\n$$u\'\'+u=0$$\n:::\n\nUso della formula.');
     seedRevision('s2', 'Vedi la {{formula:@binet}}.');
     issue('i1', 'program-off', { quote: 'Formula di Binet' });
-    fake.next(answer({ figures: [], changes: [1, 2, 3].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2, 3])));
+    fake.next(patchAnswer({ figures: [], changes: [1, 2, 3].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2, 3])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
     assert.equal(r.status, 'current', 'not held back as a proposal for shrinking');
     assert.equal(head('s1')!.markdown, 'Prima.');
@@ -1086,7 +1086,7 @@ describe('fixes for program issues may add material', () => {
     q('q-gen', 'generated');
     q('q-exam', 'authentic');
     issue('i1', 'program-off', { quote: 'Formula di Binet' });
-    fake.next(answer({ figures: [], changes: [1, 2].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2])));
+    fake.next(patchAnswer({ figures: [], changes: [1, 2].map((block) => ({ block, text: '' })) }), answer(checkGood([1, 2])));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
     assert.equal(head('s2')!.markdown, 'Vedi la formula di Binet.');
     assert.equal(ctx.db.get<{ c: string | null }>(`SELECT chapter_id AS c FROM questions WHERE id = 'q-gen'`)!.c, null);
@@ -1095,7 +1095,7 @@ describe('fixes for program issues may add material', () => {
 
   test('a fix that leaves a placeholder instead of a symbol is reverted', async () => {
     issue('i1', 'program-thin');
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: 'Seconda: si misura $[?]$ tramite $q_p$.' }] }), answer(checkGood([1])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: 'Seconda: si misura $[?]$ tramite $q_p$.' }] }), answer(checkGood([1])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i1'] }));
     assert.equal(head('s1')!.markdown, 'Prima.\n\nSeconda.');
     assert.match((r.reverted ?? []).join(' '), /formula or formatting error/);
@@ -1105,7 +1105,7 @@ describe('fixes for program issues may add material', () => {
     ctx.db.run(`DELETE FROM content_revisions`);
     seedRevision('s1', 'Prima, un paragrafo abbastanza lungo perché toglierne uno corto non sia più di un quinto del testo.\n\nSeconda.');
     issue('i2', 'program-off', { quote: 'Seconda.' });
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i2'] }));
     assert.equal(fake.calls[0].selection.model, ctx.settings().routes.editor.primary.model);
     assert.doesNotMatch(fake.calls[0].system!, /\[add material\]/);
@@ -1118,7 +1118,7 @@ describe('fixes for program issues may add material', () => {
     ctx.db.run(`DELETE FROM content_revisions`);
     seedRevision('s1', 'Prima.\n\n### Sottosezione\n\nSeconda.');
     issue('i3', 'program-proof');
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: 'Titolo diverso senza il livello giusto.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: 'Titolo diverso senza il livello giusto.' }] }));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['i3'] }));
     assert.equal(r.skipped, 'no change survived the checks');
     assert.equal(head('s1')!.markdown, 'Prima.\n\n### Sottosezione\n\nSeconda.');

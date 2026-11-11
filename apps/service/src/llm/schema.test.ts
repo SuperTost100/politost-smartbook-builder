@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { z } from 'zod';
-import { dropOptionalNulls, parseJsonAnswer, rawJsonSchema, toProviderSchema } from './schema.ts';
+import { dropOptionalNulls, fillAbsentNulls, parseJsonAnswer, rawJsonSchema, toProviderSchema } from './schema.ts';
 
 type Json = Record<string, unknown>;
 
@@ -90,4 +90,13 @@ test('every model field that carries code is marked, and the marker never reache
   assert.equal(figOut.structure.smiles, 'C/C=C\\C');
   assert.equal(figOut.plot.functions[0].expr, 'x\\C');
   assert.ok(!JSON.stringify(toProviderSchema(ideSchema)).includes('x-code'));
+});
+
+test('fillAbsentNulls turns a left-out nullable key into null, at any depth, and leaves required and optional keys alone', () => {
+  const shape = z.object({ name: z.string(), label: z.string().nullable(), spec: z.object({ unit: z.string().nullable(), n: z.number() }).nullable(), more: z.string().optional() });
+  const raw = rawJsonSchema(z.array(shape));
+  const filled = fillAbsentNulls([{ name: 'a', spec: { n: 1 } }, { name: 'b' }], raw);
+  assert.deepEqual(filled, [{ name: 'a', label: null, spec: { n: 1, unit: null } }, { name: 'b', label: null, spec: null }]);
+  assert.equal(z.array(shape).safeParse(filled).success, true);
+  assert.equal(z.array(shape).safeParse([{ name: 'a' }]).success, false, 'without it the schema refuses the answer');
 });

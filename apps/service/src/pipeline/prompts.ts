@@ -1,9 +1,9 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS, guardRules } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
-import { codeString } from '../llm/schema.ts';
+import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
 export const PROMPT_VERSION = 18;
@@ -845,28 +845,33 @@ Return JSON {"markdown": "..."} with the full revised section.`,
 
 // ---------- targeted revision ----------
 
-const patchChanges = z.array(z.object({
-  block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
-  text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
-}));
+export interface PatchAnswer extends ParsedPatch { figures: z.infer<ReturnType<typeof figureSchemaFor>>[] }
 
-export interface PatchAnswer { changes: z.infer<typeof patchChanges>; figures?: z.infer<ReturnType<typeof figureSchemaFor>>[] }
-
-/** The figure specs are in the schema only when the fix may add a figure (a figure problem or an instruction), so most fixes do not carry them. */
-export function patchSchemaFor(figures: FigureSetup | null): z.ZodType<PatchAnswer> {
-  return figures
-    ? z.object({ changes: patchChanges, figures: z.array(figureSchemaFor(schemaKinds(figures))).describe('figures the new text adds with :::image blocks; usually empty') })
-    : z.object({ changes: patchChanges });
+/**
+ * Reads the plain-text patch answer (see PATCH_MARK). Figure specs are JSON and are checked against the figure schema,
+ * which is built only when the fix may add a figure (a figure problem or an instruction). Without that, a figures part is ignored.
+ * A malformed answer gets the standard repair turn of runRole, with the problem named.
+ */
+export function patchParser(figures: FigureSetup | null, limits: { blocks: number; issues: number }): (text: string) => { ok: true; data: PatchAnswer } | { ok: false; problem: string } {
+  const specs = z.array(figureSchemaFor(schemaKinds(figures)));
+  const raw = rawJsonSchema(specs);
+  return (text) => {
+    const read = parsePatchAnswer(text, limits);
+    if (!read.ok) return read;
+    if (!figures || !read.data.figures) return { ok: true, data: { ...read.data, figures: [] } };
+    const parsed = specs.safeParse(sanitizeModelValue(fillAbsentNulls(dropOptionalNulls(read.data.figures, raw), raw), raw));
+    return parsed.success ? { ok: true, data: { ...read.data, figures: parsed.data } } : { ok: false, problem: `The figures part does not match the figure format: ${describeIssues(parsed.error)}` };
+  };
 }
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; issues?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.${p.guards ? `\n\n${guardRules(p.guards)}` : ''}\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.${p.guards ? `\n\n${guardRules(p.guards)}` : ''}\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put its spec in the "${PATCH_MARK} figures" part and an :::image block in the block it belongs to. Otherwise write no figures part.\n${figureRules(p.figures)}` : ''}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
@@ -879,7 +884,16 @@ Section ids you may link to: ${p.sectionIds}
 SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
-Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]${p.figures ? ', "figures": []' : ''}}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+Answer in plain text, not JSON, in parts. Each part starts with a line that begins with ${PATCH_MARK}:
+${PATCH_MARK} block <number> | issues <numbers of the problems it answers, like 1, 3>
+<the full new text of that block, exactly as it goes in the book: write backslashes, $ and every other character as they are, with no escaping>
+${PATCH_MARK} delete <number> | issues <numbers>
+(no text: the block is removed)${p.issues ? `
+${PATCH_MARK} resolved | issues <numbers>
+<one sentence: where the section as it stands already fixes these problems. Use it only when no change is needed for them.>` : ''}${p.figures ? `
+${PATCH_MARK} figures
+<a JSON array with the specs of the figures the new text adds>` : ''}
+Give each block once. To add a paragraph, include it in the text of the block it follows. When nothing needs to change and no problem is resolved, answer only: ${PATCH_MARK} none`,
   };
 }
 

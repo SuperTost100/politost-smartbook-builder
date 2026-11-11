@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { lintSection } from './lint.ts';
-import { applyGuardedChanges, dropReferences, guardRules, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
+import { applyGuardedChanges, dropReferences, guardRules, MAX_DELETED_BLOCKS, MIN_KEPT_SHARE, parsePatchAnswer, quoteInBlock, repairSectionRefs, sameQuote, unwrapFormulaKeys } from './patch.ts';
 
 const lint = (md: string) => lintSection(md, { sectionId: 's1', language: 'it' });
 const F = ':::formula{key="k1" label="L"}\n$$x=1$$\n:::';
@@ -138,4 +138,41 @@ test('the rules told to the fix model are the limits the guard enforces', () => 
   const removed = (n: number) => applyGuardedChanges(many, many.slice(0, n).map((_, block) => ({ block, text: '' })), lint, { removals: true });
   assert.equal(removed(cut).reverted.length, 0);
   assert.equal(removed(cut + 1).reverted.length, 1);
+});
+
+test('a patch answer is read part by part, and the new text reaches the caller exactly as written', () => {
+  const body = 'Vale $\\frac{1}{2}\\nu + \\theta\\beta$ e\t\\text{tab}.\n\nSecondo paragrafo.';
+  const r = parsePatchAnswer(`@@@ block 2 | issues 1, 3\n${body}\n\n@@@ delete 4 | issues 2\n\n@@@ resolved | issues 3\nIl testo dice già la soglia.\n@@@ figures\n[{"key":"a"}]\n`, { blocks: 6, issues: 3 });
+  assert.ok(r.ok);
+  assert.deepEqual(r.data.changes, [{ block: 2, text: body, issues: [1, 3] }, { block: 4, text: '', issues: [2] }]);
+  assert.deepEqual(r.data.resolved, [{ issues: [3], reason: 'Il testo dice già la soglia.' }]);
+  assert.deepEqual(r.data.figures, [{ key: 'a' }]);
+  const none = parsePatchAnswer('@@@ none\n', { blocks: 1, issues: 1 });
+  assert.ok(none.ok && !none.data.changes.length && !none.data.resolved.length && none.data.figures === null);
+  // An author's instruction names no problems: a list is ignored instead of failing.
+  const instruction = parsePatchAnswer('@@@ block 0 | issues 1\nNuovo.', { blocks: 1, issues: 0 });
+  assert.ok(instruction.ok && instruction.data.changes[0].issues.length === 0);
+  // Windows line ends do not leave a carriage return in the text.
+  const crlf = parsePatchAnswer('@@@ block 0\r\nUno\r\nDue', { blocks: 1, issues: 0 });
+  assert.ok(crlf.ok && crlf.data.changes[0].text === 'Uno\nDue');
+});
+
+test('a malformed patch answer is refused with a problem the model can act on', () => {
+  const problem = (text: string, limits = { blocks: 3, issues: 2 }) => {
+    const r = parsePatchAnswer(text, limits);
+    assert.equal(r.ok, false, text);
+    return r.ok ? '' : r.problem;
+  };
+  assert.match(problem(''), /no parts/);
+  assert.match(problem('Ecco le modifiche:\n@@@ block 0\nx'), /before the first/);
+  assert.match(problem('@@@ block 0\n'), /has no text.*@@@ delete 0/);
+  assert.match(problem('@@@ block 0\nA\n@@@ delete 0'), /twice/);
+  assert.match(problem('@@@ block 3\nA'), /from 0 to 2/);
+  assert.match(problem('@@@ block x\nA'), /not a valid part header|number of an existing block/);
+  assert.match(problem('@@@ block 0 | issues 3\nA'), /between 1 and 2/);
+  assert.match(problem('@@@ resolved\nfatto'), /needs the numbers/);
+  assert.match(problem('@@@ none\n@@@ block 0\nA'), /stands alone/);
+  assert.match(problem('@@@ figures\n[not json'), /not valid JSON/);
+  assert.match(problem('@@@ figures\n{"a":1}'), /JSON array/);
+  assert.match(problem('@@@ banana 1\nA'), /not a valid part header/);
 });

@@ -6,7 +6,7 @@ import { MAX_DELETED_BLOCKS } from '@smartbuilder/content';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
-import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
+import { FakeFunnel, makeCtx, patchAnswer, patchText, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
@@ -784,7 +784,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('citation markers of the base revision are sent to the model and come back as citations', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Prima frase.\n\nSeconda frase.', { citations: { '0': ['n1'], '1': ['n2', 'n3'] } });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta. [[n1]]' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta. [[n1]]' }] }));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'correggi' }));
     assert.match(fake.calls[0].prompt, /Prima frase\. \[\[n1\]\]/);
     assert.match(fake.calls[0].prompt, /\[\[n2,n3\]\]/);
@@ -796,7 +796,7 @@ describe('7, 8, 9. revising keeps citations, is checkpointed and supersedes', ()
   test('same task again: no second model call and no second proposal; a new task supersedes the older pending proposal', async () => {
     seedOutline([['c1', ['s1']]]);
     const head = seedRevision('s1', 'Testo.');
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo uno.' }] }), answer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo uno.' }] }), patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
     const t1 = startTask('section.revise', { nodeId: 's1', instruction: 'a' });
     const a = await sectionRevise(ctx, t1);
     const a2 = await sectionRevise(ctx, t1);
@@ -1100,7 +1100,7 @@ describe('r5. a superseded proposal gives its issues back', () => {
   const editDuring = (obj: unknown) => () => {
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
     seedRevision('s1', 'Testo dell\'autrice.');
-    return { structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) };
+    return { text: patchText(obj as Parameters<typeof patchText>[0]), usage: usageOf(10, 10) };
   };
 
   test('regenerating before accepting reopens the issues of the replaced proposal; accepting the replacement fixes the right ones', async () => {
@@ -1114,14 +1114,14 @@ describe('r5. a superseded proposal gives its issues back', () => {
     assert.deepEqual(issue(), { status: 'proposed', resolution: `Proposal ${first.revId}` });
 
     // Regenerate the same section with an instruction: the first proposal is superseded.
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo due.' }] }));
     const second = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'più breve' }));
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', first.revId!)!.status, 'superseded');
     assert.deepEqual(issue(), { status: 'open', resolution: '' });
     assert.ok(events('issue.updated').some((e) => e.issueIds.includes('iA')));
 
     // The issue can be sent to the AI again and, with the head unchanged, the fix is applied.
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo tre dell\'autrice.' }] }), answer(checkGood([0])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo tre dell\'autrice.' }] }), answer(checkGood([0])));
     const third = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['iA'] }));
     assert.equal(third.status, 'current');
     assert.deepEqual(issue(), { status: 'fixed', resolution: `Fixed by AI in revision ${third.revId}` });
@@ -1178,7 +1178,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const before = seedRevision('s1', 'Prima frase.\n\nSeconda frase.');
     issue('i1', { quote: 'Prima frase.' });
     ctx.db.insert('review_issues', { id: 'lint-old', project_id: P, node_id: 's1', source: 'lint', severity: 'minor', category: 'old', quote: '', message: 'vecchio', suggestion: '', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta.' }] }), answer(checkGood([0])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Prima frase corretta.' }] }), answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(head().markdown, 'Prima frase corretta.\n\nSeconda frase.');
@@ -1200,7 +1200,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     ctx.db.insert('evidence_packets', { id: newId(), project_id: P, node_id: 's1', provider: 'local', query: 'q', answer: '', notes, created_at: now() });
     seedRevision('s1', 'Prima frase.\n\nSeconda frase.\n\nTerza frase.', { citations: { '0': ['n1'], '1': ['n2', 'n3'] } });
     issue('i1', { quote: 'Prima frase.' });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Prima corretta.' }] }), answer(checkGood([0])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Prima corretta.' }] }), answer(checkGood([0])));
     await fix(['i1']);
     const [system, prompt] = [fake.calls[0].system ?? '', fake.calls[0].prompt];
     assert.match(system, /Rules the builder enforces on every change/);
@@ -1210,18 +1210,38 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
 
     // A passage that is not found, or blocks that cite nothing, send the whole packet.
     issue('i2', { quote: 'Frase che non esiste.' });
-    fake.next(answer({ figures: [], changes: [] }));
+    fake.next(patchAnswer({ figures: [], changes: [] }));
     await fix(['i2']);
     assert.match(fake.calls[2].prompt, /Citazione n1[\s\S]*Citazione n2[\s\S]*Citazione n3/);
     issue('i3', { quote: 'Terza frase.' });
-    fake.next(answer({ figures: [], changes: [] }));
+    fake.next(patchAnswer({ figures: [], changes: [] }));
     await fix(['i3']);
     assert.match(fake.calls[3].prompt, /Citazione n1[\s\S]*Citazione n3/);
 
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Con istruzione.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Con istruzione.' }] }));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'riscrivi' }));
     assert.doesNotMatch(fake.calls.at(-1)!.system ?? '', /Rules the builder enforces/);
     assert.match(fake.calls.at(-1)!.prompt, /Citazione n2/);
+  });
+
+  test('the new text arrives as written, backslashes included; terminal codes are removed; a malformed answer gets one repair turn', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Vale $x$.\n\nAltro.');
+    issue('i1', { quote: 'Vale $x$.' });
+    const formula = 'Vale $\\frac{1}{2}\\nu + \\theta + \\beta\\tau$ ed è \\text{vero}.';
+    fake.next(() => ({ text: `@@@ block 0 | issues 1\n\x1b[32m${formula}\x1b[0m\u0001`, usage: usageOf(10, 10) }), answer(checkGood([0])));
+    const r = await fix(['i1']);
+    assert.equal(r.status, 'current');
+    assert.equal(head().markdown, `${formula}\n\nAltro.`);
+    assert.equal(fake.calls.length, 2, 'no repair turn for a good answer');
+    assert.equal(fake.calls[0].responseSchema, undefined, 'no provider JSON schema is sent for the patch');
+
+    issue('i2', { quote: 'Altro.' });
+    fake.next(() => ({ text: 'Ho corretto il blocco 1.', usage: usageOf(10, 10) }), patchAnswer({ changes: [{ block: 1, text: 'Altro corretto.' }] }), answer(checkGood([1])));
+    const again = await fix(['i2']);
+    assert.equal(again.status, 'current');
+    assert.equal(head().markdown, `${formula}\n\nAltro corretto.`);
+    assert.match(fake.calls[3].prompt, /Problems:\nText before the first "@@@" line[\s\S]*full corrected answer in the same format/);
   });
 
   test('the head changed while the model ran: the fix stays a proposal and the issue is proposed', async () => {
@@ -1231,7 +1251,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     fake.next(() => {
       ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1'`);
       seedRevision('s1', 'Testo dell\'autrice.');
-      return { structured: { figures: [], changes: [{ block: 0, text: 'Testo AI.' }] } as never, text: '{}', usage: usageOf(1, 1) };
+      return { text: patchText({ changes: [{ block: 0, text: 'Testo AI.' }] }), usage: usageOf(1, 1) };
     }, answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'proposal');
@@ -1243,11 +1263,11 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     issue('i1');
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo con istruzione.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo con istruzione.' }] }));
     const p = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'riscrivi' }));
     assert.equal(p.status, 'proposal');
     assert.equal(fake.calls.length, 1, 'no check for an instruction');
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), answer(checkGood([0])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), answer(checkGood([0])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM content_revisions WHERE id = ?', p.revId!)!.status, 'proposal');
@@ -1258,7 +1278,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const base = seedRevision('s1', `Intro.\n\n${FORMULA}\n\nFine.`);
     issue('i1', { quote: 'Intro.' });
     issue('i2', { quote: '$$x=1$$' });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Introduzione.' }, { block: 1, text: '' }] }), answer(checkGood([0], 2)));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Introduzione.' }, { block: 1, text: '' }] }), answer(checkGood([0], 2)));
     const r = await fix(['i1', 'i2']);
     assert.equal(r.status, 'current');
     assert.equal(head().markdown, `Introduzione.\n\n${FORMULA}\n\nFine.`);
@@ -1270,7 +1290,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const revisions = () => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM content_revisions')!.n;
     const n = revisions();
     issue('i3', { quote: '$$x=1$$' });
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: '' }] }));
     const none = await fix(['i3']);
     assert.equal(none.skipped, 'no change survived the checks');
     assert.equal(revisions(), n);
@@ -1284,7 +1304,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', `A.\n\n${FORMULA}\n\nB.\n\nC.\n\nD.\n\nE.`);
     issue('i1', { quote: 'A.' });
-    fake.next(answer({ figures: [], changes: [
+    fake.next(patchAnswer({ figures: [], changes: [
       { block: 1, text: ':::formula{key="altro" label="L"}\n$$x=1$$\n:::' },
       { block: 0, text: ':::note\nA.' },
       { block: 2, text: '' }, { block: 3, text: '' }, { block: 4, text: '' }, { block: 5, text: '' },
@@ -1299,7 +1319,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedRevision('s1', 'Vale $x+1$ qui.\n\nAltro $y$.');
     issue('i1', { quote: 'Vale $x+1$ qui.' });
     issue('i2', { quote: 'Altro $y$.' });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Vale $\\frac{1}{$ qui.' }, { block: 1, text: 'Altro $z$.' }] }), answer(checkGood([1], 2)));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Vale $\\frac{1}{$ qui.' }, { block: 1, text: 'Altro $z$.' }] }), answer(checkGood([1], 2)));
     const r = await fix(['i1', 'i2']);
     assert.equal(head().markdown, 'Vale $x+1$ qui.\n\nAltro $z$.');
     assert.equal(state('i2').status, 'fixed');
@@ -1313,7 +1333,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     issue('i1', { quote: 'Uno.' });
     issue('i2', { quote: 'Due.' });
     issue('i3', { quote: 'Tre.' });
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Uno falso.' }, { block: 1, text: 'Due bis.' }, { block: 2, text: 'Tre bis.' }] }), answer({
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Uno falso.' }, { block: 1, text: 'Due bis.' }, { block: 2, text: 'Tre bis.' }] }), answer({
       changes: [{ block: 0, verdict: 'harmful', reason: 'afferma il falso' }, { block: 1, verdict: 'good', reason: '' }, { block: 2, verdict: 'good', reason: '' }],
       issues: [{ index: 1, fixed: true, reason: '' }, { index: 2, fixed: true, reason: '' }, { index: 3, fixed: false, reason: 'il problema resta' }],
     }));
@@ -1327,7 +1347,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     // Everything judged harmful: nothing is committed.
     seedOutline([['c1', ['s1']]]);
     const cur = head().id;
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Uno peggio.' }] }), answer({ figures: [], changes: [{ block: 0, verdict: 'harmful', reason: 'errore' }], issues: [{ index: 1, fixed: false, reason: 'no' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Uno peggio.' }] }), answer({ figures: [], changes: [{ block: 0, verdict: 'harmful', reason: 'errore' }], issues: [{ index: 1, fixed: false, reason: 'no' }] }));
     const none = await fix(['i1']);
     assert.equal(none.skipped, 'no change survived the checks');
     assert.equal(head().id, cur);
@@ -1338,7 +1358,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');
     issue('i1');
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), () => new TaskError('rete assente', 'temporary'));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo corretto.' }] }), () => new TaskError('rete assente', 'temporary'));
     const r = await fix(['i1']);
     assert.equal(r.status, 'current');
     assert.equal(r.checked, false);
@@ -1350,14 +1370,14 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     const long = (w: string) => `${w} `.repeat(30).trim();
     seedRevision('s1', [long('uno'), long('due'), long('tre'), long('quattro'), long('cinque')].join('\n\n'));
     issue('i1');
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
     const r = await fix(['i1']);
     assert.equal(r.status, 'proposal');
     assert.equal(head().markdown.includes('due'), true, 'the text is unchanged');
     assert.deepEqual(state('i1'), { status: 'proposed', resolution: `Proposal ${r.revId}` });
 
     issue('i2', { category: 'repetition' });
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: '' }, { block: 2, text: '' }] }), answer(checkGood([1, 2])));
     const again = await fix(['i2']);
     assert.equal(again.status, 'current');
     assert.equal(state('i2').status, 'fixed');
@@ -1888,7 +1908,7 @@ describe('chemistry figures: structures and photos', () => {
     const img = ':::image{src="assets/s1-retta.svg" alt="Retta" caption="Una retta"}\n:::';
     seedRevision('s1', `Il lavoro è proporzionale allo spostamento.\n\n${img}\n\nAltro.`);
     ctx.db.insert('review_issues', { id: 'g1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Una retta', message: 'Il grafico ripete la proporzionalità già detta nel testo.', suggestion: 'Eliminare la figura.', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ figures: [], changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['g1'] }));
     assert.equal(r.status, 'current');
     assert.equal(current('s1'), 'Il lavoro è proporzionale allo spostamento.\n\nAltro.');
@@ -1899,7 +1919,7 @@ describe('chemistry figures: structures and photos', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
     ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: "L'ammoniaca ha una coppia solitaria.", message: 'Manca la struttura', suggestion: 'Struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({
+    fake.next(patchAnswer({
       figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true, formula: 'NH3' } })],
       changes: [{ block: 0, text: "L'ammoniaca ha una coppia solitaria.\n\n:::image{src=\"assets/nh3.svg\" alt=\"a\" caption=\"c\"}\n:::\n\n:::image{src=\"assets/inventata.svg\" alt=\"a\" caption=\"c\"}\n:::" }],
     }), answer(keepFigures(1)), answer(checkGood([0])));
@@ -2117,7 +2137,7 @@ describe('figures are checked where they are born', () => {
     seedRevision('s1', 'Testo uno.');
     ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Testo uno.', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
     fake.next(
-      answer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno corretto.\n\n${img('a')}` }] }),
+      patchAnswer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno corretto.\n\n${img('a')}` }] }),
       answer(verdict(false)), answer(checkGood([0])),
     );
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
@@ -2132,10 +2152,10 @@ describe('figures are checked where they are born', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo uno.');
     ctx.db.insert('review_issues', { id: 'c1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'clarity', quote: 'Testo uno.', message: 'Poco chiaro.', suggestion: '', status: 'open', resolution: '', created_at: now() });
-    fake.next(answer({ changes: [{ block: 0, text: 'Testo uno chiaro.' }] }), answer(checkGood([0])));
+    fake.next(patchAnswer({ changes: [{ block: 0, text: 'Testo uno chiaro.' }] }), answer(checkGood([0])));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['c1'] }));
     assert.doesNotMatch(fake.calls[0].system ?? '', /FIGURES|Kinds \(/);
-    fake.next(answer({ figures: [], changes: [{ block: 0, text: 'Testo uno con grafico.' }] }));
+    fake.next(patchAnswer({ figures: [], changes: [{ block: 0, text: 'Testo uno con grafico.' }] }));
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', instruction: 'Aggiungi un grafico di x^2.' }));
     assert.match(fake.calls.at(-1)!.system ?? '', /FIGURES[\s\S]*- plot:/);
   });

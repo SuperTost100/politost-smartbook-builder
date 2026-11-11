@@ -14,7 +14,7 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
-import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchemaFor, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
+import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
@@ -319,8 +319,8 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   // The figure rules and specs go to the model only when the fix may add a figure: a figure problem, or the author's instruction.
   const figures = project.options.figures && (instructed || issues.some((i) => i.category === 'figure')) ? figureSetupOf(project, photosAvailable(ctx)) : null;
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures, guards: !instructed && issues.length > 0 ? { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') } : null }),
-    schema: patchSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, issues: issues.length > 0, figures, guards: !instructed && issues.length > 0 ? { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') } : null }),
+    parse: patchParser(figures, { blocks: blocks.length, issues: issues.length }), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix may add figures. The check that drops decorative ones runs first; image blocks pointing at neither a new figure
   // nor an existing asset are removed.

@@ -114,6 +114,88 @@ export function guardRules(opts: { figures?: boolean; removals?: boolean } = {})
   return `Rules the builder enforces on every change. A change that breaks one is dropped and its problem stays open:\n${rules.map((r) => `- ${r}`).join('\n')}`;
 }
 
+/**
+ * What the fix model answers, in plain text. Each part starts with a line that begins with "@@@":
+ *   @@@ block 3 | issues 1, 2     the new text of block 3 follows, up to the next "@@@" line, exactly as it goes in the book
+ *   @@@ delete 5 | issues 2       removes block 5
+ *   @@@ resolved | issues 3       the current text already fixes problem 3; one sentence says where
+ *   @@@ figures                   a JSON array of figure specs follows (only when the fix may add figures)
+ *   @@@ none                      nothing to change, alone
+ * The new text is not a JSON string, so LaTeX backslashes need no escaping and none is eaten on the way.
+ */
+export const PATCH_MARK = '@@@';
+
+export interface PatchChange extends BlockChange { issues: number[] }
+export interface ParsedPatch {
+  changes: PatchChange[];
+  /** Problems (1-based, as numbered in the request) the model says the current text already fixes, each group with its reason. */
+  resolved: { issues: number[]; reason: string }[];
+  /** The JSON of the figures part, not yet checked against a figure schema. Null when there is none. */
+  figures: unknown[] | null;
+}
+
+/**
+ * Reads the answer described at PATCH_MARK. `blocks` is the number of numbered blocks, `issues` the number of numbered
+ * problems (0 for an author's instruction, which names none). A problem returns a message the model can act on in a repair turn.
+ * The bodies get no cleaning here: the caller passes text whose terminal codes and control characters are already removed.
+ * TODO(sanitize split): apply the operator-name rewriting (\cotan to \operatorname{cotan}) to the bodies once sanitize.ts
+ * offers it apart from the backslash guessing. The guessing must not run on these bodies, which never were JSON strings.
+ */
+export function parsePatchAnswer(text: string, limits: { blocks: number; issues: number }): { ok: true; data: ParsedPatch } | { ok: false; problem: string } {
+  const fail = (problem: string) => ({ ok: false as const, problem });
+  type Part = { kind: string; arg: string; issues: string; body: string[] };
+  const parts: Part[] = [];
+  const before: string[] = [];
+  for (const line of text.split(/\r?\n/)) {
+    const head = new RegExp(`^${PATCH_MARK}[ \\t]*(block|delete|resolved|figures|none)\\b[ \\t]*(\\d*)[ \\t]*(?:\\|[ \\t]*issues?[ \\t]*([\\d,\\s]*))?[ \\t]*$`).exec(line);
+    if (head) parts.push({ kind: head[1], arg: head[2], issues: head[3] ?? '', body: [] });
+    else if (line.startsWith(PATCH_MARK)) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". Headers look like "${PATCH_MARK} block 3 | issues 1, 2".`);
+    else (parts.at(-1)?.body ?? before).push(line);
+  }
+  if (before.join('').trim()) return fail(`Text before the first "${PATCH_MARK}" line: every word of the answer belongs to a part.`);
+  if (!parts.length) return fail(`The answer has no parts. Start each part with a "${PATCH_MARK}" line, or answer only "${PATCH_MARK} none" when nothing needs to change.`);
+  const issueList = (raw: string): number[] | string => {
+    const nums = raw.split(/[,\s]+/).filter(Boolean).map(Number);
+    if (nums.some((n) => !Number.isInteger(n) || n < 1 || (limits.issues > 0 && n > limits.issues))) return `Problem numbers must be between 1 and ${limits.issues}, as in the request.`;
+    return limits.issues > 0 ? nums : [];
+  };
+  const changes: PatchChange[] = [];
+  const resolved: ParsedPatch['resolved'] = [];
+  let figures: unknown[] | null = null;
+  const seen = new Set<number>();
+  for (const p of parts) {
+    const body = p.body.join('\n').trim();
+    if (p.kind === 'none') {
+      if (parts.length > 1 || body) return fail(`"${PATCH_MARK} none" stands alone, with no text.`);
+      return { ok: true, data: { changes, resolved, figures } };
+    }
+    const issues = issueList(p.issues);
+    if (typeof issues === 'string') return fail(issues);
+    if (p.kind === 'figures') {
+      try {
+        const v: unknown = JSON.parse(body.replace(/^```(?:json)?\s*|\s*```$/g, ''));
+        if (!Array.isArray(v)) return fail(`The "${PATCH_MARK} figures" part must be a JSON array.`);
+        figures = v;
+      } catch (err) {
+        return fail(`The "${PATCH_MARK} figures" part is not valid JSON: ${err instanceof Error ? err.message : String(err)}`);
+      }
+      continue;
+    }
+    if (p.kind === 'resolved') {
+      if (!issues.length) return fail(`"${PATCH_MARK} resolved" needs the numbers of the problems: "${PATCH_MARK} resolved | issues 2".`);
+      resolved.push({ issues, reason: body });
+      continue;
+    }
+    const block = Number(p.arg);
+    if (p.arg === '' || !Number.isInteger(block) || block < 0 || block >= limits.blocks) return fail(`"${PATCH_MARK} ${p.kind}" needs the number of an existing block, from 0 to ${limits.blocks - 1}.`);
+    if (seen.has(block)) return fail(`Block ${block} appears twice. Give each block once, with its full new text.`);
+    seen.add(block);
+    if (p.kind === 'block' && !body) return fail(`Block ${block} has no text. To remove a block, write "${PATCH_MARK} delete ${block}".`);
+    changes.push({ block, text: p.kind === 'delete' ? '' : body, issues });
+  }
+  return { ok: true, data: { changes, resolved, figures } };
+}
+
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
 
 /** The first 60 whitespace-normalised characters of a quote: what issues are matched on. */

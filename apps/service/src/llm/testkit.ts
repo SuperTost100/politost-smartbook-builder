@@ -114,3 +114,18 @@ export class FakeFunnel implements FunnelLike {
 }
 
 export const usageOf = (input: number, output: number) => ({ inputTokens: input, outputTokens: output, totalTokens: input + output });
+
+/**
+ * A fix answer in the plain-text format of the patch prompt, written from the data it carries. Every change is given as
+ * answering problem 1. `resolved` entries say the current text already fixes problems.
+ */
+export function patchText(a: { changes: { block: number; text: string }[]; figures?: unknown[]; resolved?: { issues: number[]; reason: string }[] }): string {
+  const parts = [
+    ...a.changes.map((c) => (c.text === '' ? `@@@ delete ${c.block} | issues 1` : `@@@ block ${c.block} | issues 1\n${c.text}`)),
+    ...(a.resolved ?? []).map((r) => `@@@ resolved | issues ${r.issues.join(', ')}\n${r.reason}`),
+    ...(a.figures?.length ? [`@@@ figures\n${JSON.stringify(a.figures)}`] : []),
+  ];
+  return parts.join('\n\n') || '@@@ none';
+}
+
+export const patchAnswer = (a: Parameters<typeof patchText>[0]) => () => ({ text: patchText(a), usage: usageOf(10, 10) });
