@@ -86,7 +86,8 @@ export default function BookSetup() {
   const onTitle = (v: string) => { setTitle(v); if (!slugTouched) setSlug(slugify(v)); };
   const set = <K extends keyof BookOptions>(k: K, v: BookOptions[K]) => setOpts((o) => ({ ...o, [k]: v }));
 
-  const area: SubjectArea = opts.subjectArea ?? inferSubjectArea(subject, title);
+  const inferred = inferSubjectArea(subject, title);
+  const area: SubjectArea = opts.subjectArea ?? inferred;
   const profile = SUBJECT_PROFILES[area];
   const language = lang === 'other' ? otherLang.trim() : lang;
   const authorList = authors.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
@@ -96,7 +97,8 @@ export default function BookSetup() {
   const save = useMutation({
     mutationFn: async () => {
       const body: ProjectInput = { title: title.trim(), subject: subject.trim(), slug, authors: authorList, language, audience, goals, options: opts };
-      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body });
+      // A saved book keeps the area it has unless the patch says null, so Automatic has to be sent as null.
+      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: { ...body, options: { ...opts, subjectArea: opts.subjectArea ?? null } } });
       return api('POST /api/projects', { body });
     },
     onSuccess: (p) => {
@@ -138,10 +140,11 @@ export default function BookSetup() {
         </div>
         <div className="ui-field">
           <label className="ui-field__label" htmlFor="su-area">Subject area</label>
-          <select id="su-area" className="ui-select su-area" value={area} onChange={(e) => set('subjectArea', e.target.value as SubjectArea)} aria-describedby="su-area-hint">
+          <select id="su-area" className="ui-select su-area" value={opts.subjectArea ?? ''} onChange={(e) => set('subjectArea', e.target.value ? e.target.value as SubjectArea : undefined)} aria-describedby="su-area-hint">
+            <option value="">Automatic ({AREA_LABEL[inferred]})</option>
             {SUBJECT_AREAS.map((a) => <option key={a} value={a}>{AREA_LABEL[a]}</option>)}
           </select>
-          <span id="su-area-hint" className="ui-field__hint">{opts.subjectArea ? 'Sets which figures the writer may draw and which notation the outline settles. You can still change every option below.' : `Taken from the subject and the title, because no area is chosen. Choosing one fixes it. It sets which figures the writer may draw and which notation the outline settles.`}</span>
+          <span id="su-area-hint" className="ui-field__hint">{opts.subjectArea ? 'Sets which figures the writer may draw and which notation the outline settles. You can still change every option below.' : `Automatic follows the subject and the title, so editing either can change the area. Choosing an area fixes it. It sets which figures the writer may draw and which notation the outline settles.`}</span>
           <dl className="su-area-effects" aria-label={`What ${AREA_LABEL[area]} sets`}>
             <dt>Figure kinds</dt><dd>{upper(profile.figureKinds.map((k) => KIND_LABEL[k]).join(', '))}</dd>
             <dt>Notation hints</dt><dd>{upper(profile.notation)}</dd>
@@ -257,12 +260,12 @@ export default function BookSetup() {
           <div className="ui-stack su-stack" role="radiogroup" aria-label="When Claude usage runs out">
             {([
               [false, 'Continue on the fallback model', 'The work goes on with the fallback model of each job, as set in Connections. The wording can change from one section to the next.'],
-              [true, 'Pause until it resets', 'Drafting stops and starts again by itself when the Claude window resets. Choose this when the book must keep one voice.'],
+              [true, 'Pause until it resets', 'A usage limit stops the run, and it starts again by itself when the Claude window resets. Choose this when the book must keep one voice.'],
             ] as const).map(([v, l, d]) => (
               <label key={l} className="su-radio"><input type="radio" name="su-quota" checked={opts.noClaudeFallback === v} onChange={() => set('noClaudeFallback', v)} /><span><strong>{l}</strong><br /><span className="ui-muted">{d}</span></span></label>
             ))}
           </div>
-          <p className="ui-field__hint">This choice wins over the fallbacks set in Connections, for this book only. While a book is paused for usage, the Run panel says when it starts again.</p>
+          <p className="ui-field__hint">With this choice, the jobs that start on Claude never use their fallback for this book, whatever the fallbacks in Connections say. A usage limit pauses the run until it resets, and the Run panel says when. Any other failure, such as a timeout, is retried and then stops the task.</p>
         </fieldset>
       </section>
 

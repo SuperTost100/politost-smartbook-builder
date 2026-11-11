@@ -67,9 +67,13 @@ export default function ReviewPage() {
   const minorOpenShown = minor.filter((i) => i.status === 'open');
   const minorPicked = minorOpenShown.filter(picked).length;
   const serious = open.filter((i) => i.severity !== 'minor');
-  // shortcut: "nothing serious" is derived here from the open issues and the last review run. Switch to the field of the review run's result that says so once it is in pipeline/review.ts.
+  const runActive = project.data?.activeRun?.kind === 'review' && !['completed', 'failed', 'cancelled'].includes(project.data.activeRun.status);
+  // The service says whether the book was reviewed at its current text with nothing serious open (`review` in the project summary).
+  // shortcut: a service that does not send it yet gets "the last review run completed and no serious issue is open", which also counts a run that only checked questions, upgrade when every service sends `review`.
   const lastReview = [...(runs.data ?? [])].filter((r) => r.kind === 'review').sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
-  const reviewedClear = lastReview?.status === 'completed' && serious.length === 0;
+  const standing = project.data?.review;
+  // Never "ready to export" before the issues are known, or while a review is running.
+  const reviewedClear = !!issuesQ.data && !runActive && (standing !== undefined ? standing?.clean === true : lastReview?.status === 'completed' && serious.length === 0);
 
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.issues(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); void qc.invalidateQueries({ queryKey: ['section', pid] }); };
   const fixMany = useMutation({
@@ -80,7 +84,7 @@ export default function ReviewPage() {
   const [confirmFull, setConfirmFull] = useState(false);
   const review = useMutation({
     mutationFn: (mode?: 'full') => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'review', ...(mode ? { scope: { reviewMode: mode } } : {}) } }),
-    onSuccess: (_r, mode) => { toast(mode ? 'Full review started' : 'Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); },
+    onSuccess: (_r, mode) => { toast(mode ? 'Full review started' : 'Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.runs(pid) }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const setIssue = useMutation({
@@ -93,7 +97,6 @@ export default function ReviewPage() {
   /** Selects or clears a whole group at once. */
   const setGroup = (list: ReviewIssue[], on: boolean) => setCleared((s) => { const n = new Set(s); for (const i of list) { if (on) n.delete(i.id); else n.add(i.id); } return n; });
   const allPicked = openShown.length > 0 && openShown.every(picked);
-  const runActive = project.data?.activeRun?.kind === 'review' && !['completed', 'failed', 'cancelled'].includes(project.data.activeRun.status);
 
   const location = (i: ReviewIssue) => {
     if (i.nodeId) {
@@ -110,7 +113,7 @@ export default function ReviewPage() {
   const counts = (['blocker', 'major', 'minor'] as const).map((sv) => [open.filter((i) => i.severity === sv).length, sv === 'blocker' ? 'blocker' : sv === 'major' ? 'major issue' : 'minor note'] as const).filter(([n]) => n > 0).map(([n, w]) => plural(n, w));
   const joined = counts.length > 1 ? `${counts.slice(0, -1).join(', ')} and ${counts[counts.length - 1]}` : counts[0];
   const waiting = proposedCount > 0 ? ` · ${plural(proposedCount, 'fix', 'fixes')} waiting for your approval in the Manuscript` : '';
-  const summary = reviewedClear ? (
+  const summary = !issuesQ.data ? null : reviewedClear ? (
     <p className="rv-summary" role="status"><Icon name="check" size={18} /><span>No blockers or major issues in the changed text. The book is ready to export.{openCount > 0 ? ` ${plural(openCount, 'minor note')} ${openCount === 1 ? 'is' : 'are'} left, and ${openCount === 1 ? 'it does' : 'they do'} not hold back the export.` : ''} <Link to={`/books/${pid}/export`}>Go to Export</Link>{waiting}</span></p>
   ) : (
     <p className="ui-lede">{openCount === 0 ? 'No open issues.' : `${joined} in the changed text. Open one to see it in the text, or let the writer fix it.`}{waiting}</p>
@@ -186,7 +189,7 @@ export default function ReviewPage() {
 
       {issuesQ.isLoading && <div className="ui-skeleton" style={{ height: 160 }} />}
       {issuesQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(issuesQ.error)}</div>}
-      {!issuesQ.isLoading && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate(undefined)} disabled={review.isPending}>Run review</button></div>}
+      {issuesQ.data && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate(undefined)} disabled={review.isPending}>Run review</button></div>}
       {all.length > 0 && shown.length === 0 && <p className="ui-muted">No issues match these filters.</p>}
 
       {main.length > 0 && <ul className="rv-list" aria-label="Blockers and major issues">{main.map((i) => card(i))}</ul>}

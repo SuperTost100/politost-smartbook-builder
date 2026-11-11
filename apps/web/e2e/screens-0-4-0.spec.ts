@@ -21,6 +21,7 @@ async function keepBook(page: Page, subject?: string) {
       const body = req.postDataJSON() as { options?: Record<string, unknown> };
       patches.push(body);
       book.options = { ...book.options, ...body.options };
+      for (const [k, v] of Object.entries(book.options)) if (v === null) delete book.options[k]; // the service clears an option patched to null
     }
     return answer(route, book);
   });
@@ -34,11 +35,12 @@ test.describe('Book setup', () => {
     const { patches } = await keepBook(page, 'Elettrotecnica');
     await page.goto('/books/p1/settings');
     const area = page.getByLabel('Subject area');
-    await expect(area).toHaveValue('electronics');
-    await expect(page.getByText('Taken from the subject and the title')).toBeVisible();
+    await expect(area).toHaveValue('');
+    await expect(area.locator('option:checked')).toHaveText('Automatic (Electronics)');
+    await expect(page.getByText('Automatic follows the subject and the title')).toBeVisible();
 
     await area.selectOption('physics');
-    await expect(page.getByText('Taken from the subject and the title')).toHaveCount(0);
+    await expect(page.getByText('Automatic follows the subject and the title')).toHaveCount(0);
     await page.getByRole('radio', { name: /Generous/ }).check();
     await page.getByRole('radio', { name: /European/ }).check();
     await page.getByRole('radio', { name: /Pause until it resets/ }).check();
@@ -56,21 +58,42 @@ test.describe('Book setup', () => {
     await expect(page.getByRole('radio', { name: /Continue on the fallback model/ })).not.toBeChecked();
   });
 
-  test('a book without an area shows the inferred one and keeps it unset when the author does not choose', async ({ page }) => {
+  test('a book without an area shows Automatic with the inferred one, and saving keeps it unset', async ({ page }) => {
     const { patches } = await keepBook(page);
     await page.goto('/books/p1/settings');
-    await expect(page.getByLabel('Subject area')).toHaveValue('mathematics');
+    await expect(page.getByLabel('Subject area')).toHaveValue('');
+    await expect(page.getByLabel('Subject area').locator('option:checked')).toHaveText('Automatic (Mathematics)');
     await expect(page.getByRole('radio', { name: /Where they help/ })).toBeChecked();
     await expect(page.getByRole('radio', { name: /Continue on the fallback model/ })).toBeChecked();
     await page.getByRole('button', { name: 'Save setup' }).click();
     await expect(page.getByText('Book setup saved')).toBeVisible();
-    expect(patches[0].options).not.toHaveProperty('subjectArea');
+    expect(patches[0].options).toMatchObject({ subjectArea: null }); // null is how the options patch says "no area"
+  });
+
+  test('the inferred area can be pinned, and Automatic takes the pin away', async ({ page }) => {
+    const { book, patches } = await keepBook(page);
+    await page.goto('/books/p1/settings');
+    const area = page.getByLabel('Subject area');
+    await expect(area.locator('option:checked')).toHaveText('Automatic (Mathematics)');
+    await area.selectOption('mathematics'); // the area Automatic shows: choosing it saves it
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+    expect(patches[0].options).toMatchObject({ subjectArea: 'mathematics' });
+    expect(book.options.subjectArea).toBe('mathematics');
+
+    await page.goto('/books/p1/settings');
+    await expect(area).toHaveValue('mathematics');
+    await area.selectOption('');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+    expect(patches[1].options).toMatchObject({ subjectArea: null });
+    expect(book.options.subjectArea).toBeUndefined();
   });
 
   test('circuit symbols are offered for electronics and physics and hidden for mathematics', async ({ page }) => {
     await keepBook(page);
     await page.goto('/books/p1/settings');
-    await expect(page.getByLabel('Subject area')).toHaveValue('mathematics');
+    await expect(page.getByLabel('Subject area').locator('option:checked')).toHaveText('Automatic (Mathematics)');
     await expect(page.getByRole('radiogroup', { name: 'Circuit symbols' })).toHaveCount(0);
     for (const [area, shown] of [['electronics', true], ['physics', true], ['chemistry', false], ['mechanics', false]] as const) {
       await page.getByLabel('Subject area').selectOption(area);
@@ -108,9 +131,11 @@ test.describe('Book setup', () => {
 
   test('the usage-limit choice and Connections agree', async ({ page }) => {
     await page.goto('/books/p1/settings');
-    await expect(page.getByText('This choice wins over the fallbacks set in Connections, for this book only.')).toBeVisible();
+    await expect(page.getByText('the jobs that start on Claude never use their fallback for this book')).toBeVisible();
+    await expect(page.getByText('Any other failure, such as a timeout, is retried and then stops the task.')).toBeVisible();
     await page.goto('/connections');
-    await expect(page.getByText('A book can choose to pause when Claude usage runs out instead, and that choice wins for that book.')).toBeVisible();
+    await expect(page.getByText('For that book the roles that start on Claude never use their fallback')).toBeVisible();
+    await expect(page.getByText('any other failure is retried and then stops the task')).toBeVisible();
   });
 
   test('the setup page works from the keyboard and does not overflow at 390 px', async ({ page }) => {
@@ -179,14 +204,20 @@ test.describe('Sources: exam split warning', () => {
     await expect(page.getByRole('alert').nth(1)).toContainText('Every session has at most one question');
   });
 
+  const splitTask = (over: Record<string, unknown> = {}) => ({ id: 'tk7', runId: 'r7', kind: 'resource.split', label: 'Split esami-2024.pdf with AI', state: 'running', attempts: 1, provider: 'codex', error: null, waitReason: null, resourceId: 'rsBad', applied: null, startedAt: ago(1), finishedAt: null, ...over });
+  const NOT_APPLIED = 'The AI split of esami-2024.pdf was not applied. The solution of exercise 2 of "Esame del 12 febbraio 2024" does not start with the line the model quoted on page 9, or it comes before the exercise.';
+  /** The newest Prepare run as the service lists it, and its tasks. A test changes `run.summary` and `run.tasks` to move the run on. */
+  async function keepRun(page: Page, summary: ReturnType<typeof aiRun> | null, tasks: unknown[] = []) {
+    const run = { summary, tasks, detailFetches: 0 };
+    await page.route(/\/api\/projects\/p1\/runs$/, (route) => answer(route, run.summary ? [run.summary] : []));
+    await page.route(/\/api\/runs\/r7$/, (route) => { run.detailFetches++; return answer(route, { ...run.summary, tasks: run.tasks, usage: [] }); });
+    return run;
+  }
+
   test('Split with AI shows the run, and an answer the service did not accept leaves the warning with its reason', async ({ page }) => {
     const state = await keepResources(page, [examBad()]);
-    let polls = 0;
-    await page.route(/\/api\/resources\/rsBad\/split$/, (route) => { state.splits++; return answer(route, aiRun('running')); });
-    await page.route(/\/api\/runs\/r7$/, (route) => {
-      const message = 'The AI split of esami-2024.pdf was not applied. The solution of exercise 2 of "Esame del 12 febbraio 2024" does not start with the line the model quoted on page 9, or it comes before the exercise.';
-      return answer(route, { ...(polls++ === 0 ? aiRun('running') : aiRun('completed', [{ taskId: 'tk', label: 'Split esami-2024.pdf with AI', message }])), tasks: [], usage: [] });
-    });
+    const run = await keepRun(page, null);
+    await page.route(/\/api\/resources\/rsBad\/split$/, (route) => { state.splits++; run.summary = aiRun('running'); run.tasks = [splitTask()]; return answer(route, run.summary); });
     await page.goto('/books/p1/sources');
     await page.getByRole('button', { name: 'Split with AI' }).click();
     const busy = page.getByRole('status').filter({ hasText: 'Splitting esami-2024.pdf with AI' });
@@ -194,6 +225,9 @@ test.describe('Sources: exam split warning', () => {
     await expect(busy.getByRole('link', { name: 'Open run' })).toHaveAttribute('href', '/books/p1/run');
     await expect(page.getByRole('button', { name: 'Split with AI' })).toHaveCount(0);
 
+    // The run finishes: the split task says it did not apply, and the run summary carries the reason.
+    run.summary = aiRun('completed', [{ taskId: 'tk7', label: 'Split esami-2024.pdf with AI', message: NOT_APPLIED }]);
+    run.tasks = [splitTask({ state: 'succeeded', applied: false, finishedAt: ago(0) })];
     const alert = page.getByRole('alert');
     await expect(alert).toContainText('The AI split of esami-2024.pdf was not applied.', { timeout: 15_000 });
     await expect(alert).toContainText('The file keeps the split it had.');
@@ -204,17 +238,68 @@ test.describe('Sources: exam split warning', () => {
 
   test('a split the service accepted replaces the warning with the counts', async ({ page }) => {
     const state = await keepResources(page, [examBad()]);
-    await page.route(/\/api\/resources\/rsBad\/split$/, (route) => {
-      // The new split is stored by the time the run is done.
-      state.rows = [examBad({ splitSessions: 9, splitQuestions: 41, splitWarning: null })];
-      return answer(route, aiRun('completed'));
-    });
-    await page.route(/\/api\/runs\/r7$/, (route) => answer(route, { ...aiRun('completed'), tasks: [], usage: [] }));
+    const run = await keepRun(page, null);
+    await page.route(/\/api\/resources\/rsBad\/split$/, (route) => { run.summary = aiRun('running'); run.tasks = [splitTask()]; return answer(route, run.summary); });
     await page.goto('/books/p1/sources');
     await page.getByRole('button', { name: 'Split with AI' }).click();
-    await expect(page.getByText('esami-2024.pdf was split with AI')).toBeVisible();
+    await expect(page.getByRole('status').filter({ hasText: 'Splitting esami-2024.pdf with AI' })).toBeVisible();
+    // The new split is stored by the time the task is done.
+    state.rows = [examBad({ splitSessions: 9, splitQuestions: 41, splitWarning: null })];
+    run.summary = aiRun('completed');
+    run.tasks = [splitTask({ state: 'succeeded', applied: true, finishedAt: ago(0) })];
+    await expect(page.getByText('esami-2024.pdf was split with AI')).toBeVisible({ timeout: 15_000 });
     await expect(page.getByText('9 sessions · 41 questions found')).toBeVisible();
     await expect(page.getByRole('alert')).toHaveCount(0);
+  });
+
+  test('the row finds its split again after the page is left and opened again', async ({ page }) => {
+    await keepResources(page, [examBad()]);
+    const run = await keepRun(page, aiRun('running'), [splitTask(), splitTask({ id: 'tk8', kind: 'resource.questions', label: 'Split other.pdf into questions', resourceId: 'rsOther', state: 'queued' })]);
+    await page.goto('/books/p1/sources');
+    // No component state knows about this run: the row reads it from the project's runs and their tasks.
+    const busy = page.getByRole('status').filter({ hasText: 'Splitting esami-2024.pdf with AI' });
+    await expect(busy).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Split with AI' })).toHaveCount(0);
+    await busy.getByRole('link', { name: 'Open run' }).click();
+    await expect(page).toHaveURL(/\/books\/p1\/run$/);
+    run.summary = aiRun('completed', [{ taskId: 'tk7', label: 'Split esami-2024.pdf with AI', message: NOT_APPLIED }]);
+    run.tasks = [splitTask({ state: 'succeeded', applied: false, finishedAt: ago(0) })];
+    await page.getByRole('link', { name: 'Sources' }).first().click();
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('The AI split of esami-2024.pdf was not applied.');
+    await expect(alert).toContainText('The file keeps the split it had.');
+  });
+
+  test('a run that fails after a split that was applied says so, and does not say the old split was kept', async ({ page }) => {
+    // The split task replaced the questions and left no warning, then the topic map failed.
+    await keepResources(page, [examOk, examBad({ splitSessions: 9, splitQuestions: 41, splitWarning: null })]);
+    await keepRun(page, aiRun('failed'), [splitTask({ state: 'succeeded', applied: true, finishedAt: ago(1) }), splitTask({ id: 'tk9', kind: 'topics.map', label: 'Map the topics', resourceId: null, state: 'failed' })]);
+    await page.goto('/books/p1/sources');
+    const note = page.getByRole('listitem').filter({ hasText: 'esami-2024.pdf' }).getByRole('alert');
+    await expect(note).toContainText('The new split was saved, but the run failed afterwards, so the topics may not use it yet.');
+    await expect(note).not.toContainText('keeps the split it had');
+    await expect(note.getByRole('button', { name: 'Try again' })).toHaveCount(0);
+  });
+
+  test('a split task that failed or was cancelled leaves the old split and offers another try', async ({ page }) => {
+    await keepResources(page, [examBad()]);
+    const run = await keepRun(page, aiRun('failed'), [splitTask({ state: 'failed', error: { message: 'The model answered with text that is not valid.' } })]);
+    await page.goto('/books/p1/sources');
+    const alert = page.getByRole('alert');
+    await expect(alert).toContainText('The split with AI failed, so the file keeps the split it had. The model answered with text that is not valid.');
+    await expect(alert.getByRole('button', { name: 'Try again' })).toBeEnabled();
+    run.summary = aiRun('cancelled');
+    run.tasks = [splitTask({ state: 'cancelled' })];
+    await page.reload();
+    await expect(page.getByRole('alert')).toContainText('The split with AI was cancelled, so the file keeps the split it had.');
+  });
+
+  test('an excluded file with an empty split does not get the green check', async ({ page }) => {
+    await keepResources(page, [resource({ id: 'rsOut', role: 'exams', filename: 'fuori.pdf', included: false, splitSessions: 1, splitQuestions: 0, splitWarning: null })]);
+    await page.goto('/books/p1/sources');
+    const row = page.getByRole('listitem').filter({ hasText: 'fuori.pdf' });
+    await expect(row).toBeVisible();
+    await expect(row.getByText(/questions? found/)).toHaveCount(0);
   });
 
   test('a refusal while Prepare runs is shown in the row and the file keeps its warning', async ({ page }) => {
@@ -236,15 +321,15 @@ test.describe('Sources: exam split warning', () => {
     await expect(page.getByRole('alert')).toContainText('Some questions of this source were edited or checked already');
   });
 
-  test('Mark as not an exam changes the role to Mixed, and Undo brings the warning back', async ({ page }) => {
+  test('Mark as not an exam changes the role to Theory, the one role whose questions stop counting, and Undo brings the warning back', async ({ page }) => {
     const state = await keepResources(page, [examBad()]);
     await page.goto('/books/p1/sources');
     await page.getByRole('button', { name: 'Mark as not an exam' }).click();
     const note = page.getByRole('status').filter({ hasText: 'Marked as not an exam' });
-    await expect(note).toContainText('The role is now Mixed');
+    await expect(note).toContainText('The role is now Theory, so the questions of this file no longer count as exam questions');
     await expect(page.getByRole('alert')).toHaveCount(0);
-    await expect(page.getByLabel('Role of esami-2024.pdf')).toHaveValue('mixed');
-    expect(state.patches).toEqual([{ rid: 'rsBad', body: { role: 'mixed' } }]);
+    await expect(page.getByLabel('Role of esami-2024.pdf')).toHaveValue('theory');
+    expect(state.patches).toEqual([{ rid: 'rsBad', body: { role: 'theory' } }]);
     await note.getByRole('button', { name: 'Undo' }).click();
     await expect(page.getByRole('alert')).toContainText('1 session and 0 questions found');
     await expect(page.getByLabel('Role of esami-2024.pdf')).toHaveValue('exams');
@@ -381,6 +466,47 @@ test.describe('Review: minor notes', () => {
     await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
   });
 
+  test('before the issues are loaded the page claims nothing, and when they fail to load it still does not', async ({ page }) => {
+    await reviewData(page, []);
+    let release = () => {};
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    await page.route(/\/api\/projects\/p1\/issues$/, async (route) => { await gate; await answer(route, []); });
+    await page.goto('/books/p1/review');
+    await expect(page.locator('.ui-skeleton').first()).toBeVisible();
+    await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
+    await expect(page.getByText('No open issues.')).toHaveCount(0);
+    release();
+    await expect(page.getByText('The book is ready to export.')).toBeVisible();
+
+    await page.unroute(/\/api\/projects\/p1\/issues$/);
+    await page.route(/\/api\/projects\/p1\/issues$/, (route) => answer(route, { error: { code: 'boom', message: 'The issues could not be read.' } }, 500));
+    await page.reload();
+    await expect(page.getByRole('alert')).toContainText('The issues could not be read.');
+    await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
+    await expect(page.getByText('Nothing to review yet.')).toHaveCount(0);
+  });
+
+  test('the review field of the project decides when the service sends it, and a review under way holds the claim back', async ({ page }) => {
+    await reviewData(page, [], { review: 'none' });
+    const book = (over: Record<string, unknown>) => ({ ...mockData().projects[0], activeRun: null, ...over });
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, book({ review: { clean: true, openSerious: 0, reviewedAt: ago(3) } })));
+    await page.goto('/books/p1/review');
+    await expect(page.getByText('The book is ready to export.')).toBeVisible(); // no review run is listed, the field says clean
+
+    await page.unroute(/\/api\/projects\/p1$/);
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, book({ review: { clean: false, openSerious: 0, reviewedAt: ago(3) } })));
+    await page.route(/\/api\/projects\/p1\/runs$/, (route) => answer(route, [{ id: 'r5', projectId: 'p1', kind: 'review', status: 'completed', createdAt: ago(4), finishedAt: ago(3), counts: { succeeded: 2 }, waiting: null, warnings: [] }]));
+    await page.reload();
+    await expect(page.getByText('No open issues.')).toBeVisible(); // the run completed, but the text changed after it
+    await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
+
+    await page.unroute(/\/api\/projects\/p1$/);
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, book({ review: { clean: true, openSerious: 0, reviewedAt: ago(30) }, activeRun: { id: 'r9', projectId: 'p1', kind: 'review', status: 'running', createdAt: ago(1), finishedAt: null, counts: { running: 1 }, waiting: null, warnings: [] } })));
+    await page.reload();
+    await expect(page.getByRole('button', { name: 'Reviewing…' })).toBeVisible();
+    await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
+  });
+
   test('the severity filter "Minor" opens the group by itself', async ({ page }) => {
     await reviewData(page, issues);
     await page.goto('/books/p1/review');
@@ -463,6 +589,30 @@ test.describe('Connections: usage and routing', () => {
     await page.goto('/connections');
     await expect(page.getByText('No model calls in the last 30 days.')).toBeVisible();
     await expect(page.getByRole('region', { name: 'Model calls per provider' })).toHaveCount(0);
+  });
+
+  test('tokens no call reported show a dash, not zero', async ({ page }) => {
+    const none = { provider: 'agy', models: ['gemini'], calls: 3, inputTokens: null, outputTokens: null, cachedShare: null, failed: 0, timeouts: 0 };
+    await page.route(/\/api\/usage$/, (route) => answer(route, { days: 30, providers: [none], total: { ...none, provider: '' } }));
+    await page.goto('/connections');
+    const row = page.getByRole('region', { name: 'Model calls per provider' }).getByRole('row').filter({ hasText: 'agy' });
+    await expect(row.getByRole('cell').nth(1)).toHaveText(/–\s*Not reported/);
+    await expect(row.getByRole('cell').nth(3)).toHaveText(/–\s*Not reported/);
+    await expect(row).not.toContainText('0 tokens');
+  });
+
+  test('the usage table shows when the connections request fails, and Check again reads both again', async ({ page }) => {
+    let usageReads = 0;
+    let connectionReads = 0;
+    await page.route(/\/api\/connections$/, (route) => { connectionReads++; return answer(route, { error: { code: 'boom', message: 'The tools could not be checked.' } }, 500); });
+    await page.route(/\/api\/usage$/, (route) => { usageReads++; return route.fallback(); });
+    await page.goto('/connections');
+    await expect(page.getByRole('alert').filter({ hasText: 'The tools could not be checked.' })).toBeVisible();
+    const table = page.getByRole('region', { name: 'Model calls per provider' });
+    await expect(table.getByRole('row').filter({ hasText: 'claude' })).toContainText('1,284'); // no label without the provider list, so the id
+    const [usage0, connections0] = [usageReads, connectionReads];
+    await page.getByRole('button', { name: 'Check again' }).click();
+    await expect.poll(() => [usageReads > usage0, connectionReads > connections0]).toEqual([true, true]);
   });
 
   test('the usage table scrolls inside its box on a phone', async ({ page }) => {

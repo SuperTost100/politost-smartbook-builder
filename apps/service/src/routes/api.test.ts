@@ -67,6 +67,11 @@ describe('projects', () => {
     const subject = await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: 'electronics', figurePolicy: 'generous', circuitSymbols: 'european' } });
     assert.equal(subject.status, 200);
     assert.deepEqual([subject.body.options.subjectArea, subject.body.options.figurePolicy, subject.body.options.circuitSymbols], ['electronics', 'generous', 'european']);
+    const cleared = await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: null } });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.options.subjectArea, undefined, 'null clears the area, so it is inferred again');
+    assert.equal(cleared.body.options.figurePolicy, 'generous', 'the other options keep their value');
+    assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: 'electronics' } })).body.options.subjectArea, 'electronics');
     const later = await t.req('PATCH', `/api/projects/${id}`, { options: { graphs: true } });
     assert.deepEqual([later.body.options.subjectArea, later.body.options.figurePolicy], ['electronics', 'generous'], 'a later patch keeps them');
     assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: 'poetry' } })).status, 400);
@@ -512,13 +517,25 @@ describe('runs', () => {
     row('claude', 'opus', 500, null, 0, 'aborted', 3); // an old row without the cache count, and a stopped call
     row('claude', 'sonnet', 9999, 0, 1, null, 40); // outside the period
     row('codex', 'gpt', 200, null, 1, null, 1); // no call reported its cache
+    t.ctx.db.run(`INSERT INTO usage (provider, model, role, input_tokens, output_tokens, cached_input_tokens, error_kind, ms, ok, created_at) VALUES ('agy', 'm', 'writer', NULL, NULL, NULL, NULL, 1, 1, ?)`, new Date().toISOString());
     const { body } = await t.req('GET', '/api/usage');
     assert.equal(body.days, 30);
     const claude = body.providers.find((p: { provider: string }) => p.provider === 'claude');
     assert.deepEqual([claude.models, claude.calls, claude.inputTokens, claude.cachedShare, claude.failed, claude.timeouts], [['sonnet', 'opus'], 3, 2500, 0.5, 1, 1]);
     assert.equal(body.providers.find((p: { provider: string }) => p.provider === 'codex').cachedShare, null);
-    assert.deepEqual([body.total.calls, body.total.failed, body.total.cachedShare], [4, 1, 0.5]);
+    const agy = body.providers.find((p: { provider: string }) => p.provider === 'agy');
+    assert.deepEqual([agy.calls, agy.inputTokens, agy.outputTokens], [1, null, null], 'a provider whose calls reported no counts has no totals, not zero');
+    assert.deepEqual([body.total.calls, body.total.failed, body.total.cachedShare, body.total.inputTokens], [5, 1, 0.5, 2700]);
     assert.equal((await t.req('GET', '/api/usage?days=0')).status, 400);
+  });
+
+  it('names the source of a task and whether a split with AI replaced its questions', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('split-task'));
+    const runId = t.ctx.queue.createRun(p.id, 'prepare', [{ kind: 'resource.split', key: 'split:r1', label: 'Split a.pdf with AI', input: { resourceId: 'r1' } }, { kind: 'login', key: 'l', label: 'L' }]);
+    t.ctx.db.run(`UPDATE tasks SET state = 'succeeded', result = ? WHERE run_id = ? AND key = 'split:r1'`, JSON.stringify({ applied: false, warning: 'x' }), runId);
+    const { body } = await t.req('GET', `/api/runs/${runId}`);
+    const [split, other] = body.tasks;
+    assert.deepEqual([split.resourceId, split.applied, other.resourceId, other.applied], ['r1', false, null, null]);
   });
 
   it('controls runs through the queue and aggregates usage with NULL propagation', async () => {

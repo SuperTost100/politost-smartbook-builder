@@ -1,5 +1,5 @@
 import { rmSync } from 'node:fs';
-import { bookOptionsSchema, type BookOptions, type Project, type ProjectInput, type ProjectStage, type ProjectSummary } from '@smartbuilder/domain';
+import { bookOptionsSchema, type BookOptionsPatch, type Project, type ProjectInput, type ProjectStage, type ProjectSummary } from '@smartbuilder/domain';
 import { paths } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -85,7 +85,7 @@ function currentStage(p: Project, counts: ProjectSummary['counts'], hasOutline: 
   return counts.sections > 0 && counts.drafted >= counts.sections ? 'review' : 'drafting';
 }
 
-export type ProjectPatch = Partial<Omit<ProjectInput, 'options'>> & { options?: Partial<BookOptions> };
+export type ProjectPatch = Partial<Omit<ProjectInput, 'options'>> & { options?: BookOptionsPatch };
 
 /** Options are merged key by key so a patch never resets the toggles it does not mention. */
 export function updateProject(ctx: AppContext, id: string, patch: ProjectPatch): Project {
@@ -95,7 +95,11 @@ export function updateProject(ctx: AppContext, id: string, patch: ProjectPatch):
     const { options, ...rest } = patch;
     const values: Record<string, unknown> = { updated_at: now() };
     for (const [k, v] of Object.entries(rest)) if (v !== undefined) values[k] = v;
-    if (options) values.options = bookOptionsSchema.parse({ ...cur.options, ...options });
+    if (options) {
+      const { subjectArea, ...others } = options;
+      const merged = { ...cur.options, ...others, ...(subjectArea === undefined ? {} : { subjectArea: subjectArea ?? undefined }) };
+      values.options = bookOptionsSchema.parse(merged);
+    }
     ctx.db.update('projects', id, values);
     return getProject(ctx, id);
   });

@@ -52,6 +52,8 @@ export function RunView({ projectId }: { projectId: string }) {
   const run = detail.data ?? summary;
 
   useEffect(() => { if (picked && !list.some((r) => r.id === picked)) setPicked(null); }, [list, picked]);
+  // The list can show a run as finished while the open detail was fetched earlier. Polling stops with the list, so fetch the detail once more to get the final warnings.
+  useEffect(() => { if (summary && TERMINAL_RUN.has(summary.status) && detail.data && detail.data.status !== summary.status) void detail.refetch(); }, [summary?.status, detail.data?.status]);
 
   const refresh = () => {
     void qc.invalidateQueries({ queryKey: qk.runs(projectId) });

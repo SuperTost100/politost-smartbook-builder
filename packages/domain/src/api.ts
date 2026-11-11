@@ -3,7 +3,7 @@
 // Mutations require the header `x-smartbuilder: 1` (CSRF guard).
 import type {
   AlignmentReport, CourseProgram, ExamFormat, ProgramInput, ProgramItem,
-  Asset, BookOptions, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
+  Asset, BookOptions, BookOptionsPatch, ContentRevision, Enrichment, EvidencePacket, Outline, OutlineRevision, Page, Project,
   ProjectInput, ProjectSummary, Question, Resource, ResourceRole, ReviewIssue, RunSummary, Settings,
   SourceIndex, TaskRow, Topic, UsageRow, UsageSummary, Role,
 } from './index.ts';
@@ -87,7 +87,7 @@ export interface Api {
   'GET /api/projects': { res: ProjectSummary[] };
   'POST /api/projects': { body: ProjectInput; res: Project };
   'GET /api/projects/:id': { res: ProjectSummary };
-  'PATCH /api/projects/:id': { body: Partial<ProjectInput> & { options?: Partial<BookOptions> }; res: Project };
+  'PATCH /api/projects/:id': { body: Partial<Omit<ProjectInput, 'options'>> & { options?: BookOptionsPatch }; res: Project };
   'POST /api/projects/:id/archive': { res: Project };
   'DELETE /api/projects/:id': { res: { ok: true } };
 

@@ -32,7 +32,7 @@ function providerAdvice(p: ProviderStatus): { tone: 'success' | 'warning' | 'dan
       : { tone: 'warning', text: `${p.label} is not signed in. Sign in with its command line tool in a terminal on this computer, then press Check again.` };
   }
   if (p.error) return { tone: 'warning', text: `${p.label} answered with a problem: ${p.error}` };
-  if (p.limit) return { tone: 'warning', text: `${p.label} has reached its usage limit: ${p.limit} Roles that have a fallback use it until the limit resets${p.provider === 'claude' ? ', except in a book set to pause until Claude usage resets' : ''}.` };
+  if (p.limit) return { tone: 'warning', text: `${p.label} has reached its usage limit: ${p.limit} Roles that have a fallback use it until the limit resets${p.provider === 'claude' ? ', except in a book set to pause when Claude runs out, which waits for the reset' : ''}.` };
   if (p.signedIn === null) return { tone: 'warning', text: `${p.label} is installed, but sign-in could not be checked. Try a model test below.` };
   return { tone: 'success', text: `${p.label} is ready.` };
 }
@@ -48,7 +48,7 @@ export default function ConnectionsPage() {
   const [stopped, setStopped] = useState(false);
   const toast = useToast();
 
-  const check = async () => { setChecking(true); try { await conn.refetch(); } finally { setChecking(false); } };
+  const check = async () => { setChecking(true); try { await Promise.all([conn.refetch(), usage.refetch()]); } finally { setChecking(false); } };
   const stop = useMutation({
     mutationFn: () => api('POST /api/shutdown'),
     onSuccess: () => { setStopOpen(false); setStopped(true); },
@@ -80,15 +80,19 @@ export default function ConnectionsPage() {
       {conn.error && <div className="ui-banner ui-banner--danger" role="alert"><div className="ui-banner__body"><span className="ui-banner__title">Connections did not load</span><span>{errorText(conn.error)}</span></div></div>}
 
       {c && (
-        <>
-          <section aria-label="Providers" className="cn-cards">
-            {c.providers.map((p) => <ProviderCard key={p.provider} p={p} />)}
-            <NotebookCard nb={c.notebooklm} />
-            <LibreCard lo={c.libreoffice} />
-            <StockCard stock={c.stock} />
-          </section>
+        <section aria-label="Providers" className="cn-cards">
+          {c.providers.map((p) => <ProviderCard key={p.provider} p={p} />)}
+          <NotebookCard nb={c.notebooklm} />
+          <LibreCard lo={c.libreoffice} />
+          <StockCard stock={c.stock} />
+        </section>
+      )}
 
-          <UsageTable usage={usage.data} error={usage.error} labels={Object.fromEntries(c.providers.map((p) => [p.provider, p.label]))} />
+      {/* Usage comes from its own request, so it shows even when the provider check failed; a provider then goes by its id. */}
+      <UsageTable usage={usage.data} error={usage.error} labels={Object.fromEntries((c?.providers ?? []).map((p) => [p.provider, p.label]))} />
+
+      {c && (
+        <>
 
           {settings.data && <Routing connections={c} settings={settings.data} onSaved={(s) => qc.setQueryData(qk.settings, s)} />}
 
@@ -261,11 +265,18 @@ function UsageTable({ usage, error, labels }: { usage: UsageSummary | undefined;
               {usage.providers.length > 1 && <tfoot><UsageRow p={usage.total} labels={labels} /></tfoot>}
             </table>
           </div>
-          <p className="ui-field__hint">Failed calls include the timeouts, and leave out calls you stopped. A timeout is a call that ran past its time limit, and the count turns amber when it is more than 1 call in 100. Calls that did not report their cache, such as those made before the builder kept it, are left out of the cached share.</p>
+          <p className="ui-field__hint">Failed calls include the timeouts, and leave out calls you stopped. A timeout is a call that ran past its time limit, and the count turns amber when it is more than 1 call in 100. Token totals add up only the calls that reported a count, and a dash means none did. Calls that did not report their cache, such as those made before the builder kept it, are left out of the cached share.</p>
         </>
       )}
     </section>
   );
+}
+
+/** A token total. Null means no call reported the count, which is not the same as zero tokens. */
+function Tokens({ n }: { n: number | null }) {
+  return n === null
+    ? <td className="ui-num" title="No call reported this count."><span aria-hidden="true">–</span><span className="ui-sr">Not reported</span></td>
+    : <td className="ui-num" title={`${n.toLocaleString('en')} tokens`}>{compactCount(n)}</td>;
 }
 
 function UsageRow({ p, labels }: { p: ProviderUsage; labels: Record<string, string> }) {
@@ -276,11 +287,11 @@ function UsageRow({ p, labels }: { p: ProviderUsage; labels: Record<string, stri
     <tr>
       <th scope="row" className="cn-prov">{first}{second}</th>
       <td className="ui-num">{p.calls.toLocaleString('en')}</td>
-      <td className="ui-num" title={`${p.inputTokens.toLocaleString('en')} tokens`}>{compactCount(p.inputTokens)}</td>
+      <Tokens n={p.inputTokens} />
       <td>{share === null
         ? <span title="Not recorded: none of these calls reported how much input came from the cache."><span aria-hidden="true">–</span><span className="ui-sr">Not recorded</span></span>
         : <><span className="cn-bar" aria-hidden="true"><i style={{ width: `${share}%` }} /></span>{share}%</>}</td>
-      <td className="ui-num" title={`${p.outputTokens.toLocaleString('en')} tokens`}>{compactCount(p.outputTokens)}</td>
+      <Tokens n={p.outputTokens} />
       <td className="ui-num">{p.failed.toLocaleString('en')}</td>
       <td className={`ui-num${slow ? ' cn-warn-num' : ''}`}>{p.timeouts.toLocaleString('en')}</td>
     </tr>
@@ -341,7 +352,7 @@ function Routing({ connections, settings, onSaved }: { connections: ConnectionsR
     <>
       <section className="ui-card ui-card--pad cn-section" aria-label="Model routing">
         <div className="cn-section__head">
-          <div><h2 className="ui-panel-title">Model routing</h2><p className="ui-muted">Which model does each job. The fallback takes over when the primary is unavailable or out of quota. A book can choose to pause when Claude usage runs out instead, and that choice wins for that book.</p></div>
+          <div><h2 className="ui-panel-title">Model routing</h2><p className="ui-muted">Which model does each job. The fallback takes over when the primary is unavailable or out of quota. A book can choose to pause when Claude runs out. For that book the roles that start on Claude never use their fallback: a usage limit pauses the run until it resets, and any other failure is retried and then stops the task.</p></div>
           <span className={`cn-state${state === 'error' ? ' is-error' : ''}`} role="status" aria-live="polite">{state === 'saving' ? 'Saving…' : state === 'saved' ? 'Saved' : state === 'error' ? `Couldn't save — ${err}` : ''}</span>
         </div>
         <ul className="cn-roles">
