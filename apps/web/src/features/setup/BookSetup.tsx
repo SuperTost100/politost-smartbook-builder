@@ -12,7 +12,7 @@ import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
   outsideMaterial: false, ide: true, labLanguage: 'python', graphs: true, figures: true, firstChapterGate: true, outlineGate: true,
-  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete',
+  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete', figurePolicy: 'helpful', circuitSymbols: 'american',
 };
 
 type LangChoice = 'it' | 'en' | 'other';
