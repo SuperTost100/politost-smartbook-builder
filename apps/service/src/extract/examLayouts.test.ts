@@ -357,3 +357,31 @@ test('plainLines: a line of absolute values stays whole, the rows of a table wit
   assert.deepEqual(plainLines('| Cognome | Mario |\n|---|---|\n| Data | 12/02/2024 |'), ['Cognome', 'Mario', 'Data', '12/02/2024']);
   assert.deepEqual(plainLines('| x | + | y |\n\n| a | b |\n| :-- | --: |\n| c | d |'), ['| x | + | y |', 'a', 'b', 'c', 'd']);
 });
+
+// ---------- the header of the next paper is not the end of the last solution (acceptance run, part 2) ----------
+
+const ELETTROTECNICA_FILES = ['appelli-elettrotecnica-2024.md', 'appelli-elettrotecnica-2024.pdf', 'appelli-elettrotecnica-2024-v1-soluzioni-con-data.pdf'];
+
+for (const f of ELETTROTECNICA_FILES) {
+  test(`${f}: the last solution of the February paper ends with its own text, not with the header cells of the July paper`, async () => {
+    const k = makeCtx();
+    const id = await storeResource(k.ctx, k.projectId, { filename: f, bytes: readFileSync(new URL(`./testdata/${f}`, import.meta.url)), role: 'exams' });
+    await extractResource(k.ctx, id, new AbortController().signal);
+    const { rows } = splitQuestions(k.ctx, id);
+    assert.deepEqual(rows.map((r) => `${r.examGroup} #${r.number}`), ['Prova scritta del 12 febbraio 2024 #1', 'Prova scritta del 12 febbraio 2024 #2', 'Prova scritta del 3 luglio 2024 #1', 'Prova scritta del 3 luglio 2024 #2']);
+    const last = rows[1].solution;
+    assert.match(last, /45\s*(?:\^\\circ|°)\$?\.$/, last.slice(-80));
+    assert.doesNotMatch(last, /Corso|Elettrotecnica \(|Ingegneria|\bProva\b/);
+    for (const r of rows) assert.doesNotMatch(`${r.statement}\n${r.solution}`, /^(?:Corso|Prova|Matricola|Durata)$/m);
+    assert.match(rows[2].statement, /^Problema 1 \(12 punti\)/);
+  });
+}
+
+test('a solution that ends in short lines is cut only where the next paper\'s header table starts', () => {
+  const paper = (day: string) => ['Corso', 'Elettrotecnica (ING-IND/31)', 'Prova', `Prova scritta, Appello del ${day}`, 'Problema 1', 'Un circuito.', 'a) Calcolare la corrente.'];
+  const rows = segmentExams('r', pages([...paper('12 febbraio 2024'), 'Soluzioni', 'Problema 1.', 'a) I = 2 A.', 'Risposta:', '3,386 kHz', ...paper('3 luglio 2024')]), { label: 'x', untitled: true });
+  assert.equal(rows[0].solution, 'Problema 1.\na) I = 2 A.\nRisposta:\n3,386 kHz');
+  // A statement is cut the same way when the solutions are not printed after the paper.
+  const noSolutions = segmentExams('r', pages([...paper('12 febbraio 2024'), ...paper('3 luglio 2024')]), { label: 'x', untitled: true });
+  assert.equal(noSolutions[0].statement, 'Problema 1\nUn circuito.\na) Calcolare la corrente.');
+});
