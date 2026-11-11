@@ -6,7 +6,7 @@ import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type
 import { codeString } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 17;
+export const PROMPT_VERSION = 18;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -710,7 +710,8 @@ export const reviewSchema = z.object({
     sectionId: z.string(),
     quote: z.string().describe('verbatim text from the chapter that the issue points at, max 200 chars'),
     severity: z.enum(['blocker', 'major', 'minor']),
-    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'clarity', 'repetition', 'figure', 'language']),
+    // Style categories ("clarity", "repetition") are not offered any more. Issues stored with them still load and show: the stored category is a plain string.
+    category: z.enum(['correctness', 'missing-hypothesis', 'unsupported', 'coverage', 'notation', 'figure', 'language']),
     message: z.string(),
     suggestion: z.string(),
   })),
@@ -720,15 +721,17 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
   const lang = languageName(p.language);
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
-    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
+    system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, explanations that mislead, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
-Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that shows something wrong and a figure that adds nothing the text does not already say plainly. Use category "figure" and severity minor, or major for a figure that shows something wrong. Never report a missing figure: whether the section needs one is the writer's choice.
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text and a figure that shows something wrong. Use category "figure", severity major for a figure that shows something wrong and minor for a caption or label that is off. Never report a missing figure and never report a figure because it adds little: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Do not report those. Prefer fewer, solid issues to a long list of doubtful ones.
+
+Style is not your job. Do not report wording, tone, length, order of presentation, repetition or "could be clearer", at any severity.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -736,13 +739,13 @@ ${p.objectives}
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
 
-${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue, category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
+${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue (the one minor that is not about a wrong word), category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
-Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: everything else worth fixing. Return an empty list if the chapter is correct.`,
+Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: only a wrong word, symbol, unit or reference that could mislead a student (a symbol that differs from the one in the statement, a wrong unit, a link to the wrong formula); anything that is only style or could be said better is not an issue. Return an empty list if the chapter is correct.`,
   };
 }
 

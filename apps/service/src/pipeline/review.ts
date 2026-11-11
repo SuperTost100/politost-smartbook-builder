@@ -61,7 +61,7 @@ const notRealResolution = (reason: string) => `Second opinion: not a real proble
  */
 export interface ReviewResult {
   skipped?: boolean | string; reused?: boolean; reviewed?: string; mode?: string; full?: boolean; model?: string; verifier?: string;
-  issues?: number; dropped?: number; lowered?: number; checked?: boolean; rechecked?: number; skippedSettled?: number; outOfScope?: number; compileIssues?: number;
+  issues?: number; dropped?: number; lowered?: number; checked?: boolean; rechecked?: number; skippedSettled?: number; outOfScope?: number; minorsDropped?: number; compileIssues?: number;
 }
 
 export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<ReviewResult> {
@@ -165,7 +165,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
       text: sections.map(sectionText).join('\n\n'), evidence: sections.map((x) => sectionEvidence(x.s.id)).filter(Boolean).join('\n\n'), objectives: objectivesOf(chapter.sections), handled: handledFor(new Set(reviewNodes)),
       changes: full
         ? 'This is a full review: review all of the text.'
-        : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`,
+        : `SINCE THE LAST REVIEW only the passages below are new or rewritten. The rest of the chapter was reviewed before and is shown for context. Report only problems inside these passages, quoting them; anything else is ignored. Report only blockers and majors: a minor issue is dropped without being read, so do not spend words on one.\n\n${truncate(changedText, 60_000) || '(no changed passages)'}`,
     });
     model = call.route.model;
     raw.push(...call.data.issues);
@@ -176,10 +176,14 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const settled = ctx.db.all<{ node_id: string; quote: string }>(`SELECT node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('dismissed', 'accepted') AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
   let outOfScope = 0;
   let skippedSettled = 0;
+  let minorsDropped = 0;
   const candidates: Finding[] = [];
   for (const i of raw) {
     const nodeId = valid.has(i.sectionId) ? i.sectionId : chapterId;
     if (!full && !(nodeId !== chapterId && inChanged(nodeId, i.quote))) { outOfScope++; continue; }
+    // After the first review, text that was rewritten attracts new minor remarks on every pass, so the loop never ends:
+    // only blockers and majors count, and a minor never reaches the second opinion.
+    if (!full && i.severity === 'minor') { minorsDropped++; continue; }
     if (settled.some((x) => x.node_id === nodeId && sameQuote(x.quote, i.quote))) { skippedSettled++; continue; }
     candidates.push({ ...i, sectionId: nodeId });
   }
@@ -233,7 +237,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   ctx.events.emit('issue.created', { chapterId, count: opinion.kept.length }, { projectId, runId: t.task.runId });
   return {
     issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, checked: opinion.checked,
-    skippedSettled, outOfScope, mode, full, compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model,
+    skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode, full, compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model,
   };
 }
 

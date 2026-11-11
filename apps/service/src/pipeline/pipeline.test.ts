@@ -16,11 +16,11 @@ import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { patchPrompt } from './prompts.ts';
+import { patchPrompt, reviewSchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, rejectProposal, insertProposal, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, rejectProposal, insertProposal, listIssues, saveHuman, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -1334,7 +1334,7 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
 });
 
 describe('the review converges', () => {
-  const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'clarity', quote: 'Una frase.', message: 'Poco chiara', suggestion: 'Riscrivi', ...o });
+  const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'correctness', quote: 'Una frase.', message: 'Poco chiara', suggestion: 'Riscrivi', ...o });
   const review = () => chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1' }));
 
   test('the prompt carries decided and fixed issues and marks changed and unchanged sections', async () => {
@@ -1422,6 +1422,43 @@ describe('the review converges', () => {
     const second = await review();
     assert.equal(fake.calls.length, 1);
     assert.equal(second.issues, 0);
+  });
+
+  test('the first review reports minors, a review of changed text asks for blockers and majors and drops any minor before the second opinion', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.\n\nSimbolo sbagliato.');
+    fake.next(answer({ issues: [finding({ quote: 'Simbolo sbagliato.', severity: 'minor', message: 'Simbolo diverso dall\'enunciato' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'minor', reason: '' }] }));
+    const first = await review();
+    ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
+    assert.equal(first.issues, 1, 'the first review reports a minor');
+    assert.doesNotMatch(fake.calls[0].prompt, /Report only blockers and majors/);
+    assert.match(fake.calls[0].prompt, /Minor: only a wrong word, symbol, unit or reference that could mislead/);
+
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
+    seedRevision('s1', 'Una frase.\n\nSimbolo riscritto.\n\nNuovo passo.');
+    fake.next(answer({ issues: [
+      finding({ quote: 'Simbolo riscritto.', severity: 'minor', message: 'Minore' }),
+      finding({ quote: 'Nuovo passo.', severity: 'major', message: 'Maggiore' }),
+    ] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] }));
+    const second = await review();
+    assert.match(fake.calls[2].prompt, /Report only blockers and majors/);
+    assert.deepEqual([second.issues, second.minorsDropped], [1, 1]);
+    assert.match(fake.calls[3].prompt, /\[major\] "Nuovo passo\." Maggiore/);
+    assert.doesNotMatch(fake.calls[3].prompt, /Minore/);
+    // A full review keeps reporting everything.
+    fake.next(answer({ issues: [finding({ quote: 'Nuovo passo.', severity: 'minor', message: 'Minore ancora' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'minor', reason: '' }] }));
+    const full = await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', mode: 'full' }));
+    assert.equal(full.issues, 1);
+  });
+
+  test('the reviewer cannot raise the style categories, and issues stored with them still load', () => {
+    assert.equal(reviewSchema.safeParse({ issues: [{ sectionId: 's1', quote: 'q', severity: 'minor', category: 'clarity', message: 'm', suggestion: 's' }] }).success, false);
+    assert.equal(reviewSchema.safeParse({ issues: [{ sectionId: 's1', quote: 'q', severity: 'minor', category: 'repetition', message: 'm', suggestion: 's' }] }).success, false);
+    assert.equal(reviewSchema.safeParse({ issues: [{ sectionId: 's1', quote: 'q', severity: 'major', category: 'correctness', message: 'm', suggestion: 's' }] }).success, true);
+    seedOutline([['c1', ['s1']]]);
+    ctx.db.insert('review_issues', { id: 'old1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'clarity', quote: 'q', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    ctx.db.insert('review_issues', { id: 'old2', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'repetition', quote: 'q', message: 'm', suggestion: '', status: 'fixed', resolution: '', created_at: now() });
+    assert.deepEqual(listIssues(ctx, P).map((i) => i.category), ['clarity', 'repetition']);
   });
 
   test('Run review no longer forces: identical text is reused, changed text is read again', async () => {
