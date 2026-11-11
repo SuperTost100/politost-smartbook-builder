@@ -603,6 +603,8 @@ test('Escape keeps the draft while the section changed elsewhere and moves focus
   await expect(banner).toBeVisible();
   await expect(banner.getByRole('button', { name: 'Compare' })).toBeFocused();
   expect((await s2(request)).current.markdown).not.toContain('BOZZA-TENUTA');
+  // The long reason in the save status takes its own row instead of squeezing the section title into a narrow column.
+  expect((await page.locator('#ms-title').boundingBox())!.width).toBeGreaterThan(400);
   // The author still decides: discarding closes the editor.
   await banner.getByRole('button', { name: 'Discard my draft' }).click();
   await expect(page.locator('.ms-edit')).toHaveCount(0);
