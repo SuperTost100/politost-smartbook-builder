@@ -9,6 +9,7 @@ import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts
 import { FakeFunnel, makeCtx, seedPage, seedProject, seedResource, usageOf } from '../llm/testkit.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { deleteResource, listResources, updateResource } from '../repo/index.ts';
+import { authenticExtractPrompt, sessionExtractPrompt } from './prompts.ts';
 import { installFakes, projectBody, startApp, type TestApp } from '../routes/testkit.ts';
 import { splitExams } from '../extract/segment.ts';
 import { buildAiSplit, resourceSplit, splitMessage, type ExamSplitAnswer } from './examSplit.ts';
@@ -504,5 +505,16 @@ describe('a split asked for while Prepare runs', () => {
     assert.doesNotThrow(() => startRun(ctx, P, 'prepare', { splitResourceId: 'ex1' }));
     ctx.db.run(`UPDATE runs SET status = 'cancelled'`);
     await new Promise((r) => setImmediate(r));
+  });
+});
+
+describe('the exam readers tell the model to leave out heading lines', () => {
+  const SENTENCE = 'A statement and a solution carry the text only, without the heading line that names the exercise ("Problema 2.", "Esercizio 2") and without the word that opens the solutions ("Soluzioni", "Svolgimento").';
+
+  test('the session reader and the per-question reader both carry the sentence', () => {
+    const session = sessionExtractPrompt({ language: 'it', examGroup: 'Giugno', exercises: [{ number: '1', solutionText: '' }], pages: 'p' });
+    const single = authenticExtractPrompt({ language: 'it', examGroup: 'Giugno', number: '1', statementPages: 'p', solutionPages: 'p' });
+    assert.ok(session.prompt.includes(SENTENCE));
+    assert.ok(single.prompt.includes(SENTENCE));
   });
 });
