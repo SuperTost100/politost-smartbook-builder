@@ -121,9 +121,11 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   const route = { id: pid, nodeId, assetId: details.assetId };
 
   const captionField = useField(details.caption);
+  const altField = useField(details.alt);
   const showsField = useField(drawing?.shows ?? '');
   const sourceField = useField(drawing?.source ?? '');
   const { value: caption, set: setCaption } = captionField;
+  const { value: alt, set: setAlt } = altField;
   const { value: shows, set: setShows } = showsField;
   const { value: source, set: setSource } = sourceField;
   const [instruction, setInstruction] = useState('');
@@ -186,9 +188,13 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
   });
   const save = useMutation({
     mutationFn: () => api('PATCH /api/projects/:id/sections/:nodeId/figures/:assetId', {
-      params: route, body: { baseRevId: details.headRevId, ...(caption !== details.caption ? { caption } : {}), ...(drawing && shows !== drawing.shows ? { shows } : {}) },
+      params: route, body: { baseRevId: details.headRevId, ...(caption !== details.caption ? { caption } : {}), ...(alt !== details.alt ? { alt } : {}), ...(drawing && shows !== drawing.shows ? { shows } : {}) },
     }),
-    onSuccess: (sv) => { done(sv); toast('Figure saved'); onClose(); },
+    onSuccess: (sv) => {
+      done(sv); toast('Figure saved'); setError(null);
+      // A source the author has not rendered is not part of this save. Closing would drop it without the question, so the dialog stays.
+      if (unrendered) { setApplied(true); setSrcOpen(true); } else onClose();
+    },
     onError: (e) => setError(errorText(e)),
   });
   const replace = useMutation({
@@ -204,11 +210,14 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
 
   const rendering = render.isPending;
   const busy = rendering || redrawing || save.isPending || replace.isPending || remove.isPending;
-  const dirty = caption !== details.caption || (!!drawing && shows !== drawing.shows);
+  const dirty = caption !== details.caption || alt !== details.alt || (!!drawing && shows !== drawing.shows);
+  // The lint blocks an image without alt text, so an empty one is not saved.
+  const altMissing = !alt.trim();
   const unrendered = !!drawing && source !== drawing.source;
   // Someone else saved a field the author has edited: nothing is written until they choose which text stays.
   const conflicts = [
     { field: captionField, what: 'caption', code: false },
+    { field: altField, what: 'alt text', code: false },
     ...(drawing ? [{ field: showsField, what: 'description', code: false }, { field: sourceField, what: 'source', code: true }] : []),
   ].filter((c) => c.field.theirs !== null);
   const held = busy || conflicts.length > 0;
@@ -250,7 +259,7 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
             ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setRemoving(true)} disabled={busy}><Icon name="trash" />Remove figure</button>}
           </div>
           <button type="button" className="ui-btn" onClick={requestClose}>{applied ? 'Close' : 'Cancel'}</button>
-          <button type="button" className="ui-btn ui-btn--accent" onClick={() => save.mutate()} disabled={held || !dirty}>{save.isPending ? <><span className="ui-spinner" />Saving…</> : 'Save figure'}</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => save.mutate()} disabled={held || !dirty || altMissing}>{save.isPending ? <><span className="ui-spinner" />Saving…</> : 'Save figure'}</button>
         </>
       )}
     >
@@ -268,7 +277,7 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
           </div>
         </div>
       ))}
-      <p className="ui-field__hint fd-note">Render and Replace change the figure in the book at once, and the earlier one stays in the section history. A caption or description is saved with Save figure.</p>
+      <p className="ui-field__hint fd-note">Render and Replace change the figure in the book at once, and the earlier one stays in the section history. A caption, alt text or description is saved with Save figure.</p>
       <div className="fd-grid">
         <div className="fd-col">
           <div className={`sb-figure-frame fd-preview${rendering || showRedraw ? ' is-busy' : ''}${compileError ? ' is-stale' : ''}`}>
@@ -291,6 +300,12 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
             <label className="ui-field__label" htmlFor="fd-caption">Caption</label>
             <input id="fd-caption" className="ui-input" value={caption} onChange={(e) => setCaption(e.target.value)} disabled={redrawing} />
             <span className="ui-field__hint">{number && <><span className="fd-caption-id">Fig. {number}</span> is</>}{!number && 'The figure number is'} added in front of the caption automatically.{details.kind === 'photo' ? ' The credit line is part of the caption: keep it.' : ''}{!showCaption ? ' Without a caption the figure shows no text under it.' : ''}</span>
+          </div>
+
+          <div className="ui-field">
+            <label className="ui-field__label" htmlFor="fd-alt">Alt text</label>
+            <textarea id="fd-alt" className="ui-textarea fd-alt" rows={2} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={redrawing} aria-invalid={altMissing} aria-describedby="fd-alt-hint" />
+            <span id="fd-alt-hint" className={`ui-field__hint${altMissing ? ' fd-alt-missing' : ''}`}>{altMissing ? 'Alt text is needed: a figure without it does not pass the check. ' : ''}What a reader who cannot see the figure is told in its place.</span>
           </div>
 
           {drawing && (

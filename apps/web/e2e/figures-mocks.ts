@@ -11,11 +11,12 @@ const ago = (min: number) => new Date(Date.now() - min * 60_000).toISOString();
 
 const DRAWING_SVG = readFileSync(join(import.meta.dirname, 'fixtures', 'drawing.svg'), 'utf8');
 const FIG_CAPTION = 'Amplificatore invertente con resistenze R₁ e R₂.';
+export const FIG_ALT = 'Amplificatore operazionale con una resistenza in ingresso e una di retroazione.';
 const FIG_SHOWS = 'An inverting amplifier built around an op-amp. The input voltage Vin goes through resistor R1 to the inverting input, the feedback resistor R2 connects the output back to the inverting input, and the non-inverting input is grounded.';
 const FIG_SOURCE = ['#import "@preview/cetz:0.3.4": canvas, draw', '#import "@preview/zap:0.3.0": opamp, resistor, ground', '#set page(width: auto, height: auto, margin: 8pt)', '', '#canvas({', '  import draw: *', '  opamp("U1", (0, 0))', '  resistor("R1", (-5, 0.6), (-1.4, 0.6), label: $R_1$)', '  resistor("R2", (-3.2, 2.6), (1.6, 2.6), label: $R_2$)', '  ground((-1.4, -0.6))', '})'].join('\n');
 export const FIG_COMPILE_ERROR = 'error at line 9, column 31: unknown variable: Rf\n  9 |   resistor("R2", (-3.2, 2.6), (1.6, 2.6), label: $Rf$)';
 
-interface MockFigure { id: string; filename: string; caption: string; origin: 'generated-svg' | 'imported' | 'stock'; shows: string; source: string; createdAt: string }
+interface MockFigure { id: string; filename: string; caption: string; alt: string; origin: 'generated-svg' | 'imported' | 'stock'; shows: string; source: string; createdAt: string }
 
 export interface FigureMock {
   /** "METHOD path" of every write the page made, with its JSON body. */
@@ -33,8 +34,8 @@ export interface FigureMock {
   figures: () => MockFigure[];
   /** Ids the page asked for that the text no longer shows (the service answers 404 to them). */
   notFound: string[];
-  /** Another tab changes the figure the text shows now (a copy and a new head, as a save does), and this page is told. */
-  elsewhere: (change: { caption?: string; shows?: string; source?: string }) => void;
+  /** Another tab changes the figure the text shows now (a copy and a new head, as a save does), and this page is told unless `quiet`. */
+  elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string }, o?: { quiet?: boolean }) => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -42,7 +43,7 @@ export interface FigureMock {
 export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail?: boolean } = {}): Promise<FigureMock> {
   let n = 1;
   let headId = 'rvf1';
-  const figs = new Map<string, MockFigure>([['a1', { id: 'a1', filename: 'fig-opamp.svg', caption: FIG_CAPTION, origin: 'generated-svg', shows: FIG_SHOWS, source: FIG_SOURCE, createdAt: ago(40) }]]);
+  const figs = new Map<string, MockFigure>([['a1', { id: 'a1', filename: 'fig-opamp.svg', caption: FIG_CAPTION, alt: FIG_ALT, origin: 'generated-svg', shows: FIG_SHOWS, source: FIG_SOURCE, createdAt: ago(40) }]]);
   // Block texts of the section; an entry that is a figure id is that figure's block.
   let blocks: string[] = ['### Amplificatore invertente', 'Poiché la tensione tra i due morsetti è nulla (massa virtuale), la corrente in $R_1$ vale $V_{in}/R_1$.', 'fig:a1', 'Ne segue la relazione tra uscita e ingresso:'];
   let pending: { kind: 'redraw'; id: string; shows?: string } | { kind: 'draw'; afterBlock: number; caption: string } | null = null;
@@ -52,34 +53,34 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
   const gate = new Promise<void>((r) => { release = r; });
   const fm: FigureMock = {
     writes: [], notFound: [], renderMs: 0, runStatus: 'running', runError: '', stale: false, putMs: 0, head: () => headId, figures: () => [...figs.values()],
-    elsewhere: (change) => {
+    elsewhere: (change, opts) => {
       const id = [...figs.keys()].find((k) => blocks.includes(`fig:${k}`))!;
       swap(id, change);
-      release();
+      if (!opts?.quiet) release();
     },
     complete: () => {
       fm.runStatus = 'completed';
       if (pending?.kind === 'redraw') swap(pending.id, { source: `${figs.get(pending.id)!.source}\n// redrawn`, ...(pending.shows ? { shows: pending.shows } : {}) });
       if (pending?.kind === 'draw') {
         const id = `a${++n}`;
-        figs.set(id, { id, filename: `drawn-${n}.svg`, caption: pending.caption, origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
+        figs.set(id, { id, filename: `drawn-${n}.svg`, caption: pending.caption, alt: 'Schema', origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
         blocks.splice(pending.afterBlock + 1, 0, `fig:${id}`); newHead();
       }
       pending = null;
     },
   };
 
-  const src = (f: MockFigure) => `:::image{src="assets/${f.filename}" alt="Schema" caption="${f.caption}"}\n:::`;
+  const src = (f: MockFigure) => `:::image{src="assets/${f.filename}" alt="${f.alt}" caption="${f.caption}"}\n:::`;
   const markdown = () => blocks.map((b) => (b.startsWith('fig:') ? src(figs.get(b.slice(4))!) : b)).join('\n\n');
-  const compiled = () => ['## p1 | Definizione di limite', ...blocks.map((b, i) => (b.startsWith('fig:') ? `:::image{src="assets/${figs.get(b.slice(4))!.filename}" alt="Schema" caption="Fig. 1.${i} — ${figs.get(b.slice(4))!.caption}"}\n:::` : b))].join('\n\n');
+  const compiled = () => ['## p1 | Definizione di limite', ...blocks.map((b, i) => (b.startsWith('fig:') ? `:::image{src="assets/${figs.get(b.slice(4))!.filename}" alt="${figs.get(b.slice(4))!.alt}" caption="Fig. 1.${i} — ${figs.get(b.slice(4))!.caption}"}\n:::` : b))].join('\n\n');
   const sectionView = () => ({
     chapterId: 'c1', sectionId: 's1', title: 'Definizione di limite', proposal: null, evidence: null, issues: [], compiled: compiled(),
     current: { id: headId, projectId: 'p1', nodeId: 's1', kind: 'section', markdown: markdown(), origin: 'human', model: null, parentRevId: null, status: 'current', citations: {}, createdAt: ago(1) },
   });
   const newHead = () => { headId = `rvf${++n}`; };
-  const assetRows = () => [...figs.values()].map((f) => ({ id: f.id, projectId: 'p1', nodeId: 's1', filename: f.filename, mime: 'image/svg+xml', origin: f.origin, spec: f.origin === 'generated-svg' ? { kind: 'drawing', engine: 'typst', source: f.source, shows: f.shows, family: 'circuit', symbols: 'european' } : null, caption: f.caption, alt: 'Schema', checks: [], createdAt: f.createdAt }));
+  const assetRows = () => [...figs.values()].map((f) => ({ id: f.id, projectId: 'p1', nodeId: 's1', filename: f.filename, mime: 'image/svg+xml', origin: f.origin, spec: f.origin === 'generated-svg' ? { kind: 'drawing', engine: 'typst', source: f.source, shows: f.shows, family: 'circuit', symbols: 'european' } : null, caption: f.caption, alt: f.alt, checks: [], createdAt: f.createdAt }));
   const details = (f: MockFigure) => ({
-    assetId: f.id, filename: f.filename, kind: f.origin === 'generated-svg' ? 'drawing' : f.origin === 'stock' ? 'photo' : 'image', caption: f.caption, alt: 'Schema', createdAt: f.createdAt,
+    assetId: f.id, filename: f.filename, kind: f.origin === 'generated-svg' ? 'drawing' : f.origin === 'stock' ? 'photo' : 'image', caption: f.caption, alt: f.alt, createdAt: f.createdAt,
     drawing: f.origin === 'generated-svg' ? { shows: f.shows, engine: 'typst', source: f.source, family: 'circuit' } : null, headRevId: headId, redrawRunId: null,
   });
   const run = (status: string) => ({ id: 'r-fig', projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: [] });
@@ -130,9 +131,9 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       write(fig[2] === 'replace' ? { name: 'upload' } : b);
       if (fm.stale) return stale();
       if (method === 'PATCH') {
-        // A caption or description change is a copy of the figure and a new revision, as in the service.
-        if ((b.caption !== undefined && b.caption !== f.caption) || (b.shows !== undefined && b.shows !== f.shows)) {
-          swap(f.id, { caption: b.caption ?? f.caption, shows: b.shows ?? f.shows, createdAt: f.createdAt });
+        // A caption, alt text or description change is a copy of the figure and a new revision, as in the service.
+        if ((b.caption !== undefined && b.caption !== f.caption) || (b.alt !== undefined && b.alt !== f.alt) || (b.shows !== undefined && b.shows !== f.shows)) {
+          swap(f.id, { caption: b.caption ?? f.caption, alt: b.alt ?? f.alt, shows: b.shows ?? f.shows, createdAt: f.createdAt });
         }
         return json(sectionView());
       }
@@ -158,7 +159,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       if (fm.stale) return stale();
       const at = Number(/name="afterBlock"\r\n\r\n(\d+)/.exec(request.postData() ?? '')?.[1] ?? 0);
       const id = `a${++n}`;
-      figs.set(id, { id, filename: `upload-${n}.svg`, caption: 'Schema del circuito di prova', origin: 'imported', shows: '', source: '', createdAt: new Date().toISOString() });
+      figs.set(id, { id, filename: `upload-${n}.svg`, caption: 'Schema del circuito di prova', alt: 'Schema', origin: 'imported', shows: '', source: '', createdAt: new Date().toISOString() });
       blocks.splice(at + 1, 0, `fig:${id}`); newHead();
       return json(sectionView());
     }
@@ -172,7 +173,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       const b = body(); write(b);
       if (fm.stale) return stale();
       const id = `a${++n}`;
-      figs.set(id, { id, filename: `photo-${n}.jpg`, caption: `${b.caption || 'Una scheda'}. Foto: Ada / Wikimedia Commons, CC BY 4.0`, origin: 'stock', shows: '', source: '', createdAt: new Date().toISOString() });
+      figs.set(id, { id, filename: `photo-${n}.jpg`, caption: `${b.caption || 'Una scheda'}. Foto: Ada / Wikimedia Commons, CC BY 4.0`, alt: 'Schema', origin: 'stock', shows: '', source: '', createdAt: new Date().toISOString() });
       blocks.splice(Number(b.afterBlock) + 1, 0, `fig:${id}`); newHead();
       return json(sectionView());
     }

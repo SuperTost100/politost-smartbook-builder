@@ -495,6 +495,18 @@ describe('history notes', () => {
     assert.equal(note(afterReplace.id), 'Figure "Nuova didascalia": the drawing was replaced with an image');
     assert.equal(note(afterRemove.id), 'Figure "Nuova didascalia" removed');
   });
+
+  it('says an alt text changed, also on an uploaded image, where a new copy with the same caption is otherwise a replacement', async () => {
+    const s = await seed();
+    const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
+    await t.req('POST', url(s, `/${s.drawn}/replace`), form.payload, form.headers);
+    const afterReplace = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: afterReplace.id, alt: 'Una foto della scheda' });
+    const afterAlt = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    assert.equal(history.find((r) => r.id === afterAlt.id)?.figureNote, 'Figure "Un cerchio": alt text changed');
+  });
 });
 
 describe('a figure is changed only through its section', () => {

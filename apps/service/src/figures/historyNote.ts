@@ -26,10 +26,11 @@ export function figureNote(before: string, after: string, assets: Map<string, As
   const was1 = drawingSpec(old);
   const is1 = drawingSpec(now);
   if (was1 && !is1) return `${label(old)}: the drawing was replaced with an image`;
-  // An image's caption is the only thing a copy of it can change, so a new image with the same caption is a replacement.
-  if (!was1 && !is1 && now.caption === old.caption) return `${label(old)}: the image was replaced`;
+  // The caption and the alt text are all a copy of an image can change, so a new image with both unchanged is a replacement.
+  if (!was1 && !is1 && now.caption === old.caption && now.alt === old.alt) return `${label(old)}: the image was replaced`;
   const parts: string[] = [];
   if (now.caption !== old.caption) parts.push(`caption changed to ${quote(now.caption.trim(), 60)}`);
+  if (now.alt !== old.alt) parts.push('alt text changed');
   if (was1 && is1) {
     if (is1.shows !== was1.shows) parts.push('description changed');
     if (is1.source !== was1.source) parts.push(o.origin === 'ai' ? `redrawn${o.instruction ? `: ${quote(o.instruction, 80)}` : ''}` : 'source rendered');
