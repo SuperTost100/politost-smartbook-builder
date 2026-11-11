@@ -77,14 +77,14 @@ export function SourceEditor({ value, onChange, onSave, onCancel, label, autoFoc
 }
 
 /** Live KaTeX preview of source-dialect text, with plain-language formula errors. */
-export function LivePreview({ source, label = 'Preview' }: { source: string; label?: string }) {
+export function LivePreview({ source, label = 'Preview', resolveAsset }: { source: string; label?: string; resolveAsset?: (src: string) => string | undefined }) {
   const text = useDebounced(source, 120);
   const prepared = prepareSnippet(previewSource(text));
   const errors = findMathErrors(text);
   return (
     <div className="se-preview" aria-label={label}>
       <div className="ui-meta se-preview__label">{label}</div>
-      {text.trim() ? <ContentFlow content={prepared.content} formulaIndex={formulaMap(prepared.formulas)} /> : <p className="ui-muted">Nothing to preview yet.</p>}
+      {text.trim() ? <ContentFlow content={prepared.content} formulaIndex={formulaMap(prepared.formulas)} resolveAsset={resolveAsset} /> : <p className="ui-muted">Nothing to preview yet.</p>}
       {errors.length > 0 && (
         <ul className="se-errors" role="alert">
           {errors.map((e, i) => <li key={i}><code>{e.tex}</code>: {e.message}</li>)}

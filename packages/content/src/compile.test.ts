@@ -340,6 +340,22 @@ test('figure captions lose LaTeX and get chapter numbers', async () => {
   assert.equal(latexToPlain('$x^{10} = o(x^2)$'), 'x¹⁰ = o(x²)');
 });
 
+test('figure captions turn bare x_n and x^n notation into Unicode subscripts and superscripts', async () => {
+  const { captionToPlain } = await import('./plaintext.ts');
+  assert.equal(captionToPlain('E_n = -R_h/n^2'), 'Eₙ = -Rₕ/n²');
+  assert.equal(captionToPlain('Struttura di NCO^-'), 'Struttura di NCO⁻');
+  assert.equal(captionToPlain('Orbitali σ_1s e σ*_1s'), 'Orbitali σ₁ₛ e σ*₁ₛ');
+  assert.equal(captionToPlain('Rapporto e/m_e'), 'Rapporto e/mₑ');
+  assert.equal(captionToPlain('Il rapporto ΔH_vap/R'), 'Il rapporto ΔHᵥₐₚ/R');
+  assert.equal(captionToPlain('Costante 10^-3 e $x^2$'), 'Costante 10⁻³ e x²');
+  assert.equal(captionToPlain('un nome_file resta'), 'un nome_file resta', 'a subscript with letters Unicode lacks stays as written');
+  assert.equal(captionToPlain('Decadimento e^-x e potenza x^-n'), 'Decadimento e⁻ˣ e potenza x⁻ⁿ');
+  assert.equal(captionToPlain('Curva e^-kt'), 'Curva e^-kt', 'an exponent that cannot be converted whole stays as written');
+  assert.equal(captionToPlain('Glucosio C_6H_12O_6 e concentrazione [A]_0'), 'Glucosio C₆H₁₂O₆ e concentrazione [A]₀');
+  assert.equal(captionToPlain('Termometro. Foto: Anna_123 / Wikimedia Commons'), 'Termometro. Foto: Anna_123 / Wikimedia Commons', 'a user name in a credit is not a subscript');
+  assert.equal(captionToPlain('Da plot_1.png e https://example.org/a_1'), 'Da plot_1.png e https://example.org/a_1');
+});
+
 test('links into chapters left out of an export become plain text with a minor finding', async () => {
   const { compileBook } = await import('./compile.ts');
   const book = compileBook({

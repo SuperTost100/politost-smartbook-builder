@@ -1,4 +1,4 @@
-import { latexToPlain } from './plaintext.ts';
+import { captionToPlain, latexToPlain } from './plaintext.ts';
 import { isValidAssetPath, validateBundle, withChapterFrontmatter } from '@politost/content-core';
 import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
@@ -401,7 +401,7 @@ function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string)
       const meta = src ? env.assetMeta?.[src] : undefined;
       const rawCaption = meta?.caption?.trim() ? meta.caption : (attrs.caption ?? '');
       const rawAlt = meta?.alt?.trim() ? meta.alt : (attrs.alt ?? '');
-      const caption = latexToPlain(rawCaption).replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
+      const caption = captionToPlain(rawCaption).replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
       out.push('', `:::image{src="${src ?? ''}" alt="${latexToPlain(rawAlt)}"${caption ? ` caption="Fig. ${number}.${n} — ${caption}"` : ''}}`);
       i++;
       continue;
