@@ -448,6 +448,28 @@ test.describe('review findings of the figure dialog', () => {
     const dialog = page.getByRole('dialog', { name: /^Figure/ });
     await expect(dialog.getByRole('alert')).toContainText('The asset list could not be read.', { timeout: 15_000 });
     await expect(dialog.getByRole('status', { name: 'Loading the figure' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Try again' })).toBeVisible();
+  });
+
+  test('a figure whose picture is not among the book\'s figures says so', async ({ page }) => {
+    await open(page);
+    // The list loads, but without the picture this block names.
+    await page.route(/\/api\/projects\/p1\/assets$/, (route) => route.fulfill({ status: 200, contentType: 'application/json', body: '[]' }));
+    await page.reload();
+    await figureBlock(page).click();
+    await page.locator('.ms-actions').getByRole('button', { name: 'Edit figure' }).click();
+    const dialog = page.getByRole('dialog', { name: /^Figure/ });
+    await expect(dialog.getByRole('alert')).toContainText('The picture of this figure is not among the book', { timeout: 15_000 });
+    await expect(dialog.getByRole('status', { name: 'Loading the figure' })).toHaveCount(0);
+  });
+
+  test('Redraw with AI needs a description', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Instruction for the redraw').fill('Draw it again');
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeEnabled();
+    await dialog.getByLabel('What it shows').fill('   ');
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeDisabled();
   });
 
   test('browser Back to another section closes the dialog', async ({ page }) => {

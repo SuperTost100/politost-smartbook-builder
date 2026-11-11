@@ -80,12 +80,17 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   const title = `Figure${number ? ` ${number}` : ''}`;
   if (!open) return null;
   if (details.data) return <FigureEditor key={nodeId} details={details.data} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
-  const gone = !!section && !filename && !!headId;
+  // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
+  const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
+  const failed = details.error ?? assets.error;
+  const retry = () => { void assets.refetch(); if (asset) void details.refetch(); };
   return (
     <Dialog open onClose={onClose} title={title} footer={<button type="button" className="ui-btn" onClick={onClose}>Close</button>}>
-      {gone || details.error || assets.error
-        ? <div className="ui-banner ui-banner--warning" role="alert">{details.error || assets.error ? errorText(details.error ?? assets.error) : 'This figure is not in the section any more.'}</div>
-        : <div className="ui-skeleton" style={{ height: 220 }} role="status" aria-label="Loading the figure" />}
+      {failed
+        ? <div className="ui-banner ui-banner--warning" role="alert">{errorText(failed)} <button type="button" className="ui-btn ui-btn--link" onClick={retry}>Try again</button></div>
+        : gone
+          ? <div className="ui-banner ui-banner--warning" role="alert">{filename ? 'The picture of this figure is not among the book\'s figures any more.' : 'This figure is not in the section any more.'}</div>
+          : <div className="ui-skeleton" style={{ height: 220 }} role="status" aria-label="Loading the figure" />}
     </Dialog>
   );
 }
@@ -278,10 +283,10 @@ function FigureEditor({ details, pid, nodeId, title, number, onClose }: { detail
                     {runId && <button type="button" className="ui-btn ui-btn--sm" onClick={() => cancelRedraw.mutate()} disabled={cancelRedraw.isPending}>Cancel</button>}
                   </div>
                 ) : (
-                  <form className="fd-redraw__row" onSubmit={(e) => { e.preventDefault(); if (instruction.trim()) redraw.mutate(); }}>
+                  <form className="fd-redraw__row" onSubmit={(e) => { e.preventDefault(); if (instruction.trim() && shows.trim()) redraw.mutate(); }}>
                     <label className="ui-sr" htmlFor="fd-instr">Instruction for the redraw</label>
                     <input id="fd-instr" className="ui-input" placeholder="Move the labels off the wires" value={instruction} onChange={(e) => setInstruction(e.target.value)} disabled={busy} />
-                    <button type="submit" className="ui-btn" disabled={busy || !instruction.trim()}><Icon name="sparkle" size={14} />Redraw with AI</button>
+                    <button type="submit" className="ui-btn" disabled={busy || !instruction.trim() || !shows.trim()}><Icon name="sparkle" size={14} />Redraw with AI</button>
                   </form>
                 )}
                 {failure && (
