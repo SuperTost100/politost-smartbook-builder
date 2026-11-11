@@ -1,5 +1,5 @@
-import { useMemo } from 'react';
-import { Link, useNavigate, useParams } from 'react-router-dom';
+import { useEffect, useMemo } from 'react';
+import { Link, useLocation, useNavigate, useParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { preprocessContent } from '@politost/content-core';
 import { api, errorText } from '../../lib/api';
@@ -16,6 +16,7 @@ export default function PreviewPage() {
   const pid = useBookId();
   const { chapterId } = useParams();
   const navigate = useNavigate();
+  const { hash } = useLocation();
   const ms = useManuscript(pid);
   const chapters = ms.data ?? [];
   const idx = chapters.findIndex((c) => c.chapterId === chapterId);
@@ -25,6 +26,18 @@ export default function PreviewPage() {
   const q = useQuery({ queryKey: qk.preview(pid, chapterId ?? ''), queryFn: () => api('GET /api/projects/:id/chapters/:chapterId/preview', { params: { id: pid, chapterId: chapterId! } }), enabled: !!chapterId });
   const parsed = useMemo(() => (q.data ? parseCompiledChapter(q.data.markdown, q.data.number) : null), [q.data]);
   const assets = q.data?.assets;
+
+  // A section link in the text is a button carrying "chapter/<number>#p<n>". Same chapter: scroll to it. Another chapter: open it at that section.
+  const onRefClick = (e: React.MouseEvent) => {
+    const ref = (e.target as HTMLElement).closest<HTMLElement>('[data-ref]')?.dataset.ref;
+    const m = ref ? /^chapter\/(\d+)#(p\d+)$/.exec(ref) : null;
+    const target = m ? chapters.find((c) => c.number === Number(m[1])) : undefined;
+    if (!m || !target) return;
+    if (target.chapterId === chapterId) document.getElementById(m[2])?.scrollIntoView();
+    else navigate(`/books/${pid}/preview/${target.chapterId}#${m[2]}`);
+  };
+  // Opening a chapter at a section: the text is there only once it has loaded.
+  useEffect(() => { if (parsed && hash) document.getElementById(hash.slice(1))?.scrollIntoView(); }, [parsed, hash]);
 
   const first = chapter?.sections[0]?.sectionId;
   const prev = chapters[idx - 1];
@@ -55,7 +68,7 @@ export default function PreviewPage() {
             <section key={para.id} id={para.id} className="paragraph-section">
               <h2 className="sb-phead"><span className="sb-phead-num">{para.id}</span><span>{para.title}</span></h2>
               <div className="paragraph-body">
-                <ContentFlow content={preprocessContent(para.content)} formulaIndex={parsed.index} resolveAsset={(src) => resolveAssetFrom(assets, src)} />
+                <ContentFlow content={preprocessContent(para.content)} formulaIndex={parsed.index} resolveAsset={(src) => resolveAssetFrom(assets, src)} onRefClick={onRefClick} />
               </div>
             </section>
           ))}

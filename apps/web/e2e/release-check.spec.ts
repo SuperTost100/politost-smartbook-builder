@@ -141,3 +141,33 @@ test.describe('a figure block', () => {
     await expect(page.locator('.ms-edit .cm-content')).toContainText(':::image');
   });
 });
+
+test.describe('reader preview', () => {
+  const filler = Array.from({ length: 40 }, (_, i) => `Paragrafo di riempimento numero ${i + 1}, abbastanza lungo da occupare una riga intera della pagina.`).join('\n\n');
+  const chapter1 = `## p1 | Primo paragrafo\n\nSi veda il [secondo paragrafo](ref:chapter/1#p2) e il [paragrafo sulle derivate](ref:chapter/2#p2).\n\n${filler}\n\n## p2 | Secondo paragrafo\n\nQui arriva chi segue il collegamento.`;
+  const chapter2 = `## p1 | Prima derivata\n\nTesto.\n\n${filler}\n\n## p2 | Retta tangente\n\nQui arriva chi cambia capitolo.`;
+
+  async function openPreview(page: Page) {
+    await mockApi(page);
+    await page.route(/\/chapters\/c1\/preview$/, (route) => route.fulfill({ json: { markdown: chapter1, number: 1, assets: {} } }));
+    await page.route(/\/chapters\/c2\/preview$/, (route) => route.fulfill({ json: { markdown: chapter2, number: 2, assets: {} } }));
+    await page.goto('/books/p1/preview/c1');
+    await expect(page.getByRole('button', { name: 'secondo paragrafo' })).toBeVisible();
+  }
+
+  test('a link to another section of the chapter scrolls to it', async ({ page }) => {
+    await openPreview(page);
+    await expect(page.locator('#p2')).not.toBeInViewport();
+    await page.getByRole('button', { name: 'secondo paragrafo' }).click();
+    await expect(page.locator('#p2')).toBeInViewport();
+    await expect(page).toHaveURL(/\/preview\/c1$/);
+  });
+
+  test('a link to a section of another chapter opens that chapter at the section', async ({ page }) => {
+    await openPreview(page);
+    await page.getByRole('button', { name: 'paragrafo sulle derivate' }).click();
+    await expect(page).toHaveURL(/\/preview\/c2/);
+    await expect(page.getByRole('heading', { name: 'Calcolo differenziale' })).toBeVisible();
+    await expect(page.locator('#p2')).toBeInViewport();
+  });
+});
