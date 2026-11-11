@@ -371,6 +371,7 @@ ${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "fig
 INSTRUCTIONS
 - Cover the objectives in a logical order: motivation, definitions, results with hypotheses. When the section teaches a method or a computation, add at least one fully worked example and a typical-mistake box (${p.language === 'it' ? '"Errore tipico"' : '"Common mistake"'}); when it does not, leave both out. Use ### subsections for the planned subsections.
 - Never add sentences to reach a length: say what the objectives need and stop.
+- The book never mentions its sources or what they contain: never write "the notes", "the material provided" or "the evidence", and never say that something is or is not in them.
 - After each paragraph or block that relies on a note, add its marker, e.g. [[n3]] or [[n3,n7]], at the end of the paragraph. Every definition, theorem and formula taken from the sources needs a marker.
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `

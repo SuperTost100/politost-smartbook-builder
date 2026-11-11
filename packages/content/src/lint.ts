@@ -173,6 +173,10 @@ const META_PATTERNS: MetaPattern[] = [
   { test: re(/\bsource text\b|\boriginal text (?:has|was) been\b/i), why: 'mentions the "source text"' },
   { test: re(/^\s*(?:\*\*)?(?:Note|Nota)(?:\*\*)?\s*:\s*(?:I\b|I'|this (?:version|text|rewrite)|the (?:source|original) text|ho\b|il testo|questa versione|le formule numerate|i blocchi)/i), why: 'note addressed to the user' },
   { test: re(/\bvincoli strutturali dello Smartbook\b|\bil paragrafo inizia con l'intestazione\b/i), why: 'commentary on the format rules' },
+  // The writer talking to the reader about the author's notes ("non riportato nelle note"): the reader has no notes, and a gap is for the alignment check.
+  { test: re(/\b(?:riportat|present|contenut|citat|trattat|inclus|indicat|menzionat|fornit|coper)\w*(?:\s+\w+){0,3}\s+(?:nelle|dalle|nei|dai|negli|dagli|nel|dal)\s+(?:note|appunti|materiale|materiali|dispense|fonti|evidenze|evidenza)\b(?!\s+(?:a\s+pi[eè]|a\s+margine|di\s+(?:pagina|chiusura)))/i), why: 'tells the reader what its sources contain' },
+  { test: re(/\b(?:materiale|materiali|evidenza|evidenze|appunti|note|fonti)\s+(?:fornit[oaie]|a\s+disposizione)\b|\b(?:secondo|dalle|nelle|negli)\s+(?:le\s+)?(?:note|appunti)\s+(?:del\s+corso|fornit\w+)\b/i), why: 'tells the reader what its sources contain' },
+  { test: re(/\b(?:the|these)\s+(?:provided|supplied|given|course)\s+(?:notes|material|materials|sources|evidence)\b|\b(?:not|n't)\s+(?:\w+\s+){0,2}(?:covered|included|mentioned|stated|given|provided|reported|contained|present)\s+in\s+the\s+(?:notes|material|materials|sources|evidence)\b/i), why: 'tells the reader what its sources contain' },
 ];
 
 const META_INLINE_CODE = /`[^`]*(?:## p\d+|:::formula|:::exercise|\{\{formula)[^`]*`/;

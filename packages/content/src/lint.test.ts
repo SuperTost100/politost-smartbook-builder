@@ -102,6 +102,35 @@ test('literal-escape: question text is linted too, which is what the export vali
 
 // ---- meta-leak (F-04) --------------------------------------------------------------------
 
+test('meta-leak: a sentence that tells the reader what the author\'s notes contain is a blocker', () => {
+  for (const c of [
+    // Both sentences are from the first section of the acceptance run.
+    "Questo segue da $v_C = -R\\,i$, ed è un risultato standard non riportato nelle note.",
+    "Questi valori sono conseguenze elementari dell'esponenziale e non sono riportati come tali nelle note.",
+    'La formula vale in generale, ma non è presente negli appunti del corso.',
+    'Il risultato non è contenuto nel materiale fornito.',
+    'Qui si usa il materiale fornito per ricavare la costante.',
+    "Secondo l'evidenza fornita la costante vale 3.",
+    'This result is standard and not covered in the notes.',
+    'The provided material does not state the value of the constant.',
+    'As the supplied notes say, the time constant is RC.',
+  ]) {
+    const f = find(`Testo.\n\n${c}`, 'meta-leak');
+    assert.ok(f, c);
+    assert.equal(f!.severity, 'blocker', c);
+    assert.match(f!.message, /sources/);
+  }
+  for (const c of [
+    'Le note musicali di un diapason hanno una frequenza precisa.',
+    'Come indicato nelle note a piè di pagina del manuale, il valore cambia.',
+    'Il materiale del condensatore è ceramico, e il materiale isolante tra le armature è il dielettrico.',
+    'Le fonti di tensione ideali non hanno resistenza interna.',
+    'La corrente è riportata nella figura e presente nel ramo centrale.',
+    'The notes of a scale follow a geometric progression in frequency.',
+    'An ideal source supplies a fixed voltage.',
+  ]) assert.equal(find(`Testo.\n\n${c}`, 'meta-leak'), undefined, c);
+});
+
 test('meta-leak: model commentary is flagged as blocker', () => {
   const cases = [
     '### Sintesi del lavoro svolto',

@@ -372,6 +372,15 @@ describe('no padding, and examples only where they teach', () => {
     assert.equal(all.match(/Never add sentences to reach a length/g)?.length, 1);
   });
 
+  test('the writer is told once, in the static part of the prompt, never to speak of its sources to the reader', () => {
+    const rule = /The book never mentions its sources or what they contain: never write "the notes", "the material provided" or "the evidence", and never say that something is or is not in them\./;
+    const a = draftPrompt(input('standard'));
+    assert.match(a.system, rule);
+    assert.equal(a.system.match(/never mentions its sources/g)?.length, 1);
+    assert.doesNotMatch(a.prompt, /never mentions its sources/);
+    assert.equal(draftPrompt({ ...input('brief', 'en'), outside: true, section: { id: 'x', title: 'Y', objectives: ['p'], depth: 'brief', subsections: '' } }).system.match(rule)?.length, 1, 'the same text for every section and book');
+  });
+
   test('the length ranges are the same as before', () => {
     for (const [depth, range] of [['brief', '400-800'], ['standard', '800-1500'], ['deep', '1200-2200']]) assert.match(draftPrompt(input(depth)).prompt, new RegExp(`Depth: ${depth} \\(about ${range} words\\)`));
   });
