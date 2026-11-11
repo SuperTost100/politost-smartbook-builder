@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { useBlocker } from 'react-router-dom';
 import { splitBlocks } from '@smartbuilder/content/blocks';
 import type { FigureDetails, FigureKindName, SectionView } from '@smartbuilder/domain';
 import { api, apiUrl, ApiRequestError, errorText } from '../../lib/api';
@@ -225,7 +226,19 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
     ...(drawing ? [{ field: showsField, what: 'description', code: false }, { field: sourceField, what: 'source', code: true }] : []),
   ].filter((c) => c.field.theirs !== null);
   const held = busy || conflicts.length > 0;
-  const requestClose = () => { if (dirty || unrendered) setLeaving(true); else onClose(); };
+  const unsaved = dirty || unrendered;
+  const requestClose = () => { if (unsaved) setLeaving(true); else onClose(); };
+  // Leaving the page (reload, closing the tab) cannot wait for a question: the browser asks. A move inside the app (browser Back) gets the dialog's own question.
+  useEffect(() => {
+    if (!unsaved) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ''; };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [unsaved]);
+  const blocker = useBlocker(({ currentLocation, nextLocation }) => unsaved && currentLocation.pathname !== nextLocation.pathname);
+  useEffect(() => { if (blocker.state === 'blocked') setLeaving(true); }, [blocker.state]);
+  const keepEditing = () => { setLeaving(false); if (blocker.state === 'blocked') blocker.reset(); };
+  const discard = () => { if (blocker.state === 'blocked') blocker.proceed(); else onClose(); };
   const errLine = errorLineOf(compileError);
   const preview = apiUrl('GET /api/assets/:assetId/file', { params: { assetId: details.assetId } });
   const showCaption = caption.trim();
@@ -248,8 +261,8 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
       footer={leaving ? (
         <>
           <div className="fd-foot-l"><span role="alert">Discard your changes to this figure?</span></div>
-          <button type="button" className="ui-btn" onClick={() => setLeaving(false)} autoFocus>Keep editing</button>
-          <button type="button" className="ui-btn ui-btn--danger-solid" onClick={onClose}>Discard</button>
+          <button type="button" className="ui-btn" onClick={keepEditing} autoFocus>Keep editing</button>
+          <button type="button" className="ui-btn ui-btn--danger-solid" onClick={discard}>Discard</button>
         </>
       ) : (
         <>

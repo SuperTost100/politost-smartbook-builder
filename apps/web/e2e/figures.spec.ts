@@ -194,6 +194,68 @@ test.describe('figure dialog, edits that must not be lost', () => {
   });
 });
 
+test.describe('figure dialog, leaving the page with unsaved edits', () => {
+  test('a reload or closing the tab asks first while a field or the source is unsaved, and not otherwise', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    // Nothing typed: the page leaves without a question.
+    let asked = 0;
+    page.on('dialog', (d) => { if (d.type() === 'beforeunload') asked++; void d.dismiss(); });
+    const prompt = async () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+    expect(await prompt()).toBe(false);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    expect(await prompt()).toBe(true);
+    // The source typed but not rendered counts too.
+    await dialog.getByLabel('Caption').fill('Amplificatore invertente con resistenze R₁ e R₂.');
+    expect(await prompt()).toBe(false);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    expect(await prompt()).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  test('a save or a discard takes the prompt away again', async ({ page }) => {
+    await open(page);
+    let dialog = await openDialog(page);
+    const prompt = async () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+    await dialog.getByLabel('Caption').fill('Didascalia salvata');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    expect(await prompt()).toBe(false);
+    dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia scartata');
+    expect(await prompt()).toBe(true);
+    await page.keyboard.press('Escape');
+    await dialog.getByRole('button', { name: 'Discard' }).click();
+    await expect(dialog).toBeHidden();
+    expect(await prompt()).toBe(false);
+  });
+
+  test('browser Back with unsaved edits asks the discard question and stays on the section until the author chooses', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('smartbuilder.theme', 'light'));
+    await mockApi(page);
+    await mockFigureApi(page);
+    await page.goto('/books/p1/manuscript/s2');
+    await expect(page.locator('.ms-block').first()).toBeVisible();
+    // A move the app makes itself (the outline rail), so Back is a move the router knows about.
+    await page.locator('.ms-rail').getByRole('link', { name: /Definizione di limite/ }).click();
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await expect(page.locator('.ms-block', { has: page.locator('.sb-figure') })).toBeVisible();
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    await page.goBack();
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await page.goBack();
+    await dialog.getByRole('button', { name: 'Discard' }).click();
+    await expect(page).toHaveURL(/manuscript\/s2$/);
+    await expect(dialog).toBeHidden();
+  });
+});
+
 test.describe('figure dialog, alt text', () => {
   const saveButton = (dialog: ReturnType<Page['locator']>) => dialog.getByRole('button', { name: 'Save figure' });
   const patches = (fm: FigureMock) => fm.writes.filter((w) => w.call.startsWith('PATCH')).map((w) => w.body);
