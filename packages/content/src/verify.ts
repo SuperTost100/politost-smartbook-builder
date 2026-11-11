@@ -8,11 +8,30 @@ function isRange(v: unknown): v is [number, number] {
   return Array.isArray(v) && v.length === 2 && v.every((n) => typeof n === 'number' && Number.isFinite(n)) && (v[0] as number) < (v[1] as number);
 }
 
+/** A sampled plotly graph, as `sampleFunctionGraph` writes it: the same rules, read back from the arrays. */
+function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: string } {
+  const data = cfg.data;
+  if (!Array.isArray(data) || data.length === 0) return { ok: false, detail: 'config.data must hold at least one curve' };
+  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { yaxis?: { range?: unknown } };
+  const view = isRange(layout.yaxis?.range) ? layout.yaxis.range : null;
+  const problems: string[] = [];
+  for (const [i, t] of data.entries()) {
+    const ys = (t as { y?: unknown } | null)?.y;
+    const name = `data[${i}]`;
+    if (!Array.isArray(ys) || ys.length === 0) { problems.push(`${name}: y must be a non-empty array`); continue; }
+    const finite = ys.filter((y): y is number => typeof y === 'number' && Number.isFinite(y));
+    if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain`);
+    else if (view && !finite.some((y) => y >= view[0] && y <= view[1])) problems.push(`${name}: never enters the visible range [${view[0]}, ${view[1]}]`);
+  }
+  if (problems.length) return { ok: false, detail: problems.join('; ') };
+  return { ok: true, detail: `Checked ${data.length} curve(s): all defined and visible.` };
+}
+
 /** Checks for graph payloads: evaluates fn over the domain with the reader's expression rules. */
 export function checkFunctionGraph(payload: Record<string, unknown>): { ok: boolean; detail: string } {
   // Accept a whole GraficoConfig ({ type, config }) or just its config.
   const cfg = (payload.config && typeof payload.config === 'object' ? payload.config : payload) as Record<string, unknown>;
-  if (payload.type === 'plotly') return { ok: true, detail: 'plotly graph: nothing to evaluate' };
+  if (payload.type === 'plotly') return checkPlotlyGraph(cfg);
   if (payload.type !== undefined && payload.type !== 'function') return { ok: false, detail: `unknown graph type "${String(payload.type)}"` };
 
   const fns = cfg.functions;

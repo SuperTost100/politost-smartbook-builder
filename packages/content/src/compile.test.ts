@@ -535,3 +535,16 @@ test('an unclosed $$ in a section does not turn the rest of the chapter into mat
   assert.equal((markdown.match(/\$\$/g) ?? []).length % 2, 0, 'the preview has paired $$');
   assert.ok(markdown.includes('Dopo la formula.'));
 });
+
+test('a graph or lab example whose check failed stays out of the export and is reported', () => {
+  const bad = enrichment({ id: 'g-bad', kind: 'graph', nodeId: 'sec-vel', status: 'issue', payload: { id: 'rotto', title: 'Grafico rotto', type: 'plotly', config: { data: [], layout: {} } } });
+  const badIde = enrichment({ id: 'i-bad', kind: 'ide', nodeId: 'sec-vel', status: 'issue', payload: { id: 'ide-rotto', title: 'Esempio rotto', language: 'python', code: 'x' } });
+  const draft = enrichment({ id: 'g-draft', kind: 'graph', nodeId: 'sec-acc', status: 'draft', payload: { id: 'bozza', title: 'Bozza', type: 'plotly', config: { data: [], layout: {} } } });
+  const book = compileBook(fixtureBook({ enrichments: [bad, badIde, draft] }));
+  assert.deepEqual(JSON.parse(text(book, 'grafici.json')).map((g: { id: string }) => g.id), ['bozza']);
+  assert.deepEqual(JSON.parse(text(book, 'ide.json')), []);
+  const skipped = book.findings.filter((f) => f.rule === 'extra-excluded');
+  assert.equal(skipped.length, 2);
+  assert.match(skipped.map((f) => f.message).join(' '), /Grafico rotto/);
+  assert.ok(skipped.every((f) => f.severity === 'major'));
+});

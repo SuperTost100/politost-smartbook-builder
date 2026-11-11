@@ -684,10 +684,16 @@ export function compileBook(input: BookInput): CompiledBook {
     const s = sectionNumbers[nodeId];
     return s ? s.chapter * 10000 + s.paragraph : Number.POSITIVE_INFINITY;
   };
+  // An extra whose check failed does not ship. The author sees it here and fixes or deletes it in Extras.
+  for (const e of input.enrichments) {
+    if (e.status !== 'issue') continue;
+    const title = typeof e.payload.title === 'string' ? e.payload.title : e.id;
+    findings.push(finding('extra-excluded', 'major', e.kind === 'ide' ? 'ide.json' : 'grafici.json', `The ${e.kind === 'ide' ? 'lab example' : 'graph'} "${title}" failed its check and is left out of the export. Fix it in Extras or delete it.`, undefined, title));
+  }
   const payloads = (kind: 'ide' | 'graph') =>
     input.enrichments
       .map((e, i) => ({ e, i }))
-      .filter(({ e }) => e.kind === kind)
+      .filter(({ e }) => e.kind === kind && e.status !== 'issue')
       .sort((a, b) => orderOf(a.e.nodeId) - orderOf(b.e.nodeId) || a.i - b.i)
       .map(({ e }) => e.payload);
   if (wanted.ide) files['ide.json'] = `${JSON.stringify(payloads('ide').map(plainLabText), null, 2)}\n`;

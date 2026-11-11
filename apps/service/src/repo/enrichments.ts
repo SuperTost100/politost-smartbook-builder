@@ -1,3 +1,4 @@
+import { checkFunctionGraph } from '@smartbuilder/content';
 import type { Enrichment } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -25,10 +26,17 @@ export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'cr
   return getEnrichment(ctx, id);
 }
 
-/** An edited payload has not been checked yet, so it goes back to 'draft'. */
+/**
+ * An edited graph goes through the numeric check again and becomes 'verified' or 'issue', like a generated one.
+ * A lab example is not run here (that needs the sandbox), so it goes back to 'draft'.
+ * shortcut: an edited lab example ships unchecked, upgrade by running checkLabCode from the route.
+ */
 export function updateEnrichmentPayload(ctx: AppContext, id: string, payload: Record<string, unknown>): Enrichment {
   const cur = getEnrichment(ctx, id);
-  ctx.db.update('enrichments', id, { payload, status: 'draft', checks: [] });
+  const checked = cur.kind === 'graph' ? checkFunctionGraph(payload) : null;
+  ctx.db.update('enrichments', id, checked
+    ? { payload, status: checked.ok ? 'verified' : 'issue', checks: [{ method: 'numeric', ok: checked.ok, detail: checked.detail }] }
+    : { payload, status: 'draft', checks: [] });
   ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: cur.nodeId }, { projectId: cur.projectId });
   return getEnrichment(ctx, id);
 }

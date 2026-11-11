@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { checkFunctionGraph, numericallyEqual } from './verify.ts';
+import { checkFunctionGraph, numericallyEqual, sampleFunctionGraph } from './verify.ts';
 
 const graph = (functions: unknown[], xDomain: unknown = [-2, 2], yDomain: unknown = [-1, 5]) => ({
   id: 'g', title: 'G', type: 'function', config: { functions, xDomain, yDomain },
@@ -49,7 +49,7 @@ test('checkFunctionGraph: structural problems', () => {
   assert.equal(checkFunctionGraph(graph([{ fn: 'x' }], 'a')).ok, false);
   assert.equal(checkFunctionGraph(graph([{ fn: 'x' }], [0, 1], [3, 1])).ok, false);
   assert.equal(checkFunctionGraph(graph([{ nofn: true }])).ok, false);
-  assert.equal(checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data: [], layout: {} } }).ok, true);
+  assert.equal(checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data: [], layout: {} } }).ok, false, 'a plotly graph with no curve is a failure');
   assert.equal(checkFunctionGraph({ type: 'surface', config: {} }).ok, false);
 });
 
@@ -110,4 +110,17 @@ test('sampleFunctionGraph turns functions the reader cannot evaluate into plotly
   assert.ok(hyper.y.includes(null), 'discontinuity at 0 breaks the line');
   const bad = sampleFunctionGraph({ id: 'b', title: 'B', functions: [{ expr: 'import("fs")', label: 'x' }], xDomain: [0, 1], yDomain: [0, 1], xLabel: 'x', yLabel: 'y' });
   assert.equal(bad.ok, false);
+});
+
+test('checkFunctionGraph checks a sampled plotly graph like the generator does', () => {
+  const spec = { id: 'g', title: 'G', functions: [{ expr: 'x^2', label: 'f' }], xDomain: [0, 2] as [number, number], yDomain: [0, 4] as [number, number], xLabel: 'x', yLabel: 'y' };
+  const good = sampleFunctionGraph(spec).payload;
+  assert.equal(checkFunctionGraph(good).ok, true);
+  assert.equal(checkFunctionGraph({ ...good, config: { ...good.config, data: [] } }).ok, false, 'no curve');
+  const trace = good.config.data[0] as Record<string, unknown>;
+  const flat = { ...good, config: { ...good.config, data: [{ ...trace, y: (trace.y as number[]).map(() => 100) }] } };
+  assert.match(checkFunctionGraph(flat).detail, /never enters/);
+  const holes = { ...good, config: { ...good.config, data: [{ ...trace, y: (trace.y as number[]).map(() => null) }] } };
+  assert.equal(checkFunctionGraph(holes).ok, false, 'undefined everywhere');
+  assert.equal(checkFunctionGraph({ id: 'g', title: 'G', type: 'plotly', config: 'x' }).ok, false);
 });
