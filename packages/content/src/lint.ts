@@ -187,7 +187,8 @@ export const LATEX_COMMAND_N_T = /^\\(?:nu|neq?|nabla|ni|notin|not|nless|ngtr|nl
 
 // -- unicode math ------------------------------------------------------------------------------
 
-const UNICODE_MATH =
+/** The characters the unicode-math rule flags in prose. Exported so that the repair guard in patch.ts reads the same set. */
+export const UNICODE_MATH =
   /[Ͱ-Ͽἀ-῿←-⇿∀-⋿⟀-⟯⦀-⧿⨀-⫿⃐-⃿ℂℏℑℓℕℚℜℝℤℵ×÷±]/gu;
 const UNIT_SYMBOLS = new Set(['Ω', 'μ', 'Ω', 'µ']);
 
