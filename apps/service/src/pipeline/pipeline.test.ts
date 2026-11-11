@@ -686,6 +686,56 @@ describe('5. enrichment: pick once, one child task per extra', () => {
   });
 });
 
+describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
+  const graph = { id: 'g1', title: 'Grafico', description: 'd', functions: [{ fn: 'x^2', label: 'f' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
+  const off = { ...graph, yDomain: [10, 20] };
+  const failing = async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno.');
+    fake.next(answer(off));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
+    return { enrichment: ctx.db.get<{ id: string }>(`SELECT id FROM enrichments`)!.id, issue: ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE source = 'verification'`)!.id };
+  };
+
+  test('the redraw replaces the failing graph only when the new one passes, and then closes the issue', async () => {
+    const { enrichment, issue } = await failing();
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM enrichments')!.status, 'issue', 'the failed graph is stored with a verification issue, as the issue describes');
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] })), { skipped: 'routed', routed: { graphs: 1 } });
+    assert.equal(fake.calls.length, 1, 'the text writer is not asked');
+    const input = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%'`)!.input, {});
+    assert.deepEqual([input.force, input.replaceId, input.issueIds], [true, enrichment, [issue]]);
+    assert.match(String(input.purpose), /failed its check[\s\S]*never enters the visible range/);
+
+    // The redraw fails again: the old graph stays, no second graph and no second issue appear, the reason is shown.
+    fake.next(answer(off));
+    await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.match(fake.calls[1].prompt, /failed its check/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 1);
+    assert.equal(ctx.db.all(`SELECT 1 FROM review_issues`).length, 1);
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues')!.resolution, /redrawn but failed its check again: .*never enters the visible range/);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
+
+    fake.next(answer(graph));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', input)), { made: 1, replaced: true });
+    const rows = ctx.db.all<{ id: string; status: string }>('SELECT id, status FROM enrichments').map((r) => ({ ...r }));
+    assert.deepEqual(rows, [{ id: enrichment, status: 'verified' }]);
+    assert.deepEqual({ ...ctx.db.get<Record<string, unknown>>('SELECT status, resolution FROM review_issues') }, { status: 'fixed', resolution: 'The graph was redrawn and passes its check.' });
+  });
+
+  test('an issue whose failing graph is gone, or passes now, closes without a model call', async () => {
+    const { enrichment, issue } = await failing();
+    ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
+    assert.deepEqual(r, { skipped: 'nothing requested' });
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual({ ...ctx.db.get<Record<string, unknown>>('SELECT status, resolution FROM review_issues') }, { status: 'fixed', resolution: 'The graph passes its check now.' });
+    ctx.db.run(`UPDATE review_issues SET status = 'open'`);
+    ctx.db.run('DELETE FROM enrichments');
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
+    assert.equal(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues')!.resolution, 'The graph that failed its check is no longer in the book.');
+  });
+});
+
 describe('2. figure files are scoped to their section', () => {
   const plot = (expr: string) => ({ xRange: [-1, 1], yRange: [-1, 1], xLabel: null, yLabel: null, functions: [{ expr, label: null, domain: null, style: null }], points: null, asymptotes: null });
   const draft = (expr: string) => ({
@@ -1990,10 +2040,11 @@ describe('chemistry figures: structures and photos', () => {
     assert.equal(ctx.db.get<{ status: string }>(`SELECT status FROM review_issues WHERE id = 'g1'`)!.status, 'fixed');
   });
 
-  test('a fix can add a missing figure; an image block pointing at nothing is removed', async () => {
+  test('a fix for a problem with an existing figure can add another; an image block pointing at nothing is removed', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
-    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: "L'ammoniaca ha una coppia solitaria.", message: 'Manca la struttura', suggestion: 'Struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now() });
+    const old = ':::image{src="assets/vecchia.svg" alt="Vecchia" caption="Figura vecchia"}\n:::';
+    seedRevision('s1', `L'ammoniaca ha una coppia solitaria.\n\n${old}\n\nAltro.`);
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'figure', quote: 'Figura vecchia', message: "La figura non mostra l'ammoniaca", suggestion: 'Aggiungere la struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now() });
     fake.next(patchAnswer({
       figures: [fig({ key: 'nh3', caption: "Struttura di Lewis dell'ammoniaca", alt: 'Ammoniaca', structure: { smiles: 'N', style: 'lewis', lonePairs: true, formula: 'NH3' } })],
       changes: [{ block: 0, text: "L'ammoniaca ha una coppia solitaria.\n\n:::image{src=\"assets/nh3.svg\" alt=\"a\" caption=\"c\"}\n:::\n\n:::image{src=\"assets/inventata.svg\" alt=\"a\" caption=\"c\"}\n:::" }],
@@ -2041,6 +2092,60 @@ describe('figures pass: figures for written sections, text untouched', () => {
     assert.deepEqual(origins, ['diagram', 'structure']);
     assert.match(fake.calls[0].system ?? '', /you do not change it/);
     assert.match(fake.calls[1].prompt, /passage: L'ammoniaca ha una coppia solitaria\.\n\nLa reazione libera calore\.\nafter the figure: Fine\./);
+  });
+
+  describe('Auto Fix sends an issue that asks for a missing figure to this pass (issue 36)', () => {
+    const missing = (o: Record<string, unknown> = {}) => ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: "L'ammoniaca ha una coppia solitaria.", message: 'Manca la struttura', suggestion: 'Struttura di Lewis di NH3', status: 'open', resolution: '', created_at: now(), ...o });
+    const state = () => ({ ...ctx.db.get<{ status: string; resolution: string }>(`SELECT status, resolution FROM review_issues WHERE id = 'f1'`)! });
+
+    test('the issue text is the brief, the text writer is not asked, and the issue closes when the figure lands', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
+      missing();
+      const fix = startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] });
+      assert.deepEqual(await sectionRevise(ctx, fix), { skipped: 'routed', routed: { figures: 1 } });
+      assert.equal(fake.calls.length, 0, 'no text fix is requested');
+      const child = ctx.db.get<{ id: string; input: string }>(`SELECT id, input FROM tasks WHERE kind = 'section.figures'`)!;
+      const input = json<{ nodeId: string; issueIds: string[]; brief: string }>(child.input, {} as never);
+      assert.deepEqual([input.nodeId, input.issueIds], ['s1', ['f1']]);
+      assert.match(input.brief, /Manca la struttura[\s\S]*Suggested: Struttura di Lewis di NH3/);
+      assert.deepEqual(ctx.db.all<{ dep_id: string }>('SELECT dep_id FROM task_deps WHERE task_id = ?', child.id).map((d) => d.dep_id), [fix.task.id], 'it starts after the text fix');
+      assert.equal(state().status, 'open', 'nothing is closed before the figure lands');
+
+      fake.next(answer({ figures: [fig({})], noFigureReason: null }), answer(keepAll(1)));
+      const r = await sectionFigures(ctx, startTask('section.figures', input));
+      assert.equal(r.added, 1);
+      assert.match(fake.calls[0].prompt, /A REVIEW FOUND A FIGURE MISSING[\s\S]*Manca la struttura/);
+      assert.match(state().resolution, /^Figure added by the figures pass in revision /);
+      assert.equal(state().status, 'fixed');
+    });
+
+    test('when the pass proposes none, or the section is full, the issue stays open with the reason', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', "L'ammoniaca ha una coppia solitaria.\n\nAltro.");
+      missing();
+      const input = { nodeId: 's1', issueIds: ['f1'], brief: 'Manca la struttura' };
+      fake.next(answer({ figures: [], noFigureReason: 'Il testo non descrive nulla di visibile.' }));
+      await sectionFigures(ctx, startTask('section.figures', input));
+      assert.deepEqual(state(), { status: 'open', resolution: 'No figure was added: Il testo non descrive nulla di visibile.' });
+
+      const full = [1, 2, 3].map((n) => `:::image{src="assets/f${n}.svg" alt="a" caption="c${n}"}\n:::`).join('\n\n');
+      ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1'`);
+      seedRevision('s1', `Testo.\n\n${full}`);
+      await sectionFigures(ctx, startTask('section.figures', input));
+      assert.match(state().resolution, /^No figure was added: the section already has 3 figures/);
+    });
+
+    test('an issue about an existing figure, one that quotes its caption, stays with the text fix', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', `${'Il lavoro è proporzionale allo spostamento. '.repeat(10)}\n\n:::image{src="assets/f1.svg" alt="a" caption="Una retta"}\n:::`);
+      missing({ quote: 'Una retta', message: 'Il grafico ripete il testo.' });
+      fake.next(patchAnswer({ changes: [{ block: 1, text: '' }] }), answer(checkGood([1])));
+      const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
+      assert.equal(r.routed, undefined);
+      assert.equal(ctx.db.all(`SELECT 1 FROM tasks WHERE kind = 'section.figures'`).length, 0);
+      assert.equal(state().status, 'fixed');
+    });
   });
 
   test('a figure the check drops, or one placed after a block that does not exist, is left out with a note', async () => {
@@ -2209,8 +2314,8 @@ describe('figures are checked where they are born', () => {
 
   test('a fix for a figure problem carries the figure rules and the check drops a decorative figure it adds', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Testo uno.');
-    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Testo uno.', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
+    seedRevision('s1', 'Testo uno.\n\n:::image{src="assets/vecchio.svg" alt="Vecchio" caption="Grafico vecchio"}\n:::');
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Grafico vecchio', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
     fake.next(
       patchAnswer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno corretto.\n\n${img('a')}` }] }),
       answer(verdict(false)), answer(checkGood([0])),
@@ -2219,7 +2324,7 @@ describe('figures are checked where they are born', () => {
     assert.match(fake.calls[0].system ?? '', /Add a figure only when a problem or the author's instruction asks for one[\s\S]*- plot:/);
     assert.equal(r.status, 'current');
     assert.deepEqual(r.figureProblems, ['a: dropped by the check (Ripete il testo.)']);
-    assert.equal(current('s1'), 'Testo uno corretto.');
+    assert.equal(current('s1'), 'Testo uno corretto.\n\n:::image{src="assets/vecchio.svg" alt="Vecchio" caption="Grafico vecchio"}\n:::');
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
   });
 

@@ -3,6 +3,7 @@ import { sampleFunctionGraph } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
+import { setIssuesStatus } from '../repo/issues.ts';
 import type { TaskContext, TaskSpec } from '../queue/queue.ts';
 import { runMatlab } from './matlab.ts';
 import { runPython } from './python.ts';
@@ -80,7 +81,25 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
     id: g.data.id, title: g.data.title, xDomain: g.data.xDomain, yDomain: g.data.yDomain, xLabel: g.data.xLabel, yLabel: g.data.yLabel,
     functions: g.data.functions.map((f) => ({ expr: f.fn, label: f.label })),
   });
-  saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }]);
+  const checks = [{ method: 'numeric', ok: sampled.ok, detail: `${g.data.description}\n${sampled.detail}` }];
+  // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
+  // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
+  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
+  if (issueIds.length) {
+    if (!sampled.ok) {
+      setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
+      return { made: 0, failed: sampled.detail };
+    }
+    const replaceId = t.task.input.replaceId as string | undefined;
+    const old = replaceId ? ctx.db.get('SELECT id FROM enrichments WHERE id = ?', replaceId) : undefined;
+    if (old) {
+      ctx.db.update('enrichments', replaceId!, { payload: sampled.payload, status: 'verified', checks });
+      ctx.events.emit('enrichment.updated', { enrichmentId: replaceId, nodeId, kind: 'graph' }, { projectId });
+    } else saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+    setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
+    return { made: 1, replaced: !!old };
+  }
+  saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
   return { made: 1 };
 }
 

@@ -5,6 +5,7 @@ import { bookFigureList, bookFigures, buildFigures, commitFigures, discardUnstor
 import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { currentHead } from '../repo/content.ts';
+import { setIssuesStatus } from '../repo/issues.ts';
 import type { TaskContext } from '../queue/queue.ts';
 import { relint } from '../routes/views.ts';
 import { commitAiRevision } from './draft.ts';
@@ -17,7 +18,24 @@ const MAX_FIGURES = 3;
 
 const IMAGE_SRC = /^:::image\{[^}]*src="assets\/([^"]+)"/;
 
+/**
+ * The figures pass for one section. When Auto Fix routed review issues here (`issueIds` and a `brief` in the input), the
+ * issue text is the brief, and the issues close as fixed only when a figure landed. Otherwise they stay open with the reason.
+ */
 export async function sectionFigures(ctx: AppContext, t: TaskContext) {
+  const result = await figuresPass(ctx, t);
+  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
+  if (issueIds.length) {
+    const r = result as { revId?: string; status?: string; added?: number; skipped?: string; noFigureReason?: string; figureProblems?: string[] };
+    const landed = !!r.revId && (r.added === undefined || r.added > 0);
+    if (!landed) setIssuesStatus(ctx, t.task.projectId, issueIds, 'open', `No figure was added: ${r.skipped ?? r.noFigureReason ?? (r.figureProblems?.length ? r.figureProblems.join('; ') : 'the figures pass proposed none')}`);
+    else if (r.status === 'current') setIssuesStatus(ctx, t.task.projectId, issueIds, 'fixed', `Figure added by the figures pass in revision ${r.revId}`);
+    else setIssuesStatus(ctx, t.task.projectId, issueIds, 'proposed', `Proposal ${r.revId}`);
+  }
+  return result;
+}
+
+async function figuresPass(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
   const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
@@ -46,6 +64,7 @@ export async function sectionFigures(ctx: AppContext, t: TaskContext) {
       language: project.language, bookTitle: project.title, chapterTitle: found.chapter.title, sectionTitle: found.section.title,
       blocks: truncate(blocks.map((b, i) => `[${i + 1}] ${b.text}`).join('\n\n'), 60_000),
       existing: assets.map((a) => `${a.origin}: ${a.caption}`).join('; '), room, figures: setup, elsewhere: bookFigureList(bookFigures(ctx, projectId, nodeId)),
+      brief: typeof t.task.input.brief === 'string' ? t.task.input.brief : undefined,
     }),
     schema: figuresPassSchemaFor(setup), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });

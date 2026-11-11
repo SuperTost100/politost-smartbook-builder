@@ -931,7 +931,7 @@ export const figuresPassSchemaFor = (figures: FigureSetup) => z.object({
 });
 
 /** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
-export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string }) {
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string; brief?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
@@ -945,11 +945,11 @@ Figures the section already has: ${p.existing || '(none)'}
 ${p.elsewhere ? `Figures other sections already show (the book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption):\n${p.elsewhere}\n` : ''}
 TEXT, numbered by block:
 ${p.blocks}
-
+${p.brief ? `\nA REVIEW FOUND A FIGURE MISSING. What it asks for:\n${p.brief}\nDesign the figures that answer it. When no figure fits the text, return none and say why in one sentence.\n` : ''}
 INSTRUCTIONS
 - Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
 - Every number, species, label and direction in a figure must match the text exactly.
-- Return JSON: figures, noFigureReason (leave null).`,
+- Return JSON: figures, noFigureReason (${p.brief ? 'null, or why you propose no figure' : 'leave null'}).`,
   };
 }
 

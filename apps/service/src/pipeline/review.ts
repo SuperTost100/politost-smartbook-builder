@@ -2,7 +2,7 @@
 import { applyGuardedChanges, compileChapter, dropReferences, lintSection, MIN_KEPT_SHARE, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
 import { outlineSchema, subjectProfileOf, type EvidenceNote } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
-import { countOpenSerious, issuesChanged } from '../repo/issues.ts';
+import { countOpenSerious, issuesChanged, setIssuesStatus } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
@@ -264,7 +264,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
  * issues is applied as the current text when the guards and the cheap check allow it and the head did not change meanwhile;
  * otherwise it waits as a proposal. Changes that would damage the section are dropped and their issues stay open.
  */
-export interface ReviseResult { resolved?: number; revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean; figureProblems?: string[] }
+export interface ReviseResult { routed?: { figures?: number; graphs?: number }; resolved?: number; revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean; figureProblems?: string[] }
 
 /** Program issues about thin coverage or a missing proof ask the fix to add material; every other fix stays minimal. */
 const adds = (i: { category: string }) => i.category === 'program-thin' || i.category === 'program-proof';
@@ -283,6 +283,49 @@ function citedNotes(blocks: string[], issues: { quote: string }[]): Set<string> 
   return ids;
 }
 
+/** The block is an image block (:::image). */
+const isImageBlock = (b: string) => /^\s*:::image\{/.test(b);
+
+/**
+ * A figure issue asks for a figure that is not there when its quote is not inside an existing image block (a caption or alt
+ * text), or when it has no quote and the section has no image at all. Issues about an existing figure (it does not match the
+ * text, it is useless) stay with the text fix, which may rewrite or delete the image block.
+ * shortcut: a mismatch issue that quotes a paragraph instead of the caption is taken for a missing figure, upgrade by
+ * asking the reviewer for an explicit "missing" flag on figure issues.
+ */
+function asksForFigure(i: { category: string; quote: string }, blocks: string[]): boolean {
+  if (i.category !== 'figure') return false;
+  if (i.quote.trim()) return !blocks.some((b) => isImageBlock(b) && quoteInBlock(i.quote, b));
+  return !blocks.some(isImageBlock);
+}
+
+/**
+ * Sends the issues the text writer cannot fix to the tasks that can, as tasks of the same run that start after this one
+ * (the text fix goes first, so the figures pass reads the new text). Each task closes its issues when its result lands, or
+ * leaves them open with the reason. A graph issue whose failing graph is gone, or passes now, closes here with no model call.
+ */
+function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title: string; figures: { id: string; quote: string; message: string; suggestion: string }[]; graphs: { id: string; quote: string; message: string }[] }): ReviseResult['routed'] | undefined {
+  const { projectId } = t.task;
+  const out: NonNullable<ReviseResult['routed']> = {};
+  if (p.figures.length) {
+    const brief = p.figures.map((i, n) => `${n + 1}. ${i.message}${i.quote ? ` (at: "${cut(i.quote, 200)}")` : ''}${i.suggestion ? ` Suggested: ${i.suggestion}` : ''}`).join('\n');
+    t.enqueue([{ kind: 'section.figures', key: `fixfig:${t.task.id}`, label: `Add the missing figure to "${p.title}"`, input: { nodeId: p.nodeId, issueIds: p.figures.map((i) => i.id), brief }, pool: 'writer', maxAttempts: 2, deps: [t.task.id] }]);
+    out.figures = p.figures.length;
+  }
+  if (p.graphs.length) {
+    const failing = ctx.db.get<{ id: string }>(`SELECT id FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph' AND status = 'issue' ORDER BY rowid DESC LIMIT 1`, projectId, p.nodeId);
+    if (failing) {
+      const purpose = `Redraw the interactive graph "${p.graphs[0].quote}" of this section. The old one failed its check, so choose expressions and domains that pass. ${p.graphs.map((g) => g.message).join(' ')}`;
+      t.enqueue([{ kind: 'enrich.graph', key: `fixgraph:${t.task.id}`, label: `Redraw the graph of "${p.title}"`, input: { nodeId: p.nodeId, purpose, force: true, replaceId: failing.id, issueIds: p.graphs.map((g) => g.id) }, pool: 'editor', deps: [t.task.id] }]);
+      out.graphs = p.graphs.length;
+    } else {
+      const passes = ctx.db.get(`SELECT 1 FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph'`, projectId, p.nodeId);
+      setIssuesStatus(ctx, projectId, p.graphs.map((g) => g.id), 'fixed', passes ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.');
+    }
+  }
+  return out.figures || out.graphs ? out : undefined;
+}
+
 export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<ReviseResult> {
   const { projectId } = t.task;
   const nodeId = t.task.input.nodeId as string;
@@ -294,13 +337,18 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
-  const issues = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string }>(`SELECT id, quote, message, suggestion, severity, category FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
+  const selected = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string; source: string }>(`SELECT id, quote, message, suggestion, severity, category, source FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
+  // Two kinds of issue the text writer cannot fix go elsewhere: a missing figure to the figures pass, a graph that failed its check to a redraw.
+  const sectionBlocks = splitBlocks(head.markdown).map((b) => b.text);
+  const kindOf = (i: (typeof selected)[number]) => (i.source === 'verification' && i.category === 'graph' ? 'graph' as const : asksForFigure(i, sectionBlocks) ? 'figure' as const : null);
+  const issues = selected.filter((i) => !kindOf(i));
+  const routed = routeIssues(ctx, t, { nodeId, title: findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId)?.section.title ?? '', figures: selected.filter((i) => kindOf(i) === 'figure'), graphs: selected.filter((i) => kindOf(i) === 'graph') });
   const requests = [
     t.task.input.instruction ? `Author's instruction: ${t.task.input.instruction}` : '',
     t.task.input.selection ? `Apply it to this passage: "${t.task.input.selection}"` : '',
     ...issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`),
   ].filter(Boolean).join('\n');
-  if (!requests) return { skipped: 'nothing requested' };
+  if (!requests) return routed ? { skipped: 'routed', routed } : { skipped: 'nothing requested' };
   // Stored text has no citation markers; put the base revision's back so the model can keep them.
   const baseCitations = json<Record<string, string[]>>(ctx.db.get<{ citations: string }>('SELECT citations FROM content_revisions WHERE id = ?', head.id)?.citations, {});
   const blocks = splitBlocks(withMarkers(head.markdown, baseCitations)).map((b) => b.text);
@@ -447,8 +495,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       settleClaims();
     });
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
-    const settled = confirmed.size ? { resolved: confirmed.size } : {};
-    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...settled, ...(checked === undefined ? {} : { checked }) };
+    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }) };
   }
 
   const { markdown, citations } = extractCitations(working.filter((b) => b.trim()).join('\n\n'), splitBlocks);
@@ -504,7 +551,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   if (issues.length) issuesChanged(ctx, projectId, issues.map((i) => i.id));
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
   const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });
-  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
+  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
 }
 
 export { recordLintIssues };

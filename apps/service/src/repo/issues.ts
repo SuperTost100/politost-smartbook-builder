@@ -62,6 +62,13 @@ export function updateIssue(ctx: AppContext, id: string, patch: { status: Review
   return getIssue(ctx, id);
 }
 
+/** Sets the status and resolution of several issues at once and announces them. */
+export function setIssuesStatus(ctx: AppContext, projectId: string, issueIds: string[], status: ReviewIssue['status'], resolution: string): void {
+  if (!issueIds.length) return;
+  ctx.db.tx(() => { for (const id of issueIds) ctx.db.run('UPDATE review_issues SET status = ?, resolution = ? WHERE id = ? AND project_id = ?', status, resolution, id, projectId); });
+  issuesChanged(ctx, projectId, issueIds);
+}
+
 /**
  * Moves the issues that point at a proposal ('proposed' with resolution "Proposal <revId>") to a new status.
  * Returns the ids it changed and announces them.
