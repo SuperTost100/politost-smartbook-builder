@@ -55,6 +55,35 @@ describe('the service\'s own Codex home', () => {
     assert.ok(lstatSync(link).isSymbolicLink());
   });
 
+  test('a refreshed login written in the same millisecond as the real one still goes back', () => {
+    login('codex', 'auth.json', 'old token');
+    codexEnv(config);
+    const link = join(config.dataDir, 'codex-home', 'auth.json');
+    const real = join(root, 'codex', 'auth.json');
+    rmSync(link);
+    writeFileSync(link, 'new token');
+    const at = new Date(Math.floor(Date.now() / 1000) * 1000);
+    utimesSync(link, at, at);
+    utimesSync(real, at, at);
+    codexEnv(config);
+    assert.equal(readFileSync(real, 'utf8'), 'new token');
+  });
+
+  test('a relative CODEX_HOME is linked by its absolute path', () => {
+    login('codex', 'auth.json', 'token');
+    const before = process.env.CODEX_HOME;
+    const cwd = process.cwd();
+    try {
+      process.chdir(root);
+      process.env.CODEX_HOME = 'codex';
+      codexEnv(config);
+      assert.equal(readlinkSync(join(config.dataDir, 'codex-home', 'auth.json')), join(root, 'codex', 'auth.json'));
+    } finally {
+      process.chdir(cwd);
+      process.env.CODEX_HOME = before;
+    }
+  });
+
   test('without an auth.json (keyring login) Codex keeps its default home, and the log says so once', () => {
     mkdirSync(join(root, 'codex'));
     assert.equal(codexEnv(config, (l) => log.push(l)), undefined);

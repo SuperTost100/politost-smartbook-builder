@@ -16,7 +16,8 @@ const warned = new Set<string>();
  * when there is no login file to link (a keyring login, say) or the link cannot be made (Windows without symlink rights).
  */
 function privateHome(envName: string, sourceDir: string, loginFile: string, home: string, cli: string, log: Log): Record<string, string> | undefined {
-  const real = join(sourceDir, loginFile);
+  // Absolute, because a relative CODEX_HOME would otherwise be stored as a link target that points nowhere from the private home.
+  const real = resolve(sourceDir, loginFile);
   const useDefault = (why: string) => {
     if (!warned.has(envName)) {
       warned.add(envName);
@@ -32,7 +33,7 @@ function privateHome(envName: string, sourceDir: string, loginFile: string, home
     const current = lstatSync(link, { throwIfNoEntry: false });
     if (current?.isSymbolicLink() && readlinkSync(link) === real) return { [envName]: home };
     // The CLI replaced the link with a file when it refreshed the token: that file is the newest login, so it goes back to the real place first.
-    if (current?.isFile() && current.mtimeMs > statSync(real).mtimeMs) copyFileSync(link, real);
+    if (current?.isFile() && current.mtimeMs >= statSync(real).mtimeMs) copyFileSync(link, real);
     rmSync(link, { force: true });
     symlinkSync(real, link);
   } catch (err) {

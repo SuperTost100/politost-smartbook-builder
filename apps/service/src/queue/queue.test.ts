@@ -165,6 +165,40 @@ test('a failure blocks everything downstream, however deep: A -> B -> C fails th
   assert.ok(tasks[1].finishedAt);
 });
 
+test('a plain retry puts a blocked task back without its old finish time', async () => {
+  const { queue, projectId } = setup();
+  queue.register('boom', async () => { throw new TaskError('no', 'fatal'); });
+  queue.register('work', async () => 'ok');
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'boom', key: 'a', label: 'a' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['a'] },
+  ]);
+  queue.start();
+  await until(() => queue.runSummary(runId)!.status === 'failed');
+  await queue.stop();
+  queue.retry(runId);
+  const b = queue.tasks(runId)[1];
+  assert.equal(b.state, 'queued');
+  assert.equal(b.finishedAt ?? null, null);
+});
+
+test('a task waiting to retry behind a failed task ends with the run', async () => {
+  const { db, queue, projectId } = setup();
+  queue.register('boom', async () => { throw new TaskError('no', 'fatal'); });
+  queue.register('work', async () => 'ok');
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'boom', key: 'a', label: 'a' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['a'] },
+  ]);
+  db.run(`UPDATE tasks SET state = 'retry_wait', retry_at = ? WHERE key = 'b'`, Date.now() + 60_000);
+  queue.start();
+  await until(() => queue.runSummary(runId)!.status === 'failed');
+  await queue.stop();
+  const b = queue.tasks(runId)[1];
+  assert.equal(b.state, 'cancelled');
+  assert.equal(b.error?.message, 'Not run: an earlier task failed.');
+});
+
 test('retrying the failed task alone puts the tasks behind it back, and they run once it succeeds', async () => {
   const { queue, projectId } = setup();
   let healthy = false;
