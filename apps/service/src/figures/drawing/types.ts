@@ -7,7 +7,7 @@ export interface DrawingRequest {
   engine: DrawingEngine;
   /** Typst source (any engine file starts after the wrapper's defaults) or Python source that binds the drawing to `d`. */
   source: string;
-  /** Default 'european'. Only changes drawings that contain circuit symbols. */
+  /** Default 'american', the same as the book option. Only changes drawings that contain circuit symbols. */
   symbols?: CircuitSymbols;
   /** Accessible name written into the SVG as its <title>. */
   title?: string;

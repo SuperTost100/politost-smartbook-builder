@@ -24,8 +24,6 @@ const AREA_LABEL: Record<SubjectArea, string> = {
 const KIND_LABEL: Record<FigureKind, string> = {
   plot: 'function plots', structure: 'molecule structures', levels: 'energy-level diagrams', orbitals: 'orbital boxes', cell: 'electrochemical cells', periodic: 'periodic table highlights', drawing: 'drawings (circuits, diagrams, sketches)', photo: 'photos',
 };
-// shortcut: the domain profile does not say which subjects have circuits, so the two that do are listed here. Move it into the profile when the figure drawing agent adds circuit figures.
-const CIRCUIT_AREAS: readonly SubjectArea[] = ['electronics', 'physics'];
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 function Resistor({ kind }: { kind: 'american' | 'european' }) {
@@ -214,7 +212,7 @@ export default function BookSetup() {
               ))}
             </div>
           </fieldset>
-          {CIRCUIT_AREAS.includes(area) && (
+          {profile.hasCircuits && (
             <fieldset className="su-fieldset" disabled={!opts.figures}>
               <legend className="ui-field__label">Circuit symbols</legend>
               <div className="su-symbols" role="radiogroup" aria-label="Circuit symbols">

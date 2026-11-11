@@ -17,7 +17,7 @@ import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { examReadParser, patchPrompt, reviewSchema } from './prompts.ts';
+import { examReadParser, parseQuestionText, patchPrompt, reviewSchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
@@ -28,6 +28,8 @@ let kit: ReturnType<typeof makeCtx>;
 let ctx: AppContext;
 const P = 'project01';
 const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) });
+/** The editor's answer to a formatting repair: the three parts as plain text. */
+const questionText = (statement: string, hint: string, solution: string) => () => ({ text: `@@@ statement\n${statement}\n@@@ hint\n${hint}\n@@@ solution\n${solution}`, usage: usageOf(10, 10) });
 /** The figure check's answer: keep the first n figures. */
 const keepFigures = (n: number) => ({ figures: Array.from({ length: n }, (_, i) => ({ index: i + 1, keep: true, reason: 'utile' })) });
 /** The cheap check's answer: every listed block good, every issue (1..n) fixed. */
@@ -154,11 +156,36 @@ describe('1. question updates do not overwrite author edits', () => {
     seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
     seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
     const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
-    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: 'inventato', solution: 'Vale $1$.' }));
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), questionText('Calcola $\\lim_{x\\to 0} f(x)$.', 'inventato', 'Vale $1$.'));
     await questionImport(ctx, startTask('question.import', { questionId: id }));
     assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x)$.');
     assert.equal(row(id).hint, '');
     assert.equal(fake.calls.length, 2);
+    assert.match(fake.calls[1].prompt, /plain text, not JSON/);
+  });
+
+  test('import: the formatting repair keeps a backslash and a line break as written, and a malformed answer gets one repair turn', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
+    fake.next(
+      examRead({ number: '1', statement: 'Calcola $\\nu + 1.', solution: 'Vale $1$.' }),
+      () => ({ text: 'Ecco il testo corretto.', usage: usageOf(10, 10) }),
+      questionText('Calcola $\\nu + 1$.\n\na) il valore.', '', 'Vale $1$.'),
+    );
+    await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(row(id).statement, 'Calcola $\\nu + 1$.\n\na) il valore.', 'the backslash before n is not read as a line break');
+    assert.equal(fake.calls.length, 3);
+    assert.match(fake.calls[2].prompt, /text before the first/, 'the repair turn names the problem');
+  });
+
+  test('the question text parser: what it accepts and what it sends back', () => {
+    assert.deepEqual(parseQuestionText('@@@ statement\nCalcola $\\nu$.\n\na) il valore\n@@@ hint\n@@@ solution\nVale $\\neq 0$.'), { ok: true, data: { statement: 'Calcola $\\nu$.\n\na) il valore', hint: '', solution: 'Vale $\\neq 0$.' } });
+    const problem = (text: string) => { const r = parseQuestionText(text); assert.equal(r.ok, false, text); return (r as { problem: string }).problem; };
+    assert.match(problem('@@@ statement\nA.\n@@@ solution\nB.'), /"@@@ hint" part is missing/);
+    assert.match(problem('@@@ statement\nA.\n@@@ statement\nB.\n@@@ hint\n@@@ solution\nC.'), /two "@@@ statement" parts/);
+    assert.match(problem('@@@ statement\n\n@@@ hint\n@@@ solution\nB.'), /statement is empty/);
+    assert.match(problem('@@@ statement\nA.\n@@@ suggerimento\nB.\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/);
   });
 });
 
