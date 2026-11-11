@@ -1369,6 +1369,18 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     });
   });
 
+  test('a cited formula block does not merge the blocks after it: the fix model sees every block and can change a later one', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `Intro.\n\n${FORMULA}\n\nSecondo paragrafo.\n\nTerzo paragrafo.`, { citations: { '0': ['n1'], '1': ['n1'], '2': ['n1'] } });
+    issue('i1', { quote: 'Secondo paragrafo.' });
+    fake.next(patchAnswer({ changes: [{ block: 2, text: 'Secondo corretto. [[n1]]' }] }), answer(checkGood([2])));
+    const r = await fix(['i1']);
+    assert.match(fake.calls[0].prompt, /\[B0\][\s\S]*\[B1\]\n:::formula[\s\S]*\[B2\]\nSecondo paragrafo\.[\s\S]*\[B3\]\nTerzo paragrafo\./);
+    assert.equal(r.status, 'current');
+    assert.deepEqual(r.reverted, []);
+    assert.match(head().markdown, /Secondo corretto\.\n\nTerzo paragrafo\./);
+  });
+
   test('the head changed while the model ran: the fix stays a proposal and the issue is proposed', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');

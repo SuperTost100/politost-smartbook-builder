@@ -11,7 +11,7 @@ import { buildFigures, commitFigures, discardUnstored, existingAssetNames, rewri
 import { photosAvailable } from '../figures/stock.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
-import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
+import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, resolutionCheckPrompt, resolutionCheckSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
@@ -351,7 +351,10 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   if (!requests) return routed ? { skipped: 'routed', routed } : { skipped: 'nothing requested' };
   // Stored text has no citation markers; put the base revision's back so the model can keep them.
   const baseCitations = json<Record<string, string[]>>(ctx.db.get<{ citations: string }>('SELECT citations FROM content_revisions WHERE id = ?', head.id)?.citations, {});
-  const blocks = splitBlocks(withMarkers(head.markdown, baseCitations)).map((b) => b.text);
+  // One string per block, marker included. withMarkers joins the blocks and splits them again, and a marker after a closing ":::"
+  // keeps that fence open, so the rest of the section became one block (30 of 243 live sections), the fix model saw too few
+  // blocks and its change was reverted for an open fence.
+  const blocks = splitBlocks(head.markdown).map((b, i) => (baseCitations[String(i)]?.length ? `${b.text} [[${baseCitations[String(i)].join(',')}]]` : b.text));
   // Blockers and the author's own instructions get the strongest writer; everything else the cheaper editor.
   const instructed = !!t.task.input.instruction;
   const grows = issues.some(adds);
