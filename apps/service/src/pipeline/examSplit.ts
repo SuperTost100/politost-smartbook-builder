@@ -13,7 +13,7 @@ import { questionsChanged } from '../repo/questions.ts';
 export interface SplitSummary { sessions: number; questions: number; warning: SplitWarning | null }
 
 /** Sessions and questions of a split, and why it looks wrong, if it does. `noHeading`: the splitter recognised no session heading in the file. */
-export function summarizeSplit(rows: QuestionRow[], noHeading: boolean): SplitSummary {
+export function summarizeSplit(rows: Pick<QuestionRow, 'examGroup'>[], noHeading: boolean): SplitSummary {
   const perSession = new Map<string | null, number>();
   for (const r of rows) perSession.set(r.examGroup, (perSession.get(r.examGroup) ?? 0) + 1);
   const warning: SplitWarning | null = !rows.length ? 'no_questions'

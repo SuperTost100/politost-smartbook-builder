@@ -95,6 +95,24 @@ describe('the split of an exam file is recorded and shows trouble', () => {
     assert.deepEqual([split('ok').splitSessions, split('ok').splitQuestions, split('ok').splitWarning], [2, 4, null]);
   });
 
+  test('a file whose questions were stored before the summary existed gets its summary from those rows, which stay as they are', async () => {
+    resource('old', 'exams', ['Sessione\nEsercizio 1\nUno.\nEsercizio 2\nDue.'], { filename: 'esami-2024.pdf' });
+    resource('fine', 'exams', ['Appello del 12/02/2024\nProblema 1\nUno.\nProblema 2\nDue.', 'Appello del 05/07/2024\nProblema 1\nUno.\nProblema 2\nDue.'], { filename: 'esami-b.pdf' });
+    for (const id of ['old', 'fine']) await resourceQuestions(ctx, startTask('resource.questions', { resourceId: id }));
+    // As a book prepared by an earlier version: questions, no recorded split.
+    ctx.db.run(`UPDATE resources SET meta = '{}'`);
+    assert.deepEqual([split('old').splitSessions, split('old').splitQuestions, split('old').splitWarning], [null, null, null]);
+    const before = questionRows('old').concat(questionRows('fine'));
+    const out = await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'old' })) as Record<string, unknown>;
+    assert.deepEqual([out.reused, out.questions, out.sessions, out.splitWarning], [true, 2, 1, 'no_heading']);
+    assert.match(String(out.warning), /^1 session and 2 questions found in esami-2024\.pdf\. No session heading was recognised/);
+    const fine = await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'fine' })) as Record<string, unknown>;
+    assert.deepEqual([fine.reused, fine.questions, fine.sessions, fine.splitWarning], [true, 4, 2, undefined]);
+    assert.deepEqual([split('old').splitSessions, split('old').splitQuestions, split('old').splitWarning], [1, 2, 'no_heading']);
+    assert.deepEqual([split('fine').splitSessions, split('fine').splitQuestions, split('fine').splitWarning], [2, 4, null]);
+    assert.deepEqual(questionRows('old').concat(questionRows('fine')), before);
+  });
+
   test('the warning follows the role and inclusion; other sources carry no counts', async () => {
     resource('ex1', 'exams', ['Sessione\nEsercizio 1\nUno.'], { filename: 'esami-2024.pdf' });
     await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'ex1' }));

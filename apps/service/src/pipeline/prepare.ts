@@ -65,10 +65,19 @@ function firstLines(text: string) {
  */
 export async function resourceQuestions(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
-  const res = ctx.db.get<{ role: string; project_id: string }>('SELECT role, project_id FROM resources WHERE id = ?', resourceId);
+  const res = ctx.db.get<{ role: string; project_id: string; filename: string; meta: string }>('SELECT role, project_id, filename, meta FROM resources WHERE id = ?', resourceId);
   if (!res || !['exams', 'exercises', 'mixed'].includes(res.role)) return { skipped: true };
   const existing = ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM questions WHERE resource_id = ?', resourceId);
-  if (existing && existing.n > 0 && !t.task.input.force) return { questions: existing.n, reused: true, ...splitResult(ctx, resourceId) };
+  if (existing && existing.n > 0 && !t.task.input.force) {
+    // Questions stored before the split was recorded: summarise them as they are, so the file shows its counts and warning.
+    if (res.role === 'exams' && !json<{ split?: unknown }>(res.meta, {}).split) {
+      const stored = ctx.db.all<{ exam_group: string | null }>(`SELECT exam_group FROM questions WHERE resource_id = ? AND origin = 'authentic'`, resourceId);
+      // shortcut: the rows do not say whether a heading was found, so a file whose questions all sit in the one group named after the file counts as having none, upgrade if a book needs the exact rule result.
+      const label = res.filename.replace(/\.[^.]+$/, '').trim();
+      recordSplit(ctx, resourceId, res.role, summarizeSplit(stored.map((q) => ({ examGroup: q.exam_group })), stored.every((q) => q.exam_group === label)), 'rules');
+    }
+    return { questions: existing.n, reused: true, ...splitResult(ctx, resourceId) };
+  }
   const split = splitQuestions(ctx, resourceId);
   const { inserted, duplicates } = storeAuthenticQuestions(ctx, res.project_id, resourceId, split.rows);
   recordSplit(ctx, resourceId, res.role, summarizeSplit(split.rows, split.noHeading), 'rules');
