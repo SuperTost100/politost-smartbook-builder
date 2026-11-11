@@ -81,3 +81,9 @@ export function invalidateProject(qc: QueryClient, pid: string) {
 
 export type { Res };
 export { useMutation };
+
+/** A section the service just returned after a change of its figures: the page shows it at once, and everything built from it is read again. */
+export function applySectionView(qc: QueryClient, pid: string, sv: Res<'GET /api/projects/:id/sections/:nodeId'>) {
+  qc.setQueryData(qk.section(pid, sv.sectionId), sv);
+  for (const key of [qk.manuscript(pid), qk.preview(pid, sv.chapterId), qk.history(pid, sv.sectionId), qk.issues(pid), qk.assets(pid), ['figure', pid]]) void qc.invalidateQueries({ queryKey: key });
+}

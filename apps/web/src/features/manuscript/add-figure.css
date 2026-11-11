@@ -1,0 +1,36 @@
+/* "Add figure" in the block editor: a chooser under the button, and the placeholder that shows while a drawing is made. */
+.ins-anchor { position: relative; display: inline-flex; }
+.ins-pop { position: absolute; top: calc(100% + 8px); left: 0; z-index: 60; width: min(420px, calc(100vw - 32px)); max-height: min(640px, calc(100vh - 120px)); overflow: auto; background: var(--surface-overlay); border: 1px solid var(--border); border-radius: var(--radius-lg); box-shadow: var(--shadow-overlay); padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.ins-opt { display: flex; align-items: flex-start; gap: 12px; width: 100%; padding: 10px 12px; border: 0; background: none; border-radius: var(--radius-md); text-align: left; cursor: pointer; color: var(--ink); font: inherit; }
+.ins-opt:hover, .ins-opt[aria-pressed='true'] { background: var(--accent-soft); }
+.ins-opt:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: -2px; }
+.ins-opt > svg { margin-top: 2px; color: var(--accent-text); flex: none; }
+.ins-opt strong { display: block; font: 600 14px/20px var(--font-sans); }
+.ins-opt > span > span { display: block; font-size: 13px; line-height: 18px; color: var(--ink-muted); }
+.ins-panel { border-top: 1px solid var(--border); margin-top: 6px; padding: 12px 6px 6px; display: flex; flex-direction: column; gap: 10px; }
+.ins-where { font-size: 13px; color: var(--ink-muted); padding: 4px 12px 8px; margin: 0; }
+.ins-drop { display: flex; flex-direction: column; align-items: center; gap: 6px; padding: 18px 14px; border: 1.5px dashed var(--border-control); border-radius: var(--radius-md); color: var(--ink-muted); text-align: center; font-size: 14px; background: var(--surface); }
+.ins-drop p { margin: 0; }
+.ins-drop strong { color: var(--ink); }
+.ins-drop.is-over { border-color: var(--accent-text); background: var(--accent-soft); }
+.ins-results { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.ins-photo { position: relative; padding: 0; border: 2px solid transparent; border-radius: var(--radius-sm); overflow: hidden; background: var(--surface-raised); cursor: pointer; aspect-ratio: 4 / 3; }
+.ins-photo:focus-visible { outline: 2px solid var(--accent-ring); outline-offset: 2px; }
+.ins-photo[aria-pressed='true'] { border-color: var(--accent); }
+.ins-photo img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.ins-photo__src { position: absolute; left: 0; right: 0; bottom: 0; padding: 2px 6px; font: 400 10.5px/14px var(--font-mono); color: #fff; background: linear-gradient(transparent, rgba(0, 0, 0, 0.7)); text-align: left; }
+.ins-actions { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; align-items: center; }
+.ins-actions .ui-muted { margin-right: auto; font-size: 13px; overflow-wrap: anywhere; min-width: 0; }
+.ins-search { display: flex; gap: 8px; flex-wrap: nowrap; }
+.ins-search .ui-input { flex: 1 1 auto; min-width: 0; }
+.ms-ghost-fig { margin: 4px 0; padding: 14px; border: 1.5px dashed var(--accent); border-radius: var(--radius-md); background: var(--accent-soft); display: flex; gap: 12px; align-items: center; font-size: 14px; flex-wrap: wrap; }
+.ms-ghost-fig .ui-spinner { color: var(--accent-text); }
+.ms-ghost-fig--failed { border-color: var(--danger); background: var(--danger-soft); color: var(--danger); }
+.ms-ghost-fig--failed svg { flex: none; }
+.ms-ghost-fig__text { min-width: 0; overflow-wrap: anywhere; white-space: pre-wrap; flex: 1 1 200px; }
+.ms-fig-badge { position: absolute; top: 14px; right: 14px; }
+@media (max-width: 720px) {
+  .ins-anchor { position: static; }
+  .ins-pop { position: fixed; left: 8px; right: 8px; bottom: 12px; top: auto; width: auto; max-height: calc(100vh - 96px); }
+  .ins-results { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
