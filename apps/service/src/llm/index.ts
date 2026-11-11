@@ -96,6 +96,16 @@ function coolDown(provider: string, f: Pick<Failure, 'retryAfterMs' | 'reported'
   cooldown.set(provider, Date.now() + (f.reported ? wait : Math.min(wait, 10 * 60_000)));
 }
 
+/** Milliseconds until a provider that reported its limit may be called again; zero or less when it may. */
+const coolingFor = (provider: string) => (cooldown.get(provider) ?? 0) - Date.now();
+const isReady = (r: Route) => coolingFor(r.provider) <= 0;
+
+/** The error of a call that was not made because every route of the role is on a provider that reported its limit. The task waits for the shortest reset. */
+function limitWait(routes: Route[]): TaskError {
+  const where = routes.map((r) => `${r.provider}/${r.model}`).join(', ');
+  return new TaskError(`${where}: usage limit reached (the provider reported it earlier, so no call was made).`, 'quota', 'Wait for the limit to reset, or pick another model in Settings.', Math.max(1000, Math.min(...routes.map((r) => coolingFor(r.provider)))));
+}
+
 type Usage = { inputTokens: number | null; outputTokens: number | null };
 
 /** Runs a prompt for a role. Throws TaskError with kind auth/quota/temporary/input so the queue can react. Falls back to the role's fallback route on quota, unavailable, a timeout or a truncated answer. */
@@ -182,18 +192,25 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
     }));
   }
 
-  // Skip a provider that recently hit its quota when another candidate is available.
-  const ready = candidates.filter((c) => (cooldown.get(c.provider) ?? 0) <= Date.now());
-  if (ready.length && ready.length < candidates.length) candidates = ready;
+  // A provider that reported its limit gets no call until its reset. The role goes on with its other routes, and with none left the task waits.
+  const ready = candidates.filter(isReady);
+  if (!ready.length) throw limitWait(candidates);
+  candidates = ready;
 
   let firstQuota: Failure | undefined;
   let lastFailure: Failure | undefined;
+  let lastRoute: Route | undefined;
   const calls = { n: 0 };
   for (let i = 0; i < candidates.length; i++) {
     const route = candidates[i];
     // The provider's slot is taken for the route actually used, and the call's timeout starts only after it.
     const release = await slotsFor(ctx).acquire(route.provider, opts.signal);
     try {
+      // A call that waited for its slot may find that another call reported the provider's limit meanwhile, and a fallback may be on the provider that just did.
+      if (!isReady(route)) {
+        if (candidates.slice(i + 1).some(isReady)) continue;
+        throw lastFailure ? toTaskError(lastFailure, lastRoute!, firstQuota, candidates.length > 1) : limitWait([route]);
+      }
       return await attemptRoute(ctx, funnel, opts, route, { calls, fallback: route === fallback });
     } catch (err) {
       if (!(err instanceof RouteFailure)) throw err;
@@ -203,8 +220,9 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
         firstQuota ??= f;
       }
       lastFailure = f;
+      lastRoute = route;
       // A call that hangs until the timeout, or an answer cut off at the output limit, usually repeats on the same model, so the fallback gets the next try.
-      const canFallBack = i < candidates.length - 1 && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut || !!f.truncated);
+      const canFallBack = candidates.slice(i + 1).some(isReady) && (f.kind === 'quota' || f.kind === 'unavailable' || !!f.timedOut || !!f.truncated);
       if (canFallBack) continue;
       throw toTaskError(f, route, firstQuota, candidates.length > 1);
     } finally {
