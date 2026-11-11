@@ -1080,6 +1080,18 @@ test.describe('review findings of the figure dialog', () => {
     await expect(dialog.getByLabel('Caption')).toBeFocused();
   });
 
+  test('a figure whose alt text is still empty is drawn in the Manuscript, not shown as markup', async ({ page }) => {
+    const fm = await open(page);
+    await expect(page.locator('.ms-block .sb-figure img')).toBeVisible();
+    fm.elsewhere({ alt: '' });
+    await expect(page.locator('.ms-block .sb-figure img')).toHaveAttribute('alt', 'Figure without alt text');
+    await expect(page.getByText(':::image{')).toHaveCount(0);
+    // The dialog still asks for the alt text, which stays empty in the book until the author writes it.
+    const dialog = await openDialog(page);
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('');
+    await expect(dialog.getByText('Alt text is needed')).toBeVisible();
+  });
+
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
     const fm = await open(page);
     const dialog = await openDialog(page);

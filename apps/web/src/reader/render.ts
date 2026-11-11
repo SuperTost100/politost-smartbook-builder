@@ -15,12 +15,17 @@ export interface PreparedSnippet {
   formulas: FormulaRef[];
 }
 
+// The reader's parser draws an image only when it has alt text, and shows the block's markup otherwise. A figure whose alt text is still
+// to be written (a check blocks the export until it is) gets a stand-in here, so the author sees the picture in the builder.
+const NO_ALT = /(:::image\{[^}\n]*?\balt=)""/g;
+const altStandIn = (markdown: string) => markdown.replace(NO_ALT, '$1"Figure without alt text"');
+
 /**
  * Runs a Markdown fragment through the reader's own parser by giving it a throwaway paragraph header,
  * so formulas, images and refs resolve exactly as in the reader.
  */
 export function prepareSnippet(markdown: string, chapterNumber = 0): PreparedSnippet {
-  const ch = parseChapterMarkdown(`## p0 | x\n${markdown}`, chapterNumber);
+  const ch = parseChapterMarkdown(`## p0 | x\n${altStandIn(markdown)}`, chapterNumber);
   const para = ch.paragraphs[0];
   return { content: preprocessContent(para?.content ?? ''), formulas: ch.formulas };
 }
@@ -33,7 +38,7 @@ export function formulaMap(formulas: Iterable<FormulaRef>, base?: Map<string, Fo
 
 /** Whole compiled chapter -> paragraphs and chapter-wide formula index. */
 export function parseCompiledChapter(markdown: string, number: number): { chapter: Chapter; index: Map<string, FormulaRef> } {
-  const chapter = parseChapterMarkdown(markdown, number);
+  const chapter = parseChapterMarkdown(altStandIn(markdown), number);
   return { chapter, index: buildFormulaIndex([chapter]) };
 }
 
