@@ -26,6 +26,8 @@ import type { PhotoSearch } from '../figures/stock.ts';
 
 const baseRev = z.string().min(1);
 const captionText = z.string().max(1000);
+/** The lint blocks an image without alt text, so it cannot be saved empty. */
+const altText = z.string().trim().min(1, 'Say what the figure shows to a reader who cannot see it').max(1000);
 
 function nodeOf(ctx: AppContext, projectId: string, nodeId: string) {
   const node = findNode(requireOutline(ctx, projectId), nodeId);
@@ -84,19 +86,19 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     nodeOf(ctx, projectId, nodeId);
     const head = currentHead(ctx, projectId, nodeId);
     const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
-    return figureDetails(asset, head!.id, activeRedraw(ctx, projectId, asset.id));
+    return figureDetails(asset, head!, activeRedraw(ctx, projectId, asset.id));
   });
 
   app.patch(`${base}/:assetId`, async (req) => {
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');
-    const body = parse(z.object({ baseRevId: baseRev, caption: captionText.optional(), shows: z.string().trim().min(1).max(4000).optional() }), req.body);
+    const body = parse(z.object({ baseRevId: baseRev, caption: captionText.optional(), alt: altText.optional(), shows: z.string().trim().min(1).max(4000).optional() }), req.body);
     const head = headOf(ctx, projectId, nodeId, body.baseRevId);
     const asset = figureOfSection(ctx, projectId, idParam(req, 'assetId'), head);
     const drawing = drawingSpec(asset);
     if (body.shows !== undefined && !drawing) throw badInput('Only a drawn figure has a description to save.', undefined, 'shows');
-    // The caption and the description are read by every revision that names the asset, so the change is made on a copy (figures/author.ts).
-    const rev = saveFigureDetails(ctx, projectId, nodeId, asset, { caption: body.caption === undefined ? undefined : cleanCaption(body.caption), shows: body.shows }, head.id);
+    // The caption, the alt text and the description are read by every revision that names the asset, so the change is made on a copy (figures/author.ts).
+    const rev = saveFigureDetails(ctx, projectId, nodeId, asset, { caption: body.caption === undefined ? undefined : cleanCaption(body.caption), alt: body.alt, shows: body.shows }, head.id);
     if (rev) ctx.events.emit('asset.updated', { assetId: asset.id, nodeId }, { projectId });
     return view(projectId, nodeId);
   });

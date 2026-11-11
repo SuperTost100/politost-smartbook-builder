@@ -40,10 +40,20 @@ export function figureKind(asset: Asset): FigureKindName {
   return 'image';
 }
 
-export function figureDetails(asset: Asset, headRevId: string, redrawRunId: string | null): FigureDetails {
+/** The alt text of the block that shows `filename`, or '' when the block has none. */
+export function blockAlt(markdown: string, filename: string): string {
+  for (const m of markdown.matchAll(new RegExp(`:::image\\{(${IMAGE_ATTRS})\\}`, 'g'))) {
+    if (m[1].includes(`src="assets/${filename}"`)) return /\balt="([^"]*)"/.exec(m[1])?.[1] ?? '';
+  }
+  return '';
+}
+
+/** `head` is the section text the figure was read from. The compiler uses the asset's alt text and falls back to the block's, so the dialog shows the same. */
+export function figureDetails(asset: Asset, head: ContentRevision, redrawRunId: string | null): FigureDetails {
   const d = drawingSpec(asset);
+  const headRevId = head.id;
   return {
-    assetId: asset.id, filename: asset.filename, kind: figureKind(asset), caption: asset.caption, alt: asset.alt, createdAt: asset.createdAt,
+    assetId: asset.id, filename: asset.filename, kind: figureKind(asset), caption: asset.caption, alt: asset.alt.trim() ? asset.alt : blockAlt(head.markdown, asset.filename), createdAt: asset.createdAt,
     drawing: d ? { shows: d.shows, engine: d.engine, source: d.source, family: d.family } : null, headRevId, redrawRunId,
   };
 }
@@ -108,27 +118,31 @@ export function setBlockAttrs(markdown: string, filename: string, v: { caption?:
 }
 
 /**
- * Saves a new caption and/or description of a figure as a new revision. Both live on the asset record, which every revision that
- * names the asset reads, so the change is made on a copy and the text is pointed at it: an earlier revision keeps its own caption
- * and description when it is restored. Returns the new revision, or null when nothing differs or the figure is not in the text.
+ * Saves a new caption, alt text and/or description of a figure as a new revision. All three live on the asset record, which every
+ * revision that names the asset reads (and which wins over the block's attributes), so the change is made on a copy, the block gets
+ * the same text, and the text is pointed at the copy: an earlier revision keeps its own caption, alt text and description when it
+ * is restored. Returns the new revision, or null when nothing differs or the figure is not in the text.
  * `expectedHeadId` is the head the author saw (409 when it moved).
  */
 export function saveFigureDetails(
-  ctx: AppContext, projectId: string, nodeId: string, asset: Asset, v: { caption?: string; shows?: string }, expectedHeadId: string,
+  ctx: AppContext, projectId: string, nodeId: string, asset: Asset, v: { caption?: string; alt?: string; shows?: string }, expectedHeadId: string,
 ): ContentRevision | null {
   const drawing = drawingSpec(asset);
   const caption = v.caption !== undefined && v.caption !== asset.caption ? v.caption : undefined;
+  // The block can only hold the attribute form (no double quotes, one line), so the asset gets the same text.
+  const alt = v.alt !== undefined && attr(v.alt) !== asset.alt ? attr(v.alt) : undefined;
   const shows = v.shows !== undefined && drawing && v.shows !== drawing.shows ? v.shows : undefined;
-  if (caption === undefined && shows === undefined) return null;
+  if (caption === undefined && alt === undefined && shows === undefined) return null;
   const copy = copyAsset(ctx, asset, { keepDate: true });
   try {
     const values: Record<string, unknown> = {};
     if (caption !== undefined) values.caption = caption;
+    if (alt !== undefined) values.alt = alt;
     if (shows !== undefined && drawing) values.spec = { ...drawing, shows };
     ctx.db.update('assets', copy.id, values);
     const rev = writeFigureRevision(ctx, projectId, nodeId, (md) => {
       const swapped = swapSrc(md, asset.filename, copy.filename);
-      return caption === undefined ? swapped : setBlockAttrs(swapped, copy.filename, { caption });
+      return caption === undefined && alt === undefined ? swapped : setBlockAttrs(swapped, copy.filename, { caption, alt });
     }, { expectedHeadId });
     if (!rev) discardAsset(ctx, copy);
     return rev;

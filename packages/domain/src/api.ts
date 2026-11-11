@@ -165,7 +165,7 @@ export interface Api {
   /** The figure the section's current text shows through this asset. 404 when the text does not show it. */
   'GET /api/projects/:id/sections/:nodeId/figures/:assetId': { res: FigureDetails };
   /** Saves the caption and, for a drawing, what it shows (which does not change the picture). */
-  'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; shows?: string }; res: SectionView };
+  'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; alt?: string; shows?: string }; res: SectionView };
   /** Compiles edited source. When it compiles, the figure shows the new drawing; otherwise 422 with the compiler's message and nothing changes. */
   'POST /api/projects/:id/sections/:nodeId/figures/:assetId/render': { body: { baseRevId: string; source: string }; res: SectionView };
   /** Starts a task that asks the illustrator for a new drawing from the one-line instruction. An edited `shows` (the description) is saved on the new drawing. */

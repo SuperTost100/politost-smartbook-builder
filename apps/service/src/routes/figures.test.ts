@@ -163,6 +163,64 @@ describe('save caption and description', () => {
   });
 });
 
+describe('save alt text', () => {
+  const previewAlts = (s: Seed) => {
+    const files = compileBook(loadBookInput(t.ctx, s.projectId)).files;
+    return Object.entries(files).filter(([name]) => name.startsWith('chapters/')).flatMap(([, text]) => [...String(text).matchAll(/:::image\{[^}]*alt="([^"]*)"/g)].map((m) => m[1]));
+  };
+
+  it('an alt text change is a new asset and a new revision, the block and the asset agree, and Restore brings back the earlier alt text', async () => {
+    const s = await seed();
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'A circle with its radius marked' });
+    assert.equal(r.status, 200);
+    const head = headOf(s);
+    assert.notEqual(head.id, s.headId);
+    assert.match(head.markdown, /alt="A circle with its radius marked"/);
+    assert.match(head.markdown, /caption="Un cerchio"/, 'the caption is untouched');
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`))!;
+    assert.notEqual(fresh.id, s.drawn);
+    assert.equal(fresh.alt, 'A circle with its radius marked');
+    assert.equal(getAsset(t.ctx, s.drawn).alt, 'Un cerchio', 'the earlier asset keeps the earlier alt text');
+    assert.deepEqual(previewAlts(s), ['A circle with its radius marked']);
+    const details = await t.req('GET', url(s, `/${fresh.id}`));
+    assert.equal(details.body.alt, 'A circle with its radius marked');
+    assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId: s.headId })).status, 200);
+    assert.deepEqual(previewAlts(s), ['Un cerchio']);
+  });
+
+  it('caption and alt text saved together make one copy and one revision', async () => {
+    const s = await seed();
+    const before = listAssets(t.ctx, s.projectId).length;
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova', alt: 'Nuovo alt' })).status, 200);
+    assert.equal(listAssets(t.ctx, s.projectId).length, before + 1);
+    assert.match(headOf(s).markdown, /alt="Nuovo alt" caption="Nuova"|caption="Nuova" alt="Nuovo alt"/);
+  });
+
+  it('the alt text of the block wins nowhere: a block whose alt text differs from the asset is brought in line', async () => {
+    const s = await seed();
+    const md = headOf(s).markdown.replace('alt="Un cerchio"', 'alt="Old block alt"');
+    const head = saveHuman(t.ctx, s.projectId, 's1', md, s.headId);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: head.id, alt: 'Chosen alt' })).status, 200);
+    assert.deepEqual(previewAlts(s), ['Chosen alt']);
+    assert.ok(!headOf(s).markdown.includes('Old block alt'));
+  });
+
+  it('refuses an empty alt text, because the lint blocks an image without one, and saving what is stored makes no revision', async () => {
+    const s = await seed();
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: '   ' })).status, 400);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'Un cerchio' })).status, 200);
+    assert.equal(headOf(s).id, s.headId);
+    assert.equal(listAssets(t.ctx, s.projectId).length, 1);
+  });
+
+  it('shows the alt text of the block when the asset stores none', async () => {
+    const s = await seed();
+    t.ctx.db.update('assets', s.drawn, { alt: '' });
+    const details = await t.req('GET', url(s, `/${s.drawn}`));
+    assert.equal(details.body.alt, 'Un cerchio');
+  });
+});
+
 describe('render edited source', () => {
   it('a source that compiles gives the figure a new picture, and the old asset stays for the revision that names it', async () => {
     const s = await seed();
