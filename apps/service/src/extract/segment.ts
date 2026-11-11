@@ -251,7 +251,8 @@ const headerCell = (l: string) => l.length <= 60 && !/[=$]/.test(l) && !/^(?:[a-
 /**
  * How many of the last lines of an exercise or solution are the header table of the paper that follows ("Corso", "Elettrotecnica
  * (ING-IND/31)", "Corso di Laurea", "Ingegneria Elettronica, primo anno", "Prova", printed before the session heading). The block
- * is at least two lines, starts at a label cell, and never takes the exercise's own first line.
+ * is at least two lines, starts at a label cell, never takes the exercise's own first line and holds at least two different
+ * labels: one label and its value ("Durata", "20 s") can be a solution's own table, and the caller removes what this returns.
  * shortcut: a header whose labels are not in HEADER_LABEL stays at the end of the last text, upgrade when a paper needs another label.
  */
 export function trailingHeaderCells(lines: string[]): number {
@@ -259,7 +260,9 @@ export function trailingHeaderCells(lines: string[]): number {
   while (n < lines.length - 1 && n < 12 && headerCell(lines[lines.length - 1 - n])) n++;
   // The block starts at a label cell: short lines before it ("Risposta:") are the solution's.
   while (n >= 2 && !HEADER_LABEL.test(lines[lines.length - n])) n--;
-  return n >= 2 ? n : 0;
+  if (n < 2) return 0;
+  const labels = new Set(lines.slice(-n).filter((l) => HEADER_LABEL.test(l)).map((l) => l.toLowerCase().replace(/[\s:]+/g, ' ').trim()));
+  return labels.size >= 2 ? n : 0;
 }
 
 interface Ex { word: string; id: string; variant: string | null; startPage: number; endPage: number; lines: string[] }

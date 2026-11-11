@@ -385,3 +385,31 @@ test('a solution that ends in short lines is cut only where the next paper\'s he
   const noSolutions = segmentExams('r', pages([...paper('12 febbraio 2024'), ...paper('3 luglio 2024')]), { label: 'x', untitled: true });
   assert.equal(noSolutions[0].statement, 'Problema 1\nUn circuito.\na) Calcolare la corrente.');
 });
+
+test('a solution that ends in a small table with "Durata" and a value keeps it when no header table follows', () => {
+  const solution = ['Problema 1.', 'a) La durata del transitorio è', 'Durata', '20 s'];
+  // The next paper starts with its heading and has no header table, so "Durata" and "20 s" are the answer.
+  const rows = segmentExams('r', pages([`Prova scritta, Appello del 12 febbraio 2024`, 'Problema 1', 'Un circuito.', 'a) Calcolare la durata.', 'Soluzioni', ...solution], [`Prova scritta, Appello del 3 luglio 2024`, 'Problema 1', 'Un altro circuito.']), { label: 'x', untitled: true });
+  assert.equal(rows[0].solution, solution.join('\n'));
+  // Without a solutions section the same cells end the statement of the paper.
+  const noSolutions = segmentExams('r', pages([`Prova scritta, Appello del 12 febbraio 2024`, 'Problema 1', 'Un circuito. Il tempo di misura', 'Durata', '20 s'], [`Prova scritta, Appello del 3 luglio 2024`, 'Problema 1', 'Altro.']), { label: 'x', untitled: true });
+  assert.equal(noSolutions[0].statement, 'Problema 1\nUn circuito. Il tempo di misura\nDurata\n20 s');
+});
+
+test('the page range of a question still reaches the page where its answer ends when the answer is a small table', () => {
+  const rows = segmentExams('r', pages(
+    ['Prova scritta, Appello del 12 febbraio 2024', 'Problema 1', 'Un circuito.'],
+    ['Soluzioni', 'Problema 1.'],
+    ['Durata', '20 s'],
+    ['Prova scritta, Appello del 3 luglio 2024', 'Problema 1', 'Altro.'],
+  ), { label: 'x', untitled: true });
+  assert.equal(rows[0].solution, 'Problema 1.\nDurata\n20 s');
+  assert.equal(rows[0].pageTo, 2);
+});
+
+test('a block with one header label before the session heading stays in the solution', () => {
+  const rows = segmentExams('r', pages(
+    ['Prova scritta, Appello del 12 febbraio 2024', 'Problema 1', 'Un circuito.', 'Soluzioni', 'Problema 1.', 'a) I = 2 A.', 'Corso', 'Elettrotecnica (ING-IND/31)', 'Prova scritta, Appello del 3 luglio 2024', 'Problema 1', 'Altro.'],
+  ), { label: 'x', untitled: true });
+  assert.equal(rows[0].solution, 'Problema 1.\na) I = 2 A.\nCorso\nElettrotecnica (ING-IND/31)');
+});
