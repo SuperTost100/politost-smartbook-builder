@@ -21,7 +21,8 @@ import { drawingSpec } from './drawing/edit.ts';
 export const FIGURE_UPLOAD_MAX = 2 * 1024 * 1024;
 const UPLOAD_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg']);
 
-const attr = (s: string) => s.replace(/"/g, "'").replace(/\s+/g, ' ').trim();
+/** An attribute value on one line, with the typographic quote a caption gets (latexToPlain) because a double quote would end the attribute. */
+const attr = (s: string) => s.replace(/"/g, '”').replace(/\s+/g, ' ').trim();
 
 /** True when the text has an image block that points at assets/<filename>. */
 export const showsFigure = (markdown: string, filename: string) => markdown.includes(`src="assets/${filename}"`);

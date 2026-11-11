@@ -193,6 +193,19 @@ describe('save alt text', () => {
     assert.deepEqual(previewAlts(s), ['Un cerchio']);
   });
 
+  it('a double quote in the alt text is saved as the typographic quote a caption gets, whole and not as a single quote', async () => {
+    const s = await seed();
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'Doppie "quote" e città {x} $' });
+    assert.equal(r.status, 200);
+    const shown = listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    assert.equal(shown.alt, 'Doppie ”quote” e città {x} $');
+    assert.match(headOf(s).markdown, /alt="Doppie ”quote” e città \{x\} \$"/);
+    assert.equal((await t.req('GET', url(s, `/${shown.id}`))).body.alt, 'Doppie ”quote” e città {x} $');
+    // The caption in the block takes the same quote, which is what the compiler prints for a caption.
+    await t.req('PATCH', url(s, `/${shown.id}`), { baseRevId: headOf(s).id, caption: 'Un "cerchio"' });
+    assert.match(headOf(s).markdown, /caption="Un ”cerchio”"/);
+  });
+
   it('caption and alt text saved together make one copy and one revision', async () => {
     const s = await seed();
     const before = listAssets(t.ctx, s.projectId).length;

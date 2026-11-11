@@ -347,7 +347,7 @@ function FigureEditor({ details, stale, pid, nodeId, title, number, onClose }: {
           <div className="ui-field">
             <label className="ui-field__label" htmlFor="fd-alt">Alt text</label>
             <textarea id="fd-alt" className="ui-textarea fd-alt" rows={2} value={alt} onChange={(e) => setAlt(e.target.value)} disabled={redrawing} aria-invalid={altMissing} aria-describedby="fd-alt-hint" />
-            <span id="fd-alt-hint" className={`ui-field__hint${altMissing ? ' fd-alt-missing' : ''}`}>{altMissing ? 'Alt text is needed: a figure without it does not pass the check. ' : ''}What a reader who cannot see the figure is told in its place.</span>
+            <span id="fd-alt-hint" className={`ui-field__hint${altMissing ? ' fd-alt-missing' : ''}`}>{altMissing ? 'Alt text is needed: a figure without it does not pass the check. ' : ''}What a reader who cannot see the figure is told in its place. A double quote is saved as ”.</span>
           </div>
 
           {drawing && (
