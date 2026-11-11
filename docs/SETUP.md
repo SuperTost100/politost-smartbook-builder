@@ -7,7 +7,17 @@ npm ci
 npm run doctor
 ```
 
-`doctor` checks Node, the data folder, each AI command-line tool, NotebookLM and LibreOffice, and says what to do about anything missing.
+`doctor` checks Node, the data folder, the figure packages, each AI command-line tool, NotebookLM and LibreOffice, and says what to do about anything missing.
+
+## Figure packages
+
+Drawn figures (circuits, logic networks, timing diagrams and the like) are compiled on your computer from Typst packages and Python wheels. They are not part of the repository. `npm start` and `npm run doctor` download what is missing into `.figure-packages/` at the repository root, about 7 MB in 23 downloads, and check each file against a SHA-256 hash that is written in `scripts/fetch-figure-packages.mjs`. A file that does not match is refused. To fetch them by hand, for example before going offline, run:
+
+```bash
+npm run figure-packages
+```
+
+Nothing is downloaded while a figure renders, so a book keeps drawing after the first download with no network. If the first download fails, `npm start` prints a warning and starts anyway, and drawings fail with a message that says how many packages are missing until `npm run figure-packages` succeeds. `npm run figure-packages -- --check` only reports what is missing. The folder is ignored by git, and `scripts/fetch-figure-packages.mjs` lists every package with its version and licence.
 
 ## AI tools
 
@@ -15,17 +25,45 @@ Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost1
 
 | Tool | Sign in | Used by default for |
 |---|---|---|
-| Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the second opinion on every review finding (Sonnet), the outline once per book (Opus) |
-| Codex | `codex login` | Everything routine on GPT-6-Luna: classification, page reading, exercises, introductions, non-blocker fixes, first solution checks. GPT-6-Sol reviews chapters and gives a second opinion when a solution check finds a problem |
+| Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the second opinion on every review finding (Sonnet), the outline once per book (Opus), outside research (Sonnet) |
+| Codex | `codex login` | Everything routine on GPT-6-Luna: classification, page reading, exercises, introductions, non-blocker fixes, first solution checks. GPT-6-Sol reviews chapters, draws figures (the illustrator) and gives a second opinion when a solution check finds a problem |
 | Antigravity | `agy` | Fallback for classification and the local evidence reader (Gemini Flash) |
 | Cursor Agent | `cursor-agent login` | Nothing by default |
 
-Each job (a *role*) has a primary model and a fallback; change them under **Connections**. The defaults spend the expensive models only where a student would notice: Sonnet writes the section text and fixes blockers in it, and fixes change only the paragraphs involved. Everything else runs on GPT-6-Luna, with GPT-6-Sol as a second opinion. A few rules behind the defaults:
+Each job (a *role*) has a primary model and a fallback, and you change them under **Connections**. The defaults spend the expensive models only where a student would notice: Sonnet writes the section text and fixes blockers in it, and fixes change only the paragraphs involved. Everything else runs on GPT-6-Luna, with GPT-6-Sol as a second opinion. A few rules behind the defaults:
 
 - The reviewer should come from a different vendor than the writer, so it does not share the writer's blind spots. The same goes for the second opinion and the reviewer.
 - Reading pages needs a model that accepts images (Claude or Codex).
-- Calls through Cursor to Claude models are billed at API prices; use Claude Code for those.
-- When a subscription hits its limit, the task waits and resumes after the reset, or switches to the role's fallback. Nothing is lost.
+- Calls through Cursor to Claude models are billed at API prices, so use Claude Code for those.
+- When a subscription hits its limit, the task waits and resumes after the reset, or switches to the role's fallback. Nothing is lost. A provider that reported a limit gets no further calls until its reset, and the Connections screen shows the usage windows of Codex.
+- A book can stay on Claude whatever happens: *When Claude usage runs out* in Book setup removes the fallback of every role that starts on Claude for that book, so its tasks wait for the reset.
+
+### The service's own CLI homes
+
+Codex and Claude Code load everything in their config folder on every call: the owner's `AGENTS.md`, `CLAUDE.md`, skills, plugins and MCP servers. For the book models that is about 5,300 extra input tokens per Codex call and more on Claude Code, and none of it helps. So the service makes two private folders under the data folder:
+
+| Folder | For | Holds |
+|---|---|---|
+| `codex-home/` | Every Codex call | A link to your real `~/.codex/auth.json` |
+| `claude-home/` | Web calls of the outside research role | A link to your real `~/.claude/.credentials.json` |
+
+Each folder holds only a link to the real login file and nothing else, so a token refresh still reaches your real login, and your own instructions and skills are not read. The service creates them when it first needs them, and you can delete them, because they come back. A different `CODEX_HOME` or `CLAUDE_CONFIG_DIR` in the environment is honoured as the place of the real login. If there is no login file to link (a login kept in the system keyring) or links cannot be made (Windows without symlink rights), the tool runs in its default folder and the service log says so once.
+
+Calls to Claude Code without the web need no private folder, because they already load nothing.
+
+## Settings
+
+Settings live in two places.
+
+**Connections** holds what belongs to the computer and applies to every book:
+
+- *Model routing*: the primary and fallback model of each role, with a **Test** button per role.
+- *Evidence*: NotebookLM or Local.
+- *Concurrency*: how many tasks each provider runs at once, 1 to 8. Lower it if you hit usage limits.
+- *Stock photos*: a free [Pixabay](https://pixabay.com/api/docs/) or [Pexels](https://www.pexels.com/api/) key. Wikimedia Commons needs none and is always searched. The keys are stored in the data folder, and the service never sends them back to the browser.
+- *Usage*: the calls, tokens, cached share, failures and timeouts of the last 30 days per provider. It is read-only.
+
+**Book setup** holds what belongs to one book: language, audience and goals, the course program, the subject area, the figure policy (*Where they help* or *Generous*), the circuit symbols (shown for physics and electronics), the lab language, which extras to write, exercises per topic, the first-chapter gate, what Align book does with off-program sections and *When Claude usage runs out*. The writer's self-check has no screen yet (see [How a book is made](WORKFLOW.md#writing)).
 
 ## NotebookLM
 
@@ -85,7 +123,7 @@ npm run restore -- my-backup.tar.gz --data-dir /path/to/empty/folder
 
 The backup takes a consistent database snapshot, so it is safe while the service runs.
 
-Your sources are sent to the AI tools and to NotebookLM you configured. Exclude a source on the Sources screen to keep it out.
+Your sources are sent to the AI tools and, when evidence is set to NotebookLM, to NotebookLM. Exclude a source on the Sources screen to keep it out. The data folder also holds the two private CLI homes (see above) and the access token of LAN mode.
 
 ## Network
 

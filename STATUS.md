@@ -1,145 +1,109 @@
 # Status
 
-Last updated 11 November 2026.
+Smart Builder 0.4.0, as of 11 November 2026.
 
-## What works
+## What works today
 
-The full V1 pipeline runs end to end on real course material. It was tested on the Analisi 1 sources (4 sets of notes, 11 years of PoliTo written exams, a 521-page quiz collection: 1,063 pages in total).
+The whole pipeline runs from sources to an approved `.ptsb` that the Smartbook reader opens: Prepare, course program, outline, drafting with evidence, practice, review and fix, alignment with the program, validation and export. [How a book is made](docs/WORKFLOW.md) describes each step.
+
+The owner's instance holds five real books: Analisi Matematica 1, Fisica 1, Chimica di base, Algebra lineare e geometria and Calcolo numerico (MATLAB). Analisi 1 is the one taken furthest: all 11 chapters were written by 8 October, with no open review issue and an approved export. It was built from 4 sets of notes, 11 years of PoliTo written exams and a 521-page quiz collection (1,063 pages in all). Its first chapter run in early October showed what the pipeline did and cost then:
 
 | Step | Result on Analisi 1 |
 |---|---|
-| Prepare | 16 files read, 174 exam exercises split into 83 sessions, 720 quiz items stored, 32 topics. Exam frequency is plausible: *studio di funzione* appears in 74 of 83 sessions, limits and continuity in about 40 |
-| Plan | Opus proposed 11 chapters and 44 sections in teaching order, with deep sections where the exams concentrate |
-| Generate (chapter 6, *Limiti notevoli e confronto asintotico*) | 3 sections and an introduction (36k characters), 12 numbered formulas, 2 figures, 2 interactive graphs, 1 Python example that ran in Pyodide, 8 authentic exam questions re-read from page images, 6 generated exercises |
-| Evidence | NotebookLM returned 17–18 notes per section; every note was located on its source page |
-| Review and correction | The reviewer (GPT-6-Sol) found real errors: the order of infinitesimals stated backwards, the sequence characterization without x_n ≠ x_0, x! in a hierarchy over the reals. Three rounds of *Fix selected issues*, reviewed and accepted, closed every blocker |
-| Export | Approved `.ptsb` (61 KB). It opens in the actual PoliTost reader with all sections working and 0 formula errors |
+| Prepare | 16 files read, 174 exam exercises split into 83 sessions, 720 quiz items stored, 32 topics. *Studio di funzione* appears in 74 of 83 sessions |
+| Plan | 11 chapters and 44 sections in teaching order, with deep sections where the exams concentrate |
+| Generate (chapter 6) | 3 sections and an introduction (36k characters), 12 numbered formulas, 2 figures, 2 interactive graphs, 1 Python example, 8 exam questions re-read from page images, 6 generated exercises |
+| Review and correction | The reviewer found real errors, such as the order of infinitesimals stated backwards. Three rounds of *Fix selected issues* closed every blocker |
+| Export | Approved `.ptsb` of 61 KB that opens in the reader with all sections working and 0 formula errors |
 
-Wall-clock time on this machine: Prepare about 25 minutes (most of it was the Antigravity bottleneck, since fixed), outline 1 minute, one chapter 11 minutes, three correction rounds about 15 minutes.
+Prepare took about 25 minutes on that run, one chapter 11 minutes and three correction rounds about 15 minutes.
 
-Model use for everything above, including the failed calls caused by bugs that are now fixed:
+### Acceptance run of 11 November
 
-| Role | Model | Calls | Input tokens | Output tokens |
-|---|---|---|---|---|
-| Writer | Claude Sonnet 5 | 32 (6 failed on a schema bug) | 350k | 191k |
-| Planner | Claude Opus 5.5 | 1 | 6k | 10k |
-| Reviewer | GPT-6-Sol | 36 | 619k | 37k |
-| Bulk (classification, extraction) | GPT-6-Luna | 65 | 1.07M | 103k |
-| Vision | GPT-6-Luna | 24 | 332k | 14k |
-| Bulk, before the switch | Gemini 3.8 Flash (Antigravity) | 5 | 488k | 225k |
+A one-chapter Elettrotecnica book was built on a clean data folder with the default model routes and local evidence, from Markdown notes, an exam file and a pasted program, with the outline trimmed to one chapter by hand. The full report is not in the repository. Its first part, which ran Prepare, Program, Plan and most of Generate, measured this:
 
-About 80% of the Luna bulk tokens went to classifying exam questions once for the whole book. One chapter needs roughly 15 Sonnet calls and 15 Sol calls including corrections.
+- The four sections (881, 961, 810 and 657 words) had correct formulas and worked examples, and the Bode magnitude and phase were drawn from plot specs on a logarithmic frequency axis with the right curve.
+- Both drawn circuits had the right topology. The writer's self-check corrected two of the three sections it ran on.
+- A solution planted with a factor of 2π missing was caught three ways: by the independent solver, by the Python recomputation in the sandbox, and by a note that part b of the same solution used the right value.
+- Exam sessions were read with one call each instead of one per question, and a small Codex call carried about 11.7k input tokens, 29% less than the 16.5k measured before the lean Codex home.
+- The run stopped in Generate when the Codex 5-hour window filled. It surfaced problems that the next pull request fixed, among them exam text stored with a literal `\n`, Markdown exam files that did not split, a solutions heading with a qualifier, questions left behind by a deleted source, sentences about "the notes" in the book text, a renamed symbol, and 26 failed calls in 27 seconds on a provider at its limit.
 
-## Decisions made while you were away
+The second part (Review, Fix, the second Review, Check alignment and an approved export) was still running when this was written, so nothing is claimed here about how many rounds it takes to converge on this book.
 
-- **Antigravity became a fallback.** Gemini through Antigravity took 4–5 minutes and about 90k input tokens per call, because the CLI runs a full agent each time. Batch roles (bulk, local evidence) now default to GPT-6-Luna low, at about 20 seconds per call.
-- **Graphs ship as Plotly data.** The reader's `function` graphs only understand `x`, digits and `+ - * / ^`, so `sin(x)` draws an empty curve. The reader's own example book has this bug too. The builder samples curves with a whitelisted evaluator and ships them as `plotly` graphs, which the reader renders.
-- **Logarithmic axes.** A `plot` spec and a graph take `xScale` and `yScale`, `linear` (the default) or `log`. A log axis needs a positive range, so the spec is refused with `xRange: must be positive on a log axis` otherwise, and the figure is dropped with that note like any other bad spec. The curve is sampled evenly in the exponent, the grid has labelled powers of ten written as 10 with a raised exponent and lighter lines at 2 to 9 where a decade is at least 50 px wide, and points, asymptotes and labels go through the same transform. A graph is shipped with the Plotly axis `type: "log"` and its range as exponents. The reader's sanitiser (`src/lib/plotlySanitize.ts`) keeps both keys, so no switch is needed. A Bode plot is two figures or two graphs on the same log frequency axis: for graphs the answer carries the second one as `pair`, which takes the first graph's x axis and is saved as a second graph of the section.
-- **Function graphs are plotted, not drawn by the model.** The writer returns a plot spec, and the builder renders the SVG, so the curve matches the formula. Other figures (circuits, logic networks, free-body diagrams) are drawn by the illustrator model from the writer's description, see below. Captions are plain text, because the reader prints them as text, and they are numbered `Fig. 6.1`.
-- **Exports contain only chapters with text.** The chapters keep their outline numbers, so formulas stay `6.x` as more chapters are written. Links into chapters not yet written become plain text, with a minor warning.
-- **Missing official solutions are written and checked.** Two 2024 sessions were published without solutions; the writer solves them and the reviewer checks the result.
-- **Unreadable exam questions leave the book.** The issue stays open until you type the question in.
-- **Blockers mean a different result.** A solution is a blocker only when the independent result differs. Gaps in the reasoning keep the severity the reviewer gives them.
-- **I approved in your place.** You asked for no human in the loop, so I approved the outline and accepted the AI proposals. I read the proposals before accepting them.
+## What 0.4.0 added
 
-## Fix and review loop (changed 7 October, evening)
+- **Figures for any subject.** A book has a subject area, and the area decides which figure kinds the writer may use. Anything the builder has no drawer for is a drawing, written by an illustrator model as Typst or schemdraw code, compiled offline, repaired and checked once against its own picture. Function plots take logarithmic axes, and every figure is shown on the reader's light plate in dark mode. See [Figures](docs/WORKFLOW.md#5-figures).
+- **Electronics.** Circuits, logic networks, timing diagrams, Karnaugh maps and block diagrams as drawings, circuit symbols in the American or the European style, Bode plots as two plots on the same log axis, and the symbols the exam papers use (`f_c`, `v_{out}`) passed to the writer.
+- **Drafting.** The sections of a chapter are written in order, the text comes back outside JSON, the writer checks its own section once, and a worked example is asked for only where the section teaches a method.
+- **Review and fix loop.** A review of changed text reports only blockers and majors. Fixes apply directly, after guards. A review says when it left nothing serious open.
+- **Cost.** Exam sessions are read in one call, numeric answers are recomputed in a sandbox, only exams are classified, and Codex and web calls run in lean private homes.
+- **Screens.** Book setup (course program, subject area, figure policy, circuit symbols, generation options), Sources (the exam split result with Split with AI), Review (alignment with the program), Connections (usage per provider, Codex usage windows) and the Manuscript's figure dialog and **Add figure**.
+- **Existing books.** They need no migration. A book without a subject area gets one inferred from its subject and title, and figures stored before 0.4.0 look right on the light plate.
 
-Writing the remaining 10 chapters worked, but fixing them did not converge. *Fix selected issues* left every fix as a proposal, and none was accepted. 288 proposals were written, a later fix replaced 243 of them, and the reviews kept re-reading the unchanged first draft. Each pass found 8 to 9 issues per chapter, more than half of them the same passages as before. The loop used about 10M input tokens.
+## Decisions that still explain the design
 
-What changed:
-- A fix is applied to the text directly, after rule guards (no lost headings, formulas or `:::` fences, at most 3 deleted paragraphs, no new lint errors) and a cheap Luna check of each change. Changes that fail are dropped and their issue stays open with the reason. A fix that would remove more than a fifth of a section stays a proposal.
-- *Run review* skips chapters that did not change, tells the reviewer which sections changed, and gives it the issues already fixed, dismissed or accepted.
-- Model output is cleaned of control characters that had eaten LaTeX backslashes (`$+\x1finfty$`).
-- A call that times out moves to the role's fallback model. Fisica 1's Prepare had hung three times on Luna.
+- **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.
+- **Graphs ship as Plotly data.** The reader's `function` graphs understand only `x`, digits and `+ - * / ^`, so `sin(x)` draws nothing. The builder samples curves with a whitelisted evaluator and ships `plotly` graphs.
+- **Exports contain only chapters with text.** Chapters keep their outline numbers, so formulas stay `6.x`. Links into chapters not yet written become plain text with a minor warning.
+- **Missing official solutions are written and checked.** The writer solves the exam question and the reviewer checks it.
+- **Unreadable exam questions leave the book** until you type the question in.
+- **A solution is a blocker only when the independent result differs.** Gaps in the reasoning keep the severity the reviewer gives them.
+- **Fixes apply directly.** On 7 October, fixes left as proposals never converged: 288 proposals were written, a later fix replaced 243 of them, and the loop used about 10M input tokens. Fixes now go through guards and a cheap check, and a fix that would remove more than a fifth of a section stays a proposal. On 11 November, reviews and fixes had used 75M of 132M input tokens on four books, which led to the narrower reviews of 0.4.0.
+- **A review reads only what changed.** Every review used to re-read the whole chapter and report a different handful of old passages each time. On Fisica 1, about 80% of the issues in the second and third reviews were in text that earlier reviews had already read, so running a review never brought the count to zero.
+- **Exam questions have no hints**, as in the real exam.
 
-On the Analisi book I accepted 39 of the 45 waiting proposals after automatic checks. I rejected 6 that lost text: one deleted the whole *Problema di Cauchy* subsection. I also fixed a duplicated Weierstrass formula key and an exam question using `\cotan`.
+## Known limits
 
-On the new logic, three rounds took the whole book from 15 blockers and 7 majors to 5 blockers and 1 major. Each round was one review and one fix, and only changed sections were re-read. I wrote those last six sentences by hand. The remaining minor notes were then cleared. Statement numbering and display-math layout are now handled by the builder (see Architecture); four notes were fixed by hand; and two remarks on official exam solutions were accepted, because the published solution is kept. The book has 0 open issues, all 189 questions are verified, and it validates with 0 errors and 0 warnings. The last 80 warnings were for exam questions without hints, and exams now have no hints by design. Those rounds used 19 Sonnet calls and about 2.5M input tokens in total. The loop before had used about 10M.
+Not working or not tested:
 
-## Review and fix loop (changed 11 November)
+- **Real exam papers of an electronics course** have not been through the splitter. It was tested on Analisi, Fisica and Chimica papers and on a paper written for the acceptance run.
+- **A lab example you edit by hand ships unchecked.** An edited graph is checked again when you save it, but an example goes back to draft because running it needs the sandbox, and a draft example is exported.
+- **The builder's look follows an older version of the reader's design.** The colours, type and figure plate follow the reader's tokens, but components added to the reader since then are not in the builder.
+- **Four calls still return long text inside a JSON string**: the generated exercises, the written-out missing solution, the **Fix with AI** rewrite of a question, and the chapter introduction. A backslash before `n` or `t` in them could still be misread as a line break. The draft, its repair, the lab example, the fixes, the exam readers and the formatting repair of question text answer in plain text.
+- **The reviewer does not read exam questions.** A wrong exam solution is found by the solution check, not by the chapter review.
+- **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book runs. A Markdown exam paper was split in the acceptance run only.
+- **Drawings and photos are checked by a model, not by a person.** A drawing can compile and still be wrong in a detail, so look at each one. In the acceptance run both circuits had the right wiring, and one had a doubled wire next to the input.
+- **The sandbox for Python, MATLAB and drawings** cannot block the network on Node 24, and it caps memory only where `/proc` exists (Linux).
+- **Quiz items** are examples of level and style, not book content, because the reader has no multiple-choice format. The Fisica quiz file splits into 573 items but has no answers: its right options are only highlighted in the PDF.
+- **Outside research** is a per-section action ("Find outside sources") and not part of Generate. AI image generation is not implemented.
+- **A book with Python on may get no lab example.** The picker chose none in the acceptance run, although a Python book is meant to get one per chapter.
+- **The number of rounds to a clean review** was measured on Analisi (three rounds after the fix change) and is not known for the other books yet.
+- **The NotebookLM login** on the owner's server lives in a Chrome profile that a cron job refreshes every 6 hours. If Google forces a new sign-in, repeat the steps in [Setup](docs/SETUP.md#notebooklm).
 
-On the four books built so far, reviews and fixes used 75M of 132M input tokens, one fix in five changed nothing, and late review rounds found little. What changed:
-- A review of changed text reports only blockers and majors and sends the changed sections in full, the others as their stored summaries, and the evidence of the changed sections only. The first review and the full review still report everything, with minor defined as a wrong word, symbol, unit or reference that could mislead. The reviewer can no longer raise the `clarity` and `repetition` categories. Stored issues of those categories still load.
-- A review round says when it left no open blocker or major (`clean` in the task result, `review` in the project summary). The web app does not show it yet.
-- The fix model is told the guard rules from the guard's own constants and gets only the evidence its blocks cite. It answers in plain text parts instead of JSON.
-- When the fix model says the text already resolves an issue and the cheap checker agrees, the issue closes as fixed. A missing-figure issue goes to the figures pass and a failed graph is redrawn.
-- A formula block with a citation no longer merges the rest of the section into one block in the fix prompt. That bug hit 30 of 243 live sections.
-
-Prompt version 20.
-
-## Open issues on the Analisi book
-
-Four issues were accepted as exceptions and are visible in the Review tab:
-- the substitution principle should also require f, g ≠ 0 in a punctured neighbourhood (a real refinement for your pass);
-- the list of reference functions does not cover x₀ = −∞;
-- the reviewer read ℝ\* as "nonzero reals". The book's notation defines it as the extended line, and the reviewer now receives that notation;
-- one June 2024 question could not be read from its scan, so it is not in the book.
-
-Exam questions have no hints, as in the real exam; content-core no longer warns about them (since v0.2.1).
-
-## Prevented at generation since this run
-
-Each problem from the Analisi run is now handled when text is written, not only later in review:
-- `\cotan`, `\sen`, `\sgn` and other function names KaTeX lacks are rewritten to `\operatorname{...}` in every model output.
-- A formula key already defined in another section is unwrapped, so the book never ships the same key twice. The writer is also told not to reuse known keys.
-- Exam questions read from scans, and generated questions, get a lint pass and one formatting repair (unbalanced `$`, KaTeX errors, a colon leading nowhere), like sections already did.
-- Tool-call markup a model leaves in its answer (`</markdown>`, `</invoke>`) is stripped from every model output and is a `meta-leak` blocker in lint, so it can't reach an export. On 8 October it had leaked into 7 Analisi chapter introductions; `npm run normalize-text` removed it and the re-exported book passes content-core 0.3.0's import check (issue #1).
-- Display math in sentences, statement numbering, eaten backslashes, lost blocks in fixes and timeouts were handled earlier the same day (see above).
-
-What a fresh book will still produce: on the first review, some real content errors per chapter, such as a missing hypothesis or a wrong order of infinitesimals. Finding those is the review's job. With fixes applied automatically and the reviewer's memory, they should close in one or two rounds. Exam pages that can't be read still need you to type them in.
-
-## Not done or only partly done
-
-- **Outside research** runs per section from "Find outside sources" in the Manuscript, when the book's "Use verified outside material" option is on. Claude searches the web with every local tool switched off; the builder opens each page and keeps an addition only if its quote is there. Additions arrive as a proposal that lists the pages. It is not part of Generate.
-- **Figures** come in eight kinds (seven since 16 October, the drawing since the illustrator):
-  - function plots;
-  - molecule structures drawn from SMILES, Lewis or skeletal. The writer also gives the formula as the text writes it, and a structure whose formula does not match its SMILES is dropped;
-  - four chemistry diagrams drawn from a spec: energy levels (MO diagrams, enthalpy diagrams, Hess cycles), orbital boxes (the builder checks the electron count against the species), electrochemical cells, and the periodic table with highlighted groups and trend arrows;
-  - drawings: anything the kinds above cannot draw, in every subject area. The writer gives only `shows` (two to five sentences in English: every element, how they connect, every label and value, what to notice) and a `family` (circuit, logic, timing, karnaugh, state-machine, block-diagram, plot, sketch, tree-graph, other). The **illustrator** role (default Codex `gpt-6-sol`, fallback Claude Sonnet 5.5) writes the drawing code, in Typst for most families and in schemdraw for logic, timing and Karnaugh. The builder compiles it, sends compile errors back (at most 2), then shows the model its own picture once and takes `OK` or a corrected source. A drawing that never compiles is dropped like any failed figure. The asset keeps the source, so the author can later edit it or ask for a redraw (the service functions `renderEditedDrawing` and `redrawDrawing` exist, the screen does not). The measured results of the 12-brief run are in the pull request that added it;
-  - photos from Wikimedia Commons (no key, licence in the credit), Pixabay or Pexels, checked by a vision model before they go in.
-
-  Each book has a subject area (`subjectArea` in the book options: mathematics, physics, chemistry, electronics, computer-science, mechanics or other). A book without one gets it inferred from its subject and title, so the four existing books need no change. The area decides which kinds the writer is offered (mathematics: plots only; chemistry: all seven) and which notation and hypotheses the outline, verify and review prompts mention; the table is `packages/domain/src/subjects.ts`. The `figurePolicy` option is `helpful` by default: the writer adds a figure where the student has to see a relation, a structure or an object, and a section with nothing to show gets none. `generous` asks for a figure in most sections. The reviewer flags figures that do not match the text or add nothing, and no longer asks for missing ones. A fix gets the figure rules only when it handles a figure problem or an author instruction. A second model drops decorative figures before they are built, wherever they are born: in a draft, in a fix, and in **Add figures with AI**. **Add figures with AI** on a section, or a `figures` run with `missingOnly`, adds figures to written text without changing it, and the result is applied unless the author edited the section meanwhile. AI image generation is not implemented. In the Manuscript, a figure block opens an **Edit figure** dialog (caption, description, source with Render, Redraw with AI, replace with an image, remove) and the block editor has **Add figure** (describe a drawing, upload an image, search photos).
-- **Lab examples** are Python or MATLAB, set per book in Book setup (*Lab language*). Python examples run in Pyodide, MATLAB examples in numbl, the MATLAB-compatible interpreter the reader uses since its PR #29. Both run in a permission-restricted Node child process; Node 24 cannot restrict network access, which the comment in `pipeline/python.ts` documents. A Python book gets one example per chapter. A MATLAB book gets up to one per section, and its writer puts commands in inline code, since the reader has no code blocks. numbl lacks `format long`, `fminsearch`, `spline`, `ode45` and 3-D plots; `fzero`, `integral`, `hilb` and `vander` come from `pipeline/matlabShims.ts`, a copy of the reader's file.
-- **Quiz items** are a source, not book content: they are found by search on the chapter's topic names and shown to the exercise writer as examples of level and style. The reader has no multiple-choice format, so they are not exported. The Fisica quiz file splits into 573 items but has no answers: its right options are only highlighted in the PDF.
-- **DOCX, PPTX, Markdown and web links** pass their unit tests (LibreOffice conversion, safe fetch) but were not part of the real book run.
-- **Autosave** saves the open block 3 seconds after you stop typing, and when you leave it. Each save is still a revision; History folds your own edits made within 10 minutes of each other into one row.
-- **The NotebookLM login** now lives in a Chrome profile on the devbox (signed in through T3's browser on 7 October), so `nlm auth refresh` renews it headlessly. A cron job runs that every 6 hours. If Google ever forces a new sign-in, repeat the steps in docs/SETUP.md.
-
-## Drafting in 0.4.0
-
-- The sections of a chapter are written in order, so each writer sees the summary and the formula keys of the section before it. Chapters still run side by side.
-- The section text, its repair and the lab example's code are no longer JSON strings. The answer is the text, a `<<<META>>>` line and a small JSON object. This removes the guessing that turned a line break before `u` or `i` into `\nu` or `\ni` (the case that remained open was a first row `i_1 &= …` after `\begin{aligned}`).
-- After a section is drafted, its writer checks it once more in the same conversation (hypotheses, derivation steps, computations with units and signs, formula keys) and may return a corrected version, which is used only when it loses no heading, formula key, block, figure or citation marker. It is the book option `selfCheck`, on by default, with no screen yet.
-- The writer is asked for a worked example and a typical-mistake box only when the section teaches a method or a computation, and is told never to pad a section to reach a length. The word ranges per depth are unchanged.
-- The writer no longer gets the same evidence three times: page text is sent only for pages that have a vision transcript, at most two, besides the verified quotes and the evidence reader's answer.
-
-## Independent reviews
-
-GPT-6.1-Sol reviewed each milestone through `codex exec`.
-1. Backend after the first implementation: 18 findings, one of them a blocker (Python isolation). All were fixed with regression tests (commit a12a4e2).
-2. The fixes, the acceptance-run changes and the web app. It confirmed 16 of the 18 earlier fixes and found 15 new issues (8 major, 7 minor, no blockers). The worst were these: a manuscript refresh could discard an unsaved block edit, accepting an old proposal could overwrite newer edits, and *Verify again* re-imported questions you had repaired. All 15 are fixed with regression tests, along with the 2 incomplete earlier fixes.
-
-## Dependencies
-
-The builder validates and previews books with content-core 0.4.0 and KaTeX 0.19, the versions the reader uses, so the preview and the reader's import check agree. Model calls go through cli-funnel 0.5.0. An answer cut off at a model's output limit now moves to the role's fallback model instead of being retried on the same one.
-
-Three things come from cli-funnel 0.5.0:
-
-- When an answer fails validation on Claude Code or Codex, the repair turn continues the same conversation, whose process stays alive for it. It sends only the problems, not the whole prompt and the answer again, and the session closes as soon as the route is done. Cursor Agent and Antigravity keep no live process, so they still get the full prompt in a new conversation.
-- Claude Code and Codex report their limits with a reset time. That time sets how long a provider stays out of first place and how long the queue waits, with no 10-minute cap. Limits that only appear in an error message are still parsed from the text and capped.
-- The builder reads Codex's usage windows at most once a minute. A full window sends the role to its fallback without a failed call first, and the Connections screen shows both windows.
+Small shortcuts, each with a comment in the code that says how to upgrade it: a proof is recognised by its label (`pipeline/align.ts`), a symbol without a subscript is left out of the exam symbols (`pipeline/exam.ts`), a heading of an unusual shape is not shown to Split with AI (`pipeline/examSplit.ts`), a figure issue that quotes a paragraph counts as asking for a missing figure (`pipeline/review.ts`), and enrichment edits are told apart by comparing stored texts (`pipeline/enrich.ts`).
 
 ## Tests and CI
 
-`npm test` runs 130 content tests and 328 service tests. `npm run test:e2e` runs 54 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24), and it is green.
+`npm test` runs 192 content tests (190 pass and 2 are skipped because they need two real books that are not in the repository) and 820 service tests. `npm run test:e2e` runs 158 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
-## Your running instance
+The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 
-The service runs on the devbox in LAN mode with the default data folder. Open it from your Mac with the token link printed at startup. It is in `/tmp/sb.log`, and the token is stored in `~/.local/share/politost-smart-builder/lan-token`. The Analisi book is there with all 11 chapters written. Its approved export of chapter 6 is under *Export*; the full book is being reviewed and fixed.
+## Dependencies
 
-To restart it yourself:
+| What | Version |
+|---|---|
+| Node | 24 (`.nvmrc`), 22.13 or newer works |
+| TypeScript | 7.0 |
+| Fastify | 5.12 |
+| React, Vite | 19.3 and 8.3 |
+| content-core | 0.5.1 |
+| KaTeX | 0.19 |
+| cli-funnel | 0.9.1 |
+| numbl | 0.4.21 (the reader pins the same version) |
+| MuPDF | 1.28 |
+| Pyodide | 314.0 |
+| Typst compiler (`typst-ts-node-compiler`) | 0.7.0, which bundles Typst 0.14.2 |
+| resvg | 2.6.2 |
+| openchemlib | 9.26 |
 
-```bash
-cd ~/.t3/projects/politost-smartbook-builder
-npm start -- --lan
-```
+The Typst packages and Python wheels of drawn figures are pinned by SHA-256 in `scripts/fetch-figure-packages.mjs` and updated together with the compiler.
+
+Model calls go through cli-funnel. When an answer fails validation on Claude Code or Codex, the repair turn continues the same conversation and sends only the problems. Claude Code and Codex report their limits with a reset time, which sets how long a provider stays out of first place and how long the queue waits, and Codex's usage windows are read at most once a minute.
+
+## Independent reviews
+
+GPT-6.1-Sol reviewed each milestone of the first build through `codex exec`. The first review of the backend found 18 issues, one a blocker (Python isolation). The second confirmed 16 of the 18 fixes and found 15 new issues, no blocker, and all were fixed with regression tests. Pull requests since then are reviewed by CodeRabbit, which is asked for on each one.
+
+## Running the owner's instance
+
+The service runs on the devbox as the systemd user service `smartbuilder.service`, in LAN mode with the default data folder. It has been a service since 13 October, so it survives a reboot. After pulling a new version, restart it with `systemctl --user restart smartbuilder`, which rebuilds the web app first. The access token is in `~/.local/share/politost-smart-builder/lan-token` and the log is `service.log` in the same folder.

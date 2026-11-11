@@ -22,25 +22,26 @@
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/manuscript-dark.png">
-  <img alt="The Manuscript view of an Analisi Matematica 1 book: the outline on the left with every section drafted, and section 1.1 on number sets with rendered formulas and citation markers next to the paragraphs they support." src="docs/screenshots/manuscript-light.png">
+  <img alt="The Manuscript view of an Analisi matematica 1 book: the outline on the left, section 1.1 on the definition of a limit with rendered formulas and citation markers in the middle, and on the right the evidence panel showing the source page and the highlighted passage behind the selected paragraph." src="docs/screenshots/manuscript-light.png">
 </picture>
 
 ## Why Smart Builder
 
 A model asked to write a textbook chapter writes something fluent, and you can't tell which parts came from your course. Smart Builder works the other way round. It finds the passages in your sources first, writes from them, and shows you the original page behind every citation. A quote it can't find on its page is dropped.
 
-It also reads your past exams. It counts how many exam sessions test each topic, so the book spends its depth and its exercises where the exams do.
+It also reads your past exams. It counts how many exam sessions test each topic, so the book spends its depth and its exercises where the exams do. If you paste the course program, the outline follows it, and an existing book can be checked against it.
 
 It runs on your computer. The AI work goes through the command-line tools you already pay for (Claude Code, Codex, Cursor Agent, Antigravity) by way of [cli-funnel](https://github.com/SuperTost100/cli-funnel), plus NotebookLM if you use it. There is no API key to set up and no account to create. The finished book is a `.ptsb` file that the [Smartbook reader](https://github.com/SuperTost100/politost-smartbook) and [Pyxis](https://github.com/SuperTost100/politost-pyxis) open.
 
 ## What it does
 
 1. **Reads your sources.** PDF (text or scanned), Word, PowerPoint, Markdown and web pages. Pages whose math the PDF text layer garbles go to a vision model.
-2. **Maps the course.** It keeps each source's own index, splits past exams into sessions and questions, and counts how often each topic appears.
+2. **Maps the course.** It keeps each source's own index, splits past exams into sessions and questions (Split with AI handles a paper layout it doesn't know), and counts how often each topic appears.
 3. **Proposes an outline** that you edit and approve. Topics the exams test often get deeper sections and more exercises.
-4. **Writes each section from evidence.** NotebookLM, or a local search plus a reader model, returns verbatim passages. Each one is located on its page before the writer may cite it.
-5. **Checks its own output.** Lint catches broken formulas, leftover model commentary and Unicode math. A second model solves every exercise again, Python examples run in Pyodide and MATLAB examples in numbl, and graphs are evaluated over their domain.
-6. **Lets you finish the book.** Edit any block with a live formula preview, regenerate a passage with an instruction, accept or reject AI proposals, change a figure (edit the source of a drawing, redraw it with an instruction, replace it with your own image) or add one, and export a validated `.ptsb`.
+4. **Writes each section from evidence.** NotebookLM, or a local search plus a reader model, returns verbatim passages. Each one is located on its page before the writer may cite it. The sections of a chapter are written in order, and the writer checks its own section once before it is stored.
+5. **Adds figures where the student has to see something.** Each book has a subject area (mathematics, physics, chemistry, electronics, computer science, mechanics or other) that decides which kinds the writer may use. Function plots (with linear or logarithmic axes), molecule structures and chemistry diagrams are drawn from validated specs. Photos come from Wikimedia Commons, Pixabay or Pexels with their credit. Anything else, such as a circuit, a logic network, a timing diagram or a free-body sketch, is described by the writer, drawn as Typst or schemdraw code by a separate illustrator model, compiled on your computer and checked against its own picture.
+6. **Checks its own output.** Lint catches broken formulas, leftover model commentary and Unicode math. A second model solves every exercise again and a Python computation recomputes numeric answers, Python examples run in Pyodide and MATLAB examples in numbl, and graphs are evaluated over their domain. A reviewer reads each chapter, a second model confirms every finding before you see it, and a fix is applied only after guards check it.
+7. **Lets you finish the book.** Edit any block with a live formula preview, regenerate a passage with an instruction, accept or reject AI proposals, change a figure (edit the source of a drawing, redraw it with an instruction, replace it with your own image) or add one, and export a validated `.ptsb`.
 
 Your edits are never overwritten. AI output that arrives after you changed a section becomes a proposal you accept or reject.
 
@@ -49,7 +50,7 @@ Your edits are never overwritten. AI output that arrives after you changed a sec
     <td width="50%">
       <picture>
         <source media="(prefers-color-scheme: dark)" srcset="docs/screenshots/outline-dark.png">
-        <img alt="The outline editor: chapter 1, Numeri reali, with five sections, next to a topic coverage list where 'Studio di funzione' appears in 74 of 83 exam sessions." src="docs/screenshots/outline-light.png">
+        <img alt="The outline editor: chapter 1, Limiti e continuità, with its sections and their topics, next to a program coverage list that marks two program items as uncovered and one as left out, and a topic coverage list with the number of exam sessions for each topic." src="docs/screenshots/outline-light.png">
       </picture>
     </td>
     <td width="50%">
@@ -60,7 +61,7 @@ Your edits are never overwritten. AI output that arrives after you changed a sec
     </td>
   </tr>
   <tr>
-    <td>The outline shows how many exam sessions test each topic.</td>
+    <td>The outline shows which program item each section covers and how many exam sessions test each topic.</td>
     <td>Exercises per topic, with the high-priority topics marked.</td>
   </tr>
 </table>
@@ -81,7 +82,7 @@ npm run doctor     # what is installed and signed in, and how to fix the rest
 npm start          # builds the web app and serves it on http://localhost:5300
 ```
 
-`npm start` and `npm run doctor` also download the pinned packages that drawn figures need into `.figure-packages/` (about 7 MB, checked against SHA-256 hashes). `npm run figure-packages` does it by hand.
+The first `npm start` needs a network connection, because it also downloads the pinned packages that drawn figures need into `.figure-packages/` in the repository (about 7 MB, each file checked against a SHA-256 hash). After that, figures render offline. `npm run doctor` fetches them too, and `npm run figure-packages` does it by hand. If the download fails, the app still starts and says drawings are unavailable until it succeeds.
 
 To use it from another device on your network, such as a laptop reaching a desktop over Tailscale:
 
@@ -97,7 +98,7 @@ Closing the browser does not stop generation. Stopping the service pauses it, an
 
 Everything lives in one folder: the database, your original files, rendered pages, figures and exports. On Linux that's `~/.local/share/politost-smart-builder`. [Setup](docs/SETUP.md#data) lists the other systems, and `--data-dir` or `SMARTBUILDER_DATA_DIR` moves it. `npm run backup` writes the whole folder to one archive, and it's safe to run while the service is running.
 
-Your sources go to the AI tools you configured and, if you use it, to the book's NotebookLM notebook. Exclude a source on the Sources screen to keep it out. The models run with every tool disabled, so they only read the text Smart Builder sends and can't run commands or touch your files.
+Your sources go to the AI tools you configured and, if you use it, to the book's NotebookLM notebook. Exclude a source on the Sources screen to keep it out. The models run with every tool disabled, so they only read the text Smart Builder sends and can't run commands or touch your files. For Codex, and for Claude Code's web research, the service creates a private config folder inside the data folder that holds only a link to your login, so your own instructions and skills aren't sent with every call.
 
 ## Configuration
 
@@ -116,10 +117,12 @@ Flags go after `npm start --`. The service listens on `127.0.0.1` unless you pas
 npm run dev          # service in watch mode, web app on Vite at http://localhost:5173
 npm run typecheck
 npm test
-npm run test:e2e     # Playwright tests for the web app
+npx playwright install chromium            # once, for the end-to-end tests
+npm run build -w @smartbuilder/web         # the end-to-end tests serve the built app
+npm run test:e2e     # Playwright tests for the web app, with no model calls
 ```
 
-CI runs `typecheck`, `test` and the web build on every push, after it fetches the figure packages.
+The drawing tests download the figure packages themselves when they are missing. CI runs `typecheck`, `test`, the web build and the end-to-end tests on every push and pull request.
 
 ## Documentation
 
