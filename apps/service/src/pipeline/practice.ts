@@ -1,6 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
-import { lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
+import { changedWords, lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
 import { subjectProfileOf, type Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -11,7 +11,7 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
-import { recomputeFinalValues, type NumericCheck } from './numeric.ts';
+import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
@@ -33,6 +33,17 @@ const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
+/** Why a formatting repair of question text must not replace the original: it changed a word or a number, in the first part that did. Null when it may. */
+function wordsChanged(before: QuestionText, after: QuestionText): string | null {
+  for (const part of ['statement', 'hint', 'solution'] as const) {
+    const why = changedWords(before[part], after[part]);
+    if (why) return `${part}: ${why}`;
+  }
+  return null;
+}
+/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language). Every other rule is formatting. */
+const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift']);
+
 /**
  * One formatting repair for question text that would not render or reads broken (unbalanced $, LaTeX KaTeX rejects,
  * a colon leading nowhere): the editor fixes only the listed problems, and its text is kept when it has fewer of them.
@@ -52,7 +63,10 @@ async function repairQuestionFormat(ctx: AppContext, t: TaskContext, projectId: 
       prompt: `PROBLEMS:\n${found.join('\n')}\n\nSTATEMENT:\n${text.statement}\n\nHINT:\n${text.hint}\n\nSOLUTION:\n${text.solution}\n\nChange only what the problems require and keep an empty hint empty.\n\n${questionTextAnswerRule}`,
       parse: parseQuestionText, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
-    if (problems(data).length < found.length) return { ...data, hint: text.hint ? data.hint : '' };
+    const next = { ...data, hint: text.hint ? data.hint : '' };
+    const why = wordsChanged(text, next);
+    if (why) t.progress(`A formatting repair was not applied: ${why}`);
+    else if (problems(data).length < found.length) return next;
   } catch (err) {
     if (err instanceof TaskError && err.kind !== 'input') throw err;
   }
@@ -423,7 +437,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
     if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
       const found = mismatches.length
-        ? `Recomputing the final values in Python gives a different result: ${mismatches.map((m) => `${m.name} is ${m.computed} by the computation and ${m.stated} in the solution`).join('; ')}.`
+        ? mismatchMessage(mismatches)
         : `The independent solution reaches a different result: ${data.independentAnswer}`;
       addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
     }
@@ -439,6 +453,11 @@ function addIssue(ctx: AppContext, q: Question, severity: string, category: stri
   ctx.events.emit('issue.created', { questionId: q.id, severity }, { projectId: q.projectId });
 }
 
+/** The ids among these issues that are still open: the author has not dismissed, accepted or fixed them since the task was queued. */
+function stillOpen(ctx: AppContext, ids: string[]): string[] {
+  return ids.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'open' AND id IN (${ids.map(() => '?').join(',')})`, ...ids).map((r) => r.id) : [];
+}
+
 export const questionReviseSchema = z.object({ statement: z.string(), hint: z.string(), solution: z.string() });
 
 /** Rewrites an exercise for its open issues. Authentic questions keep their statement unless an issue says it is wrong. */
@@ -447,7 +466,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   const q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
-  const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string }>(`SELECT id, message, suggestion FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string }>(`SELECT id, message, suggestion, source, category FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
   const project = loadProject(ctx, q.projectId);
   const { data, route } = await runRole(ctx, {
     role: 'editor',
@@ -455,16 +474,37 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
+  // A fix of formatting findings may change line breaks, spacing and markup, never a word or a number.
+  const formatting = issues.length > 0 && issues.every((i) => i.source === 'lint' && !WORD_RULES.has(i.category.replace(/^compile:/, '')));
+  const why = formatting ? wordsChanged(q, data) : null;
+  if (why) {
+    // The reason goes only on issues that are still open: a decision the author made while the editor ran stays.
+    ctx.db.tx(() => {
+      const open = stillOpen(ctx, issues.map((i) => i.id));
+      if (open.length) ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, `The AI fix was not applied: ${why}`, ...open);
+      issuesChanged(ctx, q.projectId, open);
+    });
+    return { skipped: 'the repair changed words or numbers' };
+  }
+  // The author must be able to see that the paper's printed solution was changed, and how. The question turns "adapted" (below), which the Practice screen shows.
+  const corrected = q.origin === 'authentic' && changedWords(q.solution, data.solution) !== null;
+  const was = issues.flatMap((i) => readMismatches(i.message));
+  const resolution = !corrected ? `Rewritten by ${route.model}`
+    : was.length ? `The printed solution was corrected by ${route.model}: ${was.map((m) => `${m.name} was ${m.stated} and the numeric check gives ${m.computed}`).join(', ')}.`
+      : `The printed solution was rewritten by ${route.model}.`;
   return ctx.db.tx(() => {
+    // The author may have closed the issues while the editor ran. A rewrite made for issues that are all closed now is not applied over that decision.
+    const open = stillOpen(ctx, issues.map((i) => i.id));
+    if (issues.length && !open.length) return { stale: true };
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
       layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
     if (!changed) {
       keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
       return { stale: true };
     }
-    if (issues.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${issues.map(() => '?').join(',')})`, `Rewritten by ${route.model}`, ...issues.map((i) => i.id));
+    if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
     questionsChanged(ctx, q.projectId, [q.id]);
-    issuesChanged(ctx, q.projectId, issues.map((i) => i.id));
+    issuesChanged(ctx, q.projectId, open);
     return { revised: true };
   });
 }

@@ -187,6 +187,163 @@ describe('1. question updates do not overwrite author edits', () => {
     assert.match(problem('@@@ statement\n\n@@@ hint\n@@@ solution\nB.'), /statement is empty/);
     assert.match(problem('@@@ statement\nA.\n@@@ suggerimento\nB.\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/);
   });
+
+  test('import: a formatting repair that adds a word is not applied', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const id = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo' });
+    fake.next(examRead({ number: '1', statement: 'Calcola $\\lim_{x\\to 0} f(x).', solution: 'Vale $1$.' }), answer({ statement: 'Calcola $\\lim_{x\\to 0} f(x)$.', hint: '', solution: 'Vale $1$. acu' }));
+    await questionImport(ctx, startTask('question.import', { questionId: id }));
+    assert.equal(row(id).statement, 'Calcola $\\lim_{x\\to 0} f(x).', 'the text before the repair stays');
+    assert.equal(row(id).solution, 'Vale $1$.');
+  });
+});
+
+describe('1b. a formatting fix of question text changes no word or number', () => {
+  const broken = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.\n\nc) $E = 0{,}742\,\mu\mathrm{J}$.`;
+  const clean = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.
+
+c) $E = 0{,}742\,\mu\mathrm{J}$.`;
+  const lintIssue = (qid: string, category = 'compile:literal-escape') => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'lint', severity: 'blocker', category, quote: '', message: 'A literal backslash followed by n', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+
+  test('a fix that appends a word leaves the text as it was and the issue open with the reason', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: `${clean} acu` }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal(row(id).solution, broken);
+    assert.equal(row(id).origin, 'authentic');
+    const [issue] = issues(`id = '${iid}'`);
+    assert.equal(issue.status, 'open');
+    assert.match(issue.resolution, /^The AI fix was not applied: .*solution: it adds "acu"/);
+  });
+
+  test('a fix that only sets line breaks is applied', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: clean }));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.equal(row(id).solution, clean);
+    assert.equal(issues(`id = '${iid}'`)[0].status, 'fixed');
+  });
+
+  test('a fix for a rule that is about words (a leaked comment) may remove them', async () => {
+    const id = q({ statement: 'Calcola. Come riportato nelle note.', solution: 'Vale 1.' });
+    const iid = lintIssue(id, 'compile:meta-leak');
+    fake.next(answer({ statement: 'Calcola.', hint: '', solution: 'Vale 1.' }));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.equal(row(id).statement, 'Calcola.');
+  });
+});
+
+describe('1c. a decision the author makes on an issue while the editor runs stays', () => {
+  const broken = String.raw`### Problema 2.\n\na) $\tau = RC = 22\,\mathrm{ms}$.`;
+  const clean = String.raw`### Problema 2.
+
+a) $\tau = RC = 22\,\mathrm{ms}$.`;
+  const lintIssue = (qid: string) => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'lint', severity: 'blocker', category: 'compile:literal-escape', quote: '', message: 'A literal backslash followed by n', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const decide = (iid: string, status: string) => () => { ctx.db.run(`UPDATE review_issues SET status = ?, resolution = 'Decided by the author' WHERE id = ?`, status, iid); };
+  const answering = (during: () => void, solution: string) => () => { during(); return { structured: { statement: 'Calcola.', hint: '', solution } as never, text: '{}', usage: usageOf(1, 1) }; };
+  const state = (iid: string) => issues(`id = '${iid}'`)[0];
+
+  for (const status of ['dismissed', 'accepted', 'fixed']) {
+    test(`a refused repair does not reopen an issue the author marked ${status}`, async () => {
+      const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+      const iid = lintIssue(id);
+      fake.next(answering(decide(iid, status), `${clean} acu`));
+      await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+      assert.equal(state(iid).status, status);
+      assert.equal(state(iid).resolution, 'Decided by the author');
+      assert.equal(row(id).solution, broken);
+    });
+  }
+
+  test('a refused repair writes its reason on the issues that are still open and leaves the decided one', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const [a, b] = [lintIssue(id), lintIssue(id)];
+    fake.next(answering(decide(a, 'dismissed'), `${clean} acu`));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
+    assert.equal(state(a).status, 'dismissed');
+    assert.equal(state(a).resolution, 'Decided by the author');
+    assert.equal(state(b).status, 'open');
+    assert.match(state(b).resolution, /^The AI fix was not applied/);
+  });
+
+  test('a repair that arrives after the author closed every issue is not applied', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const iid = lintIssue(id);
+    fake.next(answering(decide(iid, 'dismissed'), clean));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { stale: true });
+    assert.equal(row(id).solution, broken);
+    assert.equal(state(iid).status, 'dismissed');
+    assert.equal(state(iid).resolution, 'Decided by the author');
+  });
+
+  test('a repair that arrives while one issue is still open is applied and closes only that one', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', statement: 'Calcola.', solution: broken });
+    const [a, b] = [lintIssue(id), lintIssue(id)];
+    fake.next(answering(decide(a, 'accepted'), clean));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
+    assert.equal(row(id).solution, clean);
+    assert.equal(state(a).status, 'accepted');
+    assert.equal(state(a).resolution, 'Decided by the author');
+    assert.equal(state(b).status, 'fixed');
+  });
+});
+
+describe('5b. a corrected solution of an authentic exam question leaves a trace', () => {
+  const NUMERIC = 'Recomputing the final values in Python gives a different result: f_c is 3386.2754 Hz by the computation and 21,28 kHz in the solution.';
+  const issue = (qid: string, message: string, source = 'verification') => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source, severity: 'blocker', category: 'solution', quote: '', message, suggestion: '', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const fix = (id: string, iid: string, solution: string) => {
+    fake.next(answer({ statement: 'Calcola $f_c$.', hint: '', solution }));
+    return questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+  };
+
+  test('the resolution says what changed, with the old value and the value the numeric check gives; the question is marked adapted', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', statement: 'Calcola $f_c$.', solution: 'a) $f_c = 21{,}28\\,\\mathrm{kHz}$.' });
+    const iid = issue(id, NUMERIC);
+    await fix(id, iid, 'a) $f_c = 3{,}386\\,\\mathrm{kHz}$.');
+    assert.equal(row(id).origin, 'adapted');
+    const [i] = issues(`id = '${iid}'`);
+    assert.equal(i.status, 'fixed');
+    assert.equal(i.resolution, `The printed solution was corrected by ${DEFAULT_ROUTES.editor.primary.model}: f_c was 21,28 kHz and the numeric check gives 3386.2754 Hz.`);
+  });
+
+  test('without numbers from the numeric check the resolution says the solution was rewritten, and by which model', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', statement: 'Calcola $f_c$.', solution: 'Vale 1.' });
+    const iid = issue(id, 'The independent solution reaches a different result: 2');
+    await fix(id, iid, 'Vale 2.');
+    assert.equal(issues(`id = '${iid}'`)[0].resolution, `The printed solution was rewritten by ${DEFAULT_ROUTES.editor.primary.model}.`);
+    assert.equal(row(id).origin, 'adapted');
+  });
+
+  test('a fix of the same text with other line breaks, or of a generated question, keeps the short resolution', async () => {
+    const a = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '1', statement: 'Calcola $f_c$.', solution: 'Vale 1.\\n\\nFine.' });
+    const ia = issue(a, 'A literal backslash followed by n', 'lint');
+    await fix(a, ia, 'Vale 1.\n\nFine.');
+    assert.match(issues(`id = '${ia}'`)[0].resolution, /^Rewritten by /);
+    const g = q({ solution: 'Vale 1.' });
+    const ig = issue(g, NUMERIC);
+    await fix(g, ig, 'Vale 2.');
+    assert.match(issues(`id = '${ig}'`)[0].resolution, /^Rewritten by /);
+    assert.equal(row(g).origin, 'generated');
+  });
 });
 
 describe('15. disagreement is a blocker', () => {
@@ -1758,6 +1915,28 @@ describe('the review converges', () => {
     assert.match(prompt, /ALREADY FIXED[\s\S]*"x{120}" m{200}\n/);
     assert.doesNotMatch(prompt, /x{121}|m{201}/);
     assert.match(fake.calls[1].system ?? '', /report each problem once/);
+  });
+
+  test('the reviewer gets the symbols the exam papers use on the chapter topics, and the rule for a symbol that differs', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: ['t-filtri'] });
+    seedRevision('s1', 'La frequenza di taglio è $f_t$.');
+    const exam = (statement: string, topic: string) => ctx.db.insert('questions', {
+      id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
+      statement, hint: '', solution: '', difficulty: 'medio', topic_ids: [topic], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
+    });
+    exam('Calcolare la frequenza di taglio $f_c$ con $R_1 = 1\\,\\mathrm{k\\Omega}$.', 't-filtri');
+    exam('Un altro argomento con $q_p$.', 't-altro');
+    fake.next(answer({ issues: [] }));
+    await review();
+    const { prompt, system } = fake.calls[0];
+    assert.match(prompt, /\(standard\)\n\nSymbols used in the exam papers on this chapter's topics: f_c, R_1\.\n/);
+    assert.doesNotMatch(prompt, /q_p/);
+    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs\./);
+    ctx.db.run(`DELETE FROM questions`);
+    fake.next(answer({ issues: [] }));
+    await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', force: true }));
+    assert.doesNotMatch(fake.calls[1].prompt, /Symbols used in the exam papers/);
+    assert.equal(fake.calls[1].system, system, 'the static part does not depend on the exams');
   });
 
   test('an issue whose quote matches one the author dismissed or accepted is not stored again; stale proposed issues are cleaned, live ones stay', async () => {

@@ -1,4 +1,5 @@
 // Guards for model patches: block changes are applied one at a time and a change that would damage the section is dropped. Pure.
+import { LATEX_COMMAND_N_T, UNICODE_MATH } from './lint.ts';
 import { rewriteLatexNames } from './sanitize.ts';
 import type { LintFinding } from './types.ts';
 
@@ -245,6 +246,87 @@ export function addsCommentary(before: string, after: string): boolean {
     const sameParagraph = new Set(paragraphWords(x));
     return words.length >= 4 ? words.filter((w) => sameParagraph.has(w)).length / words.length < 0.5 : words.some((w) => !known.has(w));
   });
+}
+
+/** Math spans: display and inline. */
+const MATH_SPAN = /\$\$[\s\S]*?\$\$|\$[^$\n]*\$/g;
+
+/**
+ * LaTeX commands for the symbols the unicode-math lint rule flags in prose. A repair that follows the rule writes "$\tau$" for
+ * "τ", so the guard reads both as the same symbol. Several commands can stand for one character (\epsilon and \varepsilon are
+ * both ε), because a Unicode text does not tell them apart.
+ */
+export const MATH_SYMBOLS: Record<string, string> = {
+  alpha: 'α', beta: 'β', gamma: 'γ', delta: 'δ', epsilon: 'ε', varepsilon: 'ε', zeta: 'ζ', eta: 'η', theta: 'θ', vartheta: 'θ',
+  iota: 'ι', kappa: 'κ', lambda: 'λ', mu: 'μ', nu: 'ν', xi: 'ξ', omicron: 'ο', pi: 'π', varpi: 'π', rho: 'ρ', varrho: 'ρ',
+  sigma: 'σ', varsigma: 'σ', tau: 'τ', upsilon: 'υ', phi: 'φ', varphi: 'φ', chi: 'χ', psi: 'ψ', omega: 'ω',
+  Alpha: 'Α', Beta: 'Β', Gamma: 'Γ', Delta: 'Δ', Epsilon: 'Ε', Zeta: 'Ζ', Eta: 'Η', Theta: 'Θ', Iota: 'Ι', Kappa: 'Κ', Lambda: 'Λ',
+  Mu: 'Μ', Nu: 'Ν', Xi: 'Ξ', Omicron: 'Ο', Pi: 'Π', Rho: 'Ρ', Sigma: 'Σ', Tau: 'Τ', Upsilon: 'Υ', Phi: 'Φ', Chi: 'Χ', Psi: 'Ψ', Omega: 'Ω',
+  times: '×', div: '÷', pm: '±', mp: '∓', cdot: '⋅', circ: '∘', ast: '∗',
+  leq: '≤', le: '≤', geq: '≥', ge: '≥', neq: '≠', ne: '≠', approx: '≈', equiv: '≡', sim: '∼', simeq: '≃', cong: '≅', propto: '∝', ll: '≪', gg: '≫',
+  infty: '∞', partial: '∂', nabla: '∇', sum: '∑', prod: '∏', int: '∫', oint: '∮', sqrt: '√', forall: '∀', exists: '∃', emptyset: '∅', varnothing: '∅',
+  in: '∈', notin: '∉', ni: '∋', subset: '⊂', subseteq: '⊆', supset: '⊃', supseteq: '⊇', cup: '∪', cap: '∩', setminus: '∖',
+  wedge: '∧', vee: '∨', oplus: '⊕', otimes: '⊗', perp: '⊥', parallel: '∥', angle: '∠', therefore: '∴', because: '∵', cdots: '⋯',
+  to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', implies: '⇒', iff: '⇔', mapsto: '↦',
+  uparrow: '↑', downarrow: '↓', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
+};
+/** Characters that look alike and mean the same symbol: the micro sign and the ohm sign, and the variant Greek letters. */
+const SAME_SYMBOL: Record<string, string> = { '\u00b5': '\u03bc', '\u2126': '\u03a9', 'ς': 'σ', 'ϕ': 'φ', 'ϵ': 'ε', 'ϑ': 'θ', 'ϖ': 'π', 'ϱ': 'ρ', '−': '-', '–': '-' };
+const BLACKBOARD = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ' } as const;
+const WHOLE_SYMBOL = new RegExp(`^(?:${UNICODE_MATH.source})$`, 'u');
+const SYMBOL = `(?:${UNICODE_MATH.source})`;
+const MATH_TOKEN = new RegExp(`${SYMBOL}|\\p{L}+|\\d+(?:\\.\\d+)*|[-+^]`, 'gu');
+// Prose has no operators: a sign counts only in front of a digit and not inside a word, so a hyphen or a list marker is none.
+const PROSE_TOKEN = new RegExp(`${SYMBOL}|\\p{L}+|\\d+(?:\\.\\d+)*|(?<!\\p{L})[-+](?=\\.?\\d)`, 'gu');
+
+/**
+ * The words, numbers and symbols of a text, in order and lower case. Markup, math delimiters, LaTeX commands without a symbol
+ * and spacing are not words, and neither is a literal backslash-n or backslash-t outside math (a line break or tab a model
+ * wrote as two characters). A number keeps its value however it is typeset: its decimal separator ("," or "{,}") reads as ".",
+ * and a minus, a plus and a "^" in math, or in front of a digit in prose, are tokens, so a dropped sign or exponent shows.
+ * A symbol is one token, written as a Unicode character or as its LaTeX command. Letters and digits count separately, so "x1"
+ * and "x_1" give the same sequence.
+ */
+function wordSequence(text: string): string[] {
+  const out: string[] = [];
+  let last = 0;
+  const commands = (s: string) => s
+    .replace(/\\mathbb\{([RNZQC])\}/g, (_, c: keyof typeof BLACKBOARD) => ` ${BLACKBOARD[c]} `)
+    .replace(/\\([A-Za-z]+)/g, (_, name: string) => (MATH_SYMBOLS[name] ? ` ${MATH_SYMBOLS[name]} ` : ' '))
+    .replace(/\\./g, ' ');
+  // A backslash-n or -t that starts a LaTeX command (\nu, \to) is no line break, also in a fragment with an unbalanced $.
+  const prose = (s: string) => commands(s.replace(/(?<!\\)\\[nt]/g, (m, at: number) => (LATEX_COMMAND_N_T.test(s.slice(at)) ? m : ' ')));
+  const take = (s: string, re: RegExp) => {
+    const same = s.replace(/[\u00b5\u2126ςϕϵϑϖϱ−–]/g, (c) => SAME_SYMBOL[c]).replace(/(\d)(?:\{,\}|[.,])(?=\d)/g, '$1.');
+    for (const [tok] of same.matchAll(re)) out.push(/^\p{L}+$/u.test(tok) && !WHOLE_SYMBOL.test(tok) ? tok.toLowerCase() : tok);
+  };
+  for (const m of text.matchAll(MATH_SPAN)) {
+    take(prose(text.slice(last, m.index)), PROSE_TOKEN);
+    take(commands(m[0]), MATH_TOKEN);
+    last = m.index + m[0].length;
+  }
+  take(prose(text.slice(last)), PROSE_TOKEN);
+  return out;
+}
+
+/**
+ * How a formatting repair changed the words and numbers of a text, or null when it changed none. A repair may change line
+ * breaks, spacing, math delimiters and markup, and must neither add nor remove a word or a number.
+ */
+export function changedWords(before: string, after: string): string | null {
+  const a = wordSequence(before);
+  const b = wordSequence(after);
+  let head = 0;
+  while (head < a.length && head < b.length && a[head] === b[head]) head++;
+  let tail = 0;
+  while (tail < a.length - head && tail < b.length - head && a[a.length - 1 - tail] === b[b.length - 1 - tail]) tail++;
+  const removed = a.slice(head, a.length - tail);
+  const added = b.slice(head, b.length - tail);
+  if (!removed.length && !added.length) return null;
+  const list = (w: string[]) => `"${w.slice(0, 6).join(' ')}${w.length > 6 ? ' …' : ''}"`;
+  if (!removed.length) return `it adds ${list(added)}`;
+  if (!added.length) return `it removes ${list(removed)}`;
+  return `it replaces ${list(removed)} with ${list(added)}`;
 }
 
 const flat = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();

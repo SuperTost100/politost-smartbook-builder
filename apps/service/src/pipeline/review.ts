@@ -14,6 +14,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
+import { chapterTopicIds, examSymbols } from './exam.ts';
 import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, resolutionCheckPrompt, resolutionCheckSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
@@ -90,6 +91,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   // The reviewer learns what the exam covers, so it flags extra material as minor instead of inventing scope.
   const program = readyProgram(ctx, projectId);
   const chapterItems = program ? program.items.filter((i) => chapter.sections.some((s) => s.programItems.includes(i.key))) : [];
+  const symbols = examSymbols(ctx, projectId, [...chapterTopicIds(chapter)]);
   const programText = chapterItems.length ? programItemsText(chapterItems, 300) : undefined;
 
   const sectionText = (x: (typeof sections)[number]) => `=== [${x.s.id}] ${x.s.title} ===\n${x.head!.markdown}`;
@@ -157,7 +159,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   };
 
   const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }) => runRole(ctx, {
-    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled, profile: subjectProfileOf(project) }),
+    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, examSymbols: symbols, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled, profile: subjectProfileOf(project) }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const objectivesOf = (list: typeof chapter.sections) => list.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');

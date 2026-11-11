@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 21;
+export const PROMPT_VERSION = 22;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -617,7 +617,7 @@ export interface ExamReading { exercises: { number: string; statement: string; s
 const EXAM_PART = /^@@@[ \t]*(statement|solution|unreadable)\b[ \t]*(.*?)[ \t]*$/;
 
 /** How the model answers a reading of exam pages: plain text, so that no statement or solution is ever a JSON string. */
-const examAnswerRule = `Answer in plain text, not JSON, so that no backslash has to be escaped. For each exercise write a line "@@@ statement <number>" and then its statement, exactly as it should appear in the book: real line breaks, and LaTeX written once, with single backslashes. When the pages print an official solution, write a line "@@@ solution <number>" and then the solution in the same way. When the exercise is not on the pages or cannot be read, write only the line "@@@ unreadable <number>" for it. Give the exercises in the order listed, with the number exactly as listed. Write nothing before the first "@@@" line, no code fence around anything, and no comment.`;
+const examAnswerRule = `Answer in plain text, not JSON, so that no backslash has to be escaped. For each exercise write a line "@@@ statement <number>" and then its statement, exactly as it should appear in the book: real line breaks, and LaTeX written once, with single backslashes. When the pages print an official solution, write a line "@@@ solution <number>" and then the solution in the same way. A statement and a solution carry the text only, without the heading line that names the exercise ("Problema 2.", "Esercizio 2") and without the word that opens the solutions ("Soluzioni", "Svolgimento"). When the exercise is not on the pages or cannot be read, write only the line "@@@ unreadable <number>" for it. Give the exercises in the order listed, with the number exactly as listed. Write nothing before the first "@@@" line, no code fence around anything, and no comment.`;
 
 /**
  * Reads the answer described by `examAnswerRule`. `numbers` are the exercises asked for. The answer must have every one of them
@@ -858,7 +858,7 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string; program?: string; profile?: SubjectProfile }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; examSymbols?: string[]; handled?: string; changes?: string; program?: string; profile?: SubjectProfile }) {
   const lang = languageName(p.language);
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
@@ -867,6 +867,8 @@ export function reviewPrompt(p: { language: string; chapterTitle: string; chapte
 Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text and a figure that shows something wrong. Use category "figure", severity major for a figure that shows something wrong and minor for a caption or label that is off. Never report a missing figure and never report a figure because it adds little: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
+
+A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
@@ -879,7 +881,7 @@ ${p.objectives}
 
 Notation fixed for the whole book (symbols defined here need no definition in the chapter):
 ${p.notation || '(standard)'}
-
+${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
 ${p.program ? `COURSE PROGRAM ITEMS the chapter's sections teach (the exam covers these and nothing else): material clearly outside them is at most a minor issue (the one minor that is not about a wrong word), category "coverage", saying it is outside the program; do not invent scope and do not ask for topics the program does not list.\n${p.program}\n\n` : ''}${p.changes ? `${p.changes}\n\n` : ''}${p.handled ? `${p.handled}\n\n` : ''}CHAPTER TEXT (sections are marked with their ids):
 ${p.chapter}
 

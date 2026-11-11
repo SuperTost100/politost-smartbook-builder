@@ -243,6 +243,28 @@ function parsePaper(l: string, following: string[], label: string): Heading | nu
   return { key: label ? `Prova scritta - ${label}` : 'Prova scritta', date: null, numbered: false, variant };
 }
 
+/** The label cells of a paper's header table: "Corso", "Corso di Laurea", "Prova", "Durata", "Nome e cognome", "Matricola", "Data". */
+const HEADER_LABEL = /^(?:corso(?:\s+di\s+laurea)?|prova|durata|nome(?:\s+e\s+cognome)?|cognome(?:\s+e\s+nome)?|matricola|data|docente|anno\s+accademico)\s*:?$/i;
+/** A short line of a header table, label or value: no formula, no sub-question mark, no sentence. */
+const headerCell = (l: string) => l.length <= 60 && !/[=$]/.test(l) && !/^(?:[a-z]\)|\d{1,2}[.)])\s/i.test(l) && !/[.;]$/.test(l);
+
+/**
+ * How many of the last lines of an exercise or solution are the header table of the paper that follows ("Corso", "Elettrotecnica
+ * (ING-IND/31)", "Corso di Laurea", "Ingegneria Elettronica, primo anno", "Prova", printed before the session heading). The block
+ * is at least two lines, starts at a label cell, never takes the exercise's own first line and holds at least two different
+ * labels: one label and its value ("Durata", "20 s") can be a solution's own table, and the caller removes what this returns.
+ * shortcut: a header whose labels are not in HEADER_LABEL stays at the end of the last text, upgrade when a paper needs another label.
+ */
+export function trailingHeaderCells(lines: string[]): number {
+  let n = 0;
+  while (n < lines.length - 1 && n < 12 && headerCell(lines[lines.length - 1 - n])) n++;
+  // The block starts at a label cell: short lines before it ("Risposta:") are the solution's.
+  while (n >= 2 && !HEADER_LABEL.test(lines[lines.length - n])) n--;
+  if (n < 2) return 0;
+  const labels = new Set(lines.slice(-n).filter((l) => HEADER_LABEL.test(l)).map((l) => l.toLowerCase().replace(/[\s:]+/g, ' ').trim()));
+  return labels.size >= 2 ? n : 0;
+}
+
 interface Ex { word: string; id: string; variant: string | null; startPage: number; endPage: number; lines: string[] }
 interface Group { key: string; date: string | null; variant: string | null; statements: Ex[]; solutions: Ex[] }
 
@@ -302,7 +324,17 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
   let mode = 'statement' as 'statement' | 'solution';
   let cur = null as Ex | null;
 
-  const startGroup = (h: Heading) => {
+  const startGroup = (h: Heading, at = -1) => {
+    // The header table of this paper is printed before its heading, so it sits at the end of the previous paper's last text.
+    if (cur && at >= 0) {
+      const tail = cur.lines.slice(-12);
+      let n = trailingHeaderCells(cur.lines);
+      while (n > 0 && tail[tail.length - n] !== texts[at - n]) n--;
+      if (n) {
+        cur.lines.length -= n;
+        cur.endPage = Math.max(cur.startPage, lines[at - n - 1]?.page ?? cur.startPage);
+      }
+    }
     group = { key: h.key, date: h.date, variant: h.variant ?? null, statements: [], solutions: [] };
     groups.push(group);
     mode = 'statement';
@@ -333,9 +365,9 @@ export function splitExams(resourceId: string, pages: PageText[], opts: SegmentO
         while (k <= pos[i] && cur.lines.length > 1 && cur.lines[cur.lines.length - 1] === texts[i - k]) { cur.lines.pop(); k++; }
         if (k > 1) cur.endPage = Math.max(cur.startPage, lines[i - k]?.page ?? cur.startPage);
       }
-      if (!group || group.key !== h.key) startGroup(h);
+      if (!group || group.key !== h.key) startGroup(h, i);
       // Same heading again after exercises: another copy of the paper (running headers carry a section number and are ignored).
-      else if (hasContent && !h.numbered && (!h.generic || startsNewCopy(i, group))) startGroup(h);
+      else if (hasContent && !h.numbered && (!h.generic || startsNewCopy(i, group))) startGroup(h, i);
       else if (!hasContent && mode === 'solution') mode = 'statement';
       continue;
     }
