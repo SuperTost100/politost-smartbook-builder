@@ -14,7 +14,7 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
-import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
+import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, resolutionCheckPrompt, resolutionCheckSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
@@ -264,7 +264,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
  * issues is applied as the current text when the guards and the cheap check allow it and the head did not change meanwhile;
  * otherwise it waits as a proposal. Changes that would damage the section are dropped and their issues stay open.
  */
-export interface ReviseResult { revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean; figureProblems?: string[] }
+export interface ReviseResult { resolved?: number; revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean; figureProblems?: string[] }
 
 /** Program issues about thin coverage or a missing proof ask the fix to add material; every other fix stays minimal. */
 const adds = (i: { category: string }) => i.category === 'program-thin' || i.category === 'program-proof';
@@ -322,6 +322,53 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, issues: issues.length > 0, figures, guards: !instructed && issues.length > 0 ? { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') } : null }),
     parse: patchParser(figures, { blocks: blocks.length, issues: issues.length }), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
+  // The model may say that the section already fixes a problem and change nothing for it (an earlier fix or an edit by hand did).
+  // A cheap model confirms that against the text as it stands: a confirmed problem is closed as fixed, an unconfirmed one stays
+  // open with the reason shown. A problem the model also changed text for is not a claim.
+  const touched = new Set(data.changes.flatMap((c) => c.issues));
+  const claims = new Map(data.resolved.flatMap((r) => r.issues.filter((n) => !touched.has(n)).map((n) => [issues[n - 1].id, r.reason] as const)));
+  const claimed = issues.filter((i) => claims.has(i.id));
+  // The problems the changed blocks must fix, which the check of the changes judges.
+  const fixable = issues.filter((i) => !claims.has(i.id));
+  const confirmed = new Map<string, string>();
+  const rejected = new Map<string, string>();
+  if (claimed.length) {
+    const near = new Set<number>();
+    let located = true;
+    for (const i of claimed) {
+      const at = blocks.flatMap((b, n) => (quoteInBlock(i.quote, b) ? [n] : []));
+      if (!at.length) located = false;
+      for (const n of at) for (const m of [n - 1, n, n + 1]) if (m >= 0 && m < blocks.length) near.add(m);
+    }
+    const shown = located ? [...near].sort((a, b) => a - b) : blocks.map((_, n) => n);
+    const text = shown.map((n, k) => `${k && n !== shown[k - 1] + 1 ? '[…]\n\n' : ''}[B${n}]\n${blocks[n]}`).join('\n\n');
+    try {
+      const verdict = await runRole(ctx, {
+        role: 'checker',
+        ...resolutionCheckPrompt({
+          language: project.language,
+          issues: claimed.map((i, n) => `${n + 1}. [${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}"${blocks.some((b) => quoteInBlock(i.quote, b)) ? '' : ', a passage that is no longer in the section'})` : ''}\n   Claim: ${claims.get(i.id) || 'the text already fixes it'}`).join('\n'),
+          text: truncate(text, 30_000),
+        }),
+        schema: resolutionCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+      });
+      claimed.forEach((i, n) => {
+        const v = verdict.data.issues.find((x) => x.index === n + 1);
+        if (v?.resolved) confirmed.set(i.id, v.reason.trim() || claims.get(i.id) || 'the text already fixes it');
+        else rejected.set(i.id, v ? v.reason.trim() || 'the check found the problem still there' : 'the check gave no verdict');
+      });
+    } catch (err) {
+      if (!(err instanceof TaskError) || t.signal.aborted) throw err;
+      for (const i of claimed) rejected.set(i.id, 'the check could not run');
+    }
+  }
+  const settleClaims = () => {
+    for (const i of claimed) {
+      const gone = i.quote.trim() && !blocks.some((b) => quoteInBlock(i.quote, b)) ? ' The passage it quoted is no longer in the section.' : '';
+      if (confirmed.has(i.id)) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id = ?`, `Already resolved in the current text: ${confirmed.get(i.id)}${gone}`, i.id);
+      else ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id = ?`, `The AI said the text already fixes this, but the check disagreed: ${rejected.get(i.id)}`, i.id);
+    }
+  };
   // A fix may add figures. The check that drops decorative ones runs first; image blocks pointing at neither a new figure
   // nor an existing asset are removed.
   let proposed = figures ? data.figures ?? [] : [];
@@ -352,7 +399,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     for (const c of data.changes) if (c.block >= 0 && c.block < blocks.length) working[c.block] = c.text.trim();
   } else {
     const lint = (md: string) => lintSection(extractCitations(md, splitBlocks).markdown, { sectionId: nodeId, language: project.language });
-    const guarded = applyGuardedChanges(blocks, data.changes, lint, { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') });
+    const guarded = applyGuardedChanges(blocks, fixable.length ? data.changes : [], lint, { figures: issues.some((i) => i.category === 'figure'), removals: issues.some((i) => i.category === 'program-off') });
     working = guarded.blocks;
     reverted = guarded.reverted;
     if (guarded.kept.length) {
@@ -365,7 +412,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
           role: 'checker',
           ...fixCheckPrompt({
             language: project.language, additive: grows,
-            issues: issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}[${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`).join('\n'),
+            issues: fixable.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}[${i.severity}] ${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`).join('\n'),
             changes: guarded.kept.map((n) => `[B${n}]\nBLOCK BEFORE:\n${clip(blocks[n - 1])}\nOLD:\n${clip(blocks[n])}\nNEW:\n${working[n].trim() ? clip(working[n], 12_000) : '(deleted)'}\nBLOCK AFTER:\n${clip(blocks[n + 1])}`).join('\n\n'),
           }),
           schema: fixCheckSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
@@ -376,7 +423,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
           working[c.block] = blocks[c.block];
           reverted.push({ block: c.block, reason: `the check found it harmful${c.reason ? ` (${c.reason.trim()})` : ''}` });
         }
-        for (const i of verdict.data.issues) if (!i.fixed && i.index >= 1 && i.index <= issues.length) unresolved.set(i.index - 1, i.reason.trim() || 'the check found the problem still there');
+        for (const i of verdict.data.issues) if (!i.fixed && i.index >= 1 && i.index <= fixable.length) unresolved.set(i.index - 1, i.reason.trim() || 'the check found the problem still there');
       } catch (err) {
         // The check is a safeguard, not a gate: when it cannot run, the guards alone decide.
         if (!(err instanceof TaskError) || t.signal.aborted) throw err;
@@ -395,9 +442,13 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
 
   if (!surviving) {
     discardUnstored(built, []);
-    reopen(issues, (id) => `The AI fix was not applied: ${dropped(issues.find((i) => i.id === id)!) ?? fallback}`);
+    ctx.db.tx(() => {
+      reopen(fixable, (id) => `The AI fix was not applied: ${dropped(fixable.find((i) => i.id === id)!) ?? fallback}`);
+      settleClaims();
+    });
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
-    return { skipped: 'no change survived the checks', reverted: reasons, ...(checked === undefined ? {} : { checked }) };
+    const settled = confirmed.size ? { resolved: confirmed.size } : {};
+    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...settled, ...(checked === undefined ? {} : { checked }) };
   }
 
   const { markdown, citations } = extractCitations(working.filter((b) => b.trim()).join('\n\n'), splitBlocks);
@@ -405,7 +456,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   // Image blocks are not text: removing a useless figure does not shrink the section.
   const prose = (md: string) => md.replace(/:::image\{[^}]*\}\s*\n\s*:::/g, '').length;
   const shrunk = !!issues.length && prose(markdown) < prose(head.markdown) * MIN_KEPT_SHARE && !issues.some((i) => i.category === 'repetition' || i.category === 'program-off');
-  const answered = issues.filter((i) => !dropped(i) && !unresolved.has(issues.indexOf(i)));
+  const answered = fixable.filter((i) => !dropped(i) && !unresolved.has(fixable.indexOf(i)));
   let committed!: ReturnType<typeof commitAiRevision>;
   let stored: string[] = [];
   let saved = false;
@@ -438,11 +489,12 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       }
       const done = new Set(answered.map((i) => i.id));
       if (answered.length) ctx.db.run(`UPDATE review_issues SET status = ?, resolution = ? WHERE id IN (${answered.map(() => '?').join(',')})`, applied ? 'fixed' : 'proposed', applied ? `Fixed by AI in revision ${committed.revId}` : `Proposal ${committed.revId}`, ...answered.map((i) => i.id));
-      reopen(issues.filter((i) => !done.has(i.id)), (id) => {
-        const i = issues.find((x) => x.id === id)!;
+      reopen(fixable.filter((i) => !done.has(i.id)), (id) => {
+        const i = fixable.find((x) => x.id === id)!;
         const r = dropped(i);
-        return r ? `The AI fix was not applied: ${r}` : `The AI fix did not resolve it: ${unresolved.get(issues.indexOf(i))}`;
+        return r ? `The AI fix was not applied: ${r}` : `The AI fix did not resolve it: ${unresolved.get(fixable.indexOf(i))}`;
       });
+      settleClaims();
     });
     saved = true;
   } finally {
@@ -452,7 +504,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   if (issues.length) issuesChanged(ctx, projectId, issues.map((i) => i.id));
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
   const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });
-  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
+  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
 }
 
 export { recordLintIssues };

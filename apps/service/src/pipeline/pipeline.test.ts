@@ -1244,6 +1244,81 @@ describe('fixes are applied directly, behind guards and a cheap check', () => {
     assert.match(fake.calls[3].prompt, /Problems:\nText before the first "@@@" line[\s\S]*full corrected answer in the same format/);
   });
 
+  describe('a fix that finds the text already resolves an issue (issue 37)', () => {
+    const verdicts = (...v: [boolean, string][]) => answer({ issues: v.map(([resolved, reason], k) => ({ index: k + 1, resolved, reason })) });
+    const revisions = () => ctx.db.get<{ n: number }>('SELECT COUNT(*) AS n FROM content_revisions')!.n;
+
+    test('a confirmed claim closes the issue as fixed with the reason, and no revision is written', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', 'La fenolftaleina vira tra pH 8,2 e 10.\n\nAltro.');
+      issue('i1', { quote: 'La fenolftaleina' });
+      const n = revisions();
+      fake.next(patchAnswer({ changes: [], resolved: [{ issues: [1], reason: 'Il testo nomina già la fenolftaleina e il suo intervallo.' }] }), verdicts([true, 'Il primo blocco indica indicatore e intervallo.']));
+      const r = await fix(['i1']);
+      assert.equal(r.skipped, 'the text already fixes the issues');
+      assert.equal(r.resolved, 1);
+      assert.deepEqual(state('i1'), { status: 'fixed', resolution: 'Already resolved in the current text: Il primo blocco indica indicatore e intervallo.' });
+      assert.equal(revisions(), n);
+      assert.equal(fake.calls[1].selection.model, ctx.settings().routes.checker.primary.model);
+      assert.match(fake.calls[1].prompt, /Claim: Il testo nomina già la fenolftaleina[\s\S]*\[B0\]\nLa fenolftaleina vira/);
+      assert.ok(events('issue.updated').some((e) => e.issueIds.includes('i1')));
+    });
+
+    test('an unconfirmed claim leaves the issue open with the reason shown; a check that cannot run does too', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', 'Testo uno.\n\nTesto due.');
+      issue('i1', { quote: 'Testo uno.' });
+      issue('i2', { quote: 'Testo due.' });
+      fake.next(patchAnswer({ changes: [], resolved: [{ issues: [1, 2], reason: 'Già detto.' }] }), verdicts([false, 'La soglia non è nominata.'], [true, 'Sì.']));
+      const r = await fix(['i1', 'i2']);
+      assert.equal(r.resolved, 1);
+      assert.deepEqual(state('i1'), { status: 'open', resolution: 'The AI said the text already fixes this, but the check disagreed: La soglia non è nominata.' });
+      assert.equal(state('i2').status, 'fixed');
+
+      fake.next(patchAnswer({ changes: [], resolved: [{ issues: [1], reason: 'Già detto.' }] }), () => new TaskError('rete assente', 'temporary'));
+      const again = await fix(['i1']);
+      assert.equal(again.skipped, 'no change survived the checks');
+      assert.match(state('i1').resolution, /the check could not run/);
+    });
+
+    test('with other changes: the changed blocks are checked against their own issues, and the claim is settled apart', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', 'Prima frase.\n\nSeconda frase.');
+      issue('i1', { quote: 'Prima frase.' });
+      issue('i2', { quote: 'Seconda frase.' });
+      fake.next(
+        () => ({ text: '@@@ block 0 | issues 1\nPrima corretta.\n@@@ resolved | issues 2\nLa seconda è già giusta.', usage: usageOf(10, 10) }),
+        answer(checkGood([0], 1)),
+        verdicts([true, 'Corretta.']),
+      );
+      const r = await fix(['i1', 'i2']);
+      assert.equal(r.status, 'current');
+      assert.equal(head().markdown, 'Prima corretta.\n\nSeconda frase.');
+      assert.equal(r.resolved, 1);
+      assert.match(state('i1').resolution, /^Fixed by AI in revision/);
+      assert.match(state('i2').resolution, /^Already resolved in the current text: Corretta\./);
+      const change = fake.calls.find((c) => /CHANGED BLOCKS/.test(c.prompt))!;
+      assert.match(change.prompt, /1\. \[major\] Problema i1/);
+      assert.doesNotMatch(change.prompt, /Problema i2/, 'the change check does not judge the claimed issue');
+    });
+
+    test('a problem the model changed text for is not a claim, and the resolution says when the quoted passage is gone', async () => {
+      seedOutline([['c1', ['s1']]]);
+      seedRevision('s1', 'Frase nuova.');
+      issue('i1', { quote: 'Frase vecchia che non c\'è più.' });
+      fake.next(patchAnswer({ changes: [], resolved: [{ issues: [1], reason: 'Riscritta in precedenza.' }] }), verdicts([true, 'La frase nuova è corretta.']));
+      await fix(['i1']);
+      assert.match(state('i1').resolution, /Already resolved in the current text: La frase nuova è corretta\. The passage it quoted is no longer in the section\./);
+      assert.match(fake.calls[1].prompt, /a passage that is no longer in the section/);
+
+      issue('i2', { quote: 'Frase nuova.' });
+      fake.next(() => ({ text: '@@@ block 0 | issues 1\nFrase corretta.\n@@@ resolved | issues 1\nGià a posto.', usage: usageOf(10, 10) }), answer(checkGood([0])));
+      const r = await fix(['i2']);
+      assert.equal(r.resolved, undefined);
+      assert.match(state('i2').resolution, /^Fixed by AI in revision/);
+    });
+  });
+
   test('the head changed while the model ran: the fix stays a proposal and the issue is proposed', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo.');

@@ -822,6 +822,30 @@ Return JSON {"changes": [{"block": <number>, "verdict": "good"|"harmful", "reaso
   };
 }
 
+// ---------- check of a claim that the text already fixes a problem ----------
+
+export const resolutionCheckSchema = z.object({
+  issues: z.array(z.object({
+    index: z.number().int().min(1).describe('the number of the problem in the list'),
+    resolved: z.boolean(),
+    reason: z.string().describe('one short sentence: where the text fixes it, or what is still wrong'),
+  })),
+});
+
+/** A fix model said the section already fixes a problem and changed nothing for it. A cheap model looks at the text as it stands. */
+export function resolutionCheckPrompt(p: { language: string; issues: string; text: string }) {
+  return {
+    system: `You check whether a university textbook section written in ${languageName(p.language)} already fixes problems that a reviewer reported earlier. Another model claims that it does. Judge from the section as it stands now, never from the claim. A problem is resolved only when the text now says what the problem asked for, correctly: the hypothesis is stated, the statement is true, the symbol or reference is right. If the passage the problem quoted is no longer in the section, the problem is resolved only when what is there instead does not have the problem. Be strict about mathematics.`,
+    prompt: `PROBLEMS, each with the claim that the text already fixes it:
+${p.issues}
+
+SECTION AS IT STANDS (the blocks the problems point at, with their neighbours; "[…]" marks blocks left out):
+${p.text}
+
+Return JSON {"issues": [{"index": <number>, "resolved": <boolean>, "reason": "..."}]} with one entry per problem, the reason in ${languageName(p.language)}.`,
+  };
+}
+
 // ---------- revision ----------
 
 export function revisePrompt(p: { language: string; markdown: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string }) {
