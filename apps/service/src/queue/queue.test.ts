@@ -159,7 +159,42 @@ test('a failure blocks everything downstream, however deep: A -> B -> C fails th
   queue.start();
   await until(() => queue.runSummary(runId)!.status === 'failed');
   await queue.stop();
-  assert.deepEqual(queue.tasks(runId).map((t) => t.state), ['failed', 'queued', 'queued']);
+  const tasks = queue.tasks(runId);
+  assert.deepEqual(tasks.map((t) => t.state), ['failed', 'cancelled', 'cancelled']);
+  assert.equal(tasks[1].error?.message, 'Not run: an earlier task failed.');
+  assert.ok(tasks[1].finishedAt);
+});
+
+test('retrying the failed task alone puts the tasks behind it back, and they run once it succeeds', async () => {
+  const { queue, projectId } = setup();
+  let healthy = false;
+  queue.register('flaky', async () => { if (!healthy) throw new TaskError('no', 'fatal'); return 'ok'; });
+  queue.register('work', async () => 'ok');
+  const runId = queue.createRun(projectId, 'generate', [
+    { kind: 'flaky', key: 'a', label: 'a' },
+    { kind: 'work', key: 'b', label: 'b', deps: ['a'] },
+  ]);
+  queue.start();
+  await until(() => queue.runSummary(runId)!.status === 'failed');
+  assert.deepEqual(queue.tasks(runId).map((t) => t.state), ['failed', 'cancelled']);
+  healthy = true;
+  queue.retry(runId, [queue.tasks(runId)[0].id]);
+  await until(() => queue.runSummary(runId)!.status === 'completed');
+  await queue.stop();
+  assert.deepEqual(queue.tasks(runId).map((t) => t.state), ['succeeded', 'succeeded']);
+});
+
+test('at startup, tasks that an earlier version left queued in a failed run end with it', async () => {
+  const { queue, db, projectId } = setup();
+  const failed = queue.createRun(projectId, 'generate', [{ kind: 'x', key: 'a', label: 'a' }, { kind: 'x', key: 'b', label: 'b' }]);
+  db.run(`UPDATE tasks SET state = 'failed' WHERE run_id = ? AND key = 'a'`, failed);
+  db.run(`UPDATE runs SET status = 'failed' WHERE id = ?`, failed);
+  const other = queue.createRun(projectId, 'generate', [{ kind: 'x', key: 'c', label: 'c' }]);
+  db.run(`UPDATE runs SET status = 'paused' WHERE id = ?`, other);
+  queue.start();
+  await queue.stop();
+  assert.deepEqual(queue.tasks(failed).map((t) => t.state), ['failed', 'cancelled']);
+  assert.deepEqual(queue.tasks(other).map((t) => t.state), ['queued']);
 });
 
 test('independent work keeps a run going while a deep chain is blocked by a failure', async () => {
