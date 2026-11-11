@@ -35,7 +35,8 @@ const dir = process.argv[1];
 const input = JSON.parse(await new Promise((resolve) => { let s = ''; process.stdin.setEncoding('utf8'); process.stdin.on('data', (d) => { s += d; }); process.stdin.on('end', () => resolve(s)); }));
 let out = '';
 const add = (s) => { if (out.length < ${MAX_OUTPUT}) out += s + '\\n'; };
-const reply = (o) => process.stdout.write(JSON.stringify(o) + '\\n');
+let sent = Promise.resolve();
+const reply = (o) => { sent = new Promise((done) => process.stdout.write(JSON.stringify(o) + '\\n', () => done())); };
 try {
   const { loadPyodide } = await import(dir + '/pyodide.mjs');
   const py = await loadPyodide({ indexURL: dir, jsglobals: {}, stdout: add, stderr: add });
@@ -48,6 +49,9 @@ try {
 } catch (e) {
   reply({ ok: false, stdout: '', error: 'Pyodide could not start: ' + String((e && e.message) || e).slice(0, 500), version: 'unavailable' });
 }
+// A write to a pipe is not finished when write() returns, and process.exit() drops what is still waiting, so the answer was
+// lost whenever the parent read late (a busy machine). The exit waits for the write.
+await sent;
 process.exit(0);
 `;
 
