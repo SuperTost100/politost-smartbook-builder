@@ -17,6 +17,12 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Typst packages and Python wheels for drawn figures, pinned by SHA-256 in the script. Cached by that file's hash.
+      - uses: actions/cache@v4
+        with:
+          path: .figure-packages
+          key: figure-packages-${{ hashFiles('scripts/fetch-figure-packages.mjs') }}
+      - run: npm run figure-packages
       - run: npm run typecheck
       - run: npm test
       - run: npm run build -w @smartbuilder/web

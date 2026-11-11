@@ -11,7 +11,7 @@ import { idParam, parse, projectOf } from './util.ts';
 
 const fields = projectInputSchema.shape;
 const optionsPatch = z.object(Object.fromEntries(
-  Object.entries(bookOptionsSchema.shape).map(([k, v]) => [k, (v as z.ZodDefault<z.ZodType>).removeDefault().optional()]),
+  Object.entries(bookOptionsSchema.shape).map(([k, v]) => [k, v instanceof z.ZodDefault ? v.removeDefault().optional() : v]),
 )) as unknown as z.ZodType<Partial<BookOptions>>;
 
 // Defaults are removed so a patch only touches the fields it names.

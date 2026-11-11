@@ -1,4 +1,5 @@
 // Prints what the builder can use on this computer and how to fix what is missing.
+import { ensureFigurePackages, missingFigurePackages } from '../../../../scripts/fetch-figure-packages.mjs';
 import { parseArgs } from '../config.ts';
 import { createContext } from '../context.ts';
 import { getConnections } from '../llm/index.ts';
@@ -16,4 +17,15 @@ for (const p of c.providers) {
 const nb = c.notebooklm;
 console.log(`[${mark(nb.installed && nb.signedIn)}] NotebookLM: ${!nb.installed ? 'nlm is not installed (uv tool install notebooklm-mcp-cli)' : nb.signedIn ? `signed in as ${nb.account ?? 'unknown'}` : 'not signed in — see docs/SETUP.md'}`);
 console.log(`[${mark(c.libreoffice.installed)}] LibreOffice: ${c.libreoffice.installed ? c.libreoffice.path : 'not found (only needed for Word and PowerPoint files)'}`);
+// Drawn figures need the pinned Typst packages and Python wheels. Fetch them here when they are missing, like `npm start` does.
+let figureProblem = '';
+if (missingFigurePackages().length) {
+  try {
+    await ensureFigurePackages();
+  } catch (e) {
+    figureProblem = e instanceof Error ? e.message : String(e);
+  }
+}
+const stillMissing = missingFigurePackages().length;
+console.log(`[${mark(stillMissing === 0)}] Figure packages: ${stillMissing === 0 ? 'installed (.figure-packages)' : `${stillMissing} missing${figureProblem ? ` (${figureProblem})` : ''}. Run: npm run figure-packages`}`);
 ctx.db.close();

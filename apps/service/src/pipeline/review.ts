@@ -1,6 +1,6 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
 import { applyGuardedChanges, compileChapter, dropReferences, lintSection, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
-import { outlineSchema } from '@smartbuilder/domain';
+import { outlineSchema, subjectProfileOf } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { questionsChanged } from '../repo/questions.ts';
@@ -13,7 +13,8 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues, withMarkers } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
-import { CUT, fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchema, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
+import { dropDecorative, figurePlaces } from './figureCheck.ts';
+import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchPrompt, patchSchemaFor, programItemsText, reviewPrompt, reviewSchema, repairSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
 
 const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
@@ -141,7 +142,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   };
 
   const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }) => runRole(ctx, {
-    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled }),
+    role: 'reviewer', ...reviewPrompt({ language: project.language, notation, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled, profile: subjectProfileOf(project) }),
     schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const objectivesOf = (list: typeof chapter.sections) => list.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
@@ -241,7 +242,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
  * issues is applied as the current text when the guards and the cheap check allow it and the head did not change meanwhile;
  * otherwise it waits as a proposal. Changes that would damage the section are dropped and their issues stay open.
  */
-export interface ReviseResult { revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean }
+export interface ReviseResult { revId?: string; status?: string; reused?: boolean; skipped?: string; findings?: number; reverted?: string[]; checked?: boolean; shrunk?: boolean; figureProblems?: string[] }
 
 /** Program issues about thin coverage or a missing proof ask the fix to add material; every other fix stays minimal. */
 const adds = (i: { category: string }) => i.category === 'program-thin' || i.category === 'program-proof';
@@ -275,15 +276,28 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const instructed = !!t.task.input.instruction;
   const grows = issues.some(adds);
   const role = instructed || grows || issues.some((i) => i.severity === 'blocker') ? 'writer' : 'editor';
+  // The figure rules and specs go to the model only when the fix may add a figure: a figure problem, or the author's instruction.
+  const figures = project.options.figures && (instructed || issues.some((i) => i.category === 'figure')) ? figureSetupOf(project, photosAvailable(ctx)) : null;
   const { data, route } = await runRole(ctx, {
-    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures: project.options.figures ? { photos: photosAvailable(ctx) } : null }),
-    schema: patchSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    role, ...patchPrompt({ language: project.language, blocks: blocks.map((b, i) => `[B${i}]\n${b}`).join('\n\n'), requests, evidence: ev, knownFormulas: known, sectionIds, minimal: !instructed && issues.length > 0, additive: grows, figures }),
+    schema: patchSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
-  // A fix may add figures; image blocks pointing at neither a new figure nor an existing asset are removed.
+  // A fix may add figures. The check that drops decorative ones runs first; image blocks pointing at neither a new figure
+  // nor an existing asset are removed.
+  let proposed = figures ? data.figures ?? [] : [];
+  const figureNotes: string[] = [];
+  if (figures && proposed.length) {
+    const after = blocks.map((b, i) => data.changes.find((c) => c.block === i)?.text ?? b);
+    const { text, afterBlock } = figurePlaces(splitBlocks(after.join('\n\n')).map((b) => b.text), proposed);
+    const checked = await dropDecorative(ctx, t, { projectId, language: project.language, figures, proposed, blocks: text, afterBlock: (f) => afterBlock.get(f), soft: true });
+    proposed = checked.kept;
+    figureNotes.push(...checked.notes);
+  }
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: project.options.figures ? data.figures ?? [] : [], photos: photosAvailable(ctx), keepOwn: true,
+    projectId, nodeId, language: project.language, figures: proposed, photos: photosAvailable(ctx), keepOwn: true,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
+  figureNotes.push(...built.notes);
   const existing = existingAssetNames(ctx, projectId);
   for (const c of data.changes) c.text = rewriteImageRefs(c.text, built, existing);
   const isIntro = !findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId);
@@ -398,7 +412,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   if (issues.length) issuesChanged(ctx, projectId, issues.map((i) => i.id));
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
   const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });
-  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}) };
+  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
 }
 
 export { recordLintIssues };

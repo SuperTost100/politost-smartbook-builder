@@ -525,3 +525,14 @@ test('numbering is part of the book compile and leaves questions alone', () => {
   assert.match(text(book, 'chapters/01-cinematica.md'), /\*\*Teorema 1\.1\.\*\* Nuovo\./);
   assert.match(text(book, 'esercizi.md'), /\*\*Teorema 9\.9\*\* nel testo di una domanda\./);
 });
+
+test('a truth table and a matrix written as KaTeX arrays survive the compile and the reader parser', () => {
+  const table = '$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\n0 & 0 & 0 \\\\\n1 & 1 & 1\n\\end{array}\n$$';
+  const matrix = '$$\n\\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix}\n$$';
+  const out = compileChapter(chapterOf(3, `La porta AND:\n\n${table}\n\nLa matrice identità:\n\n${matrix}\n\nL'uscita vale $5\\,\\mathrm{V}$.`));
+  assert.deepEqual(out.findings, []);
+  assert.ok(out.markdown.includes(table), out.markdown);
+  assert.ok(out.markdown.includes(matrix));
+  const content = parseChapterMarkdown(out.markdown, 3).paragraphs.map((p) => p.content).join('\n');
+  assert.ok(content.includes('\\begin{array}{cc|c}') && content.includes('\\hline') && content.includes('\\end{array}'), content);
+});

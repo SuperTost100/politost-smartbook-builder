@@ -1,7 +1,7 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
 import { lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
-import type { Question } from '@smartbuilder/domain';
+import { subjectProfileOf, type Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -274,7 +274,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (!q.statement.trim() || !q.solution.trim()) return { skipped: 'missing statement or solution' };
   const project = loadProject(ctx, q.projectId);
   const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
-    role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution }), schema: verifySchema,
+    role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution, profile: subjectProfileOf(project) }), schema: verifySchema,
     projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.

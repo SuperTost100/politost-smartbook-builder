@@ -60,6 +60,18 @@ describe('projects', () => {
     assert.equal(patched.body.language, 'it', 'untouched fields keep their value');
     assert.deepEqual(patched.body.authors, ['Ada']);
 
+    // The subject area and the figure options are set through the same options patch.
+    assert.equal(created.body.options.subjectArea, undefined, 'no area until one is set: it is inferred from the subject');
+    assert.equal(created.body.options.figurePolicy, 'helpful');
+    assert.equal(created.body.options.circuitSymbols, 'american');
+    const subject = await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: 'electronics', figurePolicy: 'generous', circuitSymbols: 'european' } });
+    assert.equal(subject.status, 200);
+    assert.deepEqual([subject.body.options.subjectArea, subject.body.options.figurePolicy, subject.body.options.circuitSymbols], ['electronics', 'generous', 'european']);
+    const later = await t.req('PATCH', `/api/projects/${id}`, { options: { graphs: true } });
+    assert.deepEqual([later.body.options.subjectArea, later.body.options.figurePolicy], ['electronics', 'generous'], 'a later patch keeps them');
+    assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { subjectArea: 'poetry' } })).status, 400);
+    assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { figurePolicy: 'lots' } })).status, 400);
+
     const list = await t.req('GET', '/api/projects');
     const row = list.body.find((p: { id: string }) => p.id === id);
     assert.deepEqual(row.counts, { resources: 0, sections: 0, drafted: 0, questions: 0, openIssues: 0 });

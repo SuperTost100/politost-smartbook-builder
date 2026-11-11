@@ -4,6 +4,7 @@ import { renderPlotSvg, validatePlotSpec } from '@smartbuilder/content';
 import { mkdirSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { z } from 'zod';
+import { FIGURE_KINDS, type FigureKind } from '@smartbuilder/domain';
 import { paths, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
@@ -13,11 +14,8 @@ import { renderStructureSvg, structureIdentity, validateStructureSpec } from './
 import { codeString } from '../llm/schema.ts';
 import { findSection, loadOutline } from '../pipeline/util.ts';
 
-export const figureSchema = z.object({
-  key: z.string().describe('kebab-case, used as file name'),
-  kind: z.enum(['plot', 'structure', 'photo', 'levels', 'orbitals', 'cell', 'periodic']),
-  caption: z.string(),
-  alt: z.string(),
+/** One nullable spec per figure kind. A new kind adds its spec here, its name to FIGURE_KINDS (domain) and a block to the figure rules (prompts.ts). */
+const KIND_SPECS = {
   plot: z.object({
     xRange: z.tuple([z.number(), z.number()]),
     yRange: z.tuple([z.number(), z.number()]),
@@ -41,7 +39,26 @@ export const figureSchema = z.object({
   orbitals: orbitalsSchema.nullable().describe('for kind "orbitals", else null'),
   cell: cellSchema.nullable().describe('for kind "cell", else null'),
   periodic: periodicSchema.nullable().describe('for kind "periodic", else null'),
-});
+} satisfies Record<FigureKind, z.ZodType>;
+
+const figureHead = { key: z.string().describe('kebab-case, used as file name'), caption: z.string(), alt: z.string() };
+
+/** Every kind. This is the shape the builder reads; what a book's writer is asked for is `figureSchemaFor`. */
+export const figureSchema = z.object({ key: figureHead.key, kind: z.enum(FIGURE_KINDS), caption: figureHead.caption, alt: figureHead.alt, ...KIND_SPECS });
+
+/**
+ * The schema of one figure request for a book that can use only `kinds`: the provider schema then carries only those
+ * specs. Typed as the full schema because the builder reads only the spec of the kind a figure chose, and the others
+ * are null or missing in both.
+ */
+export function figureSchemaFor(kinds: readonly FigureKind[]): typeof figureSchema {
+  const used = FIGURE_KINDS.filter((k) => kinds.includes(k));
+  if (!used.length) throw new Error('A figure schema needs at least one kind.');
+  return z.object({
+    key: figureHead.key, kind: z.enum(used as [FigureKind, ...FigureKind[]]), caption: figureHead.caption, alt: figureHead.alt,
+    ...Object.fromEntries(used.map((k) => [k, KIND_SPECS[k]])),
+  }) as unknown as typeof figureSchema;
+}
 export type FigureRequest = z.infer<typeof figureSchema>;
 
 /** What makes two figures the same picture: the photo itself, the species in its drawing style, or the whole spec. */
@@ -97,7 +114,7 @@ export interface BuiltFigures {
 
 const DIAGRAMS: readonly string[] = ['levels', 'orbitals', 'cell', 'periodic'] satisfies DiagramKind[];
 
-const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
+export const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').slice(0, 50);
 /**
  * The builder numbers figures, so a number the model wrote in front of the caption is removed. Formulas stay as written:
  * the compiler turns them into plain text (`latexToPlain`), fractions and roots included.
@@ -105,7 +122,7 @@ const cleanKey = (key: string) => key.toLowerCase().replace(/[^a-z0-9-]/g, '-').
 export function cleanCaption(caption: string): string {
   return caption.replace(/^\s*(?:fig(?:ura|ure)?\.?)\s*\d+(?:\.\d+)*\s*[:.\-–—)]?\s*/i, '').trim();
 }
-const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
+export const stem = (name: string) => name.replace(/\.[a-z0-9]+$/i, '');
 
 function asPlotSpec(p: NonNullable<FigureRequest['plot']>) {
   return {

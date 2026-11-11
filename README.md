@@ -81,6 +81,8 @@ npm run doctor     # what is installed and signed in, and how to fix the rest
 npm start          # builds the web app and serves it on http://localhost:5300
 ```
 
+`npm start` and `npm run doctor` also download the pinned packages that drawn figures need into `.figure-packages/` (about 7 MB, checked against SHA-256 hashes). `npm run figure-packages` does it by hand.
+
 To use it from another device on your network, such as a laptop reaching a desktop over Tailscale:
 
 ```bash
@@ -117,7 +119,7 @@ npm test
 npm run test:e2e     # Playwright tests for the web app
 ```
 
-CI runs `typecheck`, `test` and the web build on every push.
+CI runs `typecheck`, `test` and the web build on every push, after it fetches the figure packages.
 
 ## Documentation
 
@@ -137,3 +139,5 @@ Smart Builder comes as is, with no warranty and no liability for what you make w
 ## License
 
 AGPL-3.0-or-later. Smart Builder uses [MuPDF](https://mupdf.com/) (AGPL) for PDF reading and code adapted from the [Smartbook reader](https://github.com/SuperTost100/politost-smartbook) (AGPL). Books you make with it are yours and aren't covered by this license.
+
+Drawn figures use these third-party components, all compatible with the AGPL: the [Typst](https://github.com/typst/typst) compiler through [typst.ts](https://github.com/Myriad-Dreamin/typst.ts) (Apache-2.0), the Typst packages [CeTZ](https://github.com/cetz-package/cetz) and [cetz-plot](https://github.com/cetz-package/cetz-plot) (LGPL-3.0-or-later), [zap](https://codeberg.org/grangelouis/zap), [fletcher](https://github.com/Jollywatt/typst-fletcher), [lilaq](https://github.com/lilaq-project/lilaq), [finite](https://github.com/jneug/typst-finite) and their helper packages (MIT, MIT-0 or Apache-2.0), [schemdraw](https://github.com/cdelker/schemdraw), ziamath, ziafont and latex2mathml (MIT, the first two bundle the STIX Two Math and DejaVu Sans fonts) and [resvg](https://github.com/linebender/resvg) through `@resvg/resvg-js` (MPL-2.0). The Typst packages and Python wheels are downloaded unchanged by `scripts/fetch-figure-packages.mjs`, which lists every version and hash, and each carries its own license file.

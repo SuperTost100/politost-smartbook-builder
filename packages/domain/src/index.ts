@@ -3,6 +3,8 @@
 import { z } from 'zod';
 
 export * from './api.ts';
+import { SUBJECT_AREAS } from './subjects.ts';
+export * from './subjects.ts';
 
 // ---------- Model routing ----------
 
@@ -68,6 +70,12 @@ export const bookOptionsSchema = z.object({
   labLanguage: z.enum(['python', 'matlab']).default('python'),
   graphs: z.boolean().default(true),
   figures: z.boolean().default(true),
+  /** What the book is about. Without it, the area is inferred from the subject and the title (`subjectAreaOf`). It sets the figure kinds, the notation and the hypotheses the prompts mention. */
+  subjectArea: z.enum(SUBJECT_AREAS).optional(),
+  /** `helpful`: a figure only where the student has to see something to follow the text. `generous`: most sections get one. Only read when `figures` is on. */
+  figurePolicy: z.enum(['helpful', 'generous']).default('helpful'),
+  /** How circuit figures are drawn. Nothing reads it yet. */
+  circuitSymbols: z.enum(['american', 'european']).default('american'),
   /** Hold every chapter after the first until the author approves chapter 1. */
   firstChapterGate: z.boolean().default(true),
   /** Wait for outline approval before drafting. */

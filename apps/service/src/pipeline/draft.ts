@@ -13,7 +13,8 @@ import { carryCitations, currentHead, insertProposal } from '../repo/content.ts'
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { readyProgram } from '../repo/program.ts';
 import { chapterExamStats, examSessionTotal } from './exam.ts';
-import { draftPrompt, draftSchema, examGuidePrompt, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
+import { draftPrompt, draftSchemaFor, examGuidePrompt, figureSetupOf, introPrompt, repairPrompt, repairSchema } from './prompts.ts';
+import { dropDecorative, figurePlaces } from './figureCheck.ts';
 import { chapterPlanText, extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, loadTopics, revisionForTask, truncate } from './util.ts';
 
 const MAX_TRANSCRIBED_PAGES = 4;
@@ -173,6 +174,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   // The closing exam guide of a chapter is written from the chapter's exam questions, with no evidence and no figures.
   const guide = section.role === 'exam-guide';
   const photos = project.options.figures && !guide && photosAvailable(ctx);
+  const figures = project.options.figures && !guide ? figureSetupOf(project, photos) : null;
   let prompt: { system: string; prompt: string };
   if (guide) {
     const stats = chapterExamStats(ctx, projectId, chapter);
@@ -193,14 +195,14 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
       section: { id: section.id, title: section.title, objectives: section.objectives, depth: section.depth, subsections: section.subsections.map((s) => `${s.title} (${s.objectives.join('; ')})`).join(' | ') },
       topics: topics.map((tp) => `- ${tp.name}: ${tp.examSessions} of ${sessions} exam sessions${tp.priority === 'high' ? ' (high priority)' : ''}`).join('\n') || '(none)',
       earlier: earlier.join('\n'), knownFormulas: known.map((k) => `${k.key}: ${k.label}`).join('\n'), sectionIds,
-      evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures: project.options.figures, photos, outside: project.options.outsideMaterial,
+      evidence: ev.notes, pages: ev.pages, summary: ev.summary, figures, outside: project.options.outsideMaterial,
       bookFigures: project.options.figures ? bookFigureList(bookFigures(ctx, projectId, nodeId)) : '',
       teaches: project.options.labLanguage === 'matlab' ? 'matlab' : undefined,
       program: program ? { items: section.programItems.map((k) => program.items.find((i) => i.key === k)).filter((i) => !!i), exam: program.examFormat } : undefined,
     });
   }
   t.progress(`Writing "${section.title}"`);
-  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const { data, route } = await runRole(ctx, { role: 'writer', ...prompt, schema: draftSchemaFor(figures), projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   t.setProvider(route.provider);
 
   let { markdown, citations } = extractCitations(data.markdown, splitBlocks);
@@ -208,12 +210,21 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
 
   // Figures: plots and structures are drawn from validated specs, photos picked from the stock services. Blocks whose
   // figure failed are removed. File names are scoped to the section, so two sections can use the same figure key.
+  // The cheap check that the figures pass runs also checks the figures a draft proposes, before they are built.
+  let proposed = figures ? data.figures ?? [] : [];
+  const figureNotes: string[] = [];
+  if (figures && proposed.length) {
+    const { text, afterBlock } = figurePlaces(splitBlocks(markdown).map((b) => b.text), proposed);
+    const checked = await dropDecorative(ctx, t, { projectId, language: project.language, figures, proposed, blocks: text, afterBlock: (f) => afterBlock.get(f), soft: true });
+    proposed = checked.kept;
+    figureNotes.push(...checked.notes);
+  }
   const built = await buildFigures(ctx, {
-    projectId, nodeId, language: project.language, figures: project.options.figures && !guide ? data.figures ?? [] : [], photos,
+    projectId, nodeId, language: project.language, figures: proposed, photos,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
   markdown = rewriteImageRefs(markdown, built, new Set());
-  const figureNotes = built.notes;
+  figureNotes.push(...built.notes);
 
   // A stray ** is dropped here, so it does not cost a repair round. One repair round for problems that break rendering or meaning.
   markdown = dropUnpairedBold(markdown);

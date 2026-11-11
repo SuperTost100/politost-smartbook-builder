@@ -187,7 +187,7 @@ function unicodeMathChars(masked: string): string[] {
     const ch = m[0];
     const idx = m.index ?? 0;
     const before = masked.slice(0, idx).replace(/\s+$/, '');
-    if (UNIT_SYMBOLS.has(ch) && /\d$/.test(before)) continue; // "10 Ω", "5 μm"
+    if (UNIT_SYMBOLS.has(ch) && /\d\s*[kKMGTmnpf]?$/.test(before)) continue; // "10 Ω", "4,7 kΩ", "5 μm"
     // chemical/biological names such as "α-elica", "β-carotene"
     if (/[Ͱ-Ͽ]/.test(ch) && /^-\p{L}/u.test(masked.slice(idx + ch.length, idx + ch.length + 2))) continue;
     found.add(ch);

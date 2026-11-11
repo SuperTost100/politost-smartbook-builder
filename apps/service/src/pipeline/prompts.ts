@@ -1,11 +1,12 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import type { ExamFormat, ProgramItem } from '@smartbuilder/domain';
+import { ALLOWED_FUNCTIONS } from '@smartbuilder/content';
+import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { codeString } from '../llm/schema.ts';
-import { figureSchema } from '../figures/materialize.ts';
+import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 16;
+export const PROMPT_VERSION = 17;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -18,7 +19,7 @@ export function formatRules(language: string) {
 - Write all reader-facing text in ${lang}. Keep the syntax below exactly as shown (attribute names stay in English).
 - Paragraphs are separated by one blank line. Subsection headings use "### Title" only. Never use #, ## or ####.
 - Inline math always inside $...$, display math inside $$...$$ on its own lines. Every mathematical symbol, Greek letter, arrow, inequality or set symbol goes inside math; never write Δ, θ, ≤, →, ∈, ∞ as plain text.
-- LaTeX must compile with KaTeX: use \\lim_{x\\to 0}, \\frac{}{}, \\sqrt{}, \\mathbb{R}, \\operatorname{dom}, \\left( \\right). No \\begin{align}; use \\begin{aligned} inside $$ when you need several aligned lines.
+- LaTeX must compile with KaTeX: use \\lim_{x\\to 0}, \\frac{}{}, \\sqrt{}, \\mathbb{R}, \\operatorname{dom}, \\left( \\right). No \\begin{align}; use \\begin{aligned} inside $$ when you need several aligned lines. Matrices use \\begin{pmatrix} or \\begin{bmatrix}.
 - Important numbered formulas use a formula block, with a short unique kebab-case key and a label in ${lang}:
 :::formula{key="limite-notevole-seno" label="Limite notevole del seno"}
 $$\\lim_{x\\to 0}\\frac{\\sin x}{x} = 1$$
@@ -27,7 +28,18 @@ $$\\lim_{x\\to 0}\\frac{\\sin x}{x} = 1$$
 - Link to another section with [testo](ref:section/<sectionId>) using the section ids you are given. No external links.
 - Write statement labels (${language === 'it' ? 'Definizione, Teorema, Esempio, Errore tipico, ...' : 'Definition, Theorem, Example, Common mistake, ...'}) without numbers, e.g. ${label}. The builder numbers them per chapter, so never cite a statement by its number; name it instead.
 - Bold with **word**, with a space or punctuation outside the asterisks. Never leave an unmatched **.
-- Lists with "- " or "1. ". No tables (the reader cannot show them): turn tabular data into a list or prose. No code fences, no HTML, no images except the figure blocks described below.
+- Lists with "- " or "1. ". Markdown tables are forbidden (the reader cannot show them): turn tabular data into a list or prose. The one exception is a truth table or a small table of values, which you write as a KaTeX array in display math, with | for column rules, \\\\ at the end of each row and \\hline under the header:
+$$
+\\begin{array}{cc|c}
+A & B & A \\cdot B \\\\
+\\hline
+0 & 0 & 0 \\\\
+0 & 1 & 0 \\\\
+1 & 0 & 0 \\\\
+1 & 1 & 1
+\\end{array}
+$$
+- Units go inside math in upright type, with a thin space after the number and the usual SI prefixes: $5\\,\\mathrm{m/s}$, $10\\,\\mathrm{k\\Omega}$, $2\\,\\mu\\mathrm{F}$. No code fences, no HTML, no images except the figure blocks described below.
 - Never end a paragraph with ":" unless a formula, a display math block or a list follows immediately.
 - Never write about the writing process, the sources, the prompt or yourself ("ecco", "ho riscritto", "di seguito", "here is", "as requested", "nota:", summaries of what you did). Write only the book.`;
 }
@@ -172,8 +184,9 @@ export const plannedOutlineSchema = z.object({
   programExclusions: z.array(z.object({ item: z.string(), reason: z.string() })).describe('program items left out of the book, with the reason; empty when there is no program'),
 });
 
-export function outlinePrompt(p: { title: string; subject: string; language: string; audience: string; goals: string; topics: string; indexes: string; sessions: number; program?: { items: ProgramItem[]; exam: ExamFormat } }) {
+export function outlinePrompt(p: { title: string; subject: string; language: string; audience: string; goals: string; topics: string; indexes: string; sessions: number; program?: { items: ProgramItem[]; exam: ExamFormat }; profile?: SubjectProfile }) {
   const lang = languageName(p.language);
+  const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
     system: `You are the editor of a university textbook written in ${lang}. You design the book's common index from the course's sources and its exam history. The index must respect prerequisites, cover every topic the course needs, and give more depth to topics that the exams test often, without dropping topics the exams never test.`,
     prompt: `Book: ${p.title} (${p.subject})
@@ -196,7 +209,7 @@ Design the book:
 - depth: "deep" for topics in many exam sessions or that are hard, "brief" for background, "standard" otherwise.
 - Subsections only where a section clearly has distinct parts.
 - Every topic key appears in some section, or in exclusions with a reason.
-- notation: the conventions to use throughout (e.g. how to write the domain, intervals, derivatives, limits), in ${lang}.
+- notation: the conventions to use throughout (e.g. ${profile.notation}), in ${lang}.
 - Titles in ${lang}, short, without numbering. slug: kebab-case from the chapter title.${p.program ? `
 - The course program decides the scope; the exam frequency only decides the depth. Every program item key goes in "programItems" of the section that teaches it (a section can teach several items, an item can be taught across sections), or in "programExclusions" with a reason when the book leaves it out. An item must not appear in both. Use only the keys listed above.
 - A source topic the program does not cover (and the exams do not need as a prerequisite) goes in "exclusions" with a reason such as "not in the course program"; a short recap of a prerequisite may stay inside a related section, it does not get a section of its own. Do not drop a program item because the sources are thin on it: keep the section.
@@ -207,10 +220,29 @@ Design the book:
 
 // ---------- section drafting ----------
 
-export const draftSchema = z.object({
+/**
+ * What the writer of a book may draw: the kinds of its subject and how freely to add them. The schema carries every kind of
+ * the subject, but the rules offer a photo only when photos can be searched (a photo the builder cannot fetch is dropped with a note).
+ */
+export interface FigureSetup {
+  kinds: readonly FigureKind[];
+  photos: boolean;
+  policy: 'helpful' | 'generous';
+  profile: SubjectProfile;
+}
+
+export function figureSetupOf(book: Parameters<typeof subjectProfileOf>[0] & { options: { figurePolicy: 'helpful' | 'generous' } }, photos: boolean): FigureSetup {
+  const profile = subjectProfileOf(book);
+  return { kinds: profile.figureKinds, photos, policy: book.options.figurePolicy, profile };
+}
+
+/** The kinds a schema is built for. A book that draws no figures gets the smallest schema, with the field the answer needs. */
+const schemaKinds = (figures: FigureSetup | null): readonly FigureKind[] => figures?.kinds ?? ['plot'];
+
+export const draftSchemaFor = (figures: FigureSetup | null) => z.object({
   markdown: z.string().describe('the section body in PoliTost source Markdown, with [[nX]] citation markers'),
-  figures: z.array(figureSchema),
-  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence naming what the section discusses and why no figure kind can show it; else null'),
+  figures: z.array(figureSchemaFor(schemaKinds(figures))),
+  noFigureReason: z.string().nullable().optional().describe('leave null'),
   summary: z.string().describe('2-3 sentences: what this section defined and which notation it fixed, for the writers of later sections'),
 });
 
@@ -230,9 +262,8 @@ export interface DraftPromptInput {
   pages: string;
   /** The evidence reader's answer: clean formulas, unverified wording. */
   summary: string;
-  figures: boolean;
-  /** Photos can be searched (Wikimedia Commons, plus Pixabay or Pexels with a key). */
-  photos: boolean;
+  /** The figures the writer may add; null when the book has none. */
+  figures: FigureSetup | null;
   outside: boolean;
   /** Figures other sections already show, one per line; empty when there are none. */
   bookFigures?: string;
@@ -261,19 +292,47 @@ ${p.items.map((i) => `- ${i.title} | ${clip(i.details.replace(/\s+/g, ' '), 800)
 ${proofs}${p.items.length ? '\nCover every program item above and stay inside what the program lists: no extra theory the exam never asks.' : ''}`;
 }
 
-/** What the writer may draw. Shared by drafting, fixes and the figures pass, which can all add figures. */
-export function figureRules(photos: boolean) {
-  return `FIGURES. Students study from these pages, and a page of plain text is harder to learn from. Most sections of a science book have at least one place where a figure shows something faster than words: a relation that is easier to see as a graph, the structure of a molecule or ion, energy levels, an electron configuration, a cell or apparatus, a pattern across the periodic table${photos ? ', a real object or phenomenon the student should recognise' : ''}. Find those places and put a figure there. Never add a decorative figure or one that only repeats a sentence. Return an empty "figures" array only when nothing the section discusses fits any kind below, and then say in "noFigureReason" what the section discusses and why no kind can show it. At most 3 figures${photos ? ', at most 1 of them a photo' : ''}.
-  Kinds (set "kind" and fill only the matching spec; the others are null):
-  - plot: a function graph. Expressions use x, + - * / ^, and functions sin cos tan asin acos atan exp log sqrt abs sign floor; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write charges with Unicode superscripts ("Ca²⁺", "S²⁻"). Examples: a limit or an asymptote, a derivative as slope, x(t) of a motion, p(V) isotherms, a heating curve (temperature against time), a titration curve, the Maxwell-Boltzmann distribution, ln k against 1/T, concentration against time, a periodic trend against atomic number (as points).
-  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.
-  - levels: an energy-level diagram: a molecular orbital diagram, the enthalpy of reactants and products with a ΔH arrow, a Hess cycle, the energy order of orbitals. The vertical axis is an energy (or enthalpy, entropy), named in "yLabel"; never use it for a flow chart, a conversion scheme or a classification. "columns" are the vertical groups from left to right (an MO diagram has three: atom, molecule, atom). Each level has a unique key, its column (from 0), an energy (only order and spacing matter), a label, "boxes" for degenerate orbitals (π2p has 2) and "electrons" (null to draw no arrows). "links" join levels by key: "dashed" for MO correlation lines, "arrow" for an energy change, labelled like "ΔH = −286 kJ".
-  - orbitals: orbital boxes for the electron configuration of one atom or ion. "species" as the text writes it ("O", "Fe3+"), "core" a noble-gas core like "[Ar]" or null, "subshells" in the order the text writes them, each with its electrons ("3d" with 5). The builder checks that the electrons add up to the species and drops the figure if they do not.
-  - cell: an electrochemical cell. "galvanic": two half-cells, a salt bridge (its electrolyte, e.g. "KNO3") and a voltmeter reading or null. "electrolytic": a generator; with saltBridge null both electrodes share one vessel, whose solution or melt is left.solution. With saltBridge null both electrodes share one vessel (a lead-acid battery, molten NaCl). Each side has its electrode, solution ("ZnSO4 1 M"), role (anode or cathode) and half-reaction or null. Do not draw a fuel cell or a dry cell as beakers.
-  - periodic: the periodic table with up to 5 groups of elements highlighted, each with its label ("Metalli alcalini"), and up to two trend arrows: "right" or "left" across a period, "up" or "down" along a group, labelled with what increases that way.${photos ? `
-  - photo: a real photo from Wikimedia Commons, Pixabay or Pexels: lab equipment, a precipitate, a flame test, crystals, minerals, corrosion, an industrial plant. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.` : ''}
-  Labels inside levels, orbitals, cell and periodic diagrams are plain text with light markup: digits after a symbol become subscripts and a trailing charge a superscript ("H2O", "ZnSO4", "Zn2+"); write "SO4^2-" for a polyatomic charge and "_" for other subscripts ("σ*_2p", "S_(g)").
-  Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0", "H2O"); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
+const KIND_SEEING: Record<FigureKind, string> = {
+  plot: 'a relation that is easier to see as a graph',
+  structure: 'the structure of a molecule or ion',
+  levels: 'energy levels',
+  orbitals: 'an electron configuration',
+  cell: 'an electrochemical cell',
+  periodic: 'a pattern across the periodic table',
+  photo: 'a real object or phenomenon the student should recognise',
+};
+
+/** One block per kind. A new kind adds its block here and its name to the subject profiles (domain). */
+const KIND_BLOCKS: Record<FigureKind, (f: FigureSetup) => string> = {
+  plot: (f) => `  - plot: a function graph. Expressions use x, the constants e and pi, + - * / ^, and the functions ${[...ALLOWED_FUNCTIONS].join(' ')}; a piecewise curve is several functions with a domain each. The plot must match the text exactly; its labels are plain text, so write powers with Unicode superscripts ("x²"). Examples: ${f.profile.plotExamples}.`,
+  structure: () => `  - structure: a molecule or ion as an exact SMILES string, drawn by the builder. style "lewis" shows every atom, the bonds, lone pairs (set lonePairs true) and formal charges: use it for general chemistry (H2O as "O", NH4+ as "[NH4+]", CO2 as "O=C=O", sulfate as "[O-]S(=O)(=O)[O-]"). style "skeletal" is for organic molecules with more than about six carbons. "formula" is the formula exactly as the text writes it ("NH4+", "SO4^2-", "NaCl"); the builder checks it against the SMILES and drops the figure if they differ. One species, or one resonance form, per figure; check every atom and charge.`,
+  levels: () => `  - levels: an energy-level diagram: a molecular orbital diagram, the enthalpy of reactants and products with a ΔH arrow, a Hess cycle, the energy order of orbitals. The vertical axis is an energy (or enthalpy, entropy), named in "yLabel"; never use it for a flow chart, a conversion scheme or a classification. "columns" are the vertical groups from left to right (an MO diagram has three: atom, molecule, atom). Each level has a unique key, its column (from 0), an energy (only order and spacing matter), a label, "boxes" for degenerate orbitals (π2p has 2) and "electrons" (null to draw no arrows). "links" join levels by key: "dashed" for MO correlation lines, "arrow" for an energy change, labelled like "ΔH = −286 kJ".`,
+  orbitals: () => `  - orbitals: orbital boxes for the electron configuration of one atom or ion. "species" as the text writes it ("O", "Fe3+"), "core" a noble-gas core like "[Ar]" or null, "subshells" in the order the text writes them, each with its electrons ("3d" with 5). The builder checks that the electrons add up to the species and drops the figure if they do not.`,
+  cell: () => `  - cell: an electrochemical cell. "galvanic": two half-cells, a salt bridge (its electrolyte, e.g. "KNO3") and a voltmeter reading or null. "electrolytic": a generator; with saltBridge null both electrodes share one vessel (a lead-acid battery, molten NaCl), whose solution or melt is left.solution. Each side has its electrode, solution ("ZnSO4 1 M"), role (anode or cathode) and half-reaction or null. Do not draw a fuel cell or a dry cell as beakers.`,
+  periodic: () => `  - periodic: the periodic table with up to 5 groups of elements highlighted, each with its label ("Metalli alcalini"), and up to two trend arrows: "right" or "left" across a period, "up" or "down" along a group, labelled with what increases that way.`,
+  photo: (f) => `  - photo: a real photo from Wikimedia Commons, Pixabay or Pexels: ${f.profile.photoExamples}. "query" is 2-5 English search words, "mustShow" says precisely what the photo must show. The builder keeps a photo only if it shows exactly that, otherwise the figure is dropped.`,
+};
+
+const MARKUP_KINDS: readonly FigureKind[] = ['levels', 'orbitals', 'cell', 'periodic'];
+
+const listOf = (items: string[]) => (items.length < 2 ? items.join('') : `${items.slice(0, -1).join(', ')} or ${items[items.length - 1]}`);
+
+/** What the writer may draw: a policy paragraph, one block per kind of the book's subject, and the rule for placing the image block. */
+export function figureRules(setup: FigureSetup) {
+  const f = { ...setup, kinds: setup.kinds.filter((k) => k !== 'photo' || setup.photos) };
+  const seeing = f.kinds.map((k) => KIND_SEEING[k]);
+  const limit = `At most 3 figures${f.kinds.includes('photo') ? ', at most 1 of them a photo' : ''}.`;
+  const policy = f.policy === 'generous'
+    ? `FIGURES. Students study from these pages, and a page of plain text is harder to learn from. Most sections have at least one place where a figure shows something faster than words: ${seeing.join(', ')}. Find those places and put a figure there. Never add a decorative figure or one that only repeats a sentence. Return an empty "figures" array only when nothing the section discusses fits any kind below. ${limit}`
+    : `FIGURES. Add a figure where the student has to see a relation, a structure or an object to follow the text: ${listOf(seeing)}. Where the text is built around one of these, a figure belongs there. A section with nothing to show gets no figure and an empty "figures" array: most definitions, proofs and worked computations need none, and you do not have to find one. Never add a decorative figure or one that only repeats a sentence. ${limit}`;
+  const diagrams = MARKUP_KINDS.filter((k) => f.kinds.includes(k));
+  const markup = diagrams.length
+    ? `\n  Labels inside ${listOf(diagrams)} diagrams are plain text with light markup: digits after a symbol become subscripts and a trailing charge a superscript ("H2O", "ZnSO4", "Zn2+"); write "SO4^2-" for a polyatomic charge and "_" for other subscripts ("σ*_2p", "S_(g)").`
+    : '';
+  return `${policy}
+  Kinds (set "kind" and fill the matching spec; any other spec is null):
+${f.kinds.map((k) => KIND_BLOCKS[k](f)).join('\n')}${markup}
+  Place each figure in the text where it belongs with :::image{src="assets/<key>.svg" alt="<alt>" caption="<caption>"} followed by a line with ::: on its own (always write .svg; the builder sets the real file type). Captions and alt text are plain text without $ or LaTeX (write "sin(x)/x", "x → 0"${f.kinds.includes('structure') ? ', "H2O"' : ''}); do not number figures, the builder does. The text must read correctly without the figure: never write "as the figure shows"; the caption says what to look at.`;
 }
 
 export function draftPrompt(p: DraftPromptInput) {
@@ -322,7 +381,7 @@ INSTRUCTIONS
 - ${p.outside ? 'You may add standard material the notes do not contain (e.g. a classical counterexample), but never contradict the notes.' : 'Stay within what the evidence supports. If something needed for the objectives is missing from the evidence, write the standard, uncontroversial version and do not add a marker to that paragraph.'}
 - Where the sources disagree, follow the course notes and mention the other convention in one sentence.${p.teaches === 'matlab' ? `
 - This book teaches MATLAB. Write every command, expression, function name and short statement as inline code with backticks (\`x = linspace(0, 1, 5);\`, \`A(2, :)\`, \`format long\`). Show a short sequence of commands as a list, one command per item, each followed by what it does or prints. There are no code blocks: describe longer programs in words, step by step, because the builder adds runnable MATLAB scripts to the lab separately. Math still goes in $...$.` : ''}
-- ${p.figures ? figureRules(p.photos) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
+- ${p.figures ? figureRules(p.figures) : 'Do not add figures; return an empty "figures" array and null "noFigureReason".'}${p.figures && p.bookFigures ? `\n- Figures other sections already show. The book never repeats a picture: do not propose any of these again, nor the same species, photo or diagram with another caption.\n${p.bookFigures}` : ''}
 - Return JSON: markdown (the section body, without the section title), figures, noFigureReason, summary.`,
   };
 }
@@ -535,9 +594,10 @@ export const verifySchema = z.object({
   problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
 });
 
-export function verifyPrompt(p: { language: string; statement: string; solution: string }) {
+export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
+  const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
-    system: 'You are an independent examiner checking a textbook problem. First solve it yourself from the statement alone, then compare with the given solution. Be strict about wrong results, missing hypotheses (domains, continuity, convergence), unjustified steps and statements that lack information. Do not complain about style.',
+    system: `You are an independent examiner checking a textbook problem. First solve it yourself from the statement alone, then compare with the given solution. Be strict about wrong results, missing hypotheses (${profile.hypotheses}), unjustified steps and statements that lack information. Do not complain about style.`,
     prompt: `STATEMENT:
 ${p.statement}
 
@@ -628,18 +688,19 @@ export const reviewSchema = z.object({
   })),
 });
 
-export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string; program?: string }) {
+export function reviewPrompt(p: { language: string; chapterTitle: string; chapter: string; evidence: string; objectives: string; notation?: string; handled?: string; changes?: string; program?: string; profile?: SubjectProfile }) {
   const lang = languageName(p.language);
+  const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
     system: `You are an independent reviewer of a university textbook chapter written in ${lang}. You did not write it. Find real problems: wrong statements or computations, theorems missing hypotheses, claims the evidence does not support, objectives not covered, inconsistent notation, unclear explanations, repetition, figures that do not match the text, text not in ${lang}. Quote the exact text each issue refers to.
 
-Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that adds nothing the text does not already say plainly, and a place where a figure is clearly missing because the text describes in words a graph, the structure of a molecule or ion, energy levels, an electron configuration, an electrochemical cell, a trend across the periodic table, or an object the student should recognise. Use category "figure" and severity minor, or major for a figure that shows something wrong. For a missing figure, quote the passage it belongs to and say in the suggestion what it should show. Do not ask for figures for their own sake.
+Figures (:::image blocks; a structure's alt text ends with the formula of the species drawn): report a figure whose caption, alt text or formula does not match the text, a figure that shows something wrong and a figure that adds nothing the text does not already say plainly. Use category "figure" and severity minor, or major for a figure that shows something wrong. Never report a missing figure: whether the section needs one is the writer's choice.
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Report those as minor at most. Prefer fewer, solid issues to a long list of doubtful ones.`,
     prompt: `Chapter: ${p.chapterTitle}
 Objectives per section:
 ${p.objectives}
@@ -753,22 +814,28 @@ Return JSON {"markdown": "..."} with the full revised section.`,
 
 // ---------- targeted revision ----------
 
-export const patchSchema = z.object({
-  changes: z.array(z.object({
-    block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
-    text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
-  })),
-  figures: z.array(figureSchema).describe('figures the new text adds with :::image blocks; usually empty'),
-});
+const patchChanges = z.array(z.object({
+  block: z.number().int().min(0).describe('number of the block to replace, from the [B..] labels'),
+  text: z.string().describe('the new text of that block; may hold several paragraphs; empty string removes the block'),
+}));
+
+export interface PatchAnswer { changes: z.infer<typeof patchChanges>; figures?: z.infer<ReturnType<typeof figureSchemaFor>>[] }
+
+/** The figure specs are in the schema only when the fix may add a figure (a figure problem or an instruction), so most fixes do not carry them. */
+export function patchSchemaFor(figures: FigureSetup | null): z.ZodType<PatchAnswer> {
+  return figures
+    ? z.object({ changes: patchChanges, figures: z.array(figureSchemaFor(schemaKinds(figures))).describe('figures the new text adds with :::image blocks; usually empty') })
+    : z.object({ changes: patchChanges });
+}
 
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
-export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: { photos: boolean } | null }) {
+export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; figures?: FigureSetup | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
   const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {
-    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nOnly when a problem asks for a missing figure, add it with "figures" and an :::image block in the block it belongs to; otherwise return an empty "figures" array.\n${figureRules(p.figures.photos)}` : '\n\nReturn an empty "figures" array.'}`,
+    system: `You fix specific problems in one section of a textbook in ${languageName(p.language)}. The section is split into numbered blocks. Change as few blocks as possible and return only those, each rewritten in full.${minimal}${additive} Keep [[nX]] citation markers and formula keys of text you keep. Keep existing :::image blocks unchanged unless a problem is about that figure.\n\n${formatRules(p.language)}${p.figures ? `\n\nAdd a figure only when a problem or the author's instruction asks for one: put it in "figures" and an :::image block in the block it belongs to. Otherwise return an empty "figures" array.\n${figureRules(p.figures)}` : ''}`,
     prompt: `PROBLEMS TO FIX:
 ${p.requests}
 
@@ -781,26 +848,26 @@ Section ids you may link to: ${p.sectionIds}
 SECTION (blocks labelled [B0], [B1], …; the labels are not part of the text):
 ${p.blocks}
 
-Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}], "figures": []}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
+Return JSON {"changes": [{"block": <number>, "text": "<the full new text of that block>"}]${p.figures ? ', "figures": []' : ''}}. To add a paragraph, include it in the text of the block it follows. To delete a block, return an empty text.`,
   };
 }
 
 // ---------- figures pass ----------
 
-export const figuresPassSchema = z.object({
-  figures: z.array(figureSchema.extend({
+export const figuresPassSchemaFor = (figures: FigureSetup) => z.object({
+  figures: z.array(figureSchemaFor(schemaKinds(figures)).extend({
     afterBlock: z.number().int().min(1).describe('number of the block the figure illustrates, from the [n] labels; the figure goes right after it'),
   })),
-  noFigureReason: z.string().nullable().describe('when figures is empty: one sentence naming what the section discusses and why no figure kind can show it; else null'),
+  noFigureReason: z.string().nullable().optional().describe('leave null'),
 });
 
 /** Figures for a section that is already written: the model places and designs them, the text stays as it is. */
-export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; photos: boolean; elsewhere?: string }) {
+export function figuresPassPrompt(p: { language: string; bookTitle: string; chapterTitle: string; sectionTitle: string; blocks: string; existing: string; room: number; figures: FigureSetup; elsewhere?: string }) {
   const lang = languageName(p.language);
   return {
     system: `You add figures to one section of a university textbook in ${lang}: "${p.bookTitle}". The text is final and you do not change it. You choose where figures go and design them; the builder draws them and puts each one after the block you name.
 
-${figureRules(p.photos)}
+${figureRules(p.figures)}
 
 In this task you do not write :::image blocks or any text: return each figure with "afterBlock" and the builder inserts it. Captions and alt text are in ${lang}.`,
     prompt: `CHAPTER: ${p.chapterTitle}
@@ -813,7 +880,7 @@ ${p.blocks}
 INSTRUCTIONS
 - Add at most ${p.room} figure${p.room === 1 ? '' : 's'}, each right after the block it illustrates. Do not repeat what an existing figure shows.
 - Every number, species, label and direction in a figure must match the text exactly.
-- Return JSON: figures, noFigureReason.`,
+- Return JSON: figures, noFigureReason (leave null).`,
   };
 }
 
@@ -826,9 +893,10 @@ export const figureCheckSchema = z.object({
 });
 
 /** A second model decides whether each proposed figure earns its place, before any photo is searched or file drawn. */
-export function figureCheckPrompt(p: { language: string; items: string }) {
+export function figureCheckPrompt(p: { language: string; items: string; kinds?: readonly FigureKind[] }) {
+  const seeing = listOf((p.kinds ?? FIGURE_KINDS).map((k) => KIND_SEEING[k]));
   return {
-    system: `You check figures proposed for a university textbook in ${languageName(p.language)}. Keep a figure when it lets the student see something the passage explains: a graph of a relation, the structure of a species, energy levels, an electron configuration, a cell, a trend, a real object. Seeing these helps even when the text also describes them. The passage is the paragraph the figure follows, with the paragraphs around it. Drop a figure that is decorative, that shows something the section does not discuss, an energy-level diagram used as a flow chart or conversion scheme, that does not match the passage (another species, other numbers or labels, a wrong direction), or that adds nothing a plain sentence does not already give (a straight line for a simple proportionality, a lone ion).`,
+    system: `You check figures proposed for a university textbook in ${languageName(p.language)}. Keep a figure when it lets the student see something the passage explains: ${seeing}. Seeing these helps even when the text also describes them. The passage is the paragraph the figure follows, with the paragraphs around it. Drop a figure that is decorative, that shows something the section does not discuss, an energy-level diagram used as a flow chart or conversion scheme, that does not match the passage (another species, other numbers or labels, a wrong direction), or that adds nothing a plain sentence does not already give (a straight line for a simple proportionality, a lone ion).`,
     prompt: `PROPOSED FIGURES, each with the passage it follows (the paragraph right before the figure comes last):
 
 ${p.items}
