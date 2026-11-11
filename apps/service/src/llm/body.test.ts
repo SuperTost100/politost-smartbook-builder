@@ -83,3 +83,36 @@ test('without metadata the answer is the text alone, and the separator line is r
   assert.equal(r.ok, false);
   assert.equal(plain('  \n').ok, false);
 });
+
+test('a fence around the whole answer is removed before the separator is looked for', async () => {
+  const { draftParser, ideParser } = await import('../pipeline/prompts.ts');
+  const draft = draftParser(null);
+  const lab = '{"id": "rc", "title": "Filtro RC", "description": "d", "expectedOutput": "x"}';
+  const code = 'import numpy as np\nprint(np.pi)';
+  for (const tag of ['', 'python', 'markdown']) {
+    const wrapped = (body: string, json: string) => `\`\`\`${tag}\n${body}\n${META_SEPARATOR}\n${json}\n\`\`\``;
+    const l = ideParser(wrapped(code, lab));
+    assert.equal(l.ok, true, `lab example, fence tag "${tag}": ${l.ok ? '' : l.problem}`);
+    assert.equal((l as { data: { code: string } }).data.code, code);
+    const d = draft(wrapped('Testo $x$.\n\nSecondo.', '{"figures": [], "summary": "s"}'));
+    assert.equal(d.ok, true, `draft, fence tag "${tag}": ${d.ok ? '' : d.problem}`);
+    assert.equal((d as { data: { markdown: string } }).data.markdown, 'Testo $x$.\n\nSecondo.');
+  }
+  // The metadata in its own fence is still tolerated (the fence round the code alone goes, as before), and a complete fenced block inside a body stays.
+  const fenced = '```python\nprint(1)\n```';
+  const l = ideParser(`${fenced}\n${META_SEPARATOR}\n\`\`\`json\n${lab}\n\`\`\``);
+  assert.deepEqual(l.ok && l.data.code, 'print(1)');
+  const d = draft(`Prima.\n\n${fenced}\n\nDopo.\n${META_SEPARATOR}\n{"figures": [], "summary": "s"}`);
+  assert.equal(d.ok && d.data.markdown, `Prima.\n\n${fenced}\n\nDopo.`);
+});
+
+test('a body with a fence that is opened and not closed, or the other way round, is refused so the repair turn runs', () => {
+  const problem = (text: string) => {
+    const r = parse(text);
+    assert.equal(r.ok, false);
+    return (r as { problem: string }).problem;
+  };
+  assert.match(problem(answer('Testo.\n\n```python\nprint(1)')), /code fence/);
+  assert.match(problem(answer('Testo.\n\n```\n\nAltro.')), /code fence/);
+  assert.match(problem(`\`\`\`python\nprint(1)\n${META_SEPARATOR}\n{"figures": [], "summary": "s"}\nSpiegazione`), /could not be read|code fence/);
+});

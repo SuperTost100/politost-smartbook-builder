@@ -15,12 +15,26 @@ export function bodyFormatRule(field: string, withMeta: boolean) {
     : `Answer with ${field} as plain text and nothing else: no JSON, no code fence, no comment before or after it. Never write the line ${META_SEPARATOR}.`;
 }
 
-/** The whole answer is wrapped in one code fence. The fence goes, and a fence inside the text means the text is not wrapped. */
+const isFence = (line: string) => /^\s*```/.test(line);
+
+/** The whole text is wrapped in one code fence. The fence goes, and a fence inside the text means the text is not wrapped. */
 function unfence(text: string): string {
   const lines = text.trim().split('\n');
   if (lines.length < 3 || !/^```[\w-]*\s*$/.test(lines[0]) || lines.at(-1)!.trim() !== '```') return text;
   const inner = lines.slice(1, -1);
   return inner.some((l) => /^```/.test(l)) ? text : inner.join('\n');
+}
+
+/**
+ * The whole answer (text, separator and metadata) is wrapped in one fence. The fence opened on the first line is still
+ * open at the separator and closes on the last line. A text that is one complete fenced block, followed by metadata in a
+ * fence of its own, has closed its fence before the separator and stays as it is.
+ */
+function unwrapAnswer(lines: string[], at: number): string[] {
+  const end = lines.findLastIndex((l) => l.trim() !== '');
+  if (end < 2 || !/^```[\w-]*\s*$/.test(lines[0].trim()) || lines[end].trim() !== '```') return lines;
+  if (lines.slice(0, at).filter(isFence).length % 2 === 0) return lines;
+  return lines.slice(1, end);
 }
 
 /**
@@ -37,8 +51,12 @@ export function bodyParser<K extends string, M extends object = Record<never, ne
 ): (text: string) => ParseResult<M & Record<K, string>> {
   const raw = meta ? rawJsonSchema(meta) : undefined;
   return (text) => {
-    const lines = text.replace(/\r\n?/g, '\n').split('\n');
-    const at = lines.findLastIndex((l) => l.trim() === META_SEPARATOR);
+    let lines = text.replace(/\r\n?/g, '\n').split('\n');
+    let at = lines.findLastIndex((l) => l.trim() === META_SEPARATOR);
+    if (at >= 0) {
+      lines = unwrapAnswer(lines, at);
+      at = lines.findLastIndex((l) => l.trim() === META_SEPARATOR);
+    }
     let fields: M = {} as M;
     let body: string;
     if (!meta) {
@@ -58,6 +76,7 @@ export function bodyParser<K extends string, M extends object = Record<never, ne
       fields = parsed.data;
     }
     body = unfence(body).trim();
+    if (body.split('\n').filter(isFence).length % 2) return { ok: false, problem: 'The text has a code fence (a line starting with three backticks) that is opened and not closed, or closed and not opened. Write the text without code fences around it, and close every fence you open inside it.' };
     if (!body) return { ok: false, problem: meta ? `There is no text before ${META_SEPARATOR}.` : 'The answer is empty.' };
     return { ok: true, data: { ...fields, [field]: kind === 'markdown' ? rewriteLatexNames(body) : body } as M & Record<K, string> };
   };
