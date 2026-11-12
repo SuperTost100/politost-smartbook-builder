@@ -419,6 +419,9 @@ test('two turns of one day get their own session name, so the second file is not
   assert.deepEqual(group('Appello del 12 febbraio 2024 - Turno A'), ['Appello del 12 febbraio 2024 - Turno A']);
   assert.deepEqual(group('Appello del 12 febbraio 2024 - Turno B'), ['Appello del 12 febbraio 2024 - Turno B']);
   assert.deepEqual(group('Appello del 12/02/2024 - Turno 2 - Prof. Rossi'), ['Appello del 12 febbraio 2024 - Turno 2']);
+  // The colon or full stop that ends a heading is not part of the turn's name.
+  assert.deepEqual(group('Appello del 12 febbraio 2024 - Turno A:'), ['Appello del 12 febbraio 2024 - Turno A']);
+  assert.deepEqual(group('Appello del 12 febbraio 2024, turno b.'), ['Appello del 12 febbraio 2024 - Turno B']);
   // A course name or a room after the date is no turn.
   assert.deepEqual(group('Appello del 12/02/2024 - Elettrotecnica'), ['Appello del 12 febbraio 2024']);
   // The AI split names the session the same way.

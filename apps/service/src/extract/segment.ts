@@ -171,8 +171,8 @@ function parseGenericHeading(l: string, following: string[], before: string[], l
   const variant = fila ? fila[1].toUpperCase() : null;
   const date = dateAround(l, following, before);
   // "Appello del 12 febbraio 2024 - Turno A": two turns of one day are two papers. Only the word "Turno" counts, because other text after the date is a course name or a room.
-  const turn = /\bturno\s+([^\s,;()\-–—]+)/i.exec(l);
-  if (date) return { key: sessionKey(date, word, turn ? `Turno ${turn[1].toUpperCase()}` : ''), date: isoOf(date), numbered: false, variant, generic: true };
+  const turn = /\bturno\s+([^\s,;()\-–—]+)/i.exec(l)?.[1].replace(/[.:!?]+$/, '');
+  if (date) return { key: sessionKey(date, word, turn ? `Turno ${turn.toUpperCase()}` : ''), date: isoOf(date), numbered: false, variant, generic: true };
   if (!following.some((f) => parseExercise(f))) return null;
   return { key: label ? `${word} - ${label}` : word, date: null, numbered: false, variant, generic: true };
 }
