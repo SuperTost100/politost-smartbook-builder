@@ -117,6 +117,10 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     "The result isn't covered in the notes.",
     "This value wasn't mentioned in the provided material.",
     'The formula does not appear in the course notes, so it is only stated.',
+    'The provided sources do not state the value of the constant.',
+    'According to the given sources, the constant is 3.',
+    'Le fonti fornite non riportano il valore della costante.',
+    'Secondo le fonti fornite la costante vale 3.',
   ]) {
     const f = find(`Testo.\n\n${c}`, 'meta-leak');
     assert.ok(f, c);
@@ -140,6 +144,12 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     'Il campo elettrico non è presente nel materiale conduttore.',
     'The power delivered by the voltage sources is $P$.',
     "The ripple isn't included in the sources of the supply.",
+    // The same words about circuit elements and physical material.
+    'The given sources are ideal voltage sources.',
+    'The provided sources supply 5 V to the load.',
+    'The given material is copper.',
+    'Le fonti fornite sono generatori ideali di tensione.',
+    'Le fonti a disposizione sono due generatori indipendenti.',
   ]) assert.equal(find(`Testo.\n\n${c}`, 'meta-leak'), undefined, c);
 });
 
