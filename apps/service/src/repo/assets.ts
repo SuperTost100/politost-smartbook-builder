@@ -43,7 +43,8 @@ export function assertSafeSvg(svg: string): void {
   if (new RegExp(`${tag}(?:iframe|embed|object|link|meta|audio|video)[\\s/>]`, 'i').test(svg)) throw reject('embeds other content');
   if (/<!ENTITY/i.test(svg)) throw reject('declares custom entities');
   if (/javascript\s*:/i.test(svg)) throw reject('contains a javascript: link');
-  const tags = svg.match(/<[a-zA-Z][^\s>/]*(?:"[^"]*"|'[^']*'|[^'">])*>/g) ?? [];
+  // Every start tag. With names limited to ASCII above, a name starts with a letter, "_" or ":".
+  const tags = svg.match(/<[a-zA-Z_:][^\s>/]*(?:"[^"]*"|'[^']*'|[^'">])*>/g) ?? [];
   for (const tag of tags) {
     const attrs = [...tag.matchAll(/([^\s=/"'<>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)];
     for (const m of attrs) {
