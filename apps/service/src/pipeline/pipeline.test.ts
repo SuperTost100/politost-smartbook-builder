@@ -542,6 +542,16 @@ describe('4. practice generation stages', () => {
 });
 
 describe('an index task queued before a source was excluded', () => {
+  test('stops between two calls when the source is excluded while the first one runs', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-long', role: 'theory' });
+    for (let i = 0; i < 151; i++) seedPage(ctx, 'r-long', i, `Pagina ${i + 1}`, `Titolo ${i + 1}\nTesto.`);
+    // The author excludes the source while the first group of pages is with the model.
+    fake.next(() => { ctx.db.run(`UPDATE resources SET included = 0 WHERE id = 'r-long'`); return answer({ entries: [{ title: 'Titolo 1', level: 1, page: 1 }] })(); });
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-long' })), { skipped: 'excluded' });
+    assert.equal(fake.calls.length, 1, 'the second group of pages is not sent');
+    assert.equal(ctx.db.get(`SELECT 1 FROM source_indexes WHERE resource_id = 'r-long'`), undefined);
+  });
+
   test('sends nothing of the excluded source to a model, and indexes it once it is included again', async () => {
     seedResource(ctx, { projectId: P, id: 'r-theory', role: 'theory', included: 0 });
     seedPage(ctx, 'r-theory', 0, 'Introduzione ai limiti', 'Introduzione ai limiti\nTesto.');

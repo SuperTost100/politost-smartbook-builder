@@ -45,6 +45,8 @@ export async function resourceIndex(ctx: AppContext, t: TaskContext) {
   const entries: { title: string; level: number; page: number }[] = [];
   // ~150 pages per call keeps the prompt small and the call fast.
   for (const group of chunk(pages, 150)) {
+    // A long source takes several calls. Excluded between two of them, it sends no further pages.
+    if (!ctx.db.get<{ included: number }>('SELECT included FROM resources WHERE id = ?', resourceId)?.included) return { skipped: 'excluded' };
     const heads = group.map((p) => `page ${p.idx + 1}: ${firstLines(p.transcript || p.text)}`).join('\n');
     const { data } = await runRole(ctx, {
       role: 'bulk', ...inferIndexPrompt({ filename: res.filename, heads }), schema: inferredIndexSchema,
