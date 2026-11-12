@@ -68,8 +68,10 @@ const DECORATION_LINE = new RegExp(String.raw`^(\s*(?:[-*+]\s+|\d+[.)]\s+)?)${DE
 
 /** The text without difficulty decoration at the start of each line. */
 export function stripDifficultyDecoration(text: string): string {
-  return text.split('\n').map((line) => {
-    const m = DECORATION_LINE.exec(line);
+  // Lines inside a display formula are math: "(*)" there is an equation tag, not a difficulty mark.
+  const math = new Set(scan(text).lines.filter((l) => l.kind === 'math').map((l) => l.n));
+  return text.replace(/\r\n?/g, '\n').split('\n').map((line, i) => {
+    const m = math.has(i + 1) ? null : DECORATION_LINE.exec(line);
     return m ? m[1] + line.slice(m[0].length) : line;
   }).join('\n');
 }

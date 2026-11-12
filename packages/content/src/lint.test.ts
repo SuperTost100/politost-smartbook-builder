@@ -506,6 +506,12 @@ test('difficulty decoration at the start of a line is flagged and stripped, bold
   assert.equal(stripDifficultyDecoration('(facile): Sia $f(x)=1$.'), 'Sia $f(x)=1$.');
 });
 
+test('stripDifficultyDecoration leaves the lines of a display formula alone', () => {
+  const tag = '$$\n(*)\\quad x = 1\n$$';
+  assert.equal(stripDifficultyDecoration(tag), tag);
+  assert.equal(stripDifficultyDecoration(`(*) Calcolare.\n\n${tag}`), `Calcolare.\n\n${tag}`);
+});
+
 test('dropUnpairedBold removes the last ** of a line with an odd count, outside math and code, and leaves paired bold alone', () => {
   assert.equal(dropUnpairedBold('Un **termine** e un altro** qui.'), 'Un **termine** e un altro qui.');
   const untouched = 'Riga **ok**.\n\n$a**b$ e `x**y` e **ok**';
