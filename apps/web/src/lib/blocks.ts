@@ -59,8 +59,4 @@ export function superscript(n: number): string {
   return `⁽${String(n).split('').map((d) => map[Number(d)]).join('')}⁾`;
 }
 
-/** The file name an image block points at (`assets/<file>`), or null for any other block. */
-export const imageFilename = (source: string): string | null => /^:::image\{[^}]*src="assets\/([^"]+)"/.exec(source)?.[1] ?? null;
-
-/** The number the compiler gave a figure ("4.3" from `caption="Fig. 4.3 — …"`), or null when the block has none. */
-export const figureNumber = (compiled: string | null): string | null => /^:::image\{[^}]*caption="Fig(?:ura)?\.?\s*(\d+(?:\.\d+)*)\s*[—–:-]/i.exec(compiled ?? '')?.[1] ?? null;
+export { figureNumber, imageFilename } from '@smartbuilder/content/blocks';

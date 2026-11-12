@@ -114,3 +114,12 @@ export function proseLines(lines: string[]): boolean[] {
   }
   return out;
 }
+
+/** The attributes of an image block: quoted values are taken whole, so a brace inside an alt text or a caption does not end the block early. */
+const IMAGE_ATTRS = '(?:"[^"\\n]*"|[^}"\\n])*?';
+
+/** The file name an image block points at (`assets/<file>`), or null for any other block. */
+export const imageFilename = (source: string): string | null => new RegExp(`^:::image\\{${IMAGE_ATTRS}(?<=[{\\s])src="assets/([^"]+)"`).exec(source)?.[1] ?? null;
+
+/** The number the compiler gave a figure ("4.3" from `caption="Fig. 4.3 — …"`), or null when the block has none. */
+export const figureNumber = (compiled: string | null): string | null => new RegExp(`^:::image\\{${IMAGE_ATTRS}(?<=[{\\s])caption="Fig(?:ura)?\\.?\\s*(\\d+(?:\\.\\d+)*)\\s*[—–:-]`, 'i').exec(compiled ?? '')?.[1] ?? null;
