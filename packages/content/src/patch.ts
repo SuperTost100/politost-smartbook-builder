@@ -274,6 +274,23 @@ export const MATH_SYMBOLS: Record<string, string> = {
   to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', implies: '⇒', iff: '⇔', mapsto: '↦',
   uparrow: '↑', downarrow: '↓', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
 };
+/**
+ * LaTeX commands that only decorate, size, space or group what they hold, so a repair may add or drop them. Any other command
+ * (\\sin, \\lim, \\max, \\not, one this list does not know) names something, so it counts as a word: "$\\sin x$" and "$\\cos x$"
+ * differ. shortcut: a decoration missing from this list makes a repair that adds it look like a change and be refused, which
+ * keeps the old text; add the command here when that shows up.
+ */
+const PRESENTATION = new Set([
+  'mathrm', 'mathbf', 'mathit', 'mathsf', 'mathtt', 'mathcal', 'mathscr', 'mathfrak', 'boldsymbol', 'bm', 'rm', 'bf', 'it',
+  'text', 'textrm', 'textbf', 'textit', 'textsf', 'texttt', 'textnormal', 'mbox', 'hbox', 'operatorname',
+  'left', 'right', 'big', 'Big', 'bigg', 'Bigg', 'bigl', 'bigr', 'Bigl', 'Bigr', 'biggl', 'biggr', 'Biggl', 'Biggr', 'middle',
+  'displaystyle', 'textstyle', 'scriptstyle', 'scriptscriptstyle', 'limits', 'nolimits',
+  'quad', 'qquad', 'hspace', 'vspace', 'hskip', 'enspace', 'thinspace', 'medspace', 'thickspace', 'negthinspace', 'phantom', 'vphantom', 'hphantom', 'strut',
+  'frac', 'dfrac', 'tfrac', 'binom', 'dbinom', 'tbinom', 'begin', 'end', 'tag', 'label', 'nonumber', 'notag', 'cr', 'hline',
+  'vec', 'hat', 'bar', 'overline', 'underline', 'dot', 'ddot', 'tilde', 'widehat', 'widetilde', 'overrightarrow', 'overbrace', 'underbrace', 'color',
+  'ldots', 'dots', 'vdots', 'ddots', 'lbrace', 'rbrace', 'langle', 'rangle', 'lvert', 'rvert', 'lVert', 'rVert', 'vert', 'Vert', 'mid', 'lfloor', 'rfloor', 'lceil', 'rceil',
+  'mathbin', 'mathrel', 'mathop', 'mathord',
+]);
 /** Characters that look alike and mean the same symbol: the micro sign and the ohm sign, and the variant Greek letters. */
 const SAME_SYMBOL: Record<string, string> = { '\u00b5': '\u03bc', '\u2126': '\u03a9', 'ς': 'σ', 'ϕ': 'φ', 'ϵ': 'ε', 'ϑ': 'θ', 'ϖ': 'π', 'ϱ': 'ρ', '−': '-', '–': '-' };
 const BLACKBOARD = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ' } as const;
@@ -296,7 +313,7 @@ function wordSequence(text: string): string[] {
   let last = 0;
   const commands = (s: string) => s
     .replace(/\\mathbb\{([RNZQC])\}/g, (_, c: keyof typeof BLACKBOARD) => ` ${BLACKBOARD[c]} `)
-    .replace(/\\([A-Za-z]+)/g, (_, name: string) => (MATH_SYMBOLS[name] ? ` ${MATH_SYMBOLS[name]} ` : ' '))
+    .replace(/\\([A-Za-z]+)/g, (_, name: string) => (MATH_SYMBOLS[name] ? ` ${MATH_SYMBOLS[name]} ` : PRESENTATION.has(name) ? ' ' : ` ${name} `))
     .replace(/\\./g, ' ');
   // A backslash-n or -t that starts a LaTeX command (\nu, \to) is no line break, also in a fragment with an unbalanced $.
   const prose = (s: string) => commands(s.replace(/(?<!\\)\\[nt]/g, (m, at: number) => (LATEX_COMMAND_N_T.test(s.slice(at)) ? m : ' ')));

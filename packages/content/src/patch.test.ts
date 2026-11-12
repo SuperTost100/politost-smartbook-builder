@@ -314,6 +314,28 @@ test('changedWords: re-typesetting the same value passes', () => {
   assert.equal(changedWords('- 2 resistori\n- 3 diodi', '- 2 resistori\n\n- 3 diodi'), null, 'a list marker is no sign');
 });
 
+test('changedWords: a function or operator command is a word, so swapping one is a change', () => {
+  assert.match(changedWords('Vale $\\sin x$.', 'Vale $\\cos x$.')!, /replaces "sin" with "cos"/, 'sine becomes cosine');
+  assert.match(changedWords('Vale $\\sin x$.', 'Vale $x$.')!, /removes "sin"/, 'the function is dropped');
+  assert.match(changedWords('Vale $\\log x$.', 'Vale $\\ln x$.')!, /./);
+  assert.match(changedWords('Vale $\\lim_{x\\to 0} f$.', 'Vale $\\sup_{x\\to 0} f$.')!, /./);
+  assert.match(changedWords('Vale $\\max(a,b)$.', 'Vale $\\min(a,b)$.')!, /./);
+  assert.match(changedWords('Vale $\\arcsin x$.', 'Vale $\\arccos x$.')!, /./);
+  assert.match(changedWords('Vale $x \\foo y$.', 'Vale $x \\baz y$.')!, /./, 'an unknown command is kept as written');
+  assert.match(changedWords('Vale $x \\not= y$.', 'Vale $x = y$.')!, /./, 'a negation is no decoration');
+});
+
+test('changedWords: the same function written as a word or as a command, and presentation commands, change nothing', () => {
+  assert.equal(changedWords('Vale sin x e lim f.', 'Vale $\\sin x$ e $\\lim f$.'), null);
+  assert.equal(changedWords('Vale $\\sin x$.', 'Vale\n\n$$\\sin x$$'), null);
+  assert.equal(changedWords('Vale $f(x) = (a+b)/2$.', 'Vale $f(x) = \\left(\\frac{a+b}{2}\\right)$.'), null);
+  assert.equal(changedWords('Il vettore v e la matrice A.', 'Il vettore $\\vec{v}$ e la matrice $\\mathbf{A}$.'), null);
+  assert.equal(changedWords('Vale $\\displaystyle \\frac{a}{b}$ per $x$.', 'Vale $\\dfrac{a}{b}$\\quad per $x$.'), null);
+  assert.equal(changedWords('Vale $x_1, x_2, ..., x_n$.', 'Vale $x_1, x_2, \\ldots, x_n$.'), null);
+  assert.equal(changedWords('Vale $\\bigl( x \\bigr)$ e $\\text{ V}$.', 'Vale $( x )$ e $V$.'), null);
+  assert.equal(changedWords('Il rango di A.', 'Il $\\operatorname{rango}$ di $A$.'), null);
+});
+
 test('changedWords: a Unicode symbol and its LaTeX command are the same token', () => {
   assert.equal(changedWords('La costante τ vale 2.', 'La costante $\\tau$ vale 2.'), null);
   assert.equal(changedWords('Con ω = 2π f e Δt piccolo.', 'Con $\\omega = 2\\pi f$ e $\\Delta t$ piccolo.'), null);
