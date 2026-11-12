@@ -496,6 +496,21 @@ describe('the writer gets page text only where the quotes are not enough', () =>
     assert.equal(back.summary, 'Sintesi.');
   });
 
+  test('the local reader\'s answer is left out when it may hold a quote of an excluded source that no note records', () => {
+    seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
+    seedResource(ctx, { id: 'r2', projectId: P, filename: 'riservato.pdf', included: 0 });
+    const local = (trailer: string) => ({ ...packet([note('n1', 0)]), answer: `Sintesi.${trailer}` });
+    // The reader dropped a quote it could not match, so the answer may cite a page that no note names.
+    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).summary, '');
+    assert.equal(evidenceText(ctx, local('')).summary, '', 'an answer without the count is not known to be clean');
+    // Nothing was dropped: every quote of the answer has a note, and none is from the excluded source.
+    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=0 pages=2 -->')).summary, 'Sintesi.');
+    assert.match(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).notes, /\[n1\]/, 'the recorded quotes are still sent');
+    // With no excluded source there is nothing to keep out.
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r2'`);
+    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).summary, 'Sintesi.');
+  });
+
   test('a packet whose pages have no transcript sends no page text', () => {
     seedResource(ctx, { id: 'r1', projectId: P });
     seedPage(ctx, 'r1', 0, 'Testo buono.');

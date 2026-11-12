@@ -85,8 +85,11 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
   // quotes and pages are dropped here, where the writer and the reviewer both read the packet. A note from the web has no source.
   const excluded = new Set(sources.filter((r) => !r.included).map((r) => r.id));
   const out = (n: { resourceId: string | null }) => n.resourceId !== null && excluded.has(n.resourceId);
-  const tainted = packet.notes.some(out);
-  packet = tainted ? { ...packet, notes: packet.notes.filter((n) => !out(n)) } : packet;
+  // The local reader keeps a note only for a quote it could match, and says in its answer how many it dropped. With a dropped
+  // quote, or no count, the answer may cite an excluded source that no note records.
+  const unrecorded = excluded.size > 0 && packet.provider === 'local' && /<!-- local-evidence:[^>]*\bdropped=(\d+)/.exec(packet.answer)?.[1] !== '0';
+  const tainted = unrecorded || packet.notes.some(out);
+  packet = { ...packet, notes: packet.notes.filter((n) => !out(n)) };
   const notes = packet.notes.filter((n) => n.verified).map((n) => {
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
     return `[${n.id}] (${where}) "${truncate(n.quote.replace(/\s+/g, ' '), 700)}"${n.claim ? `\n    supports: ${truncate(n.claim, 300)}` : ''}`;
