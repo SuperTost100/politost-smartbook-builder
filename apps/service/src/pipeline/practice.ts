@@ -416,7 +416,8 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (suspicious(data, recomputed) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
     ({ data, route } = await check('reviewer'));
-    recomputed = await recomputeFinalValues(data.computation, data.statedValues);
+    // The reviewer's recomputation replaces the checker's only when it ran: a reviewer that gave no usable program does not erase a mismatch.
+    recomputed = (await recomputeFinalValues(data.computation, data.statedValues)) ?? recomputed;
   }
   const mismatches = recomputed?.mismatches ?? [];
   const resultsAgree = data.resultsAgree && !mismatches.length;

@@ -426,6 +426,19 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.equal(json<{ method: string; ok: boolean }[]>(row(id).checks, []).find((c) => c.method === 'numeric')!.ok, false);
   });
 
+  test('a reviewer that gives no usable recomputation does not erase the checker\'s numeric mismatch', async () => {
+    const id = q({ statement: circuit, solution: 'R = 5 kΩ' });
+    const bad = verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] });
+    // The reviewer agrees with the solution, and gives no program, or one that fails.
+    for (const reviewer of [verdict({}), verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] })]) {
+      fake.next(bad, reviewer);
+      const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+      assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+      assert.equal(row(id).status, 'issue');
+      assert.match(issues(`question_id = '${id}'`)[0].message, /R_eq is 500\.0 ohm by the computation and 5\.0 kΩ in the solution/);
+    }
+  });
+
   test('a computation that throws is ignored and the model verdict stands', async () => {
     const id = q({ statement: circuit, solution: 'R = 500 Ω' });
     fake.next(verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));
