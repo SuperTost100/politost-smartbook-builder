@@ -346,6 +346,25 @@ test('solutions printed after two papers of one day go to the turn their heading
   assert.match(rows[1].solution, /9 µC/);
 });
 
+test('turns named by a word (Mattina, Pomeriggio) are two sessions, and their solutions go to the turn the heading names', () => {
+  const paper = (turn: string, text: string) => [`Appello del 12 febbraio 2024 - Turno ${turn}`, 'Esercizio 1 (12 punti)', text];
+  // Each paper starts its own page, as printed papers do.
+  const rows = segmentExams('r', pages(
+    paper('Mattina', 'Un resistore R = 4,7 kΩ è collegato a un generatore V₀ = 12 V. Calcolare la corrente.'),
+    paper('Pomeriggio', 'Un condensatore C = 1 µF è carico alla tensione V₀ = 9 V. Calcolare la carica.'),
+    ['Soluzioni (Appello del 12 febbraio 2024 - Turno Mattina)', 'Esercizio 1.', 'I = V/R = 2,55 mA.', 'Soluzioni (Appello del 12 febbraio 2024 - turno pomeriggio)', 'Esercizio 1.', 'Q = CV = 9 µC.'],
+  ));
+  assert.deepEqual(rows.map((r) => r.examGroup), ['Appello del 12 febbraio 2024 - Turno Mattina', 'Appello del 12 febbraio 2024 - Turno Pomeriggio']);
+  assert.match(rows[0].solution, /2,55 mA/);
+  assert.match(rows[1].solution, /9 µC/);
+});
+
+test('a word after "turno" that is not a turn name gives no turn', () => {
+  const group = (heading: string) => segmentExams('r', pages([heading, 'Esercizio 1 (12 punti)', 'Calcolare la corrente nel resistore R = 4,7 kΩ con V₀ = 12 V.'])).map((r) => r.examGroup);
+  assert.deepEqual(group('Appello del 12 febbraio 2024 - turno di recupero'), ['Appello del 12 febbraio 2024']);
+  assert.deepEqual(group('Appello del 12 febbraio 2024 - Turno d\'esame'), ['Appello del 12 febbraio 2024']);
+});
+
 test('a solutions heading that gives only the date does not pick one of two papers of that day', () => {
   const rows = segmentExams('r', pages([...TURN_A, ...TURN_B, 'Soluzioni (Esame del 12 febbraio 2024)', 'Problema 1.', 'Q = CV = 9 µC.']));
   assert.equal(rows[0].solution, '');

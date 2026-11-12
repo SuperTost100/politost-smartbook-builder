@@ -171,8 +171,8 @@ function parseGenericHeading(l: string, following: string[], before: string[], l
   const variant = fila ? fila[1].toUpperCase() : null;
   const date = dateAround(l, following, before);
   // "Appello del 12 febbraio 2024 - Turno A": two turns of one day are two papers. Only the word "Turno" counts, because other text after the date is a course name or a room.
-  const turn = /\bturno\s+([^\s,;()\-–—]+)/i.exec(l)?.[1].replace(/[.:!?]+$/, '');
-  if (date) return { key: sessionKey(date, word, turn ? `Turno ${turn.toUpperCase()}` : ''), date: isoOf(date), numbered: false, variant, generic: true };
+  const turn = turnName(l);
+  if (date) return { key: sessionKey(date, word, turn ? `Turno ${turn.length > 2 ? turn[0] + turn.slice(1).toLowerCase() : turn}` : ''), date: isoOf(date), numbered: false, variant, generic: true };
   if (!following.some((f) => parseExercise(f))) return null;
   return { key: label ? `${word} - ${label}` : word, date: null, numbered: false, variant, generic: true };
 }
@@ -277,8 +277,17 @@ function variantOf(rest: string): string | null {
   return k ? `v${k[1]}` : null;
 }
 
-/** The letter or number after "Turno", "Versione", "Fila" or "Compito" ("Turno A" gives "A"). */
-const turnOf = (s: string) => /\b(?:turno|versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+)\b(?!['’])/i.exec(s)?.[1].toUpperCase() ?? null;
+/**
+ * The name after "Turno", in capitals: a letter, a number, or one of the words papers use for a turn ("Turno A", "turno 2",
+ * "Turno Mattina"). Any other word after it is not a name ("turno di recupero", "turno d'esame"). The session name and the
+ * routing of solutions both read it here, so a turn that names a session is found again in a solutions heading.
+ */
+function turnName(s: string): string | null {
+  return /\bturno\s+([A-Za-z]\d?|\d+|mattin[ao]|pomeriggio|pomeridiano|sera|serale)(?![\p{L}\p{N}'’])/iu.exec(s)?.[1].toUpperCase() ?? null;
+}
+
+/** The turn's name, or the letter or number after "Versione", "Fila", "Variante" or "Compito" ("Fila A" gives "A"). */
+const turnOf = (s: string) => turnName(s) ?? /\b(?:versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+)\b(?!['’])/i.exec(s)?.[1].toUpperCase() ?? null;
 
 const numberLabel = (e: Ex) => (e.variant ? (e.variant.startsWith('v') ? `${e.id}.${e.variant.slice(1)}` : `${e.id}${e.variant}`) : e.id);
 
