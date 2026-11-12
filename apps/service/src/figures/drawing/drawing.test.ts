@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,7 +8,7 @@ import { after, before, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { Resvg } from '@resvg/resvg-js';
 import { bookOptionsSchema } from '@smartbuilder/domain';
-import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
+import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, fileHasHash, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { assertSafeSvg } from '../../repo/assets.ts';
 import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
 import type { DrawingEngine, DrawingResult } from './index.ts';
@@ -101,6 +102,17 @@ describe('pinned packages', () => {
     };
     const gz = gzipSync(Buffer.concat([block('typst.toml', 'name = "x"\n'), block('src/lib.typ', '#let a = 1'), Buffer.alloc(1024)]));
     assert.deepEqual(untar(gz).map(([n, b]) => [n, b.toString()]), [['typst.toml', 'name = "x"\n'], ['src/lib.typ', '#let a = 1']]);
+  });
+
+  it('a wheel counts as present only when the file still has the pinned SHA-256', () => {
+    const dir = mkdtempSync(join(privateTmp, 'wheel-'));
+    const file = join(dir, 'a.whl');
+    writeFileSync(file, 'whole wheel');
+    const hash = createHash('sha256').update('whole wheel').digest('hex');
+    assert.equal(fileHasHash(file, hash), true);
+    writeFileSync(file, 'whole');
+    assert.equal(fileHasHash(file, hash), false, 'a truncated file is not the wheel');
+    assert.equal(fileHasHash(join(dir, 'missing.whl'), hash), false);
   });
 });
 
