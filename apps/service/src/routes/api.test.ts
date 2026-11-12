@@ -400,6 +400,10 @@ describe('assets', () => {
   it('sanitizer refuses the dangerous constructs', () => {
     const bad = [
       svg('<script>x</script>'),
+      svg('<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>'),
+      svg('<svg:script>alert(1)</svg:script>'),
+      svg('<s:foreignObject xmlns:s="http://www.w3.org/2000/svg"><div/></s:foreignObject>'),
+      svg('<x:iframe src="/"/>'),
       svg('<rect onclick="x()"/>'),
       svg('<rect title=">" onload="x()"/>'),
       svg('<a href="javascript:alert(1)"><rect/></a>'),
