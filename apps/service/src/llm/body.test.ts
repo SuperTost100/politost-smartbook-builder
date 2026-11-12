@@ -114,5 +114,17 @@ test('a body with a fence that is opened and not closed, or the other way round,
   };
   assert.match(problem(answer('Testo.\n\n```python\nprint(1)')), /code fence/);
   assert.match(problem(answer('Testo.\n\n```\n\nAltro.')), /code fence/);
-  assert.match(problem(`\`\`\`python\nprint(1)\n${META_SEPARATOR}\n{"figures": [], "summary": "s"}\nSpiegazione`), /could not be read|code fence/);
+  assert.match(problem(`\`\`\`python\nprint(1)\n${META_SEPARATOR}\n{"figures": [], "summary": "s"}\nSpiegazione`), /could not be read|code fence|after the JSON/);
+});
+
+test('text after the metadata JSON is refused, because the model may have kept writing the section there', () => {
+  const r = parse(answer('Primo paragrafo.', '{"figures": [], "summary": "ok"}\nSecond section'));
+  assert.equal(r.ok, false);
+  assert.match((r as { problem: string }).problem, /after the JSON/);
+  assert.equal(parse(answer('Primo.', '```json\n{"figures": [], "summary": "ok"}\n```\nSecond section')).ok, false);
+  assert.equal(parse(answer('Primo.', '{"figures": [], "summary": "ok"} Second section')).ok, false);
+  // The usual forms stay accepted: bare, fenced, with a blank line or a final newline.
+  for (const json of ['{"figures": [], "summary": "ok"}', '{"figures": [], "summary": "ok"}\n\n', '```json\n{"figures": [], "summary": "ok"}\n```\n', 'Metadata:\n{"figures": [], "summary": "ok"}', '```\n{"figures": [], "summary": "ok"}']) {
+    assert.equal(parse(answer('Primo.', json)).ok, true, json);
+  }
 });

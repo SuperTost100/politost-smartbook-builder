@@ -3,7 +3,7 @@
 import { rewriteLatexNames, sanitizeModelValue } from '@smartbuilder/content';
 import type { z } from 'zod';
 import type { ParseResult } from './index.ts';
-import { describeIssues, dropOptionalNulls, parseJsonAnswer, rawJsonSchema } from './schema.ts';
+import { describeIssues, dropOptionalNulls, firstBalanced, parseJsonAnswer, rawJsonSchema } from './schema.ts';
 
 /** A line of its own between the text and its metadata. It is no Markdown, no LaTeX and no code a book contains. */
 export const META_SEPARATOR = '<<<META>>>';
@@ -13,6 +13,31 @@ export function bodyFormatRule(field: string, withMeta: boolean) {
   return withMeta
     ? `Answer in this format, with no code fence around any part: first ${field} as plain text, exactly as it should appear, with every backslash written once. Then one line holding only ${META_SEPARATOR}. Then one JSON object with the other fields. Nothing comes after the JSON.`
     : `Answer with ${field} as plain text and nothing else: no JSON, no code fence, no comment before or after it. Never write the line ${META_SEPARATOR}.`;
+}
+
+/**
+ * What follows the JSON object in the metadata segment. `parseJsonAnswer` tolerates prose around the object, but here a
+ * model that wrote more of the section after the object would lose it, so the caller refuses any text left over.
+ */
+function textAfterJson(segment: string): string {
+  const t = segment.trim();
+  try {
+    JSON.parse(t);
+    return '';
+  } catch {
+    // Not bare JSON: look for a fenced object, then for the first balanced one.
+  }
+  const fenced = /^```(?:json|JSON)?\s*\n([\s\S]*?)```([\s\S]*)$/.exec(t);
+  if (fenced) {
+    try {
+      JSON.parse(fenced[1].trim());
+      return fenced[2].trim();
+    } catch {
+      // The fence holds something else: read the segment as prose with an object in it.
+    }
+  }
+  const block = firstBalanced(t);
+  return block ? t.slice(t.indexOf(block) + block.length).replace(/^\s*```/, '').trim() : '';
 }
 
 const isFence = (line: string) => /^\s*```/.test(line);
@@ -66,11 +91,13 @@ export function bodyParser<K extends string, M extends object = Record<never, ne
       if (at < 0) return { ok: false, problem: `The line ${META_SEPARATOR} is missing. Write the text, then a line holding only ${META_SEPARATOR}, then one JSON object with the other fields.` };
       body = lines.slice(0, at).join('\n');
       let value: unknown;
+      const segment = lines.slice(at + 1).join('\n');
       try {
-        value = parseJsonAnswer(lines.slice(at + 1).join('\n'));
+        value = parseJsonAnswer(segment);
       } catch (err) {
         return { ok: false, problem: `The JSON after ${META_SEPARATOR} could not be read. ${err instanceof Error ? err.message : String(err)}` };
       }
+      if (textAfterJson(segment)) return { ok: false, problem: `There is text after the JSON that follows ${META_SEPARATOR}. Nothing may come after the JSON, so put all the text before ${META_SEPARATOR}.` };
       const parsed = meta.safeParse(sanitizeModelValue(dropOptionalNulls(value, raw!), raw));
       if (!parsed.success) return { ok: false, problem: `The JSON after ${META_SEPARATOR} does not fit:\n${describeIssues(parsed.error)}` };
       fields = parsed.data;

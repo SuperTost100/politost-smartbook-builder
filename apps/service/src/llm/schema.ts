@@ -178,7 +178,7 @@ export function parseJsonAnswer(text: string): unknown {
   throw new Error(`The answer is not valid JSON: ${lastErr instanceof Error ? lastErr.message : String(lastErr)}`);
 }
 
-function firstBalanced(text: string): string | null {
+export function firstBalanced(text: string): string | null {
   const start = text.search(/[{[]/);
   if (start < 0) return null;
   const open = text[start];
