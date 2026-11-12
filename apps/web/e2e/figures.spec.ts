@@ -843,6 +843,29 @@ test.describe('Add figure', () => {
     await expect(failed).toBeHidden();
   });
 
+  test('a second drawing started at the same block after the first one failed shows its own progress and ends with the figure in the text', async ({ page }) => {
+    const { fm, pop } = await openChooser(page);
+    const draw = async (text: string, reopen: boolean) => {
+      if (reopen) await page.getByRole('button', { name: 'Add figure', exact: true }).click();
+      await pop.getByRole('button', { name: /Describe a drawing/ }).click();
+      await pop.getByLabel('What should the drawing show?').fill(text);
+      await pop.getByRole('button', { name: 'Draw it' }).click();
+    };
+    await draw('Something odd', false);
+    fm.runStatus = 'failed';
+    fm.runError = 'The drawing did not compile after two repairs.';
+    const failed = page.locator('.ms-ghost-fig--failed');
+    await expect(failed).toContainText('did not compile', { timeout: 12_000 });
+    // The failure is not dismissed: the author describes the figure again, at the same block.
+    await draw('An op-amp with R1 and R2.', true);
+    await expect(failed).toBeHidden();
+    await expect(page.locator('.ms-ghost-fig')).toContainText('Drawing the figure from your description');
+    fm.complete();
+    await expect(page.getByText(/Figure added after block 2/)).toBeVisible({ timeout: 12_000 });
+    await expect(page.locator('.ms-ghost-fig')).toBeHidden();
+    await expect(page.locator('.ms-block .sb-figure')).toHaveCount(2);
+  });
+
   test('upload an image: a file and a caption put it after the block, and a file over 2 MB is refused (3c)', async ({ page }) => {
     const { fm, pop } = await openChooser(page);
     await pop.getByRole('button', { name: /Upload an image/ }).click();

@@ -364,7 +364,7 @@ export default function ManuscriptPage() {
                       onEditFigure={onEditFigure}
                     />
                     {drawing && drawing.nodeId === nodeId && drawing.afterBlock === b.index && (
-                      <div role="listitem"><DrawGhost pid={pid} nodeId={nodeId!} runId={drawing.runId} afterBlock={drawing.afterBlock} onDone={() => setDrawing(null)} /></div>
+                      <div role="listitem"><DrawGhost key={drawing.runId} pid={pid} nodeId={nodeId!} runId={drawing.runId} afterBlock={drawing.afterBlock} onDone={() => setDrawing(null)} /></div>
                     )}
                     </Fragment>
                   ))}
