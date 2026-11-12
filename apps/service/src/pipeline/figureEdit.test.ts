@@ -244,6 +244,25 @@ describe('draw task', () => {
     assert.equal(currentHead(ctx(), P, N)!.origin, 'ai');
   });
 
+  test('a figure is not inserted when the block the author chose was removed while it was drawn, and the drawing is discarded', async () => {
+    const head = saveHuman(ctx(), P, N, 'A.\n\nB.\n\nC.', null);
+    fake.next(say(GOOD), say('OK'));
+    const t = task('figure.draw', { nodeId: N, afterBlock: 1, anchor: 'B.', blocks: 3, description: 'A circle.', caption: 'Un cerchio' });
+    const removed = saveHuman(ctx(), P, N, 'A.\n\nC.', head.id);
+    await assert.rejects(figureDraw(ctx(), t), (e: unknown) => e instanceof TaskError && e.kind === 'input' && /removed/.test(e.message));
+    assert.equal(currentHead(ctx(), P, N)!.id, removed.id, 'the text is as the author left it');
+    assert.equal(listAssets(ctx(), P).length, 0, 'no drawing is kept');
+  });
+
+  test('a block the author corrected while the figure was drawn still gets the figure after it', async () => {
+    const head = saveHuman(ctx(), P, N, 'A.\n\nB.\n\nC.', null);
+    fake.next(say(GOOD), say('OK'));
+    const t = task('figure.draw', { nodeId: N, afterBlock: 1, anchor: 'B.', blocks: 3, description: 'A circle.', caption: 'Un cerchio' });
+    saveHuman(ctx(), P, N, 'A.\n\nB corrected.\n\nC.', head.id);
+    await figureDraw(ctx(), t);
+    assert.deepEqual(currentHead(ctx(), P, N)!.markdown.split('\n\n').map((b) => b.slice(0, 8)), ['A.', 'B correc', ':::image', 'C.']);
+  });
+
   test('a drawing described without a caption gets no alt text, because the description is English and the author writes the alt text in the book\'s language; a caption becomes the alt text', async () => {
     saveHuman(ctx(), P, N, 'Primo.', null);
     fake.next(say(GOOD), say('OK'));

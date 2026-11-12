@@ -22,6 +22,12 @@ export const MIN_KEPT_SHARE = 0.8;
 
 const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
+/** The first item of `before` that `after` has fewer times than `before`: two identical headings of which one goes count as a loss. */
+function firstLost(before: string[], after: string[]): string | undefined {
+  const left = new Map<string, number>();
+  for (const x of after) left.set(x, (left.get(x) ?? 0) + 1);
+  return before.find((x) => { const n = left.get(x) ?? 0; left.set(x, n - 1); return n <= 0; });
+}
 const hasDirective = (s: string) => /^[ \t]*:::/m.test(s);
 /** A block that is one :::image directive and nothing else. */
 const onlyImage = (s: string) => /^\s*:::image\{[^}]*\}\s*\n\s*:::\s*$/.test(s);
@@ -70,15 +76,18 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     const drop = (reason: string) => { reverted.push({ block: c.block, reason }); };
     if (!text) {
       if (!old.trim()) continue;
+      // Also with removals: the fix model is told a figure goes only when a problem is about that figure, a note around an image included.
+      if (!opts.figures && /^[ \t]*:::image\{/m.test(old)) { drop('it would delete a figure block'); continue; }
       const image = opts.figures && onlyImage(old);
       if (!image && !opts.removals && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
       const limit = opts.removals ? MAX_DELETED_BLOCKS * REMOVAL_FACTOR : MAX_DELETED_BLOCKS;
       if (deleted >= limit) { drop(`it would delete more than ${limit} blocks`); continue; }
     } else {
-      const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));
+      const lostKey = firstLost(formulaKeys(old), formulaKeys(text));
       if (lostKey) { drop(`it drops the formula "${lostKey}"`); continue; }
-      const newHeadings = headings(text);
-      if (headings(old).some((h) => !newHeadings.includes(h))) { drop('it drops or rewrites a heading'); continue; }
+      if (firstLost(headings(old), headings(text))) { drop('it drops or rewrites a heading'); continue; }
+      // A block rewritten without its picture loses the figure as a deletion does, so the same rule holds.
+      if (!opts.figures && firstLost(imageSources(old), imageSources(text))) { drop('it would remove a figure'); continue; }
       if (fenceBalance(text) !== 0 && fenceBalance(text) !== fenceBalance(old)) { drop('it leaves a ::: fence open'); continue; }
     }
     base ??= serious(lint(join(out)));
@@ -199,7 +208,7 @@ export function parsePatchAnswer(text: string, limits: { blocks: number; issues:
 }
 
 /** Opening lines of ::: blocks, by block name. */
-const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::\s*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
+const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::[ \t]*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
 const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
 
 /**
@@ -208,18 +217,15 @@ const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+
  * or leaves a ::: fence open.
  */
 export function lostStructure(before: string, after: string): string | null {
-  const kept = headings(after);
-  const heading = headings(before).find((h) => !kept.includes(h));
+  const heading = firstLost(headings(before), headings(after));
   if (heading) return `it drops or rewrites the heading "${heading}"`;
-  const keys = formulaKeys(after);
-  const key = formulaKeys(before).find((k) => !keys.includes(k));
+  const key = firstLost(formulaKeys(before), formulaKeys(after));
   if (key) return `it drops the formula "${key}"`;
   const blocks = directiveNames(after);
   for (const name of new Set(directiveNames(before))) {
     if (blocks.filter((n) => n === name).length < directiveNames(before).filter((n) => n === name).length) return `it drops a :::${name} block`;
   }
-  const sources = imageSources(after);
-  const image = imageSources(before).find((src) => !sources.includes(src));
+  const image = firstLost(imageSources(before), imageSources(after));
   if (image) return `it drops the image "${image}"`;
   if (fenceBalance(after) !== 0 && fenceBalance(after) !== fenceBalance(before)) return 'it leaves a ::: fence open';
   return null;
@@ -270,6 +276,23 @@ export const MATH_SYMBOLS: Record<string, string> = {
   to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', implies: '⇒', iff: '⇔', mapsto: '↦',
   uparrow: '↑', downarrow: '↓', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
 };
+/**
+ * LaTeX commands that only decorate, size, space or group what they hold, so a repair may add or drop them. Any other command
+ * (\\sin, \\lim, \\max, \\not, one this list does not know) names something, so it counts as a word: "$\\sin x$" and "$\\cos x$"
+ * differ. shortcut: a decoration missing from this list makes a repair that adds it look like a change and be refused, which
+ * keeps the old text; add the command here when that shows up.
+ */
+const PRESENTATION = new Set([
+  'mathrm', 'mathbf', 'mathit', 'mathsf', 'mathtt', 'mathcal', 'mathscr', 'mathfrak', 'boldsymbol', 'bm', 'rm', 'bf', 'it',
+  'text', 'textrm', 'textbf', 'textit', 'textsf', 'texttt', 'textnormal', 'mbox', 'hbox', 'operatorname',
+  'left', 'right', 'big', 'Big', 'bigg', 'Bigg', 'bigl', 'bigr', 'Bigl', 'Bigr', 'biggl', 'biggr', 'Biggl', 'Biggr', 'middle',
+  'displaystyle', 'textstyle', 'scriptstyle', 'scriptscriptstyle', 'limits', 'nolimits',
+  'quad', 'qquad', 'hspace', 'vspace', 'hskip', 'enspace', 'thinspace', 'medspace', 'thickspace', 'negthinspace', 'phantom', 'vphantom', 'hphantom', 'strut',
+  'frac', 'dfrac', 'tfrac', 'binom', 'dbinom', 'tbinom', 'begin', 'end', 'tag', 'label', 'nonumber', 'notag', 'cr', 'hline',
+  'vec', 'hat', 'bar', 'overline', 'underline', 'dot', 'ddot', 'tilde', 'widehat', 'widetilde', 'overrightarrow', 'overbrace', 'underbrace', 'color',
+  'ldots', 'dots', 'vdots', 'ddots', 'lbrace', 'rbrace', 'langle', 'rangle', 'lvert', 'rvert', 'lVert', 'rVert', 'vert', 'Vert', 'mid', 'lfloor', 'rfloor', 'lceil', 'rceil',
+  'mathbin', 'mathrel', 'mathop', 'mathord',
+]);
 /** Characters that look alike and mean the same symbol: the micro sign and the ohm sign, and the variant Greek letters. */
 const SAME_SYMBOL: Record<string, string> = { '\u00b5': '\u03bc', '\u2126': '\u03a9', 'ς': 'σ', 'ϕ': 'φ', 'ϵ': 'ε', 'ϑ': 'θ', 'ϖ': 'π', 'ϱ': 'ρ', '−': '-', '–': '-' };
 const BLACKBOARD = { R: 'ℝ', N: 'ℕ', Z: 'ℤ', Q: 'ℚ', C: 'ℂ' } as const;
@@ -292,7 +315,7 @@ function wordSequence(text: string): string[] {
   let last = 0;
   const commands = (s: string) => s
     .replace(/\\mathbb\{([RNZQC])\}/g, (_, c: keyof typeof BLACKBOARD) => ` ${BLACKBOARD[c]} `)
-    .replace(/\\([A-Za-z]+)/g, (_, name: string) => (MATH_SYMBOLS[name] ? ` ${MATH_SYMBOLS[name]} ` : ' '))
+    .replace(/\\([A-Za-z]+)/g, (_, name: string) => (MATH_SYMBOLS[name] ? ` ${MATH_SYMBOLS[name]} ` : PRESENTATION.has(name) ? ' ' : ` ${name} `))
     .replace(/\\./g, ' ');
   // A backslash-n or -t that starts a LaTeX command (\nu, \to) is no line break, also in a fragment with an unbalanced $.
   const prose = (s: string) => commands(s.replace(/(?<!\\)\\[nt]/g, (m, at: number) => (LATEX_COMMAND_N_T.test(s.slice(at)) ? m : ' ')));

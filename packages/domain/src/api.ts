@@ -173,7 +173,7 @@ export interface Api {
   /** multipart/form-data: file (PNG, JPEG, SVG or WebP, up to 2 MB), baseRevId. The figure becomes an uploaded image and its drawing source is dropped. */
   'POST /api/projects/:id/sections/:nodeId/figures/:assetId/replace': { res: SectionView };
   /** Takes the figure out of the text. Its picture stays in the section history. */
-  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove': { body: { baseRevId: string }; res: SectionView };
+  'POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove': { body: { baseRevId: string; /** The figure block to remove, counted as the editor counts blocks. */ block: number }; res: SectionView };
   /** Inserts a drawing after block `afterBlock` once the illustrator has drawn it: starts a task. */
   'POST /api/projects/:id/sections/:nodeId/figures/draw': { body: { baseRevId: string; afterBlock: number; description: string; caption: string }; res: RunSummary };
   /** multipart/form-data: file (PNG, JPEG, SVG or WebP, up to 2 MB), baseRevId, afterBlock, caption. */

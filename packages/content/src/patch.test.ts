@@ -44,6 +44,47 @@ test('a fix for a figure problem may delete a block that is only that image; not
   assert.deepEqual(mixed.kept, [0]);
 });
 
+test('a removal fix for off-program material may not delete a figure unless a figure problem is open', () => {
+  const IMG = ':::image{src="assets/s1-retta.svg" alt="a" caption="c"}\n:::';
+  const inNote = `:::note\nTesto.\n${IMG}\n:::`;
+  const blocks = ['Testo.', IMG, inNote, '### Fuori programma'];
+  const del = [0, 1, 2, 3].map((block) => ({ block, text: '' }));
+  const r = applyGuardedChanges(blocks, del, lint, { removals: true });
+  assert.deepEqual(r.kept, [0, 3]);
+  assert.deepEqual(r.reverted.map((x) => [x.block, x.reason]), [[1, 'it would delete a figure block'], [2, 'it would delete a figure block']]);
+  assert.deepEqual(applyGuardedChanges(blocks, del, lint, { removals: true, figures: true }).kept, [0, 1, 2, 3], 'with a figure problem open the figures may go');
+  // Rewriting the block is the same loss as deleting it: a figure block turned into text, and a note that keeps its text and loses its image.
+  const rewrite = [{ block: 1, text: 'Testo.' }, { block: 2, text: ':::note\nTesto.\n:::' }];
+  for (const opts of [{}, { removals: true }]) {
+    const w = applyGuardedChanges(blocks, rewrite, lint, opts);
+    assert.deepEqual(w.kept, [], JSON.stringify(opts));
+    assert.deepEqual(w.reverted.map((x) => x.reason), ['it would remove a figure', 'it would remove a figure']);
+  }
+  assert.deepEqual(applyGuardedChanges(blocks, rewrite, lint, { figures: true }).kept, [1, 2]);
+  // A new caption on the same picture is no loss.
+  assert.deepEqual(applyGuardedChanges(blocks, [{ block: 1, text: IMG.replace('caption="c"', 'caption="d"') }], lint).kept, [1]);
+});
+
+test('lostStructure counts a repeated heading, formula key or image, so deleting one of two copies shows', () => {
+  const H = '### Esempio';
+  const IMG = ':::image{src="assets/rc.svg" alt="a" caption="c"}\n:::';
+  const before = `${H}\n\nPrimo.\n\n${IMG}\n\n${H}\n\nSecondo.\n\n${IMG}`;
+  assert.match(lostStructure(before, before.replace(`\n\n${H}\n\nSecondo.`, ''))!, /heading "### Esempio"/);
+  assert.match(lostStructure(before, before.replace(`\n\n${IMG}`, ''))!, /:::image block|image "assets\/rc.svg"/);
+  assert.equal(lostStructure(before, before.replace('Primo.', 'Primo bis.')), null);
+  const keys = `${F}\n\n${F}`;
+  assert.match(lostStructure(keys, F)!, /formula "k1"/);
+  // Inside a guarded change too: one of two identical headings of a block cannot go.
+  const r = applyGuardedChanges([`${H}\n\nA.\n\n${H}\n\nB.`], [{ block: 0, text: `${H}\n\nA B.` }], lint);
+  assert.match(r.reverted[0].reason, /heading/);
+});
+
+test('lostStructure reads a ::: block name from its own line, not from the paragraph after a closing fence', () => {
+  const before = `${F}\n\nEsempio svolto: un resistore.\n\nFine.`;
+  assert.equal(lostStructure(before, `${F}\n\nFine.`), null, 'the paragraph that follows a closing fence is no block named Esempio');
+  assert.match(lostStructure(before, 'Esempio svolto: un resistore.\n\nFine.')!, /formula/);
+});
+
 test('dropping a formula key or a heading, and unbalanced fences, are reverted', () => {
   const r = applyGuardedChanges(['### Titolo\n\nTesto.', F, 'Fine.'], [
     { block: 0, text: '### Altro titolo\n\nTesto.' },
@@ -281,6 +322,28 @@ test('changedWords: re-typesetting the same value passes', () => {
   assert.equal(changedWords('Vale $x-2$.', 'Vale $x - 2$.'), null);
   assert.equal(changedWords('Dal 3-4 maggio.', 'Dal $3-4$ maggio.'), null);
   assert.equal(changedWords('- 2 resistori\n- 3 diodi', '- 2 resistori\n\n- 3 diodi'), null, 'a list marker is no sign');
+});
+
+test('changedWords: a function or operator command is a word, so swapping one is a change', () => {
+  assert.match(changedWords('Vale $\\sin x$.', 'Vale $\\cos x$.')!, /replaces "sin" with "cos"/, 'sine becomes cosine');
+  assert.match(changedWords('Vale $\\sin x$.', 'Vale $x$.')!, /removes "sin"/, 'the function is dropped');
+  assert.match(changedWords('Vale $\\log x$.', 'Vale $\\ln x$.')!, /./);
+  assert.match(changedWords('Vale $\\lim_{x\\to 0} f$.', 'Vale $\\sup_{x\\to 0} f$.')!, /./);
+  assert.match(changedWords('Vale $\\max(a,b)$.', 'Vale $\\min(a,b)$.')!, /./);
+  assert.match(changedWords('Vale $\\arcsin x$.', 'Vale $\\arccos x$.')!, /./);
+  assert.match(changedWords('Vale $x \\foo y$.', 'Vale $x \\baz y$.')!, /./, 'an unknown command is kept as written');
+  assert.match(changedWords('Vale $x \\not= y$.', 'Vale $x = y$.')!, /./, 'a negation is no decoration');
+});
+
+test('changedWords: the same function written as a word or as a command, and presentation commands, change nothing', () => {
+  assert.equal(changedWords('Vale sin x e lim f.', 'Vale $\\sin x$ e $\\lim f$.'), null);
+  assert.equal(changedWords('Vale $\\sin x$.', 'Vale\n\n$$\\sin x$$'), null);
+  assert.equal(changedWords('Vale $f(x) = (a+b)/2$.', 'Vale $f(x) = \\left(\\frac{a+b}{2}\\right)$.'), null);
+  assert.equal(changedWords('Il vettore v e la matrice A.', 'Il vettore $\\vec{v}$ e la matrice $\\mathbf{A}$.'), null);
+  assert.equal(changedWords('Vale $\\displaystyle \\frac{a}{b}$ per $x$.', 'Vale $\\dfrac{a}{b}$\\quad per $x$.'), null);
+  assert.equal(changedWords('Vale $x_1, x_2, ..., x_n$.', 'Vale $x_1, x_2, \\ldots, x_n$.'), null);
+  assert.equal(changedWords('Vale $\\bigl( x \\bigr)$ e $\\text{ V}$.', 'Vale $( x )$ e $V$.'), null);
+  assert.equal(changedWords('Il rango di A.', 'Il $\\operatorname{rango}$ di $A$.'), null);
 });
 
 test('changedWords: a Unicode symbol and its LaTeX command are the same token', () => {

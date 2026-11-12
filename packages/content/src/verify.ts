@@ -24,12 +24,14 @@ const nonEmpty = (v: unknown): boolean => Array.isArray(v) && v.length > 0;
 function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: string } {
   const data = cfg.data;
   if (!Array.isArray(data) || data.length === 0) return { ok: false, detail: 'config.data must hold at least one curve' };
-  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { xaxis?: { type?: unknown }; yaxis?: { range?: unknown; type?: unknown } };
+  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { xaxis?: { range?: unknown; type?: unknown }; yaxis?: { range?: unknown; type?: unknown } };
   const xLog = layout.xaxis?.type === 'log';
   const yLog = layout.yaxis?.type === 'log';
   // On a log axis Plotly reads the range as exponents, so the visible range in data units is 10^range.
   const viewRange = isRange(layout.yaxis?.range) ? layout.yaxis.range : null;
   const view: [number, number] | null = viewRange && yLog ? [10 ** viewRange[0], 10 ** viewRange[1]] : viewRange;
+  const xViewRange = isRange(layout.xaxis?.range) ? layout.xaxis.range : null;
+  const xView: [number, number] | null = xViewRange && xLog ? [10 ** xViewRange[0], 10 ** xViewRange[1]] : xViewRange;
   const problems: string[] = [];
   let curves = 0;
   for (const [i, raw] of data.entries()) {
@@ -47,11 +49,21 @@ function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: 
     curves++;
     // A point a log axis cannot show (zero or negative on that axis) is as good as undefined.
     const ys = t.y as unknown[];
-    // Without an x array Plotly uses 0, 1, 2, ... as the coordinates. (A scatter needs a y array, so y is never implicit here.)
-    const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => k);
+    // Without an x array Plotly counts up by 1 from x0, or from 0. The reader keeps x0 and drops dx, so the step is always 1. (A scatter needs a y array, so y is never implicit here.)
+    const x0 = typeof t.x0 === 'number' && Number.isFinite(t.x0) ? t.x0 : 0;
+    const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => x0 + k);
     const finite = ys.filter((y, k): y is number => typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof xsOf[k] === 'number' && xsOf[k] > 0)));
     if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain${xLog || yLog ? ' (a log axis shows only positive values)' : ''}`);
-    else if (view && !finite.some((y) => y >= view[0] && y <= view[1])) problems.push(`${name}: never enters the visible range [${view[0]}, ${view[1]}]`);
+    else if (view || xView) {
+      // A point is on screen when it is inside both ranges. An x that is not a number (a category) has no x range to be outside of.
+      const shown = (y: unknown, k: number, inX: boolean) => {
+        const x = xsOf[k];
+        return typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof x === 'number' && x > 0))
+          && (!view || (y >= view[0] && y <= view[1])) && (!inX || !xView || typeof x !== 'number' || (x >= xView[0] && x <= xView[1]));
+      };
+      if (view && !ys.some((y, k) => shown(y, k, false))) problems.push(`${name}: never enters the visible range [${view[0]}, ${view[1]}]`);
+      else if (xView && !ys.some((y, k) => shown(y, k, true))) problems.push(`${name}: never enters the visible x range [${xView[0]}, ${xView[1]}]`);
+    }
   }
   if (problems.length) return { ok: false, detail: problems.join('; ') };
   return { ok: true, detail: curves ? `Checked ${data.length} trace(s), ${curves} curve(s) all defined and visible.` : `Checked ${data.length} trace(s): the data is there.` };

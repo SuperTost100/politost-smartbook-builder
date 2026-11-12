@@ -97,7 +97,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
 
 // Order matters: the first matching area wins, so the compound names ("Chimica fisica", "Meccanica quantistica") come first.
 const AREA_PATTERNS: [SubjectArea, RegExp][] = [
-  ['chemistry', /\b(chimic\w*|chemi\w*|stechiometri\w*|biochimic\w*)/],
+  ['chemistry', /\b(chimic\w*|chemi\w*|stechiometri\w*|biochimic\w*|biochemi\w*)/],
   ['physics', /\b(meccanica (quantistica|statistica|ondulatoria)|quantum|statistical mechanics|fisic\w*|physic\w*|termodinamic\w*|thermodynamic\w*|ottic\w*|optics|elettromagnetism\w*|electromagnetis\w*)/],
   ['electronics', /\b(elettronic\w*|electronic\w*|elettrotecnic\w*|circuit\w*|reti logiche|digital logic|telecomunicazion\w*|segnali|signals)/],
   ['computer-science', /\b(informatic\w*|algoritm\w*|algorithm\w*|programmazion\w*|programming|computer|calcolatori|software|database|basi di dati|strutture dati|data structures)/],

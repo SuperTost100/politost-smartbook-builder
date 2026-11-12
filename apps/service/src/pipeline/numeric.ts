@@ -33,6 +33,8 @@ const PREFIXES: Record<string, number> = { G: 1e9, M: 1e6, k: 1e3, c: 1e-2, m: 1
 const BASE_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'g', 'mol', 'K', 'C', 'S', 'T', 'L', 'l', 'B', 'bar']);
 // Units that take no prefix here. A unit with any other word in it (atm, mmHg, pi) is not compared.
 const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u00b0C']);
+// Units whose value in the solution is the SI value once the prefix is applied. min, h, L, bar, deg, km/h and mol/L are not: an unmarked printed value cannot be read against them.
+const SI_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'mol', 'K', 'C', 'S', 'T', 'rad', 'kg']);
 const MAX_PRINTED_VALUES = 50;
 
 /** Strips LaTeX the model may leave in a value and unifies the symbols that differ between sources. */
@@ -120,10 +122,17 @@ function compare(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'sk
   return verdicts.includes('match') ? 'match' : verdicts.every((v) => v === 'mismatch') ? 'mismatch' : 'skip';
 }
 
+/** The stated quantity is a pure number or made of SI units alone (m/s, kg·m2, kΩ), so the program's unmarked SI value is comparable with it. */
+function inSiUnits(q: Quantity): boolean {
+  if (q.unit === 'g') return q.factor === 1000;
+  return q.unit.split(/[^\p{L}\u00b0%]+/u).filter(Boolean).every((t) => SI_UNITS.has(t));
+}
+
 function compareReading(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'skip' {
   const scale = stated.factor;
   if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : differs(stated, printed.value, scale) ? 'mismatch' : 'match';
   // The program was told to print SI base units, so an unmarked value is read as one.
+  if (!inSiUnits(stated)) return 'skip';
   if (!differs(stated, printed.value, scale)) return 'match';
   if (scale === 1) return 'mismatch';
   return differs({ ...stated, base: stated.asWritten, factor: 1 }, printed.value, 1) ? 'mismatch' : 'skip';

@@ -12,8 +12,8 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey } from './practice.ts';
-import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay } from './practice.ts';
+import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
@@ -186,6 +186,7 @@ describe('1. question updates do not overwrite author edits', () => {
     assert.match(problem('@@@ statement\nA.\n@@@ statement\nB.\n@@@ hint\n@@@ solution\nC.'), /two "@@@ statement" parts/);
     assert.match(problem('@@@ statement\n\n@@@ hint\n@@@ solution\nB.'), /statement is empty/);
     assert.match(problem('@@@ statement\nA.\n@@@ suggerimento\nB.\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/);
+    assert.match(problem('@@@ statement\nA.\n @@@ hint\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/, 'an indented header is not part of the statement');
   });
 
   test('import: a formatting repair that adds a word is not applied', async () => {
@@ -426,6 +427,19 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.equal(json<{ method: string; ok: boolean }[]>(row(id).checks, []).find((c) => c.method === 'numeric')!.ok, false);
   });
 
+  test('a reviewer that gives no usable recomputation does not erase the checker\'s numeric mismatch', async () => {
+    const id = q({ statement: circuit, solution: 'R = 5 kΩ' });
+    const bad = verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] });
+    // The reviewer agrees with the solution, and gives no program, or one that fails.
+    for (const reviewer of [verdict({}), verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] })]) {
+      fake.next(bad, reviewer);
+      const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+      assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+      assert.equal(row(id).status, 'issue');
+      assert.match(issues(`question_id = '${id}'`)[0].message, /R_eq is 500\.0 ohm by the computation and 5\.0 kΩ in the solution/);
+    }
+  });
+
   test('a computation that throws is ignored and the model verdict stands', async () => {
     const id = q({ statement: circuit, solution: 'R = 500 Ω' });
     fake.next(verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));
@@ -524,6 +538,32 @@ describe('4. practice generation stages', () => {
     fake.next(answer(gen(1, 'esercizio')));
     await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
     assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
+  });
+});
+
+describe('an index task queued before a source was excluded', () => {
+  test('stops between two calls when the source is excluded while the first one runs', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-long', role: 'theory' });
+    for (let i = 0; i < 151; i++) seedPage(ctx, 'r-long', i, `Pagina ${i + 1}`, `Titolo ${i + 1}\nTesto.`);
+    // The author excludes the source while the first group of pages is with the model.
+    fake.next(() => { ctx.db.run(`UPDATE resources SET included = 0 WHERE id = 'r-long'`); return answer({ entries: [{ title: 'Titolo 1', level: 1, page: 1 }] })(); });
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-long' })), { skipped: 'excluded' });
+    assert.equal(fake.calls.length, 1, 'the second group of pages is not sent');
+    assert.equal(ctx.db.get(`SELECT 1 FROM source_indexes WHERE resource_id = 'r-long'`), undefined);
+  });
+
+  test('sends nothing of the excluded source to a model, and indexes it once it is included again', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-theory', role: 'theory', included: 0 });
+    seedPage(ctx, 'r-theory', 0, 'Introduzione ai limiti', 'Introduzione ai limiti\nTesto.');
+    const indexed = () => ctx.db.get(`SELECT 1 FROM source_indexes WHERE resource_id = 'r-theory'`);
+    fake.next(answer({ entries: [{ title: 'Introduzione ai limiti', level: 1, page: 1 }] }));
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-theory' })), { skipped: 'excluded' });
+    assert.equal(fake.calls.length, 0, 'no model call for an excluded source');
+    assert.equal(indexed(), undefined);
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r-theory'`);
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-theory' })), { origin: 'inferred', entries: 1 });
+    assert.equal(fake.calls.length, 1);
+    assert.ok(indexed());
   });
 });
 
@@ -668,6 +708,26 @@ describe('4c. one extraction call per exam session', () => {
     assert.equal(row(ids[0]).statement, 'Calcola 1.');
   });
 
+  test('a session read that keeps failing with a temporary error is retried, and on its last attempt gives way to the reads of the single questions', async () => {
+    session();
+    const hangUp = () => new Error('socket hang up');
+    const attempt = (n: number) => { const t = startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }); t.task.attempts = n; return t; };
+    fake.next(hangUp, hangUp, hangUp);
+    await assert.rejects(sessionImport(ctx, attempt(1)), (e: unknown) => e instanceof TaskError && e.kind === 'temporary', 'the first attempt is left to the queue to retry');
+    fake.next(hangUp, hangUp, hangUp);
+    assert.match((await sessionImport(ctx, attempt(3)) as { fallback: string }).fallback, /socket hang up/);
+  });
+
+  test('on its last attempt the session read also gives way for an error that is not a TaskError, and never for a cancelled task or one that waits', () => {
+    const last = { aborted: false, lastAttempt: true };
+    assert.equal(sessionGivesWay(new Error('the page did not render'), last), true);
+    assert.equal(sessionGivesWay(new TaskError('timeout'), last), true);
+    assert.equal(sessionGivesWay(new Error('the page did not render'), { aborted: false, lastAttempt: false }), false, 'earlier attempts are left to the queue');
+    assert.equal(sessionGivesWay(new Error('cancelled'), { aborted: true, lastAttempt: true }), false);
+    assert.equal(sessionGivesWay(new TaskError('Usage limit reached', 'quota'), last), false);
+    assert.equal(sessionGivesWay(new TaskError('Sign in again', 'auth'), last), false);
+  });
+
   test('the exam answer parser: what it accepts and what it sends back', () => {
     const parse = examReadParser(['1', '2']);
     const ok = parse('@@@ statement 1\nPrimo.\n\na) Calcolare $\\nu$.\n@@@ solution 1\nVale $\\neq 0$.\n@@@ unreadable 2');
@@ -682,6 +742,8 @@ describe('4c. one extraction call per exam session', () => {
     assert.match(problem('@@@ statement 1\nA.\n@@@ unreadable 1\n@@@ statement 2\nB.'), /both unreadable and given/);
     assert.match(problem('@@@ statement 1\n\n@@@ statement 2\nB.'), /Exercise 1 has no statement/);
     assert.match(problem('@@@ statement 1\nA.\n@@@ soluzione 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/);
+    assert.match(problem('@@@ statement 1\nA.\n  @@@ solution 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/, 'an indented header is not part of the statement');
+    assert.match(problem('@@@ statement 1\nA.\n\t@@@ solution 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/);
     assert.match(problem('@@@ statement\nA.\n@@@ statement 2\nB.'), /has no exercise number/);
   });
 
@@ -963,6 +1025,23 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     for (const l of layouts) assert.deepEqual(l.config.layout.xaxis, { title: 'f (Hz)', type: 'log', range: [1, 5] });
     assert.deepEqual(rows.map((r) => r.status), ['verified', 'verified']);
   });
+
+  test('a Bode pair is saved in one transaction: when the second graph cannot be written, the first is not kept, so a retry draws the pair again', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    ctx.db.raw.exec(`CREATE TRIGGER second_graph_fails BEFORE INSERT ON enrichments WHEN (SELECT count(*) FROM enrichments) >= 1 BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    const pair = {
+      id: 'bode', title: 'Modulo', description: 'Modulo in dB', functions: [{ fn: '-10*log10(1+(x/1000)^2)', label: '|H|' }],
+      xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', functions: [{ fn: '-atan(x/1000)*180/pi', label: 'fase' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+    };
+    fake.next(answer(pair));
+    await assert.rejects(enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), /disk full/);
+    assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 0);
+    ctx.db.raw.exec('DROP TRIGGER second_graph_fails');
+    fake.next(answer(pair));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), { made: 2 });
+  });
 });
 
 describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
@@ -1021,6 +1100,28 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
   });
 
+  test('a queued redraw of a graph the author fixed or deleted before it started asks no model and leaves the graph alone', async () => {
+    const { enrichment, issue } = await failing();
+    const input = { nodeId: 's1', purpose: 'p', force: true, replaceId: enrichment, issueIds: [issue] };
+    const edited = { ...graph, title: "Grafico dell'autrice" };
+    ctx.db.run(`UPDATE enrichments SET payload = ?, status = 'verified' WHERE id = ?`, JSON.stringify(edited), enrichment);
+    const calls = fake.calls.length;
+    const r = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(r.made, 0);
+    assert.match(String(r.skipped), /passes its check/);
+    assert.equal(fake.calls.length, calls, 'no model call');
+    assert.deepEqual(json(ctx.db.get<{ payload: string }>('SELECT payload FROM enrichments')!.payload, {}), edited);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'fixed');
+
+    ctx.db.run(`UPDATE review_issues SET status = 'open'`);
+    ctx.db.run('DELETE FROM enrichments WHERE id = ?', enrichment);
+    const gone = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(gone.made, 0);
+    assert.equal(fake.calls.length, calls, 'no model call for a graph that is gone');
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0, 'a deleted graph is not recreated');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'fixed');
+  });
+
   test('an issue whose failing graph is gone, or passes now, closes without a model call', async () => {
     const { enrichment, issue } = await failing();
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);
@@ -1058,6 +1159,34 @@ describe('Auto Fix redraws each failing graph of a Bode pair for its own issues'
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] })), { skipped: 'routed', routed: { graphs: 2 } });
     const inputs = redrawInputs();
     assert.deepEqual(inputs.map((i) => [i.replaceId, i.issueIds]).sort(), [[f.magRow, [f.magIssue]], [f.phaseRow, [f.phaseIssue]]].sort());
+  });
+
+  test('an issue that names neither of two failing graphs stays open, and with one failing graph it goes to that one', async () => {
+    const f = await failingPair();
+    // The magnitude graph's title was edited after the issue was written, so the issue's quote names no graph.
+    ctx.db.run(`UPDATE review_issues SET quote = 'Titolo di prima' WHERE id = ?`, f.magIssue);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
+    assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.phaseRow, [f.phaseIssue]]]);
+    assert.equal(statusOf(f.magIssue), 'open');
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', f.magIssue)!.resolution, /does not identify one of them/);
+    // With one failing graph left there is no doubt which one the issue is about.
+    ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, f.phaseRow);
+    ctx.db.run(`DELETE FROM tasks WHERE key LIKE 'fixgraph:%'`);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
+    assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.magRow, [f.magIssue]]]);
+  });
+
+  test('two failing graphs with the same title are not told apart by an issue, so neither issue is routed to the first of them', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) }));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    const issues = ctx.db.all<{ id: string; quote: string }>('SELECT id, quote FROM review_issues ORDER BY rowid');
+    assert.deepEqual(issues.map((i) => i.quote), ['Modulo', 'Modulo']);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: issues.map((i) => i.id) })), { skipped: 'nothing requested' });
+    assert.equal(redrawInputs().length, 0, 'no graph is redrawn, so no issue can close for a graph that still fails');
+    assert.deepEqual(issues.map((i) => statusOf(i.id)), ['open', 'open']);
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', issues[0]!.id)!.resolution, /does not identify one of them/);
   });
 
   test('the answer graph with the failing row\'s id replaces that row, and only its issue closes', async () => {
@@ -1955,7 +2084,7 @@ describe('the review converges', () => {
     const { prompt, system } = fake.calls[0];
     assert.match(prompt, /\(standard\)\n\nSymbols used in the exam papers on this chapter's topics: f_c, R_1\.\n/);
     assert.doesNotMatch(prompt, /q_p/);
-    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs\./);
+    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs, unless the notation fixed for the whole book defines another symbol for that quantity\. The book's notation wins over the exam papers, as it does for the writer\./);
     ctx.db.run(`DELETE FROM questions`);
     fake.next(answer({ issues: [] }));
     await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', force: true }));
@@ -2194,6 +2323,29 @@ describe('second opinion, full review and recheck', () => {
     await review();
     assert.match(fake.calls[1].prompt, /Seconda sezione\./);
     assert.doesNotMatch(fake.calls[1].prompt, /Prima sezione\./);
+  });
+
+  test('the second opinion gets the exam symbols and the rule that the book notation wins, on the first call and on a recheck', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: ['t-filtri'] });
+    seedRevision('s1', 'La frequenza di taglio è $f_t$.');
+    ctx.db.insert('questions', {
+      id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
+      statement: 'Calcolare la frequenza di taglio $f_c$.', hint: '', solution: '', difficulty: 'medio', topic_ids: ['t-filtri'], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
+    });
+    fake.next(answer({ issues: [finding({ quote: 'La frequenza di taglio è $f_t$.', category: 'notation', severity: 'major', message: 'Nei temi d\'esame è f_c' })] }), opinion(['real', 'major']));
+    await review();
+    assert.match(fake.calls[1].system ?? '', /also invent problems/);
+    assert.match(fake.calls[1].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    assert.match(fake.calls[1].system ?? '', /the notation fixed for the whole book defines none for it/);
+    assert.match(fake.calls[1].system ?? '', /not a preference about wording/);
+    assert.match(fake.calls[1].system ?? '', /a symbol that differs from the exam papers in the way described above; minor for everything else/, 'the severity rule keeps such a finding major');
+    fake.next(opinion(['real', 'major']));
+    await review({ mode: 'recheck' });
+    assert.match(fake.calls[2].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    ctx.db.run(`DELETE FROM questions`);
+    fake.next(opinion(['real', 'major']));
+    await review({ mode: 'recheck' });
+    assert.doesNotMatch(fake.calls[3].prompt, /Symbols used in the exam papers/);
   });
 
   test('recheck gives open issues a second opinion without a new review, and the next review still compares with the last one', async () => {
@@ -2784,6 +2936,16 @@ describe('figures are checked where they are born', () => {
     assert.deepEqual(r.figureProblems, ['a: dropped by the check (Ripete il testo.)']);
     assert.equal(current('s1'), 'Testo uno corretto.\n\n:::image{src="assets/vecchio.svg" alt="Vecchio" caption="Grafico vecchio"}\n:::');
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
+  });
+
+  test('a fix whose only change is a figure the check drops still returns the reason', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno.\n\n:::image{src="assets/vecchio.svg" alt="Vecchio" caption="Grafico vecchio"}\n:::');
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Grafico vecchio', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
+    fake.next(patchAnswer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno.\n\n${img('a')}` }] }), answer(verdict(false)));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
+    assert.equal(r.skipped, 'no change survived the checks');
+    assert.deepEqual(r.figureProblems, ['a: dropped by the check (Ripete il testo.)']);
   });
 
   test('a fix for another kind of problem gets no figure rules, and an author instruction gets them', async () => {

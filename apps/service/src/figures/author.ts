@@ -14,7 +14,7 @@ import { assertSafeSvg, assetPath, getAsset, mapAsset, storeAsset } from '../rep
 import { badInput, conflict, notFound } from '../repo/errors.ts';
 import type { Rec } from '../repo/util.ts';
 import { relint } from '../routes/views.ts';
-import { IMAGE_ATTRS } from './materialize.ts';
+import { IMAGE_ATTRS, removeImageBlock } from './materialize.ts';
 import { drawingSpec } from './drawing/edit.ts';
 
 /** The most an uploaded figure may weigh. */
@@ -164,6 +164,15 @@ export function saveFigureDetails(
   }
 }
 
+/** The text without block `block`, which must be an image block that shows `filename`. Null when it is not: the text moved on since the author chose it. */
+export function removeFigureBlock(markdown: string, block: number, filename: string): string | null {
+  const blocks = splitBlocks(markdown);
+  const b = blocks[block];
+  if (!b || b.kind !== 'image' || removeImageBlock(b.text, filename).trim()) return null;
+  blocks.splice(block, 1);
+  return joinBlocks(blocks);
+}
+
 /** The text with a block inserted after block `afterBlock` (counted as the editor counts them; -1 puts it first). */
 export function insertAfterBlock(markdown: string, afterBlock: number, block: string): string {
   const blocks = splitBlocks(markdown);
@@ -172,10 +181,17 @@ export function insertAfterBlock(markdown: string, afterBlock: number, block: st
   return joinBlocks(blocks);
 }
 
-/** After a revision was written: lint it again and tell the open screens. */
+/**
+ * After a revision was written: lint it again and tell the open screens. The revision is committed by now, so a failure here must
+ * not reach the callers that delete their new asset when a write fails: the committed text names that asset.
+ */
 export function announce(ctx: AppContext, projectId: string, nodeId: string, rev: ContentRevision) {
-  relint(ctx, projectId, nodeId);
-  ctx.events.emit('content.saved', { nodeId, revId: rev.id, origin: rev.origin, status: rev.status }, { projectId });
+  try {
+    relint(ctx, projectId, nodeId);
+    ctx.events.emit('content.saved', { nodeId, revId: rev.id, origin: rev.origin, status: rev.status }, { projectId });
+  } catch (err) {
+    console.error('A saved figure change could not be linted again or announced to the open screens.', err);
+  }
 }
 
 /** Writes a rewrite of the head as a new revision. `expectedHeadId` is the head the author saw (409 when it moved). */

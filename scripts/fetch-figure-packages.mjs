@@ -61,6 +61,8 @@ const wheelPathOf = (w) => join(FIGURE_PACKAGES_DIR, 'python', w.file);
 const ledgerFile = join(FIGURE_PACKAGES_DIR, 'verified.json');
 
 const sha256 = (bytes) => createHash('sha256').update(bytes).digest('hex');
+/** Whether the file exists and its SHA-256 is `hash`: a wheel cut short by a failed write or changed afterwards is not present. */
+export const fileHasHash = (path, hash) => existsSync(path) && sha256(readFileSync(path)) === hash;
 const readLedger = () => {
   try { return JSON.parse(readFileSync(ledgerFile, 'utf8')); } catch { return {}; }
 };
@@ -68,7 +70,7 @@ const readLedger = () => {
 function items() {
   return [
     ...TYPST_PACKAGES.map((p) => ({ key: `typst/${p.name}-${p.version}`, sha256: p.sha256, present: () => existsSync(join(typstDirOf(p), 'typst.toml')) })),
-    ...PYTHON_WHEELS.map((w) => ({ key: `python/${w.file}`, sha256: w.sha256, present: () => existsSync(wheelPathOf(w)) })),
+    ...PYTHON_WHEELS.map((w) => ({ key: `python/${w.file}`, sha256: w.sha256, present: () => fileHasHash(wheelPathOf(w), w.sha256) })),
   ];
 }
 

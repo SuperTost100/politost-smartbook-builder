@@ -120,6 +120,25 @@ describe('save caption and description', () => {
     assert.ok(t.ctx.db.get('SELECT 1 FROM content_revisions WHERE id = ? AND markdown LIKE ?', s.headId, `%assets/${s.drawnFile}"%`));
   });
 
+  it('a failure after the revision was committed does not delete the asset the revision names', async () => {
+    const s = await seed();
+    const emit = t.ctx.events.emit.bind(t.ctx.events);
+    t.ctx.events.emit = ((type: Parameters<typeof emit>[0], ...rest: unknown[]) => {
+      if (type === 'content.saved') throw new Error('the event stream broke');
+      return (emit as (...a: unknown[]) => unknown)(type, ...rest);
+    }) as typeof emit;
+    try {
+      assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Figura 2: Un cerchio nuovo' })).status, 200);
+    } finally {
+      t.ctx.events.emit = emit;
+    }
+    const head = headOf(s);
+    assert.notEqual(head.id, s.headId, 'the revision is committed');
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`));
+    assert.ok(fresh, 'the asset the head names still exists');
+    assert.ok(existsSync(assetPath(t.ctx, t.ctx.db.get<{ path: string; project_id: string }>('SELECT path, project_id FROM assets WHERE id = ?', fresh.id)!)), 'and so does its file');
+  });
+
   it('a description change is a new asset and a new revision too, and the picture stays', async () => {
     const s = await seed();
     const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, shows: 'A bigger circle.' });
@@ -152,7 +171,7 @@ describe('save caption and description', () => {
     assert.equal(saved.match(/caption="/g)?.length, 1);
     assert.match(saved, /caption="Nuova"/);
     const fresh = listAssets(t.ctx, s.projectId).find((a) => saved.includes(`assets/${a.filename}"`))!;
-    assert.equal((await t.req('POST', url(s, `/${fresh.id}/remove`), { baseRevId: headOf(s).id })).status, 200);
+    assert.equal((await t.req('POST', url(s, `/${fresh.id}/remove`), { baseRevId: headOf(s).id, block: 2 })).status, 200);
     assert.equal(headOf(s).markdown, ['### Intro', 'First paragraph.', 'Second paragraph.'].join('\n\n'));
   });
 
@@ -303,7 +322,7 @@ describe('redraw', () => {
     const old = await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: details.headRevId, instruction: 'Make C bigger' });
     assert.equal(old.status, 409);
     assert.equal(calls.redraw.length, 0);
-    for (const call of ['render', 'remove']) assert.equal((await t.req('POST', url(s, `/${s.drawn}/${call}`), { baseRevId: details.headRevId, source: EDITED })).status, 409, call);
+    for (const call of ['render', 'remove']) assert.equal((await t.req('POST', url(s, `/${s.drawn}/${call}`), { baseRevId: details.headRevId, source: EDITED, block: 2 })).status, 409, call);
     assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: details.headRevId, caption: 'x' })).status, 409);
     assert.equal(headOf(s).id, details.headRevId, 'nothing was written');
     // The id the dialog sends starts the task, and the model is given the rendered source.
@@ -413,16 +432,30 @@ describe('replace with an image', () => {
 describe('remove', () => {
   it('takes the block out of the text and keeps the asset for the older revisions', async () => {
     const s = await seed();
-    const r = await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: s.headId });
+    const r = await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: s.headId, block: 2 });
     assert.equal(r.status, 200);
     assert.ok(!headOf(s).markdown.includes(':::image'));
     assert.ok(existsSync(assetPath(t.ctx, t.ctx.db.get<{ path: string; project_id: string }>('SELECT path, project_id FROM assets WHERE id = ?', s.drawn)!)));
     assert.ok(t.ctx.db.get('SELECT 1 FROM content_revisions WHERE id = ? AND markdown LIKE ?', s.headId, '%:::image%'));
   });
+  it('removes only the block that was selected when two blocks show the same picture', async () => {
+    const s = await seed();
+    const block = `:::image{src="assets/${s.drawnFile}" alt="Un cerchio" caption="Un cerchio"}\n:::`;
+    const twice = saveHuman(t.ctx, s.projectId, 's1', `${headOf(s).markdown}\n\n${block}\n\nLast.`, s.headId);
+    const blocks = twice.markdown.split('\n\n');
+    assert.equal(blocks.filter((b) => b.startsWith(':::image')).length, 2);
+    assert.equal((await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: twice.id, block: 4 })).status, 200);
+    assert.equal(headOf(s).markdown, ['### Intro', 'First paragraph.', block, 'Second paragraph.', 'Last.'].join('\n\n'), 'the first block stays, the second goes');
+  });
+  it('answers 409 when the block it was asked to remove does not show this figure', async () => {
+    const s = await seed();
+    assert.equal((await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: s.headId, block: 1 })).status, 409);
+    assert.equal(headOf(s).id, s.headId);
+  });
   it('answers 409 when the text moved on', async () => {
     const s = await seed();
     saveHuman(t.ctx, s.projectId, 's1', `${headOf(s).markdown}\n\nThird.`, s.headId);
-    assert.equal((await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: s.headId })).status, 409);
+    assert.equal((await t.req('POST', url(s, `/${s.drawn}/remove`), { baseRevId: s.headId, block: 2 })).status, 409);
   });
 });
 
@@ -431,7 +464,7 @@ describe('add a figure', () => {
     const s = await seed();
     const r = await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 1, description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' });
     assert.equal(r.status, 200);
-    assert.deepEqual(calls.draw, [{ nodeId: 's1', afterBlock: 1, anchor: 'First paragraph.', description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' }]);
+    assert.deepEqual(calls.draw, [{ nodeId: 's1', afterBlock: 1, anchor: 'First paragraph.', blocks: 4, description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' }]);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: 'old', afterBlock: 1, description: 'x', caption: '' })).status, 409);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 9, description: 'x', caption: '' })).status, 400);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 1, description: ' ', caption: '' })).status, 400);
@@ -549,7 +582,7 @@ describe('history notes', () => {
     const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
     await t.req('POST', url(s, `/${shown().id}/replace`), form.payload, form.headers);
     const afterReplace = headOf(s);
-    await t.req('POST', url(s, `/${shown().id}/remove`), { baseRevId: afterReplace.id });
+    await t.req('POST', url(s, `/${shown().id}/remove`), { baseRevId: afterReplace.id, block: 2 });
     const afterRemove = headOf(s);
     const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
     const note = (id: string) => history.find((r) => r.id === id)?.figureNote;

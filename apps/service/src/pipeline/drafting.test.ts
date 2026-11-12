@@ -235,6 +235,18 @@ describe('the draft prompt goes from what every section shares to what only this
   });
 });
 
+describe('a draft keeps its citations when an image block is removed', () => {
+  test('the citation of a paragraph after a dropped figure stays on that paragraph', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const body = 'Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n:::image{src="assets/non-costruita.svg" alt="x"}\n:::\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$. [[n7]]';
+    fake.next(written({ markdown: body }));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    const row = ctx.db.get<{ markdown: string; citations: string }>(`SELECT markdown, citations FROM content_revisions WHERE node_id = 's1' AND status = 'current'`)!;
+    assert.ok(!row.markdown.includes(':::image'), 'the dangling image block is removed');
+    assert.deepEqual(JSON.parse(row.citations), { '1': ['n7'] });
+  });
+});
+
 describe('the writer checks its own draft', () => {
   const ohm = ':::formula{key="legge-ohm" label="Legge di Ohm"}\n$$V = R\\,i$$\n:::';
   const first = `Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n### La legge\n\n${ohm}\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$.`;
@@ -275,6 +287,18 @@ describe('the writer checks its own draft', () => {
       assert.equal(r.selfCheck, 'kept');
       assert.equal(current('s1'), first);
     }
+  });
+
+  test('a correction that deletes an uncited worked example from the middle of the draft is not used', async () => {
+    const example = 'Esempio svolto: un resistore da cento ohm collegato a una pila da nove volt lascia passare una corrente di novanta milliampere.';
+    const long = first.replace('Con $i = 3', `${example}\n\nCon $i = 3`);
+    assert.notEqual(long, first);
+    seed();
+    fake.next(live('w1', written({ markdown: long })), written({ markdown: long.replace(`${example}\n\n`, '').replace('5\\,\\mathrm{V}', '6\\,\\mathrm{V}') }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'kept');
+    assert.match(String(r.selfCheckNote), /Esempio svolto/);
+    assert.equal(current('s1'), long);
   });
 
   test('a correction that opens with a note about itself is not used', async () => {
@@ -450,6 +474,43 @@ describe('the writer gets page text only where the quotes are not enough', () =>
     assert.doesNotMatch(ev.pages, /pagina 4/);
     assert.match(ev.notes, /\[n1\] \(appunti\.pdf, p\. 1\) "Citazione n1"/, 'every verified quote is still sent');
     assert.equal(ev.summary, 'Sintesi.');
+  });
+
+  test('a source excluded after the evidence was gathered stays out of what the writer and the reviewer are sent', () => {
+    seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
+    seedResource(ctx, { id: 'r2', projectId: P, filename: 'riservato.pdf', included: 0 });
+    seedPage(ctx, 'r2', 0, 'testo illeggibile', 'Trascrizione della pagina riservata.');
+    const web = { id: 'w1', quote: 'Citazione dal web', resourceId: null, page: null, url: 'https://example.org/a', verified: true, claim: '' };
+    const notes = [note('n1', 0), { ...note('n2', 0), resourceId: 'r2' }, { ...note('n3', 0), resourceId: 'r2' }, web];
+    const ev = evidenceText(ctx, packet(notes as never));
+    assert.match(ev.notes, /\[n1\] \(appunti\.pdf, p\. 1\)/);
+    assert.match(ev.notes, /\[w1\] \(https:\/\/example\.org\/a\)/, 'a note from the web has no source to exclude');
+    assert.doesNotMatch(ev.notes, /n2|n3|riservato/);
+    assert.equal(ev.pages, '', 'its transcribed page is not sent either');
+    assert.equal(ev.summary, '', 'the reader\'s answer was written from that source too, so it is left out');
+    // Included again, everything is back.
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r2'`);
+    const back = evidenceText(ctx, packet(notes as never));
+    assert.match(back.notes, /\[n2\] \(riservato\.pdf, p\. 1\)/);
+    assert.match(back.pages, /Trascrizione della pagina riservata\./);
+    assert.equal(back.summary, 'Sintesi.');
+  });
+
+  test('the reader\'s answer is left out while a source that was in the book when the evidence was gathered is excluded, whatever its notes say', () => {
+    seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
+    seedResource(ctx, { id: 'r2', projectId: P, filename: 'riservato.pdf', included: 0 });
+    ctx.db.run(`UPDATE resources SET created_at = '2026-11-12T12:00:00.000Z' WHERE id = 'r2'`);
+    const at = (createdAt: string) => ({ ...packet([note('n1', 0)]), createdAt });
+    // The answer may draw on a page of the excluded source without any note saying so, and nothing records which sources it read.
+    const after = evidenceText(ctx, at('2026-11-12T13:00:00.000Z'));
+    assert.equal(after.summary, '');
+    assert.match(after.notes, /\[n1\]/, 'the quotes of the other sources are still sent');
+    assert.equal(evidenceText(ctx, at('')).summary, '', 'a packet without a date is not known to be older than the source');
+    // Evidence gathered before the excluded source was uploaded cannot have read it.
+    assert.equal(evidenceText(ctx, at('2026-11-12T10:00:00.000Z')).summary, 'Sintesi.');
+    // With no excluded source there is nothing to keep out.
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r2'`);
+    assert.equal(evidenceText(ctx, at('2026-11-12T13:00:00.000Z')).summary, 'Sintesi.');
   });
 
   test('a packet whose pages have no transcript sends no page text', () => {

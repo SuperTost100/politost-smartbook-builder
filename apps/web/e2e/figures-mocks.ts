@@ -48,6 +48,8 @@ export interface FigureMock {
   elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string; origin?: 'imported' }, o?: { quiet?: boolean }) => void;
   /** Another tab removes the figure the text shows now, and this page is told. */
   removeElsewhere: () => void;
+  /** Another tab puts a new drawing into the text after block `afterBlock`, and this page is told. */
+  insertElsewhere: (afterBlock: number) => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -55,6 +57,8 @@ export interface FigureMock {
 export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail?: boolean } = {}): Promise<FigureMock> {
   let n = 1;
   let headId = 'rvf1';
+  // Every redraw or draw is a new run with its own id, as in the service, so a screen that watches a run can tell one from the next.
+  let runSeq = 0;
   const figs = new Map<string, MockFigure>([['a1', { id: 'a1', filename: 'fig-opamp.svg', caption: FIG_CAPTION, alt: FIG_ALT, origin: 'generated-svg', shows: FIG_SHOWS, source: FIG_SOURCE, createdAt: ago(40) }]]);
   // Block texts of the section; an entry that is a figure id is that figure's block.
   let blocks: string[] = ['### Amplificatore invertente', 'Poiché la tensione tra i due morsetti è nulla (massa virtuale), la corrente in $R_1$ vale $V_{in}/R_1$.', 'fig:a1', 'Ne segue la relazione tra uscita e ingresso:'];
@@ -73,6 +77,12 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     removeElsewhere: () => {
       blocks = blocks.filter((b) => !b.startsWith('fig:'));
       newHead();
+      release();
+    },
+    insertElsewhere: (afterBlock) => {
+      const id = `a${++n}`;
+      figs.set(id, { id, filename: `drawn-${n}.svg`, caption: 'Un altro schema', alt: 'Schema', origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
+      blocks.splice(afterBlock + 1, 0, `fig:${id}`); newHead();
       release();
     },
     complete: () => {
@@ -100,7 +110,7 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     assetId: f.id, filename: f.filename, kind: f.origin === 'generated-svg' ? 'drawing' : f.origin === 'stock' ? 'photo' : 'image', caption: f.caption, alt: f.alt, createdAt: f.createdAt,
     drawing: f.origin === 'generated-svg' ? { shows: f.shows, engine: 'typst', source: f.source, family: 'circuit' } : null, headRevId: headId, redrawRunId: null,
   });
-  const run = (status: string) => ({ id: 'r-fig', projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: status === 'completed' && fm.runWarning ? [{ taskId: 'tk-fig', label: 'Redraw', message: fm.runWarning }] : [] });
+  const run = (status: string) => ({ id: `r-fig${runSeq}`, projectId: 'p1', kind: 'figure', status, createdAt: new Date().toISOString(), finishedAt: status === 'running' ? null : new Date().toISOString(), counts: status === 'running' ? { running: 1 } : { [status === 'completed' ? 'succeeded' : 'failed']: 1 }, waiting: null, warnings: status === 'completed' && fm.runWarning ? [{ taskId: 'tk-fig', label: 'Redraw', message: fm.runWarning }] : [] });
   const swap = (id: string, make: Partial<MockFigure>) => {
     const old = figs.get(id)!;
     const fresh: MockFigure = { ...old, ...make, id: `a${++n}`, filename: `fig-r${n}.svg`, createdAt: make.createdAt ?? new Date().toISOString() };
@@ -137,8 +147,8 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     if (method === 'GET' && path === '/api/projects/p1/assets') return o.assetsFail ? json({ error: { code: 'internal', message: 'The asset list could not be read.' } }, 500) : json(assetRows());
     if (method === 'GET' && path === '/api/projects/p1/chapters/c1/preview') return json({ markdown: compiled(), number: 1, assets: Object.fromEntries([...figs.values()].flatMap((f) => [[`assets/${f.filename}`, `/api/assets/${f.id}/file`], [f.filename, `/api/assets/${f.id}/file`]])) });
     if (method === 'GET' && /^\/api\/assets\/[^/]+\/file$/.test(path)) return route.fulfill({ status: 200, contentType: 'image/svg+xml', body: DRAWING_SVG });
-    if (method === 'GET' && path === '/api/runs/r-fig') return json({ ...run(fm.runStatus), tasks: [{ id: 'tk-fig', runId: 'r-fig', kind: 'figure.redraw', label: 'Redraw', state: fm.runStatus === 'completed' ? 'succeeded' : fm.runStatus === 'running' ? 'running' : 'failed', attempts: 1, provider: 'codex', error: fm.runStatus === 'failed' ? { message: fm.runError, action: 'The figure is unchanged. Change the instruction and try again.' } : null, waitReason: null, startedAt: ago(1), finishedAt: null }], usage: [] });
-    if (method === 'POST' && path === '/api/runs/r-fig/cancel') { fm.writes.push({ call: 'cancel', body: null }); fm.runStatus = 'cancelled'; return json(run('cancelled')); }
+    if (method === 'GET' && /^\/api\/runs\/r-fig\d+$/.test(path)) return json({ ...run(fm.runStatus), tasks: [{ id: 'tk-fig', runId: path.split('/').pop(), kind: 'figure.redraw', label: 'Redraw', state: fm.runStatus === 'completed' ? 'succeeded' : fm.runStatus === 'running' ? 'running' : 'failed', attempts: 1, provider: 'codex', error: fm.runStatus === 'failed' ? { message: fm.runError, action: 'The figure is unchanged. Change the instruction and try again.' } : null, waitReason: null, startedAt: ago(1), finishedAt: null }], usage: [] });
+    if (method === 'POST' && /^\/api\/runs\/r-fig\d+\/cancel$/.test(path)) { fm.writes.push({ call: 'cancel', body: null }); fm.runStatus = 'cancelled'; return json(run('cancelled')); }
 
     const fig = /^\/api\/projects\/p1\/sections\/s1\/figures\/([^/]+)(?:\/(render|redraw|replace|remove))?$/.exec(path);
     if (fig && fig[1] !== 'draw' && fig[1] !== 'upload' && fig[1] !== 'photo') {
@@ -163,13 +173,14 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
         swap(f.id, { source: b.source });
         return json(sectionView());
       }
-      if (fig[2] === 'redraw') { fm.runStatus = 'running'; pending = { kind: 'redraw', id: f.id, shows: b.shows }; return json(run('running')); }
+      if (fig[2] === 'redraw') { runSeq++; fm.runStatus = 'running'; pending = { kind: 'redraw', id: f.id, shows: b.shows }; return json(run('running')); }
       if (fig[2] === 'replace') { swap(f.id, { origin: 'imported', source: '', shows: '' }); return json(sectionView()); }
       if (fig[2] === 'remove') { blocks = blocks.filter((x) => x !== `fig:${f.id}`); newHead(); return json(sectionView()); }
     }
     if (method === 'POST' && path === '/api/projects/p1/sections/s1/figures/draw') {
       const b = body(); write(b);
       if (fm.stale) return stale();
+      runSeq++;
       fm.runStatus = 'running';
       pending = { kind: 'draw', afterBlock: b.afterBlock, caption: b.caption };
       return json(run('running'));

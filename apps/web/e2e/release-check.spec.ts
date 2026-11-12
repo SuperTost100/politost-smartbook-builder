@@ -73,6 +73,32 @@ test('the evidence drawer says a Markdown source has no page picture, with no re
   expect(images, 'the drawer does not ask for a picture the source cannot have').toEqual([]);
 });
 
+test('the evidence drawer asks for no page picture while the source list is still loading', async ({ page, request }) => {
+  const book = await makeBook(request);
+  const rid = await uploadMarkdown(request, book, 'appunti.md', '# Appunti\n\nIl limite di una funzione.');
+  await citeFirstBlock(page, book, [{ id: 'n1', quote: 'Il limite di una funzione.', resourceId: rid, page: 0, verified: true, claim: '' }]);
+  // The source list arrives only after the author has opened the block, so the drawer first has no source to look at.
+  let release!: () => void;
+  const held = new Promise<void>((resolve) => { release = resolve; });
+  await page.route(`**/api/projects/${book}/resources`, async (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    await held;
+    await route.fallback();
+  });
+  const images: string[] = [];
+  page.on('request', (r) => { if (/\/pages\/\d+\/image/.test(r.url())) images.push(r.url()); });
+  await page.goto(`/books/${book}/manuscript/s1`);
+  await page.locator('.ms-block').first().click();
+  const note = page.getByRole('article', { name: 'Evidence note 1' });
+  await expect(note.getByText('Il limite di una funzione.')).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(images, 'no picture is requested before the source kind is known').toEqual([]);
+  release();
+  await expect(note.getByText('This kind of source has no page picture.')).toBeVisible();
+  await expect(note.getByText('The page image did not load.')).toHaveCount(0);
+  expect(images).toEqual([]);
+});
+
 test('a real failure to load a page image keeps the retry', async ({ page, request }) => {
   const book = await makeBook(request);
   const rid = await uploadMarkdown(request, book, 'appunti.md', '# Appunti\n\nTesto.');
@@ -89,6 +115,21 @@ test('a real failure to load a page image keeps the retry', async ({ page, reque
   const note = page.getByRole('article', { name: 'Evidence note 1' });
   await expect(note.getByText('The page image did not load.')).toBeVisible();
   await expect(note.getByRole('button', { name: 'Try again' })).toBeVisible();
+});
+
+test('the drawer\'s Edit button moves focus into an editor that is already open', async ({ page, request }) => {
+  const book = await makeBook(request);
+  await page.goto(`/books/${book}/manuscript/s1`);
+  await page.locator('.ms-block').nth(1).click();
+  const drawer = page.locator('.ev-drawer');
+  await expect(drawer).toBeVisible();
+  await page.locator('.ms-actions').getByRole('button', { name: 'Edit', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: /Source of block 2$/ });
+  await expect(editor).toBeFocused();
+  // The editor keeps its place when the drawer asks for it again, so only the drawer's click can bring focus back to it.
+  await drawer.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(editor).toBeFocused();
 });
 
 test.describe('on a phone', () => {

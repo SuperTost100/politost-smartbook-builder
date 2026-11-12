@@ -90,8 +90,15 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
   // A redraw replaces one graph. What it looked like before the model ran is what the author's edits are measured against.
+  // The task may have waited in the queue: a graph the author fixed or deleted since is not redrawn, and no model is asked.
   const replaceId = t.task.input.replaceId as string | undefined;
   const before = replaceId ? enrichmentState(ctx, replaceId) : undefined;
+  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
+  if (replaceId && before?.status !== 'issue') {
+    const reason = before ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.';
+    setIssuesStatus(ctx, projectId, issueIds, 'fixed', reason);
+    return { made: 0, skipped: reason };
+  }
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const main = g.data;
   const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
@@ -107,7 +114,6 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   });
   // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
   // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
-  const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
   if (issueIds.length) {
     // A redraw answers the issues of one graph row. Its replacement is the graph of the answer with that row's id, or the only
     // graph of the answer when none has the id. A pair has two rows, and each gets its own redraw.
@@ -142,7 +148,8 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
     return { made: 1, replaced: false };
   }
-  for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+  // One transaction: a pair is kept whole or not at all, because a retry without force returns `reused` as soon as one graph exists.
+  ctx.db.tx(() => { for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks); });
   return { made: built.length };
 }
 

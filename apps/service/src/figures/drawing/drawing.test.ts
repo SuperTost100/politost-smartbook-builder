@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -7,12 +8,13 @@ import { after, before, describe, it } from 'node:test';
 import { gzipSync } from 'node:zlib';
 import { Resvg } from '@resvg/resvg-js';
 import { bookOptionsSchema } from '@smartbuilder/domain';
-import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
+import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackages, fileHasHash, missingFigurePackages, untar } from '../../../../../scripts/fetch-figure-packages.mjs';
 import { assertSafeSvg } from '../../repo/assets.ts';
 import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
 import type { DrawingEngine, DrawingResult } from './index.ts';
-import { readRssBytes } from './sandbox.ts';
+import { readRssBytes, rssFromStatus, runSandboxed } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
+import { readReply } from './schemdraw.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
 
 // Every render makes its temp folders under TMPDIR. This file gets a folder of its own, so a render in another process at the
@@ -101,6 +103,17 @@ describe('pinned packages', () => {
     };
     const gz = gzipSync(Buffer.concat([block('typst.toml', 'name = "x"\n'), block('src/lib.typ', '#let a = 1'), Buffer.alloc(1024)]));
     assert.deepEqual(untar(gz).map(([n, b]) => [n, b.toString()]), [['typst.toml', 'name = "x"\n'], ['src/lib.typ', '#let a = 1']]);
+  });
+
+  it('a wheel counts as present only when the file still has the pinned SHA-256', () => {
+    const dir = mkdtempSync(join(privateTmp, 'wheel-'));
+    const file = join(dir, 'a.whl');
+    writeFileSync(file, 'whole wheel');
+    const hash = createHash('sha256').update('whole wheel').digest('hex');
+    assert.equal(fileHasHash(file, hash), true);
+    writeFileSync(file, 'whole');
+    assert.equal(fileHasHash(file, hash), false, 'a truncated file is not the wheel');
+    assert.equal(fileHasHash(join(dir, 'missing.whl'), hash), false);
   });
 });
 
@@ -310,6 +323,31 @@ describe('sandbox', () => {
     assert.ok((await typst('#circle(radius: 5pt)')).ok);
   });
 
+  it('the resident size comes in bytes from the kernel, whatever the page size', () => {
+    assert.equal(rssFromStatus('Name:\tnode\nVmRSS:\t  123456 kB\nThreads:\t4\n'), 123456 * 1024);
+    assert.equal(rssFromStatus('Name:\tnode\n'), null);
+    if (process.platform === 'linux') {
+      const own = readRssBytes(process.pid)!;
+      assert.ok(own > process.memoryUsage.rss() / 2 && own < process.memoryUsage.rss() * 2, `${own} against ${process.memoryUsage.rss()}`);
+    }
+  });
+
+  it('a reply is limited in bytes, not in characters', async () => {
+    const dir = mkdtempSync(join(privateTmp, 'reply-'));
+    const script = join(dir, 'big.mjs');
+    // 6 million three-byte characters are 6 million characters but 18 MB, above the 16 MB limit.
+    writeFileSync(script, "process.stdout.write(JSON.stringify({ s: '€'.repeat(6_000_000) }) + '\\n');");
+    const r = await runSandboxed({ script, input: {}, readPaths: [], cwd: dir, timeoutMs: 20000, maxRssBytes: 2 ** 30 });
+    assert.equal(r.kind, 'output');
+  });
+
+  it('Python: a Pyodide that cannot start is a setup problem, other empty answers are a crash', () => {
+    const kind = (o: unknown) => (readReply(o, '') as { kind?: string }).kind;
+    assert.equal(kind({ ok: false, setup: true, error: 'Pyodide could not start: x' }), 'setup');
+    assert.equal(kind({ ok: false, error: 'boom' }), 'crash');
+    assert.equal(kind({ ok: true }), 'crash');
+  });
+
   it('Python cannot read the host file system', async () => {
     const r = failure(await python("print(open('/etc/passwd').read())"));
     assert.equal(r.kind, 'compile');
@@ -345,6 +383,12 @@ describe('parallel renders', () => {
 
 describe('svg rules', () => {
   const wrap = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`;
+
+  it('refuses an oversized drawing before it is parsed', () => {
+    // The body is not valid SVG, so a parser would report that. The size answer shows that nothing was parsed.
+    const r = normaliseSvg(wrap(`${'<path d="M0 0L1 1"/>'.repeat(120000)}<broken`)) as { error: string };
+    assert.match(r.error, /above the 2 MB limit/);
+  });
 
   it('rejects text, embedded images and empty drawings', () => {
     assert.match((normaliseSvg(wrap('<text x="1" y="9">R</text>')) as { error: string }).error, /<text>/);

@@ -117,6 +117,10 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     "The result isn't covered in the notes.",
     "This value wasn't mentioned in the provided material.",
     'The formula does not appear in the course notes, so it is only stated.',
+    'The provided sources do not state the value of the constant.',
+    'According to the given sources, the constant is 3.',
+    'Le fonti fornite non riportano il valore della costante.',
+    'Secondo le fonti fornite la costante vale 3.',
   ]) {
     const f = find(`Testo.\n\n${c}`, 'meta-leak');
     assert.ok(f, c);
@@ -140,6 +144,12 @@ test('meta-leak: a sentence that tells the reader what the author\'s notes conta
     'Il campo elettrico non è presente nel materiale conduttore.',
     'The power delivered by the voltage sources is $P$.',
     "The ripple isn't included in the sources of the supply.",
+    // The same words about circuit elements and physical material.
+    'The given sources are ideal voltage sources.',
+    'The provided sources supply 5 V to the load.',
+    'The given material is copper.',
+    'Le fonti fornite sono generatori ideali di tensione.',
+    'Le fonti a disposizione sono due generatori indipendenti.',
   ]) assert.equal(find(`Testo.\n\n${c}`, 'meta-leak'), undefined, c);
 });
 
@@ -504,6 +514,18 @@ test('difficulty decoration at the start of a line is flagged and stripped, bold
   }
   assert.equal(stripDifficultyDecoration('(**) Calcolare il limite.\n\n- ★★ a) primo\n* b) secondo\n**Nota.** resta'), 'Calcolare il limite.\n\n- a) primo\n* b) secondo\n**Nota.** resta');
   assert.equal(stripDifficultyDecoration('(facile): Sia $f(x)=1$.'), 'Sia $f(x)=1$.');
+});
+
+test('stripDifficultyDecoration leaves the lines of a display formula alone', () => {
+  const tag = '$$\n(*)\\quad x = 1\n$$';
+  assert.equal(stripDifficultyDecoration(tag), tag);
+  assert.equal(stripDifficultyDecoration(`(*) Calcolare.\n\n${tag}`), `Calcolare.\n\n${tag}`);
+  const block = ':::formula{key="a" label="A"}\n(*)\\quad x = 1\n:::';
+  assert.equal(stripDifficultyDecoration(block), block, 'the body of a numbered formula is math too');
+});
+
+test('dropUnpairedBold reads a bare carriage return as a line break and does not throw', () => {
+  assert.equal(dropUnpairedBold('Prima\rTesto **aperto'), 'Prima\nTesto aperto');
 });
 
 test('dropUnpairedBold removes the last ** of a line with an odd count, outside math and code, and leaves paired bold alone', () => {

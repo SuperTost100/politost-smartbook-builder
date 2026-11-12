@@ -36,13 +36,17 @@ export async function resourceIndex(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
   const existing = ctx.db.get('SELECT origin FROM source_indexes WHERE resource_id = ?', resourceId);
   if (existing) return { origin: existing.origin, reused: true };
-  const res = ctx.db.get<{ filename: string; role: string }>('SELECT filename, role FROM resources WHERE id = ?', resourceId);
+  const res = ctx.db.get<{ filename: string; role: string; included: number }>('SELECT filename, role, included FROM resources WHERE id = ?', resourceId);
   if (!res) return { skipped: true };
+  // The task was queued while the source was included. The author may have excluded it since, and its text must not go to a model then.
+  if (!res.included) return { skipped: 'excluded' };
   const pages = ctx.db.all<{ idx: number; text: string; transcript: string | null }>('SELECT idx, text, transcript FROM pages WHERE resource_id = ? ORDER BY idx', resourceId);
   if (!pages.length) return { skipped: 'no pages' };
   const entries: { title: string; level: number; page: number }[] = [];
   // ~150 pages per call keeps the prompt small and the call fast.
   for (const group of chunk(pages, 150)) {
+    // A long source takes several calls. Excluded between two of them, it sends no further pages.
+    if (!ctx.db.get<{ included: number }>('SELECT included FROM resources WHERE id = ?', resourceId)?.included) return { skipped: 'excluded' };
     const heads = group.map((p) => `page ${p.idx + 1}: ${firstLines(p.transcript || p.text)}`).join('\n');
     const { data } = await runRole(ctx, {
       role: 'bulk', ...inferIndexPrompt({ filename: res.filename, heads }), schema: inferredIndexSchema,

@@ -91,7 +91,7 @@ export default function ManuscriptPage() {
     qc.fetchQuery({ queryKey: qk.section(pid, nodeId), queryFn: () => api('GET /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId } }), staleTime: 0 }).then((fresh) => {
       if (!live) return;
       const at = mapSection(fresh).blocks.find((b) => b.kind === 'image' && imageFilename(b.source) === wantedFigure);
-      if (at) setFigureAt(at.index);
+      if (at) { figureFile.current = wantedFigure; setFigureAt(at.index); }
       setSearch((p) => { p.delete('figure'); return p; }, { replace: true });
     }, () => { /* the section's own query shows the error; the parameter stays so a reload tries again */ });
     return () => { live = false; };
@@ -109,8 +109,24 @@ export default function ManuscriptPage() {
     }
     return out;
   }, [blocks, assetsQ.data]);
+  // The open figure is followed by its picture, not by its block number: a drawing that finishes above it moves it down one block, and the
+  // dialog must go on editing the same figure. A Render or a save gives the block a new picture, which is told from a move because the
+  // old picture is gone from the section then.
+  const figureFile = useRef<string | null>(null);
+  const openAt = useMemo(() => {
+    if (figureAt === null) return null;
+    const file = figureFile.current;
+    if (!file || !blocks.length || imageFilename(blocks[figureAt]?.source ?? '') === file) return figureAt;
+    const moved = blocks.findIndex((b) => imageFilename(b.source) === file);
+    return moved >= 0 ? moved : figureAt;
+  }, [figureAt, blocks]);
+  useEffect(() => {
+    if (openAt === null) return;
+    if (openAt !== figureAt) setFigureAt(openAt);
+    figureFile.current = imageFilename(blocks[openAt]?.source ?? '') ?? figureFile.current;
+  }, [openAt, figureAt, blocks]);
   const figureOpener = useRef<HTMLElement | null>(null);
-  const onEditFigure = useCallback((i: number, opener: HTMLElement) => { figureOpener.current = opener; setFigureAt(i); }, []);
+  const onEditFigure = useCallback((i: number, opener: HTMLElement) => { figureOpener.current = opener; figureFile.current = null; setFigureAt(i); }, []);
   // The dialog is removed from the page when it closes, so the browser cannot return focus: do it here, to the button that opened it
   // (on a narrow screen that is the one in the evidence drawer, because the drawer covers the block's own buttons).
   const closeFigure = useCallback(() => {
@@ -180,7 +196,11 @@ export default function ManuscriptPage() {
   // Focus returns to the block once the editor has closed (effect below), which can be after a save.
   const endEdit = cancelEdit;
   // From the evidence drawer: on a narrow screen it would cover the editor, so it closes as the editor opens (focus goes to the editor).
-  const editFromDrawer = useCallback((i: number) => { setSel(null); setFocusNote(undefined); startEdit(i); }, [startEdit]);
+  const editFromDrawer = useCallback((i: number) => {
+    setSel(null); setFocusNote(undefined); startEdit(i);
+    // An editor that is already open on this block keeps its place and does not autofocus again, and the drawer's button is gone.
+    if (editingIdx === i) requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${i}"] .cm-content`)?.focus());
+  }, [startEdit, editingIdx]);
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
   const [compareOpen, setCompareOpen] = useState(false);
   // Leaving a block whose section changed elsewhere does nothing but point the author at the notice's choices.
@@ -364,7 +384,7 @@ export default function ManuscriptPage() {
                       onEditFigure={onEditFigure}
                     />
                     {drawing && drawing.nodeId === nodeId && drawing.afterBlock === b.index && (
-                      <div role="listitem"><DrawGhost pid={pid} nodeId={nodeId!} runId={drawing.runId} afterBlock={drawing.afterBlock} onDone={() => setDrawing(null)} /></div>
+                      <div role="listitem"><DrawGhost key={drawing.runId} pid={pid} nodeId={nodeId!} runId={drawing.runId} afterBlock={drawing.afterBlock} onDone={() => setDrawing(null)} /></div>
                     )}
                     </Fragment>
                   ))}
@@ -383,7 +403,7 @@ export default function ManuscriptPage() {
             block={selBlock}
             notes={citesFor(selBlock.index)}
             issues={byBlock.get(selBlock.index) ?? []}
-            resources={resources.data ?? []}
+            resources={resources.data}
             focusNote={focusNote}
             onClose={closeEvidence}
             onEdit={editFromDrawer}
@@ -408,7 +428,7 @@ export default function ManuscriptPage() {
       )}
       {nodeId && <HistoryDialog open={historyOpen} onClose={() => setHistoryOpen(false)} pid={pid} nodeId={nodeId} currentId={section?.current?.id ?? null} onRestored={setSectionData} />}
       {project.data?.options.figures && <FiguresDialog open={figuresOpen} onClose={() => setFiguresOpen(false)} pid={pid} nodeId={section?.current && loc && loc.index >= 0 ? nodeId ?? null : null} sectionTitle={title} chapter={loc?.chapter ?? null} />}
-      {nodeId && <FigureDialog open={figureAt !== null} onClose={closeFigure} pid={pid} nodeId={nodeId} section={section} blockIndex={figureAt} number={figureAt === null ? null : figureNumber(blocks[figureAt]?.compiled ?? null)} />}
+      {nodeId && <FigureDialog open={figureAt !== null} onClose={closeFigure} pid={pid} nodeId={nodeId} section={section} blockIndex={openAt} number={openAt === null ? null : figureNumber(blocks[openAt]?.compiled ?? null)} />}
       {nodeId && <RegenerateDialog open={!!regen} onClose={() => setRegen(null)} pid={pid} nodeId={nodeId} selection={regen?.selection} label={regen?.selection ? 'Regenerate selection' : 'Regenerate section'} />}
     </div>
   );

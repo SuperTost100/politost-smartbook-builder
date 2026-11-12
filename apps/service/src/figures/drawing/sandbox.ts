@@ -42,12 +42,17 @@ export type SandboxResult =
 const MAX_REPLY = 16 * 1024 * 1024;
 const POLL_MS = 50;
 
+/** The resident size in bytes from the text of /proc/<pid>/status, where the kernel writes it in kB. Unlike statm it does not depend on the page size. */
+export function rssFromStatus(status: string): number | null {
+  const kb = Number(/^VmRSS:\s*(\d+)\s*kB/m.exec(status)?.[1]);
+  return Number.isFinite(kb) ? kb * 1024 : null;
+}
+
 /** Resident set size of a process, or null where this platform has no cheap way to read it. */
 export function readRssBytes(pid: number): number | null {
   if (process.platform === 'linux') {
     try {
-      const pages = Number(readFileSync(`/proc/${pid}/statm`, 'utf8').split(' ')[1]);
-      return Number.isFinite(pages) ? pages * 4096 : null;
+      return rssFromStatus(readFileSync(`/proc/${pid}/status`, 'utf8'));
     } catch {
       return null;
     }
@@ -71,6 +76,7 @@ export function runSandboxed(o: SandboxOptions): Promise<SandboxResult> {
     const child = spawn(process.execPath, [...flags, o.script, ...(o.args ?? [])], { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
     let stdout = '';
+    let stdoutBytes = 0;
     let stderr = '';
     let settled = false;
     const finish = (r: SandboxResult) => {
@@ -88,7 +94,8 @@ export function runSandboxed(o: SandboxOptions): Promise<SandboxResult> {
     }, POLL_MS);
     child.stdout.setEncoding('utf8').on('data', (d: string) => {
       stdout += d;
-      if (stdout.length > MAX_REPLY) finish({ kind: 'output', message: 'The drawing produced too much output.' });
+      stdoutBytes += Buffer.byteLength(d);
+      if (stdoutBytes > MAX_REPLY) finish({ kind: 'output', message: 'The drawing produced too much output.' });
     });
     child.stderr.setEncoding('utf8').on('data', (d: string) => { if (stderr.length < 4000) stderr += d; });
     child.on('error', (e) => finish({ kind: 'crash', message: e.message }));

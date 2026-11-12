@@ -73,6 +73,19 @@ describe('comparing recomputed values with the stated ones', () => {
     assert.equal(compareValues([{ name: 'p', value: '50%' }], 'p = 50'), null, 'an unmarked 50 fits only the number as written');
   });
 
+  test('an unmarked value is not held against a stated unit that is not an SI unit', () => {
+    // 36 km/h is 10 m/s: the program printed the SI value, and the solution states another unit.
+    for (const [value, other] of [['36 km/h', 'v = 10'], ['90 min', 't = 5400'], ['2 L', 'V = 0.002'], ['30 deg', 'a = 0.5236'], ['5 mm/s', 'v = 0.005']]) {
+      assert.equal(compareValues([{ name: other.split(' ')[0], value }], other), null, `${value} against ${other}`);
+    }
+    // The same number is no agreement either: an unmarked 36 is 36 m/s, and whether the program meant km/h cannot be known.
+    assert.equal(compareValues([{ name: 'v', value: '36 km/h' }], 'v = 36'), null);
+    // Stated in SI units, an unmarked value that differs is still a mismatch.
+    assert.equal(compareValues([{ name: 'v', value: '12 m/s' }], 'v = 10')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'J', value: '3 kg·m²' }], 'J = 9')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 't', value: '5 s' }], 't = 7')!.mismatches.length, 1);
+  });
+
   test('a number without a unit is compared as it is', () => {
     assert.equal(compareValues([{ name: 'n', value: '0.25' }], 'n = 0.25')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'n', value: '0.25' }], 'n = 0.5')!.mismatches.length, 1);
