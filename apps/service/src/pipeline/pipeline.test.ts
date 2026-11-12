@@ -186,6 +186,7 @@ describe('1. question updates do not overwrite author edits', () => {
     assert.match(problem('@@@ statement\nA.\n@@@ statement\nB.\n@@@ hint\n@@@ solution\nC.'), /two "@@@ statement" parts/);
     assert.match(problem('@@@ statement\n\n@@@ hint\n@@@ solution\nB.'), /statement is empty/);
     assert.match(problem('@@@ statement\nA.\n@@@ suggerimento\nB.\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/);
+    assert.match(problem('@@@ statement\nA.\n @@@ hint\n@@@ hint\n@@@ solution\nC.'), /not a valid part header/, 'an indented header is not part of the statement');
   });
 
   test('import: a formatting repair that adds a word is not applied', async () => {
@@ -715,6 +716,8 @@ describe('4c. one extraction call per exam session', () => {
     assert.match(problem('@@@ statement 1\nA.\n@@@ unreadable 1\n@@@ statement 2\nB.'), /both unreadable and given/);
     assert.match(problem('@@@ statement 1\n\n@@@ statement 2\nB.'), /Exercise 1 has no statement/);
     assert.match(problem('@@@ statement 1\nA.\n@@@ soluzione 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/);
+    assert.match(problem('@@@ statement 1\nA.\n  @@@ solution 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/, 'an indented header is not part of the statement');
+    assert.match(problem('@@@ statement 1\nA.\n\t@@@ solution 1\nB.\n@@@ statement 2\nC.'), /not a valid part header/);
     assert.match(problem('@@@ statement\nA.\n@@@ statement 2\nB.'), /has no exercise number/);
   });
 

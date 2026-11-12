@@ -639,7 +639,7 @@ export function examReadParser(numbers: string[]): (text: string) => { ok: true;
     };
     for (const line of text.split(/\r?\n/)) {
       const head = EXAM_PART.exec(line);
-      if (!head && line.startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". Headers look like "@@@ statement ${example}", "@@@ solution ${example}" and "@@@ unreadable ${example}".`);
+      if (!head && line.trimStart().startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". Headers look like "@@@ statement ${example}", "@@@ solution ${example}" and "@@@ unreadable ${example}".`);
       if (!head) {
         (open?.body ?? before).push(line);
         continue;
@@ -685,7 +685,7 @@ export function parseQuestionText(text: string): { ok: true; data: { statement: 
   const before: string[] = [];
   for (const line of text.split(/\r?\n/)) {
     const head = QUESTION_PART.exec(line);
-    if (!head && line.startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". The headers are "@@@ statement", "@@@ hint" and "@@@ solution".`);
+    if (!head && line.trimStart().startsWith('@@@')) return fail(`This line is not a valid part header: "${line.slice(0, 80)}". The headers are "@@@ statement", "@@@ hint" and "@@@ solution".`);
     if (!head) {
       (open ?? before).push(line);
       continue;
