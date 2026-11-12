@@ -1,6 +1,6 @@
 # Status
 
-Smart Builder 0.4.0, as of 11 November 2026.
+Smart Builder 0.4.1, as of 12 November 2026.
 
 ## What works today
 
@@ -47,6 +47,19 @@ The problems this run found were fixed afterwards in PR #84 and PR #86. Neither 
 - **Screens.** Book setup (course program, subject area, figure policy, circuit symbols, generation options), Sources (the exam split result with Split with AI), Review (alignment with the program), Connections (usage per provider, Codex usage windows) and the Manuscript's figure dialog and **Add figure**.
 - **Existing books.** They need no migration. A book without a subject area gets one inferred from its subject and title, and figures stored before 0.4.0 look right on the light plate. A Markdown exam file prepared before 0.4.0 keeps the questions it was split into, because Prepare reuses the questions of a file that has any and does not split it again. To get the new split, delete the file and upload it again, or press **Split with AI** on it, which replaces its questions but is refused when any of them was edited or checked. A deleted file takes its questions with it, except the ones you edited and the ones a chapter uses that were already read from the pages. Those stay in the book without a source, and the new upload stores its own copies of them.
 
+## What 0.4.1 fixed
+
+0.4.1 changes no feature. It holds one line of text on Sources and the fixes from CodeRabbit's review of the pull requests that 0.4.0 merged before they were reviewed.
+
+- **An excluded source leaves the evidence too.** When you exclude a source after its evidence was gathered, its quotes and pages are no longer sent to the writer, and an index or split task still queued for it is skipped. The cost: the evidence reader's summary is left out of the writer's packet while such a source is excluded, because nothing records which sources the summary drew on, so the section is written from the quotes of the other sources. A copy already uploaded to NotebookLM stays in the notebook until you delete it there.
+- **Stricter check of uploaded SVG files.** An SVG that hides a `script`, `foreignObject` or embedding element behind a namespace prefix, or uses an element name with a character outside ASCII, is refused.
+- **Fixes can no longer drop a figure or one of two identical headings.** A figure block is deleted only when a figure problem is open. A fix or correction that removes one of two equal headings, formula keys or images is refused, and so is a correction that deletes a whole paragraph.
+- **Text around the metadata of a model answer is no longer lost.** An answer with text before or after its metadata JSON is sent to the repair turn instead of being accepted with the text dropped.
+- **Two exam turns of one day stay two sessions.** A generic heading takes "Turno" and its letter or number from its own line, so Turno A and Turno B are not merged as duplicates. The session name of an exam file with a printed turn changes the next time that file is split.
+- **Remove figure removes only the block you opened.** A picture that sits in two blocks stays in the other one. The request now needs the block index, which only the web app sends.
+- **Smaller corrections.** A drawing is not added after a block you removed while it was being drawn, a graph is shown as visible only when a point lies in the x and y range together, `x^0.5` stays as written in a caption, and a unit such as km/h or L is no longer reported as a mismatch against an SI value.
+- **Sources and the figure dialog.** Sources says that adding a file or a link starts Prepare by itself and that Prepare reads it with the AI models. The figure dialog now says when another tab removed the open figure, and keeps the redraw notice when the drawing became an image.
+
 ## Decisions that still explain the design
 
 - **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.
@@ -83,7 +96,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 192 content tests (190 pass and 2 are skipped because they need two real books that are not in the repository) and 820 service tests. `npm run test:e2e` runs 158 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 213 content tests (211 pass and 2 are skipped because they need two real books that are not in the repository) and 903 service tests. `npm run test:e2e` runs 220 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 
@@ -98,7 +111,7 @@ The figure renderers have a snapshot test, and every code block in the drawing c
 | content-core | 0.5.1 |
 | KaTeX | 0.19 |
 | cli-funnel | 0.9.1 |
-| numbl | 0.4.21 (the reader pins the same version) |
+| numbl | 0.4.22 (the reader pins the same version) |
 | MuPDF | 1.28 |
 | Pyodide | 314.0 |
 | Typst compiler (`typst-ts-node-compiler`) | 0.7.0, which bundles Typst 0.14.2 |
