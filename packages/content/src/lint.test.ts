@@ -510,6 +510,8 @@ test('stripDifficultyDecoration leaves the lines of a display formula alone', ()
   const tag = '$$\n(*)\\quad x = 1\n$$';
   assert.equal(stripDifficultyDecoration(tag), tag);
   assert.equal(stripDifficultyDecoration(`(*) Calcolare.\n\n${tag}`), `Calcolare.\n\n${tag}`);
+  const block = ':::formula{key="a" label="A"}\n(*)\\quad x = 1\n:::';
+  assert.equal(stripDifficultyDecoration(block), block, 'the body of a numbered formula is math too');
 });
 
 test('dropUnpairedBold reads a bare carriage return as a line break and does not throw', () => {
