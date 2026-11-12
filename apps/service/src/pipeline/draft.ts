@@ -79,16 +79,17 @@ function latestPacket(ctx: AppContext, projectId: string, nodeId: string): Evide
 
 export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, maxChars = 24_000) {
   if (!packet) return { notes: '', pages: '', summary: '' };
-  const sources = ctx.db.all<{ id: string; filename: string; included: number }>('SELECT id, filename, included FROM resources WHERE project_id = ?', packet.projectId);
+  const sources = ctx.db.all<{ id: string; filename: string; included: number; created_at: string }>('SELECT id, filename, included, created_at FROM resources WHERE project_id = ?', packet.projectId);
   const files = new Map(sources.map((r) => [r.id, r.filename]));
   // The packet was stored when its sources were included. One the author excluded since stays out of every later call: its
   // quotes and pages are dropped here, where the writer and the reviewer both read the packet. A note from the web has no source.
-  const excluded = new Set(sources.filter((r) => !r.included).map((r) => r.id));
-  const out = (n: { resourceId: string | null }) => n.resourceId !== null && excluded.has(n.resourceId);
-  // The local reader keeps a note only for a quote it could match, and says in its answer how many it dropped. With a dropped
-  // quote, or no count, the answer may cite an excluded source that no note records.
-  const unrecorded = excluded.size > 0 && packet.provider === 'local' && /<!-- local-evidence:[^>]*\bdropped=(\d+)/.exec(packet.answer)?.[1] !== '0';
-  const tainted = unrecorded || packet.notes.some(out);
+  const excluded = sources.filter((r) => !r.included);
+  const ids = new Set(excluded.map((r) => r.id));
+  const out = (n: { resourceId: string | null }) => n.resourceId !== null && ids.has(n.resourceId);
+  // The reader's answer is one text written from every source of the time, and nothing records which ones it read. So it is left
+  // out while any source that may have been among them is excluded: one not known to be uploaded after the packet was written.
+  const gathered = Date.parse(packet.createdAt);
+  const tainted = excluded.some((r) => !(Date.parse(r.created_at) > gathered));
   packet = { ...packet, notes: packet.notes.filter((n) => !out(n)) };
   const notes = packet.notes.filter((n) => n.verified).map((n) => {
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
@@ -103,7 +104,6 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
   }
   const pageTexts = transcribed.join('\n\n');
   // The evidence reader's own answer often has the formulas in clean LaTeX, while quotes from the text layer do not.
-  // The answer was written from all the sources of the time, the excluded one among them, and its parts cannot be told apart.
   const summary = tainted ? '' : truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
   return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars), summary };
 }

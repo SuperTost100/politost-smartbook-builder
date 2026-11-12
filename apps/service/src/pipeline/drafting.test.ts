@@ -496,19 +496,21 @@ describe('the writer gets page text only where the quotes are not enough', () =>
     assert.equal(back.summary, 'Sintesi.');
   });
 
-  test('the local reader\'s answer is left out when it may hold a quote of an excluded source that no note records', () => {
+  test('the reader\'s answer is left out while a source that was in the book when the evidence was gathered is excluded, whatever its notes say', () => {
     seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
     seedResource(ctx, { id: 'r2', projectId: P, filename: 'riservato.pdf', included: 0 });
-    const local = (trailer: string) => ({ ...packet([note('n1', 0)]), answer: `Sintesi.${trailer}` });
-    // The reader dropped a quote it could not match, so the answer may cite a page that no note names.
-    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).summary, '');
-    assert.equal(evidenceText(ctx, local('')).summary, '', 'an answer without the count is not known to be clean');
-    // Nothing was dropped: every quote of the answer has a note, and none is from the excluded source.
-    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=0 pages=2 -->')).summary, 'Sintesi.');
-    assert.match(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).notes, /\[n1\]/, 'the recorded quotes are still sent');
+    ctx.db.run(`UPDATE resources SET created_at = '2026-11-12T12:00:00.000Z' WHERE id = 'r2'`);
+    const at = (createdAt: string) => ({ ...packet([note('n1', 0)]), createdAt });
+    // The answer may draw on a page of the excluded source without any note saying so, and nothing records which sources it read.
+    const after = evidenceText(ctx, at('2026-11-12T13:00:00.000Z'));
+    assert.equal(after.summary, '');
+    assert.match(after.notes, /\[n1\]/, 'the quotes of the other sources are still sent');
+    assert.equal(evidenceText(ctx, at('')).summary, '', 'a packet without a date is not known to be older than the source');
+    // Evidence gathered before the excluded source was uploaded cannot have read it.
+    assert.equal(evidenceText(ctx, at('2026-11-12T10:00:00.000Z')).summary, 'Sintesi.');
     // With no excluded source there is nothing to keep out.
     ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r2'`);
-    assert.equal(evidenceText(ctx, local('\n\n<!-- local-evidence: kept=1 dropped=1 pages=2 -->')).summary, 'Sintesi.');
+    assert.equal(evidenceText(ctx, at('2026-11-12T13:00:00.000Z')).summary, 'Sintesi.');
   });
 
   test('a packet whose pages have no transcript sends no page text', () => {

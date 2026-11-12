@@ -78,7 +78,7 @@ With the first-chapter gate on (the default), the run stops after chapter 1. Rea
 
 ### Evidence
 
-NotebookLM (or the local reader) answers a question about the section by quoting the sources. Each quote is located on its page, and unlocated quotes are dropped. The most cited garbled pages are transcribed by a vision model so the writer sees clean formulas. The writer gets the verified quotes, the evidence reader's answer and the full clean text of at most two of those transcribed pages, the most cited first. A page with a good text layer is not sent whole, because the quotes come from it.
+NotebookLM (or the local reader) answers a question about the section by quoting the sources. Each quote is located on its page, and unlocated quotes are dropped. The most cited garbled pages are transcribed by a vision model so the writer sees clean formulas. The writer gets the verified quotes, the evidence reader's answer and the full clean text of at most two of those transcribed pages, the most cited first. A page with a good text layer is not sent whole, because the quotes come from it. When you exclude a source after its evidence was gathered, its quotes and pages are no longer sent. The reader's answer is left out too while such a source is excluded, because nothing records which sources the answer drew on. The section is then written from the quotes of the other sources.
 
 ### Writing
 
