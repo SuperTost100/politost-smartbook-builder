@@ -186,11 +186,11 @@ export function insertAfterBlock(markdown: string, afterBlock: number, block: st
  * not reach the callers that delete their new asset when a write fails: the committed text names that asset.
  */
 export function announce(ctx: AppContext, projectId: string, nodeId: string, rev: ContentRevision) {
-  relint(ctx, projectId, nodeId);
   try {
+    relint(ctx, projectId, nodeId);
     ctx.events.emit('content.saved', { nodeId, revId: rev.id, origin: rev.origin, status: rev.status }, { projectId });
   } catch (err) {
-    console.error('A saved figure change could not be announced to the open screens.', err);
+    console.error('A saved figure change could not be linted again or announced to the open screens.', err);
   }
 }
 
