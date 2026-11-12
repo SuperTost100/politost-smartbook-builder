@@ -236,7 +236,9 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
     projectId, nodeId, language: project.language, figures: proposed, photos,
     runId: t.task.runId, taskId: t.task.id, signal: t.signal, progress: (m) => t.progress(m),
   });
+  const beforeImageRefs = markdown;
   markdown = rewriteImageRefs(markdown, built, new Set());
+  citations = carryCitations(beforeImageRefs, markdown, citations);
   figureNotes.push(...built.notes);
 
   // A stray ** is dropped here, so it does not cost a repair round. One repair round for problems that break rendering or meaning.

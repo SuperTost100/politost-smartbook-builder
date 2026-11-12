@@ -235,6 +235,18 @@ describe('the draft prompt goes from what every section shares to what only this
   });
 });
 
+describe('a draft keeps its citations when an image block is removed', () => {
+  test('the citation of a paragraph after a dropped figure stays on that paragraph', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const body = 'Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n:::image{src="assets/non-costruita.svg" alt="x"}\n:::\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$. [[n7]]';
+    fake.next(written({ markdown: body }));
+    await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    const row = ctx.db.get<{ markdown: string; citations: string }>(`SELECT markdown, citations FROM content_revisions WHERE node_id = 's1' AND status = 'current'`)!;
+    assert.ok(!row.markdown.includes(':::image'), 'the dangling image block is removed');
+    assert.deepEqual(JSON.parse(row.citations), { '1': ['n7'] });
+  });
+});
+
 describe('the writer checks its own draft', () => {
   const ohm = ':::formula{key="legge-ohm" label="Legge di Ohm"}\n$$V = R\\,i$$\n:::';
   const first = `Una resistenza vale $R = 2\\,\\mathrm{k\\Omega}$.\n\n### La legge\n\n${ohm}\n\nCon $i = 3\\,\\mathrm{mA}$ si ha $V = 5\\,\\mathrm{V}$.`;
