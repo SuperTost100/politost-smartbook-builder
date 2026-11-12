@@ -71,6 +71,7 @@ test('create a book', async ({ page }) => {
   bookId = new URL(page.url()).pathname.split('/')[2];
   await expect(page.getByRole('heading', { name: 'Sources', level: 1 })).toBeVisible();
   await expect(page.getByText('Selected material is sent to the configured AI providers and NotebookLM.')).toBeVisible();
+  await expect(page.getByText('Adding a file or a link starts Prepare by itself, and Prepare reads it with the AI models.')).toBeVisible();
 });
 
 test('upload fixtures/sample.md and see it in Sources', async ({ page }) => {
