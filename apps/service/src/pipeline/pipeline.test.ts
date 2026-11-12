@@ -1021,6 +1021,28 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
   });
 
+  test('a queued redraw of a graph the author fixed or deleted before it started asks no model and leaves the graph alone', async () => {
+    const { enrichment, issue } = await failing();
+    const input = { nodeId: 's1', purpose: 'p', force: true, replaceId: enrichment, issueIds: [issue] };
+    const edited = { ...graph, title: "Grafico dell'autrice" };
+    ctx.db.run(`UPDATE enrichments SET payload = ?, status = 'verified' WHERE id = ?`, JSON.stringify(edited), enrichment);
+    const calls = fake.calls.length;
+    const r = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(r.made, 0);
+    assert.match(String(r.skipped), /passes its check/);
+    assert.equal(fake.calls.length, calls, 'no model call');
+    assert.deepEqual(json(ctx.db.get<{ payload: string }>('SELECT payload FROM enrichments')!.payload, {}), edited);
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'fixed');
+
+    ctx.db.run(`UPDATE review_issues SET status = 'open'`);
+    ctx.db.run('DELETE FROM enrichments WHERE id = ?', enrichment);
+    const gone = await enrichGraph(ctx, startTask('enrich.graph', input));
+    assert.equal(gone.made, 0);
+    assert.equal(fake.calls.length, calls, 'no model call for a graph that is gone');
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0, 'a deleted graph is not recreated');
+    assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'fixed');
+  });
+
   test('an issue whose failing graph is gone, or passes now, closes without a model call', async () => {
     const { enrichment, issue } = await failing();
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);
