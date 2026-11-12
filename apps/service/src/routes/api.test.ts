@@ -403,6 +403,9 @@ describe('assets', () => {
       svg('<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>'),
       svg('<é:script xmlns:é="http://www.w3.org/2000/svg">alert(1)</é:script>'),
       svg('<é:rect xmlns:é="http://www.w3.org/2000/svg" onload="x()"/>'),
+      // U+1680 may start an XML name, and JavaScript's "\s" counts it as white space.
+      svg('<\u1680:script xmlns:\u1680="http://www.w3.org/2000/svg">alert(1)</\u1680:script>'),
+      svg('<rect/><\u1680x onload="x()"/>'),
       svg('<svg:script>alert(1)</svg:script>'),
       svg('<s:foreignObject xmlns:s="http://www.w3.org/2000/svg"><div/></s:foreignObject>'),
       svg('<x:iframe src="/"/>'),

@@ -31,16 +31,19 @@ export function safeFilename(name: string): string {
 export function assertSafeSvg(svg: string): void {
   const reject = (why: string) => badInput(`This SVG was refused because it ${why}.`, 'Export a plain drawing without scripts or external links and upload it again.');
   if (!/<svg[\s>]/i.test(svg)) throw badInput('This file is not a valid SVG image.', 'Export the drawing as SVG again.');
+  // XML allows almost any letter in an element name or its prefix ("<é:script>"), and real SVG files use none outside ASCII. Such a name is
+  // refused outright, so the checks below only have to know ASCII names. The name ends at XML's own white space, not at JavaScript's "\s".
+  for (const m of svg.matchAll(/<\/?([^ \t\r\n<>/]*)/g)) {
+    if (!/^[!?]/.test(m[1]) && /[^\x00-\x7F]/.test(m[1])) throw reject('has an element name with characters outside ASCII');
+  }
   // An element may carry a namespace prefix ("<s:script xmlns:s=...>") and a browser still runs it, so every name is matched with one.
-  // A prefix is any XML name, which may hold letters outside ASCII ("<é:script>"), so it is matched by what cannot be in one.
-  const tag = String.raw`<(?:[^\s<>/:="']+:)?`;
+  const tag = String.raw`<(?:[\w.-]+:)?`;
   if (new RegExp(`${tag}script`, 'i').test(svg)) throw reject('contains a script');
   if (new RegExp(`${tag}foreignObject`, 'i').test(svg)) throw reject('contains a foreignObject element');
   if (new RegExp(`${tag}(?:iframe|embed|object|link|meta|audio|video)[\\s/>]`, 'i').test(svg)) throw reject('embeds other content');
   if (/<!ENTITY/i.test(svg)) throw reject('declares custom entities');
   if (/javascript\s*:/i.test(svg)) throw reject('contains a javascript: link');
-  // Every start tag, whatever letters its name begins with: an element with a prefix outside ASCII carries attributes like any other.
-  const tags = svg.match(/<[^\s<>/!?][^\s>/]*(?:"[^"]*"|'[^']*'|[^'">])*>/g) ?? [];
+  const tags = svg.match(/<[a-zA-Z][^\s>/]*(?:"[^"]*"|'[^']*'|[^'">])*>/g) ?? [];
   for (const tag of tags) {
     const attrs = [...tag.matchAll(/([^\s=/"'<>]+)\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))/g)];
     for (const m of attrs) {
