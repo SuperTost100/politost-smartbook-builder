@@ -79,7 +79,14 @@ function latestPacket(ctx: AppContext, projectId: string, nodeId: string): Evide
 
 export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, maxChars = 24_000) {
   if (!packet) return { notes: '', pages: '', summary: '' };
-  const files = new Map(ctx.db.all<{ id: string; filename: string }>('SELECT id, filename FROM resources WHERE project_id = ?', packet.projectId).map((r) => [r.id, r.filename]));
+  const sources = ctx.db.all<{ id: string; filename: string; included: number }>('SELECT id, filename, included FROM resources WHERE project_id = ?', packet.projectId);
+  const files = new Map(sources.map((r) => [r.id, r.filename]));
+  // The packet was stored when its sources were included. One the author excluded since stays out of every later call: its
+  // quotes and pages are dropped here, where the writer and the reviewer both read the packet. A note from the web has no source.
+  const excluded = new Set(sources.filter((r) => !r.included).map((r) => r.id));
+  const out = (n: { resourceId: string | null }) => n.resourceId !== null && excluded.has(n.resourceId);
+  const tainted = packet.notes.some(out);
+  packet = tainted ? { ...packet, notes: packet.notes.filter((n) => !out(n)) } : packet;
   const notes = packet.notes.filter((n) => n.verified).map((n) => {
     const where = n.resourceId ? `${files.get(n.resourceId) ?? '?'}, p. ${n.page !== null ? n.page + 1 : '?'}` : n.url ?? 'source';
     return `[${n.id}] (${where}) "${truncate(n.quote.replace(/\s+/g, ' '), 700)}"${n.claim ? `\n    supports: ${truncate(n.claim, 300)}` : ''}`;
@@ -93,7 +100,8 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
   }
   const pageTexts = transcribed.join('\n\n');
   // The evidence reader's own answer often has the formulas in clean LaTeX, while quotes from the text layer do not.
-  const summary = truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
+  // The answer was written from all the sources of the time, the excluded one among them, and its parts cannot be told apart.
+  const summary = tainted ? '' : truncate(packet.answer.replace(/<!--[\s\S]*?-->/g, '').trim(), 10_000);
   return { notes: truncate(notes, maxChars), pages: truncate(pageTexts, maxChars), summary };
 }
 

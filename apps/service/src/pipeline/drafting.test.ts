@@ -476,6 +476,26 @@ describe('the writer gets page text only where the quotes are not enough', () =>
     assert.equal(ev.summary, 'Sintesi.');
   });
 
+  test('a source excluded after the evidence was gathered stays out of what the writer and the reviewer are sent', () => {
+    seedResource(ctx, { id: 'r1', projectId: P, filename: 'appunti.pdf' });
+    seedResource(ctx, { id: 'r2', projectId: P, filename: 'riservato.pdf', included: 0 });
+    seedPage(ctx, 'r2', 0, 'testo illeggibile', 'Trascrizione della pagina riservata.');
+    const web = { id: 'w1', quote: 'Citazione dal web', resourceId: null, page: null, url: 'https://example.org/a', verified: true, claim: '' };
+    const notes = [note('n1', 0), { ...note('n2', 0), resourceId: 'r2' }, { ...note('n3', 0), resourceId: 'r2' }, web];
+    const ev = evidenceText(ctx, packet(notes as never));
+    assert.match(ev.notes, /\[n1\] \(appunti\.pdf, p\. 1\)/);
+    assert.match(ev.notes, /\[w1\] \(https:\/\/example\.org\/a\)/, 'a note from the web has no source to exclude');
+    assert.doesNotMatch(ev.notes, /n2|n3|riservato/);
+    assert.equal(ev.pages, '', 'its transcribed page is not sent either');
+    assert.equal(ev.summary, '', 'the reader\'s answer was written from that source too, so it is left out');
+    // Included again, everything is back.
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r2'`);
+    const back = evidenceText(ctx, packet(notes as never));
+    assert.match(back.notes, /\[n2\] \(riservato\.pdf, p\. 1\)/);
+    assert.match(back.pages, /Trascrizione della pagina riservata\./);
+    assert.equal(back.summary, 'Sintesi.');
+  });
+
   test('a packet whose pages have no transcript sends no page text', () => {
     seedResource(ctx, { id: 'r1', projectId: P });
     seedPage(ctx, 'r1', 0, 'Testo buono.');
