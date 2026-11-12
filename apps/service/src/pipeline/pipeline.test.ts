@@ -668,6 +668,16 @@ describe('4c. one extraction call per exam session', () => {
     assert.equal(row(ids[0]).statement, 'Calcola 1.');
   });
 
+  test('a session read that keeps failing with a temporary error is retried, and on its last attempt gives way to the reads of the single questions', async () => {
+    session();
+    const hangUp = () => new Error('socket hang up');
+    const attempt = (n: number) => { const t = startTask('question.session', { resourceId: 'r-exam', examGroup: 'Giugno' }, { key }); t.task.attempts = n; return t; };
+    fake.next(hangUp, hangUp, hangUp);
+    await assert.rejects(sessionImport(ctx, attempt(1)), (e: unknown) => e instanceof TaskError && e.kind === 'temporary', 'the first attempt is left to the queue to retry');
+    fake.next(hangUp, hangUp, hangUp);
+    assert.match((await sessionImport(ctx, attempt(3)) as { fallback: string }).fallback, /socket hang up/);
+  });
+
   test('the exam answer parser: what it accepts and what it sends back', () => {
     const parse = examReadParser(['1', '2']);
     const ok = parse('@@@ statement 1\nPrimo.\n\na) Calcolare $\\nu$.\n@@@ solution 1\nVale $\\neq 0$.\n@@@ unreadable 2');

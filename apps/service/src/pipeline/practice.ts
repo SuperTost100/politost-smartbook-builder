@@ -167,7 +167,7 @@ const pageText = (p: { label: string; transcript: string | null; text: string })
  * call is paid once. The answer is used only when it lists exactly the questions' numbers: none missing, none invented, none
  * twice. In every other case (a session too long for one call, an answer that does not match, a model that cannot give a valid
  * one) the result says `fallback` and each question's import reads its own pages, as it did before. Errors that a retry can
- * cure (a limit, a login, a timeout) are thrown, so the queue retries this task like any other.
+ * cure (a limit, a login, a timeout) are thrown, so the queue retries this task like any other, except a temporary error on its last attempt, which also falls back.
  */
 export async function sessionImport(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
@@ -193,6 +193,8 @@ export async function sessionImport(ctx: AppContext, t: TaskContext) {
     return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = data.exercises[i]!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
   } catch (err) {
     if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
+    // The imports wait for this task, so a task that failed for good would fail the chapter. On the last attempt a temporary error gives way to their own reads.
+    if (err instanceof TaskError && err.kind === 'temporary' && t.task.attempts >= (ctx.db.get<{ max_attempts: number }>('SELECT max_attempts FROM tasks WHERE id = ?', t.task.id)?.max_attempts ?? 1)) return { fallback: err.message };
     throw err;
   }
 }
