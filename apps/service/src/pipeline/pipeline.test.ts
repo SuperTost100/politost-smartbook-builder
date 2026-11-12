@@ -2058,7 +2058,7 @@ describe('the review converges', () => {
     const { prompt, system } = fake.calls[0];
     assert.match(prompt, /\(standard\)\n\nSymbols used in the exam papers on this chapter's topics: f_c, R_1\.\n/);
     assert.doesNotMatch(prompt, /q_p/);
-    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs\./);
+    assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs, unless the notation fixed for the whole book defines another symbol for that quantity\. The book's notation wins over the exam papers, as it does for the writer\./);
     ctx.db.run(`DELETE FROM questions`);
     fake.next(answer({ issues: [] }));
     await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', force: true }));
@@ -2297,6 +2297,28 @@ describe('second opinion, full review and recheck', () => {
     await review();
     assert.match(fake.calls[1].prompt, /Seconda sezione\./);
     assert.doesNotMatch(fake.calls[1].prompt, /Prima sezione\./);
+  });
+
+  test('the second opinion gets the exam symbols and the rule that the book notation wins, on the first call and on a recheck', async () => {
+    seedOutline([['c1', ['s1']]], { topicIds: ['t-filtri'] });
+    seedRevision('s1', 'La frequenza di taglio è $f_t$.');
+    ctx.db.insert('questions', {
+      id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
+      statement: 'Calcolare la frequenza di taglio $f_c$.', hint: '', solution: '', difficulty: 'medio', topic_ids: ['t-filtri'], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
+    });
+    fake.next(answer({ issues: [finding({ quote: 'La frequenza di taglio è $f_t$.', category: 'notation', severity: 'major', message: 'Nei temi d\'esame è f_c' })] }), opinion(['real', 'major']));
+    await review();
+    assert.match(fake.calls[1].system ?? '', /also invent problems/);
+    assert.match(fake.calls[1].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    assert.match(fake.calls[1].system ?? '', /the notation fixed for the whole book defines none for it/);
+    assert.match(fake.calls[1].system ?? '', /not a preference about wording/);
+    fake.next(opinion(['real', 'major']));
+    await review({ mode: 'recheck' });
+    assert.match(fake.calls[2].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    ctx.db.run(`DELETE FROM questions`);
+    fake.next(opinion(['real', 'major']));
+    await review({ mode: 'recheck' });
+    assert.doesNotMatch(fake.calls[3].prompt, /Symbols used in the exam papers/);
   });
 
   test('recheck gives open issues a second opinion without a new review, and the next review still compares with the last one', async () => {

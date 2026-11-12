@@ -28,7 +28,7 @@ interface Finding { sectionId: string; severity: Severity; quote: string; messag
  * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
  * are not real and may lower (never raise) the severity. When the check cannot run, the findings stay as they are.
  */
-async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; findings: F[]; text: string; evidence: string }) {
+async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string }) {
   const kept: F[] = [];
   const dropped: { finding: F; reason: string }[] = [];
   let lowered = 0;
@@ -36,7 +36,7 @@ async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext,
   const list = p.findings.map((f, n) => `${n + 1}. [${f.sectionId}] [${f.severity}] ${f.quote ? `"${f.quote}" ` : ''}${f.message}${f.suggestion ? ` Suggested fix: ${f.suggestion}` : ''}`).join('\n');
   try {
     const { data, route } = await runRole(ctx, {
-      role: 'verifier', ...secondOpinionPrompt({ language: p.language, notation: p.notation, findings: list, text: p.text, evidence: p.evidence }),
+      role: 'verifier', ...secondOpinionPrompt({ language: p.language, notation: p.notation, examSymbols: p.examSymbols, findings: list, text: p.text, evidence: p.evidence }),
       schema: secondOpinionSchema, projectId: p.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     const verdicts = new Map(data.findings.map((v) => [v.index - 1, v]));
@@ -120,7 +120,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   if (mode === 'recheck') {
     const open = ctx.db.all<{ id: string; node_id: string; severity: Severity; quote: string; message: string; suggestion: string }>(
       `SELECT id, node_id, severity, quote, message, suggestion FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
-    const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: open.map((o) => ({ ...o, sectionId: o.node_id })), ...contextFor(new Set(open.map((o) => o.node_id)), open.map((o) => o.quote)) });
+    const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: open.map((o) => ({ ...o, sectionId: o.node_id })), ...contextFor(new Set(open.map((o) => o.node_id)), open.map((o) => o.quote)) });
     ctx.db.tx(() => {
       for (const d of opinion.dropped) ctx.db.run(`UPDATE review_issues SET status = 'dismissed', resolution = ? WHERE id = ?`, notRealResolution(d.reason), d.finding.id);
       for (const k of opinion.kept) ctx.db.run('UPDATE review_issues SET severity = ? WHERE id = ?', k.severity, k.id);
@@ -207,7 +207,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     if (settled.some((x) => x.node_id === nodeId && sameQuote(x.quote, i.quote))) { skippedSettled++; continue; }
     candidates.push({ ...i, sectionId: nodeId });
   }
-  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
+  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
   const compileIssues: { nodeId: string; severity: string; rule: string; quote: string; message: string }[] = [];

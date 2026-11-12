@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 22;
+export const PROMPT_VERSION = 23;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -868,7 +868,7 @@ Figures (:::image blocks; a structure's alt text ends with the formula of the sp
 
 Statement labels (Teorema, Definizione, ...) are numbered automatically per chapter when the book is compiled; ignore their numbers in this source text.
 
-A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs.
+A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs, unless the notation fixed for the whole book defines another symbol for that quantity. The book's notation wins over the exam papers, as it does for the writer.
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
@@ -904,17 +904,17 @@ export const secondOpinionSchema = z.object({
 });
 
 /** A second model checks each finding of the reviewer against the text and the sources before the author sees it. */
-export function secondOpinionPrompt(p: { language: string; notation?: string; findings: string; text: string; evidence: string }) {
+export function secondOpinionPrompt(p: { language: string; notation?: string; examSymbols?: string[]; findings: string; text: string; evidence: string }) {
   const lang = languageName(p.language);
   return {
     system: `You check the findings another reviewer made on a university textbook written in ${lang}. Reviewers are useful but they also invent problems. For each finding, read the quoted passage in its context and decide whether the problem is real in the text as written.
 
-A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording.
+A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording. A finding that the text writes a symbol differently from the exam papers is real, and not a preference about wording, when the exam symbols below use another symbol for that quantity and the notation fixed for the whole book defines none for it. When the book's notation defines the symbol, the finding is not real.
 
 Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim or a misleading explanation; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.`,
     prompt: `Notation fixed for the whole book:
 ${p.notation || '(standard)'}
-
+${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
 FINDINGS:
 ${p.findings}
 
