@@ -123,6 +123,11 @@ test('text after the metadata JSON is refused, because the model may have kept w
   assert.match((r as { problem: string }).problem, /after the JSON/);
   assert.equal(parse(answer('Primo.', '```json\n{"figures": [], "summary": "ok"}\n```\nSecond section')).ok, false);
   assert.equal(parse(answer('Primo.', '{"figures": [], "summary": "ok"} Second section')).ok, false);
+  // The same before the JSON: a paragraph there would be dropped, a label or a fence opener is not text.
+  const before = parse(`First paragraph.\n${META_SEPARATOR}\nSecond paragraph.\n{"figures":[],"summary":"ok"}`);
+  assert.equal(before.ok, false);
+  assert.match((before as { problem: string }).problem, /between .* and the JSON/);
+  assert.equal(parse(answer('Primo.', 'Metadata:\nSecond paragraph.\n{"figures": [], "summary": "ok"}')).ok, false);
   // The usual forms stay accepted: bare, fenced, with a blank line or a final newline.
   for (const json of ['{"figures": [], "summary": "ok"}', '{"figures": [], "summary": "ok"}\n\n', '```json\n{"figures": [], "summary": "ok"}\n```\n', 'Metadata:\n{"figures": [], "summary": "ok"}', '```\n{"figures": [], "summary": "ok"}']) {
     assert.equal(parse(answer('Primo.', json)).ok, true, json);

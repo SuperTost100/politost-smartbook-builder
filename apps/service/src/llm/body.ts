@@ -42,6 +42,14 @@ function textAfterJson(segment: string): string {
 
 const isFence = (line: string) => /^\s*```/.test(line);
 
+/** What stands between the separator and the JSON, apart from a fence opener and a short label such as "Metadata:". Anything else is text the model went on writing there, and reading only the JSON would drop it. */
+function textBeforeJson(segment: string): string {
+  const t = segment.trim();
+  const start = t.indexOf('{');
+  if (start <= 0) return '';
+  return t.slice(0, start).split('\n').filter((l) => !/^\s*(?:```[\w-]*|[\p{L} ]{1,30}:)?\s*$/u.test(l)).join('\n').trim();
+}
+
 /** The whole text is wrapped in one code fence. The fence goes, and a fence inside the text means the text is not wrapped. */
 function unfence(text: string): string {
   const lines = text.trim().split('\n');
@@ -97,6 +105,7 @@ export function bodyParser<K extends string, M extends object = Record<never, ne
       } catch (err) {
         return { ok: false, problem: `The JSON after ${META_SEPARATOR} could not be read. ${err instanceof Error ? err.message : String(err)}` };
       }
+      if (textBeforeJson(segment)) return { ok: false, problem: `There is text between ${META_SEPARATOR} and the JSON. Only the JSON may follow ${META_SEPARATOR}, so put all the text before it.` };
       if (textAfterJson(segment)) return { ok: false, problem: `There is text after the JSON that follows ${META_SEPARATOR}. Nothing may come after the JSON, so put all the text before ${META_SEPARATOR}.` };
       const parsed = meta.safeParse(sanitizeModelValue(dropOptionalNulls(value, raw!), raw));
       if (!parsed.success) return { ok: false, problem: `The JSON after ${META_SEPARATOR} does not fit:\n${describeIssues(parsed.error)}` };
