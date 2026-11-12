@@ -117,6 +117,21 @@ test('a real failure to load a page image keeps the retry', async ({ page, reque
   await expect(note.getByRole('button', { name: 'Try again' })).toBeVisible();
 });
 
+test('the drawer\'s Edit button moves focus into an editor that is already open', async ({ page, request }) => {
+  const book = await makeBook(request);
+  await page.goto(`/books/${book}/manuscript/s1`);
+  await page.locator('.ms-block').nth(1).click();
+  const drawer = page.locator('.ev-drawer');
+  await expect(drawer).toBeVisible();
+  await page.locator('.ms-actions').getByRole('button', { name: 'Edit', exact: true }).click();
+  const editor = page.getByRole('textbox', { name: /Source of block 2$/ });
+  await expect(editor).toBeFocused();
+  // The editor keeps its place when the drawer asks for it again, so only the drawer's click can bring focus back to it.
+  await drawer.getByRole('button', { name: 'Edit', exact: true }).click();
+  await expect(drawer).toHaveCount(0);
+  await expect(editor).toBeFocused();
+});
+
 test.describe('on a phone', () => {
   test.use({ viewport: { width: 390, height: 844 }, hasTouch: true });
 

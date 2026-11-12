@@ -196,7 +196,11 @@ export default function ManuscriptPage() {
   // Focus returns to the block once the editor has closed (effect below), which can be after a save.
   const endEdit = cancelEdit;
   // From the evidence drawer: on a narrow screen it would cover the editor, so it closes as the editor opens (focus goes to the editor).
-  const editFromDrawer = useCallback((i: number) => { setSel(null); setFocusNote(undefined); startEdit(i); }, [startEdit]);
+  const editFromDrawer = useCallback((i: number) => {
+    setSel(null); setFocusNote(undefined); startEdit(i);
+    // An editor that is already open on this block keeps its place and does not autofocus again, and the drawer's button is gone.
+    if (editingIdx === i) requestAnimationFrame(() => blocksRef.current?.querySelector<HTMLElement>(`[data-block="${i}"] .cm-content`)?.focus());
+  }, [startEdit, editingIdx]);
   const onRegenerate = useCallback((i: number) => setRegen({ selection: blocks[i]?.source }), [blocks]);
   const [compareOpen, setCompareOpen] = useState(false);
   // Leaving a block whose section changed elsewhere does nothing but point the author at the notice's choices.
