@@ -313,8 +313,28 @@ function lostCitation(before: string, after: string, lint: (markdown: string) =>
 }
 
 /**
+ * Why a correction must not replace the draft because it deletes a paragraph, or null. Checking the mathematics may rewrite
+ * a paragraph in place, but a paragraph whose words are found in no paragraph of the correction (less than half of them) is
+ * gone, and only a correction with as many paragraphs as the draft can be a rewrite of it. A paragraph of fewer than four
+ * words is a formula or a label and may change.
+ * shortcut: a correction that deletes one paragraph and adds another keeps the count, so it passes as a rewrite; upgrade when a run shows it.
+ */
+function lostParagraph(before: string, after: string): string | null {
+  const old = splitBlocks(before).map((b) => b.text);
+  const next = splitBlocks(after).map((b) => new Set(paragraphWords(b.text)));
+  if (next.length >= old.length) return null;
+  for (const [i, text] of old.entries()) {
+    const words = paragraphWords(text);
+    if (words.length < 4) continue;
+    if (next.some((n) => words.filter((w) => n.has(w)).length / words.length >= 0.5)) continue;
+    return `it removes paragraph ${i + 1} ("${text.replace(/\s+/g, ' ').slice(0, 40)}")`;
+  }
+  return null;
+}
+
+/**
  * One follow-up in the conversation that wrote the draft. "OK" keeps the draft. A corrected answer replaces it only when it
- * parses in the same format, drops no heading, formula key, ::: block, figure or citation marker of the first draft, and does
+ * parses in the same format, drops no heading, formula key, ::: block, figure, paragraph or citation marker of the first draft, and does
  * not open or close with a note about the correction (a real run did that). A failed follow-up (a limit, a timeout) or any
  * other answer keeps the first draft; the author loses nothing. `note` says why a correction was not used.
  */
@@ -334,6 +354,7 @@ async function checkOwnDraft(talk: RoleConversation<DraftAnswer>, parse: ReturnT
   const reason = lostStructure(first.markdown, corrected.data.markdown)
     ?? (addsCommentary(first.markdown, corrected.data.markdown) ? 'it opens or closes with a note about the correction' : null)
     ?? (first.figures.some((f) => !keys.has(f.key)) ? 'it drops a figure' : null)
+    ?? lostParagraph(first.markdown, corrected.data.markdown)
     ?? lostCitation(first.markdown, corrected.data.markdown, lint);
   if (reason) return { data: first, selfCheck: 'kept', note: reason };
   return { data: corrected.data, selfCheck: 'corrected' };
