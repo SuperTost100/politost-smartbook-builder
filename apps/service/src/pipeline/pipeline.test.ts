@@ -996,6 +996,23 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     for (const l of layouts) assert.deepEqual(l.config.layout.xaxis, { title: 'f (Hz)', type: 'log', range: [1, 5] });
     assert.deepEqual(rows.map((r) => r.status), ['verified', 'verified']);
   });
+
+  test('a Bode pair is saved in one transaction: when the second graph cannot be written, the first is not kept, so a retry draws the pair again', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    ctx.db.raw.exec(`CREATE TRIGGER second_graph_fails BEFORE INSERT ON enrichments WHEN (SELECT count(*) FROM enrichments) >= 1 BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
+    const pair = {
+      id: 'bode', title: 'Modulo', description: 'Modulo in dB', functions: [{ fn: '-10*log10(1+(x/1000)^2)', label: '|H|' }],
+      xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', functions: [{ fn: '-atan(x/1000)*180/pi', label: 'fase' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+    };
+    fake.next(answer(pair));
+    await assert.rejects(enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), /disk full/);
+    assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 0);
+    ctx.db.raw.exec('DROP TRIGGER second_graph_fails');
+    fake.next(answer(pair));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), { made: 2 });
+  });
 });
 
 describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {

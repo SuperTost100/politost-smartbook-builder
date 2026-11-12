@@ -148,7 +148,8 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
     return { made: 1, replaced: false };
   }
-  for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+  // One transaction: a pair is kept whole or not at all, because a retry without force returns `reused` as soon as one graph exists.
+  ctx.db.tx(() => { for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks); });
   return { made: built.length };
 }
 
