@@ -2338,6 +2338,7 @@ describe('second opinion, full review and recheck', () => {
     assert.match(fake.calls[1].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
     assert.match(fake.calls[1].system ?? '', /the notation fixed for the whole book defines none for it/);
     assert.match(fake.calls[1].system ?? '', /not a preference about wording/);
+    assert.match(fake.calls[1].system ?? '', /a symbol that differs from the exam papers in the way described above; minor for everything else/, 'the severity rule keeps such a finding major');
     fake.next(opinion(['real', 'major']));
     await review({ mode: 'recheck' });
     assert.match(fake.calls[2].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
