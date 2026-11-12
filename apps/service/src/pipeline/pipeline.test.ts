@@ -12,7 +12,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay } from './practice.ts';
 import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
@@ -689,6 +689,16 @@ describe('4c. one extraction call per exam session', () => {
     await assert.rejects(sessionImport(ctx, attempt(1)), (e: unknown) => e instanceof TaskError && e.kind === 'temporary', 'the first attempt is left to the queue to retry');
     fake.next(hangUp, hangUp, hangUp);
     assert.match((await sessionImport(ctx, attempt(3)) as { fallback: string }).fallback, /socket hang up/);
+  });
+
+  test('on its last attempt the session read also gives way for an error that is not a TaskError, and never for a cancelled task or one that waits', () => {
+    const last = { aborted: false, lastAttempt: true };
+    assert.equal(sessionGivesWay(new Error('the page did not render'), last), true);
+    assert.equal(sessionGivesWay(new TaskError('timeout'), last), true);
+    assert.equal(sessionGivesWay(new Error('the page did not render'), { aborted: false, lastAttempt: false }), false, 'earlier attempts are left to the queue');
+    assert.equal(sessionGivesWay(new Error('cancelled'), { aborted: true, lastAttempt: true }), false);
+    assert.equal(sessionGivesWay(new TaskError('Usage limit reached', 'quota'), last), false);
+    assert.equal(sessionGivesWay(new TaskError('Sign in again', 'auth'), last), false);
   });
 
   test('the exam answer parser: what it accepts and what it sends back', () => {

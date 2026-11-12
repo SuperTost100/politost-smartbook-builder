@@ -169,6 +169,14 @@ const pageText = (p: { label: string; transcript: string | null; text: string })
  * one) the result says `fallback` and each question's import reads its own pages, as it did before. Errors that a retry can
  * cure (a limit, a login, a timeout) are thrown, so the queue retries this task like any other, except a temporary error on its last attempt, which also falls back.
  */
+/**
+ * Whether a failed session read hands over to the single reads: on its last attempt, for a temporary TaskError and for an error
+ * that is not a TaskError (a page that would not render), which the queue retries the same way. A cancelled task does not, and
+ * neither does an error that waits for the author or for a quota reset.
+ */
+export const sessionGivesWay = (err: unknown, o: { aborted: boolean; lastAttempt: boolean }): boolean =>
+  o.lastAttempt && !o.aborted && (!(err instanceof TaskError) || err.kind === 'temporary');
+
 export async function sessionImport(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
   const examGroup = (t.task.input.examGroup as string | null) ?? null;
@@ -193,8 +201,9 @@ export async function sessionImport(ctx: AppContext, t: TaskContext) {
     return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = data.exercises[i]!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
   } catch (err) {
     if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
-    // The imports wait for this task, so a task that failed for good would fail the chapter. On the last attempt a temporary error gives way to their own reads.
-    if (err instanceof TaskError && err.kind === 'temporary' && t.task.attempts >= (ctx.db.get<{ max_attempts: number }>('SELECT max_attempts FROM tasks WHERE id = ?', t.task.id)?.max_attempts ?? 1)) return { fallback: err.message };
+    // The imports wait for this task, so a task that failed for good would fail the chapter. On the last attempt an error a retry could have cured gives way to their own reads.
+    const lastAttempt = t.task.attempts >= (ctx.db.get<{ max_attempts: number }>('SELECT max_attempts FROM tasks WHERE id = ?', t.task.id)?.max_attempts ?? 1);
+    if (sessionGivesWay(err, { aborted: t.signal.aborted, lastAttempt })) return { fallback: err instanceof Error ? err.message : String(err) };
     throw err;
   }
 }
