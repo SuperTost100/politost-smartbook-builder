@@ -370,6 +370,7 @@ test('figure captions turn bare x_n and x^n notation into Unicode subscripts and
   assert.equal(captionToPlain('Rapporto e/m_e'), 'Rapporto e/mₑ');
   assert.equal(captionToPlain('Il rapporto ΔH_vap/R'), 'Il rapporto ΔHᵥₐₚ/R');
   assert.equal(captionToPlain('Costante 10^-3 e $x^2$'), 'Costante 10⁻³ e x²');
+  assert.equal(captionToPlain('Potenza x^0.5 e x^-1.5'), 'Potenza x^0.5 e x^-1.5', 'a decimal exponent is left as written');
   assert.equal(captionToPlain('un nome_file resta'), 'un nome_file resta', 'a subscript with letters Unicode lacks stays as written');
   assert.equal(captionToPlain('Decadimento e^-x e potenza x^-n'), 'Decadimento e⁻ˣ e potenza x⁻ⁿ');
   assert.equal(captionToPlain('Curva e^-kt'), 'Curva e^-kt', 'an exponent that cannot be converted whole stays as written');
