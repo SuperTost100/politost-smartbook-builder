@@ -105,21 +105,22 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   if (!open) return null;
   const failed = details.error ?? assets.error;
   const retry = () => { void assets.refetch(); if (asset) void details.refetch(); };
-  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} loadError={details.data ? null : failed} retry={retry} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
   // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
   const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
+  const goneText = filename ? 'The picture of this figure is not among the book\'s figures any more.' : 'This figure is not in the section any more.';
+  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} loadError={details.data ? null : failed} gone={!details.data && gone ? goneText : null} retry={retry} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
   return (
     <Dialog open onClose={onClose} title={title} footer={<button type="button" className="ui-btn" onClick={onClose}>Close</button>}>
       {failed
         ? <div className="ui-banner ui-banner--warning" role="alert">{errorText(failed)} <button type="button" className="ui-btn ui-btn--link" onClick={retry}>Try again</button></div>
         : gone
-          ? <div className="ui-banner ui-banner--warning" role="alert">{filename ? 'The picture of this figure is not among the book\'s figures any more.' : 'This figure is not in the section any more.'}</div>
+          ? <div className="ui-banner ui-banner--warning" role="alert">{goneText}</div>
           : <div className="ui-skeleton" style={{ height: 220 }} role="status" aria-label="Loading the figure" />}
     </Dialog>
   );
 }
 
-function FigureEditor({ details, stale, loadError, retry, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; loadError: Error | null; retry: () => void; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
+function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; loadError: Error | null; /** Why the figure on screen can no longer be changed: it left the text while the dialog was open. */ gone: string | null; retry: () => void; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const drawing = details.drawing;
@@ -343,6 +344,9 @@ function FigureEditor({ details, stale, loadError, retry, pid, nodeId, title, nu
           </div>
         </div>
       )}
+      {gone && !loadError && (
+        <div className="ui-banner ui-banner--warning fd-conflict" role="alert">{gone} What you typed here is still in the fields, so you can copy it before you close the dialog.</div>
+      )}
       {stale && loadError && (
         <div className="ui-banner ui-banner--warning fd-conflict" role="alert">{errorText(loadError)} <button type="button" className="ui-btn ui-btn--link" onClick={retry}>Try again</button></div>
       )}
@@ -433,17 +437,18 @@ function FigureEditor({ details, stale, loadError, retry, pid, nodeId, title, nu
                   </form>
                 )}
                 {redrawn && !failure && <p className="fd-ok" role="status">Redrawn. The earlier drawing is in the section history.</p>}
-                {failure && (
-                  <div className="ui-banner ui-banner--danger" role="alert">
-                    <div className="ui-banner__body">
-                      <span className="ui-banner__title">{dropped ? 'The redraw was not used.' : 'The redraw failed. The figure is unchanged.'}</span>
-                      <span className="fd-failure">{failure}</span>
-                      <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => setFailure(null)}>Dismiss</button></div>
-                    </div>
-                  </div>
-                )}
               </div>
             </>
+          )}
+          {/* Outside the drawing's own part: the drawing may have become an image in another tab after its redraw was dropped. */}
+          {failure && (
+            <div className="ui-banner ui-banner--danger" role="alert">
+              <div className="ui-banner__body">
+                <span className="ui-banner__title">{dropped ? 'The redraw was not used.' : 'The redraw failed. The figure is unchanged.'}</span>
+                <span className="fd-failure">{failure}</span>
+                <div className="ui-banner__actions"><button type="button" className="ui-btn ui-btn--sm" onClick={() => setFailure(null)}>Dismiss</button></div>
+              </div>
+            </div>
           )}
         </div>
       </div>

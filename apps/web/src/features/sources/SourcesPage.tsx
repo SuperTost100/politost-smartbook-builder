@@ -126,6 +126,7 @@ export default function SourcesPage() {
             <Icon name="upload" size={22} />
             <p><strong>Drop files here</strong> or choose them from your computer.</p>
             <p className="ui-muted so-drop__types">PDF, DOCX, PPTX, Markdown</p>
+            <p className="ui-muted so-drop__types">Adding a file or a link starts Prepare by itself, and Prepare reads it with the AI models.</p>
             <div className="ui-row so-drop__actions">
               <div className="ui-field so-role">
                 <label className="ui-field__label" htmlFor="so-role">Role of new files</label>

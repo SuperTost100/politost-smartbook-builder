@@ -1092,6 +1092,33 @@ test.describe('review findings of the figure dialog', () => {
     await expect(dialog.getByText('Alt text is needed')).toBeVisible();
   });
 
+  test('when another tab removes the figure, the open dialog says so and keeps what was typed', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    fm.removeElsewhere();
+    await expect(dialog.getByRole('alert')).toContainText('What you typed here is still in the fields');
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
+    await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+  });
+
+  test('a dropped redraw still says so after the drawing became an image in another tab', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    fm.runWarning = 'The new drawing was not used, because the figure was changed or left the text while it was being redrawn.';
+    await dialog.getByLabel('Instruction for the redraw').fill('Move the labels');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    fm.complete();
+    const notice = dialog.getByRole('alert').filter({ hasText: 'The redraw was not used.' });
+    await expect(notice).toBeVisible({ timeout: 12_000 });
+    fm.elsewhere({ origin: 'imported' });
+    await expect(dialog.getByRole('heading', { name: /Uploaded image/ })).toBeVisible();
+    await expect(notice).toBeVisible();
+  });
+
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
     const fm = await open(page);
     const dialog = await openDialog(page);

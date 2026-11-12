@@ -46,6 +46,8 @@ export interface FigureMock {
   notFound: string[];
   /** Another tab changes the figure the text shows now (a copy and a new head, as a save does), and this page is told unless `quiet`. */
   elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string; origin?: 'imported' }, o?: { quiet?: boolean }) => void;
+  /** Another tab removes the figure the text shows now, and this page is told. */
+  removeElsewhere: () => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -67,6 +69,11 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
       const id = [...figs.keys()].find((k) => blocks.includes(`fig:${k}`))!;
       swap(id, change);
       if (!opts?.quiet) release();
+    },
+    removeElsewhere: () => {
+      blocks = blocks.filter((b) => !b.startsWith('fig:'));
+      newHead();
+      release();
     },
     complete: () => {
       fm.runStatus = 'completed';
