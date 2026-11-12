@@ -723,7 +723,7 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(page.getByText('Figure removed. It stays in the section history.')).toBeVisible();
     await expect(dialog).toBeHidden();
     await expect(figureBlock(page)).toHaveCount(0);
-    expect(fm.writes.find((w) => w.call.endsWith('/remove'))!.body).toEqual({ baseRevId: 'rvf1' });
+    expect(fm.writes.find((w) => w.call.endsWith('/remove'))!.body).toEqual({ baseRevId: 'rvf1', block: 2 });
   });
 
   test('when the text moved on, saving says so and nothing is lost (409)', async ({ page }) => {
