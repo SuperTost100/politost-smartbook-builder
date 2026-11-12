@@ -277,17 +277,19 @@ function variantOf(rest: string): string | null {
   return k ? `v${k[1]}` : null;
 }
 
+const TURN_WORDS = String.raw`[A-Za-z]\d?|\d+|mattin[ao]|pomeriggio|pomeridiano|sera|serale`;
+const TURN_NAME = new RegExp(String.raw`\bturno\s+(${TURN_WORDS})(?![\p{L}\p{N}'’])`, 'iu');
+const TURN_OR_VERSION = new RegExp(String.raw`\b(?:turno\s+(${TURN_WORDS})|(?:versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+))(?![\p{L}\p{N}'’])`, 'iu');
+
 /**
  * The name after "Turno", in capitals: a letter, a number, or one of the words papers use for a turn ("Turno A", "turno 2",
  * "Turno Mattina"). Any other word after it is not a name ("turno di recupero", "turno d'esame"). The session name and the
- * routing of solutions both read it here, so a turn that names a session is found again in a solutions heading.
+ * routing of solutions both read it with the same words, so a turn that names a session is found again in a solutions heading.
  */
-function turnName(s: string): string | null {
-  return /\bturno\s+([A-Za-z]\d?|\d+|mattin[ao]|pomeriggio|pomeridiano|sera|serale)(?![\p{L}\p{N}'’])/iu.exec(s)?.[1].toUpperCase() ?? null;
-}
+const turnName = (s: string): string | null => TURN_NAME.exec(s)?.[1].toUpperCase() ?? null;
 
-/** The turn's name, or the letter or number after "Versione", "Fila", "Variante" or "Compito" ("Fila A" gives "A"). */
-const turnOf = (s: string) => turnName(s) ?? /\b(?:versione|fila|variante|compito)\s+([A-Za-z]\d?|\d+)\b(?!['’])/i.exec(s)?.[1].toUpperCase() ?? null;
+/** What tells two papers of one day apart in a heading: the turn's name, or the letter or number after "Versione", "Fila", "Variante" or "Compito". The first one in the line counts ("Compito A ... Turno 1" gives "A"). */
+const turnOf = (s: string) => { const m = TURN_OR_VERSION.exec(s); return (m?.[1] ?? m?.[2])?.toUpperCase() ?? null; };
 
 const numberLabel = (e: Ex) => (e.variant ? (e.variant.startsWith('v') ? `${e.id}.${e.variant.slice(1)}` : `${e.id}${e.variant}`) : e.id);
 

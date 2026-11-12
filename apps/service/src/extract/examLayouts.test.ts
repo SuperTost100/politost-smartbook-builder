@@ -359,6 +359,18 @@ test('turns named by a word (Mattina, Pomeriggio) are two sessions, and their so
   assert.match(rows[1].solution, /9 µC/);
 });
 
+test('a solutions heading that names a version and a turn goes to the version, which comes first in it', () => {
+  const paper = (version: string, text: string) => [`Compito ${version} - 12/02/2024`, 'Esercizio 1 (12 punti)', text];
+  const rows = segmentExams('r', pages(
+    paper('A', 'Un resistore R = 4,7 kΩ è collegato a un generatore V₀ = 12 V. Calcolare la corrente.'),
+    paper('B', 'Un condensatore C = 1 µF è carico alla tensione V₀ = 9 V. Calcolare la carica.'),
+    ['Soluzioni (Compito A del 12 febbraio 2024 - Turno 1)', 'Esercizio 1.', 'I = V/R = 2,55 mA.'],
+  ), { label: 'x', untitled: true });
+  const of = (text: RegExp) => rows.find((r) => text.test(r.statement))!;
+  assert.match(of(/resistore/).solution, /2,55 mA/, 'the solution reaches version A');
+  assert.equal(of(/condensatore/).solution, '');
+});
+
 test('a word after "turno" that is not a turn name gives no turn', () => {
   const group = (heading: string) => segmentExams('r', pages([heading, 'Esercizio 1 (12 punti)', 'Calcolare la corrente nel resistore R = 4,7 kΩ con V₀ = 12 V.'])).map((r) => r.examGroup);
   assert.deepEqual(group('Appello del 12 febbraio 2024 - turno di recupero'), ['Appello del 12 febbraio 2024']);
