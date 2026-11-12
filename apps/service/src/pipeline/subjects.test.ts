@@ -27,6 +27,7 @@ describe('subject area inference', () => {
     ['Meccanica applicata', 'Meccanica', 'mechanics'],
     ['Meccanica quantistica', 'Meccanica quantistica', 'physics'],
     ['Chimica fisica', 'Chimica fisica', 'chemistry'],
+    ['Biochemistry', 'Biochemistry', 'chemistry'],
     ['Calculus', 'Calculus I', 'mathematics'],
     ['Storia dell’arte', 'Storia dell’arte', 'other'],
   ];
