@@ -53,6 +53,16 @@ test('a removal fix for off-program material may not delete a figure unless a fi
   assert.deepEqual(r.kept, [0, 3]);
   assert.deepEqual(r.reverted.map((x) => [x.block, x.reason]), [[1, 'it would delete a figure block'], [2, 'it would delete a figure block']]);
   assert.deepEqual(applyGuardedChanges(blocks, del, lint, { removals: true, figures: true }).kept, [0, 1, 2, 3], 'with a figure problem open the figures may go');
+  // Rewriting the block is the same loss as deleting it: a figure block turned into text, and a note that keeps its text and loses its image.
+  const rewrite = [{ block: 1, text: 'Testo.' }, { block: 2, text: ':::note\nTesto.\n:::' }];
+  for (const opts of [{}, { removals: true }]) {
+    const w = applyGuardedChanges(blocks, rewrite, lint, opts);
+    assert.deepEqual(w.kept, [], JSON.stringify(opts));
+    assert.deepEqual(w.reverted.map((x) => x.reason), ['it would remove a figure', 'it would remove a figure']);
+  }
+  assert.deepEqual(applyGuardedChanges(blocks, rewrite, lint, { figures: true }).kept, [1, 2]);
+  // A new caption on the same picture is no loss.
+  assert.deepEqual(applyGuardedChanges(blocks, [{ block: 1, text: IMG.replace('caption="c"', 'caption="d"') }], lint).kept, [1]);
 });
 
 test('lostStructure counts a repeated heading, formula key or image, so deleting one of two copies shows', () => {

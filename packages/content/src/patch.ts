@@ -86,6 +86,8 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
       const lostKey = firstLost(formulaKeys(old), formulaKeys(text));
       if (lostKey) { drop(`it drops the formula "${lostKey}"`); continue; }
       if (firstLost(headings(old), headings(text))) { drop('it drops or rewrites a heading'); continue; }
+      // A block rewritten without its picture loses the figure as a deletion does, so the same rule holds.
+      if (!opts.figures && firstLost(imageSources(old), imageSources(text))) { drop('it would remove a figure'); continue; }
       if (fenceBalance(text) !== 0 && fenceBalance(text) !== fenceBalance(old)) { drop('it leaves a ::: fence open'); continue; }
     }
     base ??= serious(lint(join(out)));
