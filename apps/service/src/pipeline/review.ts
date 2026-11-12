@@ -524,7 +524,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       settleClaims(head.id);
     });
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
-    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }) };
+    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
   }
 
   const { markdown, citations } = extractCitations(working.filter((b) => b.trim()).join('\n\n'), splitBlocks);

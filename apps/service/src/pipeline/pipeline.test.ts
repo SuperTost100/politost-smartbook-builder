@@ -2786,6 +2786,16 @@ describe('figures are checked where they are born', () => {
     assert.equal(ctx.db.all('SELECT 1 FROM assets').length, 0);
   });
 
+  test('a fix whose only change is a figure the check drops still returns the reason', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno.\n\n:::image{src="assets/vecchio.svg" alt="Vecchio" caption="Grafico vecchio"}\n:::');
+    ctx.db.insert('review_issues', { id: 'f1', project_id: P, node_id: 's1', source: 'review', severity: 'minor', category: 'figure', quote: 'Grafico vecchio', message: 'Il grafico non corrisponde.', suggestion: 'Disegnare x^2', status: 'open', resolution: '', created_at: now() });
+    fake.next(patchAnswer({ figures: [fig('a', 'x^2')], changes: [{ block: 0, text: `Testo uno.\n\n${img('a')}` }] }), answer(verdict(false)));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: ['f1'] }));
+    assert.equal(r.skipped, 'no change survived the checks');
+    assert.deepEqual(r.figureProblems, ['a: dropped by the check (Ripete il testo.)']);
+  });
+
   test('a fix for another kind of problem gets no figure rules, and an author instruction gets them', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo uno.');
