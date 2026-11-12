@@ -923,6 +923,23 @@ test.describe('Add figure', () => {
 
 
 test.describe('review findings of the figure dialog', () => {
+  test('a figure put in above the open one by another task does not change which figure the dialog edits', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Una didascalia nuova');
+    fm.insertElsewhere(0);
+    await expect(page.locator('.ms-block .sb-figure')).toHaveCount(2);
+    await expect(dialog.locator('.fd-preview img')).toHaveAttribute('src', /\/api\/assets\/a1\/file/);
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Una didascalia nuova');
+    await expect(dialog.locator('.fd-conflict')).toHaveCount(0);
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    const save = fm.writes.find((w) => w.call.startsWith('PATCH'))!;
+    expect(save.call).toMatch(/\/figures\/a1$/);
+    expect(fm.figures().find((f) => f.caption === 'Una didascalia nuova')!.filename).toMatch(/^fig-r/);
+    expect(fm.figures().find((f) => f.caption === 'Un altro schema')).toBeTruthy();
+  });
+
   test('source typed while a render runs is kept when the rendered source arrives', async ({ page }) => {
     const fm = await open(page);
     fm.renderMs = 900;

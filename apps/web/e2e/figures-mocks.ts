@@ -48,6 +48,8 @@ export interface FigureMock {
   elsewhere: (change: { caption?: string; alt?: string; shows?: string; source?: string; origin?: 'imported' }, o?: { quiet?: boolean }) => void;
   /** Another tab removes the figure the text shows now, and this page is told. */
   removeElsewhere: () => void;
+  /** Another tab puts a new drawing into the text after block `afterBlock`, and this page is told. */
+  insertElsewhere: (afterBlock: number) => void;
   /** The running task ends well: the redraw gives the figure a new picture, the described drawing is put into the text. */
   complete: () => void;
 }
@@ -75,6 +77,12 @@ export async function mockFigureApi(page: Page, o: { stock?: boolean; assetsFail
     removeElsewhere: () => {
       blocks = blocks.filter((b) => !b.startsWith('fig:'));
       newHead();
+      release();
+    },
+    insertElsewhere: (afterBlock) => {
+      const id = `a${++n}`;
+      figs.set(id, { id, filename: `drawn-${n}.svg`, caption: 'Un altro schema', alt: 'Schema', origin: 'generated-svg', shows: 'A drawing.', source: '#circle(radius: 8pt)', createdAt: new Date().toISOString() });
+      blocks.splice(afterBlock + 1, 0, `fig:${id}`); newHead();
       release();
     },
     complete: () => {
