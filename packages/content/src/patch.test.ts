@@ -55,6 +55,20 @@ test('a removal fix for off-program material may not delete a figure unless a fi
   assert.deepEqual(applyGuardedChanges(blocks, del, lint, { removals: true, figures: true }).kept, [0, 1, 2, 3], 'with a figure problem open the figures may go');
 });
 
+test('lostStructure counts a repeated heading, formula key or image, so deleting one of two copies shows', () => {
+  const H = '### Esempio';
+  const IMG = ':::image{src="assets/rc.svg" alt="a" caption="c"}\n:::';
+  const before = `${H}\n\nPrimo.\n\n${IMG}\n\n${H}\n\nSecondo.\n\n${IMG}`;
+  assert.match(lostStructure(before, before.replace(`\n\n${H}\n\nSecondo.`, ''))!, /heading "### Esempio"/);
+  assert.match(lostStructure(before, before.replace(`\n\n${IMG}`, ''))!, /:::image block|image "assets\/rc.svg"/);
+  assert.equal(lostStructure(before, before.replace('Primo.', 'Primo bis.')), null);
+  const keys = `${F}\n\n${F}`;
+  assert.match(lostStructure(keys, F)!, /formula "k1"/);
+  // Inside a guarded change too: one of two identical headings of a block cannot go.
+  const r = applyGuardedChanges([`${H}\n\nA.\n\n${H}\n\nB.`], [{ block: 0, text: `${H}\n\nA B.` }], lint);
+  assert.match(r.reverted[0].reason, /heading/);
+});
+
 test('dropping a formula key or a heading, and unbalanced fences, are reverted', () => {
   const r = applyGuardedChanges(['### Titolo\n\nTesto.', F, 'Fine.'], [
     { block: 0, text: '### Altro titolo\n\nTesto.' },

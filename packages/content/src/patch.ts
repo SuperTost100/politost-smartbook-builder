@@ -22,6 +22,12 @@ export const MIN_KEPT_SHARE = 0.8;
 
 const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
+/** The first item of `before` that `after` has fewer times than `before`: two identical headings of which one goes count as a loss. */
+function firstLost(before: string[], after: string[]): string | undefined {
+  const left = new Map<string, number>();
+  for (const x of after) left.set(x, (left.get(x) ?? 0) + 1);
+  return before.find((x) => { const n = left.get(x) ?? 0; left.set(x, n - 1); return n <= 0; });
+}
 const hasDirective = (s: string) => /^[ \t]*:::/m.test(s);
 /** A block that is one :::image directive and nothing else. */
 const onlyImage = (s: string) => /^\s*:::image\{[^}]*\}\s*\n\s*:::\s*$/.test(s);
@@ -77,10 +83,9 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
       const limit = opts.removals ? MAX_DELETED_BLOCKS * REMOVAL_FACTOR : MAX_DELETED_BLOCKS;
       if (deleted >= limit) { drop(`it would delete more than ${limit} blocks`); continue; }
     } else {
-      const lostKey = formulaKeys(old).find((k) => !formulaKeys(text).includes(k));
+      const lostKey = firstLost(formulaKeys(old), formulaKeys(text));
       if (lostKey) { drop(`it drops the formula "${lostKey}"`); continue; }
-      const newHeadings = headings(text);
-      if (headings(old).some((h) => !newHeadings.includes(h))) { drop('it drops or rewrites a heading'); continue; }
+      if (firstLost(headings(old), headings(text))) { drop('it drops or rewrites a heading'); continue; }
       if (fenceBalance(text) !== 0 && fenceBalance(text) !== fenceBalance(old)) { drop('it leaves a ::: fence open'); continue; }
     }
     base ??= serious(lint(join(out)));
@@ -210,18 +215,15 @@ const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+
  * or leaves a ::: fence open.
  */
 export function lostStructure(before: string, after: string): string | null {
-  const kept = headings(after);
-  const heading = headings(before).find((h) => !kept.includes(h));
+  const heading = firstLost(headings(before), headings(after));
   if (heading) return `it drops or rewrites the heading "${heading}"`;
-  const keys = formulaKeys(after);
-  const key = formulaKeys(before).find((k) => !keys.includes(k));
+  const key = firstLost(formulaKeys(before), formulaKeys(after));
   if (key) return `it drops the formula "${key}"`;
   const blocks = directiveNames(after);
   for (const name of new Set(directiveNames(before))) {
     if (blocks.filter((n) => n === name).length < directiveNames(before).filter((n) => n === name).length) return `it drops a :::${name} block`;
   }
-  const sources = imageSources(after);
-  const image = imageSources(before).find((src) => !sources.includes(src));
+  const image = firstLost(imageSources(before), imageSources(after));
   if (image) return `it drops the image "${image}"`;
   if (fenceBalance(after) !== 0 && fenceBalance(after) !== fenceBalance(before)) return 'it leaves a ::: fence open';
   return null;
