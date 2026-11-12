@@ -401,6 +401,8 @@ describe('assets', () => {
     const bad = [
       svg('<script>x</script>'),
       svg('<s:script xmlns:s="http://www.w3.org/2000/svg">alert(1)</s:script>'),
+      svg('<é:script xmlns:é="http://www.w3.org/2000/svg">alert(1)</é:script>'),
+      svg('<é:rect xmlns:é="http://www.w3.org/2000/svg" onload="x()"/>'),
       svg('<svg:script>alert(1)</svg:script>'),
       svg('<s:foreignObject xmlns:s="http://www.w3.org/2000/svg"><div/></s:foreignObject>'),
       svg('<x:iframe src="/"/>'),
