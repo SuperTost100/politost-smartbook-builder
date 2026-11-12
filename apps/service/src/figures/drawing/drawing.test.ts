@@ -384,6 +384,12 @@ describe('parallel renders', () => {
 describe('svg rules', () => {
   const wrap = (body: string) => `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">${body}</svg>`;
 
+  it('refuses an oversized drawing before it is parsed', () => {
+    // The body is not valid SVG, so a parser would report that. The size answer shows that nothing was parsed.
+    const r = normaliseSvg(wrap(`${'<path d="M0 0L1 1"/>'.repeat(120000)}<broken`)) as { error: string };
+    assert.match(r.error, /above the 2 MB limit/);
+  });
+
   it('rejects text, embedded images and empty drawings', () => {
     assert.match((normaliseSvg(wrap('<text x="1" y="9">R</text>')) as { error: string }).error, /<text>/);
     assert.match((normaliseSvg(wrap('<image href="#a"/>')) as { error: string }).error, /embeds an image/);

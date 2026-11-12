@@ -33,6 +33,7 @@ export interface NormaliseOptions {
 
 export type NormaliseResult = { ok: true; svg: string; width: number; height: number; warnings: string[] } | { ok: false; error: string };
 
+const tooBig = (bytes: number) => `The drawing is ${Math.round(bytes / 1024)} KB, above the 2 MB limit of the book format. Use fewer points, shorter curves or fewer labels.`;
 const num = (n: number) => String(Math.round(n * 100) / 100);
 const xmlEscape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 
@@ -60,6 +61,10 @@ export function normaliseSvg(raw: string, opts: NormaliseOptions = {}): Normalis
   // Typst writes CSS classes and tool data for its own viewer. None of it is used without the stylesheet.
   body = body.replace(/\s(?:class|data-tid|data-hint|data-width|data-height)="[^"]*"/g, '').replace(/\sxmlns:h5="[^"]*"/g, '');
 
+  // Checked before Resvg parses it, because a large drawing would use the service's own CPU and memory, which the child's caps do not cover.
+  const bodyBytes = Buffer.byteLength(body);
+  if (bodyBytes > MAX_SVG_BYTES) return { ok: false, error: tooBig(bodyBytes) };
+
   const viewBox = open[0].match(/viewBox="([^"]*)"/i)?.[1]?.trim().split(/[\s,]+/).map(Number);
   const probe = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${viewBox?.join(' ') ?? '0 0 1000 1000'}">${body}</svg>`;
   let box: { x: number; y: number; width: number; height: number } | undefined;
@@ -81,7 +86,7 @@ export function normaliseSvg(raw: string, opts: NormaliseOptions = {}): Normalis
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="${num(x)} ${num(y)} ${num(width)} ${num(height)}" width="${num(width)}" height="${num(height)}" role="img" ${INK_MARKER}>${title}${body}</svg>\n`;
 
   const bytes = Buffer.byteLength(svg);
-  if (bytes > MAX_SVG_BYTES) return { ok: false, error: `The drawing is ${Math.round(bytes / 1024)} KB, above the 2 MB limit of the book format. Use fewer points, shorter curves or fewer labels.` };
+  if (bytes > MAX_SVG_BYTES) return { ok: false, error: tooBig(bytes) };
   try {
     assertSafeSvg(svg);
   } catch (e) {
