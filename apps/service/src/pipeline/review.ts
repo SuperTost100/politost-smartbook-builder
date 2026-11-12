@@ -322,17 +322,22 @@ function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title
   if (p.graphs.length) {
     // A Bode pair is two graph rows, and each can fail. Every failing row is redrawn for the issues about that row. An issue
     // belongs to the row whose title it quotes (saveEnrichment writes the title as the quote). One that matches no row goes to
-    // the last failing row, and one whose row passes now, or is gone, closes with no model call.
+    // the failing row when there is only one. With several failing it stays open, because a redraw of the wrong graph would
+    // close it while its own graph still fails. One whose row passes now, or is gone, closes with no model call.
     const rows = ctx.db.all<{ id: string; status: string; payload: string }>(`SELECT id, status, payload FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph' ORDER BY rowid`, projectId, p.nodeId)
       .map((r) => ({ id: r.id, failing: r.status === 'issue', title: json<{ title?: string }>(r.payload, {}).title ?? '', graphId: json<{ id?: string }>(r.payload, {}).id ?? '' }));
     const failing = rows.filter((r) => r.failing);
     const byRow = new Map<string, typeof p.graphs>();
     const closed: typeof p.graphs = [];
+    const unclear: typeof p.graphs = [];
     for (const g of p.graphs) {
-      const row = rows.find((r) => r.failing && r.title === g.quote) ?? rows.find((r) => r.title === g.quote) ?? failing.at(-1);
+      const named = rows.find((r) => r.failing && r.title === g.quote) ?? rows.find((r) => r.title === g.quote);
+      if (!named && failing.length > 1) { unclear.push(g); continue; }
+      const row = named ?? failing[0];
       if (!row?.failing) { closed.push(g); continue; }
       byRow.set(row.id, [...(byRow.get(row.id) ?? []), g]);
     }
+    if (unclear.length) setIssuesStatus(ctx, projectId, unclear.map((g) => g.id), 'open', `${failing.length} graphs of this section fail their check and this issue names none of them by its title, so no graph was redrawn for it. Edit the graph it is about in Extras, where a saved graph is checked again.`);
     if (closed.length) setIssuesStatus(ctx, projectId, closed.map((g) => g.id), 'fixed', rows.length ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.');
     const specs: TaskSpec[] = [...byRow].map(([rowId, graphs]) => {
       const row = failing.find((r) => r.id === rowId)!;

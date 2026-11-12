@@ -1105,6 +1105,21 @@ describe('Auto Fix redraws each failing graph of a Bode pair for its own issues'
     assert.deepEqual(inputs.map((i) => [i.replaceId, i.issueIds]).sort(), [[f.magRow, [f.magIssue]], [f.phaseRow, [f.phaseIssue]]].sort());
   });
 
+  test('an issue that names neither of two failing graphs stays open, and with one failing graph it goes to that one', async () => {
+    const f = await failingPair();
+    // The magnitude graph's title was edited after the issue was written, so the issue's quote names no graph.
+    ctx.db.run(`UPDATE review_issues SET quote = 'Titolo di prima' WHERE id = ?`, f.magIssue);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
+    assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.phaseRow, [f.phaseIssue]]]);
+    assert.equal(statusOf(f.magIssue), 'open');
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', f.magIssue)!.resolution, /names none of them/);
+    // With one failing graph left there is no doubt which one the issue is about.
+    ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, f.phaseRow);
+    ctx.db.run(`DELETE FROM tasks WHERE key LIKE 'fixgraph:%'`);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
+    assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.magRow, [f.magIssue]]]);
+  });
+
   test('the answer graph with the failing row\'s id replaces that row, and only its issue closes', async () => {
     const f = await failingPair();
     await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] }));
