@@ -289,6 +289,18 @@ describe('the writer checks its own draft', () => {
     }
   });
 
+  test('a correction that deletes an uncited worked example from the middle of the draft is not used', async () => {
+    const example = 'Esempio svolto: un resistore da cento ohm collegato a una pila da nove volt lascia passare una corrente di novanta milliampere.';
+    const long = first.replace('Con $i = 3', `${example}\n\nCon $i = 3`);
+    assert.notEqual(long, first);
+    seed();
+    fake.next(live('w1', written({ markdown: long })), written({ markdown: long.replace(`${example}\n\n`, '').replace('5\\,\\mathrm{V}', '6\\,\\mathrm{V}') }));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.selfCheck, 'kept');
+    assert.match(String(r.selfCheckNote), /Esempio svolto/);
+    assert.equal(current('s1'), long);
+  });
+
   test('a correction that opens with a note about itself is not used', async () => {
     seed();
     fake.next(live('w1', written({ markdown: first })), written({ markdown: `Ho corretto un passaggio e una forma grammaticale. Il resto torna.\n\n${fixed}` }));

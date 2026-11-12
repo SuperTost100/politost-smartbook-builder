@@ -206,7 +206,7 @@ export function parsePatchAnswer(text: string, limits: { blocks: number; issues:
 }
 
 /** Opening lines of ::: blocks, by block name. */
-const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::\s*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
+const directiveNames = (s: string) => [...s.matchAll(/^[ \t]*:::[ \t]*([A-Za-z][\w-]*)/gm)].map((m) => m[1]);
 const imageSources = (s: string) => [...s.matchAll(/:::image\{[^}]*\bsrc="([^"]+)"/g)].map((m) => m[1]);
 
 /**

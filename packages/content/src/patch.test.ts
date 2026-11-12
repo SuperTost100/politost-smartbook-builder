@@ -69,6 +69,12 @@ test('lostStructure counts a repeated heading, formula key or image, so deleting
   assert.match(r.reverted[0].reason, /heading/);
 });
 
+test('lostStructure reads a ::: block name from its own line, not from the paragraph after a closing fence', () => {
+  const before = `${F}\n\nEsempio svolto: un resistore.\n\nFine.`;
+  assert.equal(lostStructure(before, `${F}\n\nFine.`), null, 'the paragraph that follows a closing fence is no block named Esempio');
+  assert.match(lostStructure(before, 'Esempio svolto: un resistore.\n\nFine.')!, /formula/);
+});
+
 test('dropping a formula key or a heading, and unbalanced fences, are reverted', () => {
   const r = applyGuardedChanges(['### Titolo\n\nTesto.', F, 'Fine.'], [
     { block: 0, text: '### Altro titolo\n\nTesto.' },
