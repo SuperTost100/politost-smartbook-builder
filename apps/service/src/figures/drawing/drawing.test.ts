@@ -12,7 +12,7 @@ import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackage
 import { assertSafeSvg } from '../../repo/assets.ts';
 import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
 import type { DrawingEngine, DrawingResult } from './index.ts';
-import { readRssBytes, rssFromStatus } from './sandbox.ts';
+import { readRssBytes, rssFromStatus, runSandboxed } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
 
@@ -329,6 +329,15 @@ describe('sandbox', () => {
       const own = readRssBytes(process.pid)!;
       assert.ok(own > process.memoryUsage.rss() / 2 && own < process.memoryUsage.rss() * 2, `${own} against ${process.memoryUsage.rss()}`);
     }
+  });
+
+  it('a reply is limited in bytes, not in characters', async () => {
+    const dir = mkdtempSync(join(privateTmp, 'reply-'));
+    const script = join(dir, 'big.mjs');
+    // 6 million three-byte characters are 6 million characters but 18 MB, above the 16 MB limit.
+    writeFileSync(script, "process.stdout.write(JSON.stringify({ s: '€'.repeat(6_000_000) }) + '\\n');");
+    const r = await runSandboxed({ script, input: {}, readPaths: [], cwd: dir, timeoutMs: 20000, maxRssBytes: 2 ** 30 });
+    assert.equal(r.kind, 'output');
   });
 
   it('Python cannot read the host file system', async () => {

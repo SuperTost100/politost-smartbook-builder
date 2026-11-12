@@ -76,6 +76,7 @@ export function runSandboxed(o: SandboxOptions): Promise<SandboxResult> {
     const child = spawn(process.execPath, [...flags, o.script, ...(o.args ?? [])], { cwd: o.cwd, env, stdio: ['pipe', 'pipe', 'pipe'], windowsHide: true });
 
     let stdout = '';
+    let stdoutBytes = 0;
     let stderr = '';
     let settled = false;
     const finish = (r: SandboxResult) => {
@@ -93,7 +94,8 @@ export function runSandboxed(o: SandboxOptions): Promise<SandboxResult> {
     }, POLL_MS);
     child.stdout.setEncoding('utf8').on('data', (d: string) => {
       stdout += d;
-      if (stdout.length > MAX_REPLY) finish({ kind: 'output', message: 'The drawing produced too much output.' });
+      stdoutBytes += Buffer.byteLength(d);
+      if (stdoutBytes > MAX_REPLY) finish({ kind: 'output', message: 'The drawing produced too much output.' });
     });
     child.stderr.setEncoding('utf8').on('data', (d: string) => { if (stderr.length < 4000) stderr += d; });
     child.on('error', (e) => finish({ kind: 'crash', message: e.message }));
