@@ -78,7 +78,7 @@ export function stripDifficultyDecoration(text: string): string {
 
 /** Removes the last "**" of every prose line that has an odd number of them (the bold-unpaired rule), outside math and inline code. */
 export function dropUnpairedBold(markdown: string): string {
-  const src = markdown.split('\n');
+  const src = markdown.replace(/\r\n?/g, '\n').split('\n');
   for (const l of scan(markdown).lines) {
     if (!['text', 'list', 'heading', 'table'].includes(l.kind)) continue;
     const at = [...l.masked.matchAll(/\*\*/g)].map((m) => m.index!);

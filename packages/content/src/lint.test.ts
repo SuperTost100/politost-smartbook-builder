@@ -512,6 +512,10 @@ test('stripDifficultyDecoration leaves the lines of a display formula alone', ()
   assert.equal(stripDifficultyDecoration(`(*) Calcolare.\n\n${tag}`), `Calcolare.\n\n${tag}`);
 });
 
+test('dropUnpairedBold reads a bare carriage return as a line break and does not throw', () => {
+  assert.equal(dropUnpairedBold('Prima\rTesto **aperto'), 'Prima\nTesto aperto');
+});
+
 test('dropUnpairedBold removes the last ** of a line with an odd count, outside math and code, and leaves paired bold alone', () => {
   assert.equal(dropUnpairedBold('Un **termine** e un altro** qui.'), 'Un **termine** e un altro qui.');
   const untouched = 'Riga **ok**.\n\n$a**b$ e `x**y` e **ok**';
