@@ -125,6 +125,11 @@ test('a plotly trace must have a point inside the displayed x range as well as t
   assert.equal(graph({ yaxis: { range: [0, 10] } }, [1000, 2000], [5, 6]).ok, true, 'without an x range there is no x limit');
   assert.equal(graph({ xaxis: { range: [0, 3] }, yaxis: { range: [0, 10] } }, [1, 2], [50, 6]).ok, true, 'the same point must be inside both ranges: x=2, y=6');
   assert.equal(graph({ xaxis: { range: [0, 1.5] }, yaxis: { range: [0, 10] } }, [1, 2], [50, 6]).ok, false, 'x=1 has y=50 and x=2 is off: no point is inside both');
+  // A trace without an x array starts at its x0 and steps by 1, as the reader draws it (the reader keeps x0 and drops dx).
+  const implicit = (trace: object, range: [number, number]) => checkFunctionGraph({ id: 'p', title: 'P', type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', y: [5, 6], ...trace }], layout: { xaxis: { range }, yaxis: { range: [0, 10] } } } });
+  assert.equal(implicit({ x0: 100 }, [99, 102]).ok, true, 'the points are at x=100 and x=101');
+  assert.equal(implicit({ x0: 100 }, [0, 3]).ok, false);
+  assert.equal(implicit({}, [0, 3]).ok, true, 'without x0 they are at 0 and 1');
 });
 
 test('checkFunctionGraph checks a sampled plotly graph like the generator does', () => {

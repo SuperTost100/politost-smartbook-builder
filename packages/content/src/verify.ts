@@ -49,8 +49,9 @@ function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: 
     curves++;
     // A point a log axis cannot show (zero or negative on that axis) is as good as undefined.
     const ys = t.y as unknown[];
-    // Without an x array Plotly uses 0, 1, 2, ... as the coordinates. (A scatter needs a y array, so y is never implicit here.)
-    const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => k);
+    // Without an x array Plotly counts up by 1 from x0, or from 0. The reader keeps x0 and drops dx, so the step is always 1. (A scatter needs a y array, so y is never implicit here.)
+    const x0 = typeof t.x0 === 'number' && Number.isFinite(t.x0) ? t.x0 : 0;
+    const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => x0 + k);
     const finite = ys.filter((y, k): y is number => typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof xsOf[k] === 'number' && xsOf[k] > 0)));
     if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain${xLog || yLog ? ' (a log axis shows only positive values)' : ''}`);
     else if (view || xView) {
