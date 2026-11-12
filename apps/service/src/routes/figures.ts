@@ -7,9 +7,9 @@ import { splitBlocks } from '@smartbuilder/content/blocks';
 import type { PhotoCandidate, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { newId } from '../db/db.ts';
-import { bookFigures, cleanCaption, removeImageBlock } from '../figures/materialize.ts';
+import { bookFigures, cleanCaption } from '../figures/materialize.ts';
 import {
-  copyAsset, discardAsset, figureDetails, figureOfSection, figureToChange, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, saveFigureDetails, storeUpload, swapSrc, writeFigureRevision,
+  copyAsset, discardAsset, figureDetails, figureOfSection, figureToChange, FIGURE_UPLOAD_MAX, imageBlock, insertAfterBlock, removeFigureBlock, saveFigureDetails, storeUpload, swapSrc, writeFigureRevision,
 } from '../figures/author.ts';
 import { drawingSpec } from '../figures/drawing/edit.ts';
 import { loadProject } from '../pipeline/util.ts';
@@ -164,11 +164,15 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post(`${base}/:assetId/remove`, async (req) => {
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');
-    const { baseRevId } = parse(z.object({ baseRevId: baseRev }), req.body);
+    const { baseRevId, block } = parse(z.object({ baseRevId: baseRev, block: z.number().int().min(0) }), req.body);
     const head = headOf(ctx, projectId, nodeId, baseRevId);
     const asset = figureToChange(ctx, projectId, idParam(req, 'assetId'), head, nodeId);
-    // The asset stays: older revisions of the section still show it.
-    writeFigureRevision(ctx, projectId, nodeId, (md) => removeImageBlock(md, asset.filename), { expectedHeadId: head.id });
+    // Only the block the author chose: the same picture can sit in two blocks. The asset stays: older revisions of the section still show it.
+    writeFigureRevision(ctx, projectId, nodeId, (md) => {
+      const next = removeFigureBlock(md, block, asset.filename);
+      if (next === null) throw conflict('This figure changed since you opened it.', undefined, nodeId);
+      return next;
+    }, { expectedHeadId: head.id });
     return view(projectId, nodeId);
   });
 

@@ -108,7 +108,7 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   // The block no longer holds an image, or the image it names is not among the book's figures: nothing will ever load.
   const gone = !!section && !!headId && (!filename || (!!assets.data && !asset));
   const goneText = filename ? 'The picture of this figure is not among the book\'s figures any more.' : 'This figure is not in the section any more.';
-  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} loadError={details.data ? null : failed} gone={!details.data && gone ? goneText : null} retry={retry} pid={pid} nodeId={nodeId} title={title} number={number} onClose={onClose} />;
+  if (shown) return <FigureEditor key={nodeId} details={shown} stale={!details.data} loadError={details.data ? null : failed} gone={!details.data && gone ? goneText : null} retry={retry} pid={pid} nodeId={nodeId} blockIndex={blockIndex ?? 0} title={title} number={number} onClose={onClose} />;
   return (
     <Dialog open onClose={onClose} title={title} footer={<button type="button" className="ui-btn" onClick={onClose}>Close</button>}>
       {failed
@@ -120,7 +120,7 @@ export function FigureDialog({ open, onClose, pid, nodeId, section, blockIndex, 
   );
 }
 
-function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, title, number, onClose }: { details: FigureDetails; stale: boolean; loadError: Error | null; /** Why the figure on screen can no longer be changed: it left the text while the dialog was open. */ gone: string | null; retry: () => void; pid: string; nodeId: string; title: string; number: string | null; onClose: () => void }) {
+function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blockIndex, title, number, onClose }: { details: FigureDetails; stale: boolean; loadError: Error | null; /** Why the figure on screen can no longer be changed: it left the text while the dialog was open. */ gone: string | null; retry: () => void; pid: string; nodeId: string; /** The block the figure sits in: a removal takes out that block only, because the same picture can sit in two. */ blockIndex: number; title: string; number: string | null; onClose: () => void }) {
   const qc = useQueryClient();
   const toast = useToast();
   const drawing = details.drawing;
@@ -232,7 +232,7 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, tit
     onError: (e) => setReplaceError(errorText(e)),
   });
   const remove = useMutation({
-    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove', { params: route, body: { baseRevId: details.headRevId } }),
+    mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove', { params: route, body: { baseRevId: details.headRevId, block: blockIndex } }),
     onSuccess: (sv) => { done(sv); toast('Figure removed. It stays in the section history.'); onClose(); },
     onError: (e) => { setRemoving(false); setError(errorText(e)); },
   });

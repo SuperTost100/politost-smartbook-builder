@@ -14,7 +14,7 @@ import { assertSafeSvg, assetPath, getAsset, mapAsset, storeAsset } from '../rep
 import { badInput, conflict, notFound } from '../repo/errors.ts';
 import type { Rec } from '../repo/util.ts';
 import { relint } from '../routes/views.ts';
-import { IMAGE_ATTRS } from './materialize.ts';
+import { IMAGE_ATTRS, removeImageBlock } from './materialize.ts';
 import { drawingSpec } from './drawing/edit.ts';
 
 /** The most an uploaded figure may weigh. */
@@ -162,6 +162,15 @@ export function saveFigureDetails(
     discardAsset(ctx, copy);
     throw err;
   }
+}
+
+/** The text without block `block`, which must be an image block that shows `filename`. Null when it is not: the text moved on since the author chose it. */
+export function removeFigureBlock(markdown: string, block: number, filename: string): string | null {
+  const blocks = splitBlocks(markdown);
+  const b = blocks[block];
+  if (!b || b.kind !== 'image' || removeImageBlock(b.text, filename).trim()) return null;
+  blocks.splice(block, 1);
+  return joinBlocks(blocks);
 }
 
 /** The text with a block inserted after block `afterBlock` (counted as the editor counts them; -1 puts it first). */
