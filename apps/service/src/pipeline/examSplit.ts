@@ -249,9 +249,11 @@ export function buildAiSplit(resourceId: string, pages: { idx: number; text: str
  */
 export async function resourceSplit(ctx: AppContext, t: TaskContext) {
   const resourceId = t.task.input.resourceId as string;
-  const res = ctx.db.get<{ role: string; filename: string; project_id: string }>('SELECT role, filename, project_id FROM resources WHERE id = ?', resourceId);
+  const res = ctx.db.get<{ role: string; filename: string; project_id: string; included: number }>('SELECT role, filename, project_id, included FROM resources WHERE id = ?', resourceId);
   if (!res) return { skipped: 'resource deleted' };
   if (res.role !== 'exams') return { skipped: 'not an exam source' };
+  // Excluded since the author asked for the split: the text of the file must not go to a model.
+  if (!res.included) return { skipped: 'excluded' };
   const notApplied = (reason: string) => ({ applied: false, reason, ...splitResult(ctx, resourceId), warning: `The AI split of ${res.filename} was not applied. ${reason}` });
   const pages = ctx.db.all<{ idx: number; text: string; transcript: string | null }>('SELECT idx, text, transcript FROM pages WHERE resource_id = ? ORDER BY idx', resourceId)
     .map((p) => ({ idx: p.idx, text: p.transcript || p.text }));

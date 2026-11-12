@@ -145,6 +145,15 @@ describe('the split of an exam file is recorded and shows trouble', () => {
 });
 
 describe('Split with AI', () => {
+  test('a file excluded after the split was asked for is not sent to the model', async () => {
+    resource('ex1', 'exams', ES_LAYOUT, { filename: 'esami-2024.pdf' });
+    await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'ex1' }));
+    ctx.db.run(`UPDATE resources SET included = 0 WHERE id = 'ex1'`);
+    fake.next(answer(ES_ANSWER));
+    assert.deepEqual(await resourceSplit(ctx, startTask('resource.split', { resourceId: 'ex1' })), { skipped: 'excluded' });
+    assert.equal(fake.calls.length, 0);
+  });
+
   test('a valid answer stores sessions and exercises through the same path, and clears the warning', async () => {
     resource('ex1', 'exams', ES_LAYOUT, { filename: 'esami-2024.pdf' });
     await resourceQuestions(ctx, startTask('resource.questions', { resourceId: 'ex1' }));

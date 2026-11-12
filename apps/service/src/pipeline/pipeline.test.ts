@@ -13,7 +13,7 @@ import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay } from './practice.ts';
-import { labelResources, resourceQuestions, topicsMap } from './prepare.ts';
+import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
@@ -538,6 +538,22 @@ describe('4. practice generation stages', () => {
     fake.next(answer(gen(1, 'esercizio')));
     await practiceGenerate(ctx, startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' }));
     assert.doesNotMatch(fake.calls[0].prompt, /exercise collections/);
+  });
+});
+
+describe('an index task queued before a source was excluded', () => {
+  test('sends nothing of the excluded source to a model, and indexes it once it is included again', async () => {
+    seedResource(ctx, { projectId: P, id: 'r-theory', role: 'theory', included: 0 });
+    seedPage(ctx, 'r-theory', 0, 'Introduzione ai limiti', 'Introduzione ai limiti\nTesto.');
+    const indexed = () => ctx.db.get(`SELECT 1 FROM source_indexes WHERE resource_id = 'r-theory'`);
+    fake.next(answer({ entries: [{ title: 'Introduzione ai limiti', level: 1, page: 1 }] }));
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-theory' })), { skipped: 'excluded' });
+    assert.equal(fake.calls.length, 0, 'no model call for an excluded source');
+    assert.equal(indexed(), undefined);
+    ctx.db.run(`UPDATE resources SET included = 1 WHERE id = 'r-theory'`);
+    assert.deepEqual(await resourceIndex(ctx, startTask('resource.index', { resourceId: 'r-theory' })), { origin: 'inferred', entries: 1 });
+    assert.equal(fake.calls.length, 1);
+    assert.ok(indexed());
   });
 });
 
