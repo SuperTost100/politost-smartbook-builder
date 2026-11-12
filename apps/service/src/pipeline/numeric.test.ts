@@ -78,6 +78,8 @@ describe('comparing recomputed values with the stated ones', () => {
     for (const [value, other] of [['36 km/h', 'v = 10'], ['90 min', 't = 5400'], ['2 L', 'V = 0.002'], ['30 deg', 'a = 0.5236'], ['5 mm/s', 'v = 0.005']]) {
       assert.equal(compareValues([{ name: other.split(' ')[0], value }], other), null, `${value} against ${other}`);
     }
+    // The same number is no agreement either: an unmarked 36 is 36 m/s, and whether the program meant km/h cannot be known.
+    assert.equal(compareValues([{ name: 'v', value: '36 km/h' }], 'v = 36'), null);
     // Stated in SI units, an unmarked value that differs is still a mismatch.
     assert.equal(compareValues([{ name: 'v', value: '12 m/s' }], 'v = 10')!.mismatches.length, 1);
     assert.equal(compareValues([{ name: 'J', value: '3 kg·m²' }], 'J = 9')!.mismatches.length, 1);

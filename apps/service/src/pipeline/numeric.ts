@@ -132,8 +132,8 @@ function compareReading(stated: Quantity, printed: Printed): 'match' | 'mismatch
   const scale = stated.factor;
   if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : differs(stated, printed.value, scale) ? 'mismatch' : 'match';
   // The program was told to print SI base units, so an unmarked value is read as one.
-  if (!differs(stated, printed.value, scale)) return 'match';
   if (!inSiUnits(stated)) return 'skip';
+  if (!differs(stated, printed.value, scale)) return 'match';
   if (scale === 1) return 'mismatch';
   return differs({ ...stated, base: stated.asWritten, factor: 1 }, printed.value, 1) ? 'mismatch' : 'skip';
 }
