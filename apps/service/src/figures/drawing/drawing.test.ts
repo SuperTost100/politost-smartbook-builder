@@ -12,7 +12,7 @@ import { FIGURE_PACKAGES_DIR, PYTHON_WHEELS, TYPST_PACKAGES, ensureFigurePackage
 import { assertSafeSvg } from '../../repo/assets.ts';
 import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, rasterizeDrawing } from './index.ts';
 import type { DrawingEngine, DrawingResult } from './index.ts';
-import { readRssBytes } from './sandbox.ts';
+import { readRssBytes, rssFromStatus } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
 
@@ -320,6 +320,15 @@ describe('sandbox', () => {
     if (readRssBytes(process.pid) !== null) assert.equal(r.kind, 'memory');
     else assert.ok(['memory', 'crash', 'timeout'].includes(r.kind));
     assert.ok((await typst('#circle(radius: 5pt)')).ok);
+  });
+
+  it('the resident size comes in bytes from the kernel, whatever the page size', () => {
+    assert.equal(rssFromStatus('Name:\tnode\nVmRSS:\t  123456 kB\nThreads:\t4\n'), 123456 * 1024);
+    assert.equal(rssFromStatus('Name:\tnode\n'), null);
+    if (process.platform === 'linux') {
+      const own = readRssBytes(process.pid)!;
+      assert.ok(own > process.memoryUsage.rss() / 2 && own < process.memoryUsage.rss() * 2, `${own} against ${process.memoryUsage.rss()}`);
+    }
   });
 
   it('Python cannot read the host file system', async () => {
