@@ -1139,12 +1139,25 @@ describe('Auto Fix redraws each failing graph of a Bode pair for its own issues'
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue, f.phaseIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
     assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.phaseRow, [f.phaseIssue]]]);
     assert.equal(statusOf(f.magIssue), 'open');
-    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', f.magIssue)!.resolution, /names none of them/);
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', f.magIssue)!.resolution, /does not identify one of them/);
     // With one failing graph left there is no doubt which one the issue is about.
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, f.phaseRow);
     ctx.db.run(`DELETE FROM tasks WHERE key LIKE 'fixgraph:%'`);
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [f.magIssue] })), { skipped: 'routed', routed: { graphs: 1 } });
     assert.deepEqual(redrawInputs().map((i) => [i.replaceId, i.issueIds]), [[f.magRow, [f.magIssue]]]);
+  });
+
+  test('two failing graphs with the same title are not told apart by an issue, so neither issue is routed to the first of them', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il filtro passa-basso.');
+    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) }));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    const issues = ctx.db.all<{ id: string; quote: string }>('SELECT id, quote FROM review_issues ORDER BY rowid');
+    assert.deepEqual(issues.map((i) => i.quote), ['Modulo', 'Modulo']);
+    assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: issues.map((i) => i.id) })), { skipped: 'nothing requested' });
+    assert.equal(redrawInputs().length, 0, 'no graph is redrawn, so no issue can close for a graph that still fails');
+    assert.deepEqual(issues.map((i) => statusOf(i.id)), ['open', 'open']);
+    assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues WHERE id = ?', issues[0]!.id)!.resolution, /does not identify one of them/);
   });
 
   test('the answer graph with the failing row\'s id replaces that row, and only its issue closes', async () => {
