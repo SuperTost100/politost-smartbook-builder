@@ -172,10 +172,17 @@ export function insertAfterBlock(markdown: string, afterBlock: number, block: st
   return joinBlocks(blocks);
 }
 
-/** After a revision was written: lint it again and tell the open screens. */
+/**
+ * After a revision was written: lint it again and tell the open screens. The revision is committed by now, so a failure here must
+ * not reach the callers that delete their new asset when a write fails: the committed text names that asset.
+ */
 export function announce(ctx: AppContext, projectId: string, nodeId: string, rev: ContentRevision) {
   relint(ctx, projectId, nodeId);
-  ctx.events.emit('content.saved', { nodeId, revId: rev.id, origin: rev.origin, status: rev.status }, { projectId });
+  try {
+    ctx.events.emit('content.saved', { nodeId, revId: rev.id, origin: rev.origin, status: rev.status }, { projectId });
+  } catch (err) {
+    console.error('A saved figure change could not be announced to the open screens.', err);
+  }
 }
 
 /** Writes a rewrite of the head as a new revision. `expectedHeadId` is the head the author saw (409 when it moved). */

@@ -120,6 +120,25 @@ describe('save caption and description', () => {
     assert.ok(t.ctx.db.get('SELECT 1 FROM content_revisions WHERE id = ? AND markdown LIKE ?', s.headId, `%assets/${s.drawnFile}"%`));
   });
 
+  it('a failure after the revision was committed does not delete the asset the revision names', async () => {
+    const s = await seed();
+    const emit = t.ctx.events.emit.bind(t.ctx.events);
+    t.ctx.events.emit = ((type: Parameters<typeof emit>[0], ...rest: unknown[]) => {
+      if (type === 'content.saved') throw new Error('the event stream broke');
+      return (emit as (...a: unknown[]) => unknown)(type, ...rest);
+    }) as typeof emit;
+    try {
+      assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Figura 2: Un cerchio nuovo' })).status, 200);
+    } finally {
+      t.ctx.events.emit = emit;
+    }
+    const head = headOf(s);
+    assert.notEqual(head.id, s.headId, 'the revision is committed');
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`));
+    assert.ok(fresh, 'the asset the head names still exists');
+    assert.ok(existsSync(assetPath(t.ctx, t.ctx.db.get<{ path: string; project_id: string }>('SELECT path, project_id FROM assets WHERE id = ?', fresh.id)!)), 'and so does its file');
+  });
+
   it('a description change is a new asset and a new revision too, and the picture stays', async () => {
     const s = await seed();
     const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, shows: 'A bigger circle.' });
