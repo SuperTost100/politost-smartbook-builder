@@ -182,7 +182,7 @@ export function registerFigureRoutes(app: FastifyInstance, ctx: AppContext) {
     const blocks = splitBlocks(head.markdown);
     const afterBlock = afterBlockOf(body.afterBlock, blocks.length);
     if (!loadProject(ctx, projectId).options.figures) throw new HttpError(409, 'figures_off', 'Figures are off for this book.', 'Turn on figures in Setup, then try again.');
-    return deps.startDraw(ctx, projectId, { nodeId, afterBlock, anchor: blocks[afterBlock].text, description: body.description, caption: body.caption });
+    return deps.startDraw(ctx, projectId, { nodeId, afterBlock, anchor: blocks[afterBlock].text, blocks: blocks.length, description: body.description, caption: body.caption });
   });
 
   app.post(`${base}/upload`, async (req) => {

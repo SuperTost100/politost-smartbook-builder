@@ -34,8 +34,8 @@ export function startRedraw(ctx: AppContext, projectId: string, o: { nodeId: str
   return ctx.queue.runSummary(runId)!;
 }
 
-/** Starts the drawing of a new figure that goes in after block `afterBlock`. `anchor` is that block's text, to find it again if the text moved. */
-export function startDraw(ctx: AppContext, projectId: string, o: { nodeId: string; afterBlock: number; anchor: string; description: string; caption: string }): RunSummary {
+/** Starts the drawing of a new figure that goes in after block `afterBlock`. `anchor` is that block's text, to find it again if the text moved, and `blocks` is how many blocks the section had. */
+export function startDraw(ctx: AppContext, projectId: string, o: { nodeId: string; afterBlock: number; anchor: string; blocks: number; description: string; caption: string }): RunSummary {
   const runId = ctx.queue.createRun(projectId, 'figure', [{
     kind: 'figure.draw', key: `draw:${newId()}`, label: `Draw ${o.caption ? `"${o.caption.slice(0, 60)}"` : 'a figure'}`,
     input: { ...o }, pool: 'illustrator', maxAttempts: 2,
@@ -90,7 +90,7 @@ export async function figureRedraw(ctx: AppContext, t: TaskContext) {
 /** Task `figure.draw`: the illustrator draws the figure through the same path as the writer's drawings, and the block goes in after the author's block. */
 export async function figureDraw(ctx: AppContext, t: TaskContext) {
   const { projectId } = t.task;
-  const { nodeId, afterBlock, anchor, description, caption } = t.task.input as { nodeId: string; afterBlock: number; anchor: string; description: string; caption: string };
+  const { nodeId, afterBlock, anchor, blocks: blockCount, description, caption } = t.task.input as { nodeId: string; afterBlock: number; anchor: string; blocks: number; description: string; caption: string };
   // A task that runs again after its revision was committed (the service stopped before the queue noted it) must not draw again.
   const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
   if (mine) return { revId: mine.id, reused: true };
@@ -122,6 +122,9 @@ export async function figureDraw(ctx: AppContext, t: TaskContext) {
       const blocks = splitBlocks(md);
       let at = -1;
       blocks.forEach((b, i) => { if (b.text === anchor && (at < 0 || Math.abs(i - afterBlock) < Math.abs(at - afterBlock))) at = i; });
+      // The block is gone. With the same number of blocks it was corrected in place, so its place still holds. With another number it
+      // was removed, and the figure would land after a block the author did not choose, so it is not inserted.
+      if (at < 0 && blocks.length !== blockCount) throw new TaskError('The block this figure was to go after was removed while the figure was drawn, so the figure was not added.', 'input', 'Add the figure again after the block where you want it.');
       const text = insertAfterBlock(md, at >= 0 ? at : afterBlock, imageBlock(asset.row.filename as string, alt, clean));
       const out = commitFigures(ctx, { projectId, nodeId, built, markdown: text, replace: false, replaced: [] });
       stored = out.stored;

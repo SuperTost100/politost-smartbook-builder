@@ -450,7 +450,7 @@ describe('add a figure', () => {
     const s = await seed();
     const r = await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 1, description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' });
     assert.equal(r.status, 200);
-    assert.deepEqual(calls.draw, [{ nodeId: 's1', afterBlock: 1, anchor: 'First paragraph.', description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' }]);
+    assert.deepEqual(calls.draw, [{ nodeId: 's1', afterBlock: 1, anchor: 'First paragraph.', blocks: 4, description: 'An op-amp with R1 and R2.', caption: 'Amplificatore' }]);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: 'old', afterBlock: 1, description: 'x', caption: '' })).status, 409);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 9, description: 'x', caption: '' })).status, 400);
     assert.equal((await t.req('POST', url(s, '/draw'), { baseRevId: s.headId, afterBlock: 1, description: ' ', caption: '' })).status, 400);
