@@ -213,7 +213,7 @@ An instruction you give in the Manuscript ("regenerate with instruction") always
 
 ### Run review
 
-**Run review** reads the whole chapter only the first time, and that review reports everything. The reviewer is also given the subscripted symbols the exam papers use on the chapter's topics, as the writer is, and reports a symbol that differs from the exam papers' symbol for the same quantity (the cut-off frequency written `f_t` where the papers write `f_c`) as one major notation finding per symbol. A minor issue there means a wrong word, symbol, unit or reference that could mislead a student. Style, wording and "could be clearer" are not reported at any severity.
+**Run review** reads the whole chapter only the first time, and that review reports everything. The reviewer is also given the subscripted symbols the exam papers use on the chapter's topics, as the writer is, and reports a symbol that differs from the exam papers' symbol for the same quantity (the cut-off frequency written `f_t` where the papers write `f_c`) as one major notation finding per symbol, unless the book's notation fixes another symbol for that quantity, because the book's notation wins as it does for the writer. The second opinion is given the same symbols and the same rule. A minor issue there means a wrong word, symbol, unit or reference that could mislead a student. Style, wording and "could be clearer" are not reported at any severity.
 
 After the first review it reviews only the paragraphs, formulas and boxes written since the last review, such as the text a fix changed:
 

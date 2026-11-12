@@ -123,7 +123,7 @@ npm run restore -- my-backup.tar.gz --data-dir /path/to/empty/folder
 
 The backup takes a consistent database snapshot, so it is safe while the service runs.
 
-Your sources are sent to the AI tools and, when evidence is set to NotebookLM, to NotebookLM. Exclude a source on the Sources screen to keep it out. The data folder also holds the two private CLI homes (see above) and the access token of LAN mode.
+Your sources are sent to the AI tools and, when evidence is set to NotebookLM, to NotebookLM. Exclude a source on the Sources screen to keep it out of the steps that follow. Prepare starts as soon as you upload a file, so the first lines of its pages may already have gone to the AI tools by then. A copy that was already uploaded to NotebookLM stays in the notebook until you delete it there, although Smart Builder no longer asks it questions about that source. The data folder also holds the two private CLI homes (see above) and the access token of LAN mode.
 
 ## Network
 
