@@ -14,6 +14,7 @@ import { INK, MAX_PARALLEL_RENDERS, MAX_SVG_BYTES, isInkDrawing, renderDrawing, 
 import type { DrawingEngine, DrawingResult } from './index.ts';
 import { readRssBytes, rssFromStatus, runSandboxed } from './sandbox.ts';
 import { normaliseSvg } from './svg.ts';
+import { readReply } from './schemdraw.ts';
 import { checkImports, describeDiagnostics } from './typst.ts';
 
 // Every render makes its temp folders under TMPDIR. This file gets a folder of its own, so a render in another process at the
@@ -338,6 +339,13 @@ describe('sandbox', () => {
     writeFileSync(script, "process.stdout.write(JSON.stringify({ s: '€'.repeat(6_000_000) }) + '\\n');");
     const r = await runSandboxed({ script, input: {}, readPaths: [], cwd: dir, timeoutMs: 20000, maxRssBytes: 2 ** 30 });
     assert.equal(r.kind, 'output');
+  });
+
+  it('Python: a Pyodide that cannot start is a setup problem, other empty answers are a crash', () => {
+    const kind = (o: unknown) => (readReply(o, '') as { kind?: string }).kind;
+    assert.equal(kind({ ok: false, setup: true, error: 'Pyodide could not start: x' }), 'setup');
+    assert.equal(kind({ ok: false, error: 'boom' }), 'crash');
+    assert.equal(kind({ ok: true }), 'crash');
   });
 
   it('Python cannot read the host file system', async () => {

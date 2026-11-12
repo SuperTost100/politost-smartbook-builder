@@ -71,8 +71,13 @@ export async function compileSchemdraw(source: string, o: { symbols: CircuitSymb
     maxRssBytes: 1024 * 2 ** 20,
   });
   if (r.kind !== 'ok') return { ok: false, kind: r.kind, error: r.message };
-  const out = r.output as { ok: boolean; json?: string; error?: string };
-  if (!out.ok || !out.json) return { ok: false, kind: 'crash', error: out.error ?? 'Pyodide returned nothing.' };
+  return readReply(r.output, source);
+}
+
+/** Turns the line the child wrote into a result. A child that could not start Pyodide says so, which is an installation problem the model cannot fix. */
+export function readReply(output: unknown, source: string): SchemdrawRaw {
+  const out = output as { ok: boolean; setup?: boolean; json?: string; error?: string };
+  if (!out.ok || !out.json) return { ok: false, kind: out.setup ? 'setup' : 'crash', error: out.error ?? 'Pyodide returned nothing.' };
   const res = JSON.parse(out.json) as { ok: boolean; svg?: string; line?: number | null; column?: number | null; message?: string };
   if (res.ok && res.svg) return { ok: true, svg: res.svg };
   const line = res.line ?? undefined;
