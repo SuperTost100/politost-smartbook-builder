@@ -23,7 +23,8 @@ interface Props {
   block: MappedBlock;
   notes: { n: number; note: EvidenceNote }[];
   issues: ReviewIssue[];
-  resources: Resource[];
+  /** Undefined until the source list has loaded: a note cannot tell a Markdown file from a PDF before that. */
+  resources: Resource[] | undefined;
   focusNote?: string;
   onClose: () => void;
   onEdit: (index: number) => void;
@@ -76,8 +77,8 @@ export function EvidenceDrawer({ pid, section, block, notes, issues, resources, 
   );
 }
 
-function NoteCard({ n, note, resources, highlighted }: { n: number; note: EvidenceNote; resources: Resource[]; highlighted: boolean }) {
-  const resource = resources.find((r) => r.id === note.resourceId);
+function NoteCard({ n, note, resources, highlighted }: { n: number; note: EvidenceNote; resources: Resource[] | undefined; highlighted: boolean }) {
+  const resource = resources?.find((r) => r.id === note.resourceId);
   const located = note.page !== null && !!note.resourceId;
   const pages = useQuery({ queryKey: qk.pages(note.resourceId ?? ''), queryFn: () => api('GET /api/resources/:rid/pages', { params: { rid: note.resourceId! } }), enabled: located, staleTime: 60_000 });
   const label = located ? (pages.data?.find((p) => p.idx === note.page)?.label ?? String((note.page ?? 0) + 1)) : null;
@@ -89,7 +90,7 @@ function NoteCard({ n, note, resources, highlighted }: { n: number; note: Eviden
 
   // Markdown files and saved web links are text only: there is no page to draw, so nothing is requested and no retry is offered.
   const textOnly = resource?.kind === 'md' || resource?.kind === 'url';
-  const src = located && !textOnly
+  const src = located && resources && !textOnly
     ? apiUrl('GET /api/resources/:rid/pages/:idx/image', { params: { rid: note.resourceId!, idx: note.page! }, query: { scale: 1.5, highlight: note.quote.slice(0, 700), t: tries || undefined } })
     : null;
 

@@ -399,7 +399,7 @@ export default function ManuscriptPage() {
             block={selBlock}
             notes={citesFor(selBlock.index)}
             issues={byBlock.get(selBlock.index) ?? []}
-            resources={resources.data ?? []}
+            resources={resources.data}
             focusNote={focusNote}
             onClose={closeEvidence}
             onEdit={editFromDrawer}
