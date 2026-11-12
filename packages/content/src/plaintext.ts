@@ -45,7 +45,7 @@ export function captionToPlain(text: string): string {
   return latexToPlain(text)
     .split(/(\s+)/)
     .map((word) => (NOT_MATH.test(word) ? word : word
-      .replace(/\^([+-]?\d+(?!\d|[.,]\d)|[+-]?[nix](?![\p{L}\p{N}])|[+-](?![\p{L}\p{N}(]))/gu, (_, a: string) => [...a].map((c) => SUP[c]).join(''))
+      .replace(/\^([+-]?\d+(?![\p{L}\p{N}]|[.,]\d)|[+-]?[nix](?![\p{L}\p{N}])|[+-](?![\p{L}\p{N}(]))/gu, (_, a: string) => [...a].map((c) => SUP[c]).join(''))
       .replace(SUBSCRIPT, (m, base: string, a: string) => ([...a].every((c) => SUB[c]) ? base + [...a].map((c) => SUB[c]).join('') : m))))
     .join('');
 }
