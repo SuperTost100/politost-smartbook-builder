@@ -44,6 +44,17 @@ test('a fix for a figure problem may delete a block that is only that image; not
   assert.deepEqual(mixed.kept, [0]);
 });
 
+test('a removal fix for off-program material may not delete a figure unless a figure problem is open', () => {
+  const IMG = ':::image{src="assets/s1-retta.svg" alt="a" caption="c"}\n:::';
+  const inNote = `:::note\nTesto.\n${IMG}\n:::`;
+  const blocks = ['Testo.', IMG, inNote, '### Fuori programma'];
+  const del = [0, 1, 2, 3].map((block) => ({ block, text: '' }));
+  const r = applyGuardedChanges(blocks, del, lint, { removals: true });
+  assert.deepEqual(r.kept, [0, 3]);
+  assert.deepEqual(r.reverted.map((x) => [x.block, x.reason]), [[1, 'it would delete a figure block'], [2, 'it would delete a figure block']]);
+  assert.deepEqual(applyGuardedChanges(blocks, del, lint, { removals: true, figures: true }).kept, [0, 1, 2, 3], 'with a figure problem open the figures may go');
+});
+
 test('dropping a formula key or a heading, and unbalanced fences, are reverted', () => {
   const r = applyGuardedChanges(['### Titolo\n\nTesto.', F, 'Fine.'], [
     { block: 0, text: '### Altro titolo\n\nTesto.' },

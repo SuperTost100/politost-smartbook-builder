@@ -70,6 +70,8 @@ export function applyGuardedChanges(blocks: string[], changes: BlockChange[], li
     const drop = (reason: string) => { reverted.push({ block: c.block, reason }); };
     if (!text) {
       if (!old.trim()) continue;
+      // Also with removals: the fix model is told a figure goes only when a problem is about that figure, a note around an image included.
+      if (!opts.figures && /^[ \t]*:::image\{/m.test(old)) { drop('it would delete a figure block'); continue; }
       const image = opts.figures && onlyImage(old);
       if (!image && !opts.removals && (headings(old).length || hasDirective(old) || formulaKeys(old).length)) { drop('it would delete a heading, a formula or another special block'); continue; }
       const limit = opts.removals ? MAX_DELETED_BLOCKS * REMOVAL_FACTOR : MAX_DELETED_BLOCKS;
