@@ -8,7 +8,7 @@ import type { AppContext } from '../../context.ts';
 import { getAsset, assetFile } from '../../repo/assets.ts';
 import { badInput } from '../../repo/errors.ts';
 import { loadProject } from '../../pipeline/util.ts';
-import { illustrate, type LookOutcome } from './illustrator.ts';
+import { illustrate, whatHappened, type LookOutcome } from './illustrator.ts';
 import { renderDrawing } from './index.ts';
 
 const specSchema = z.object({
@@ -22,7 +22,7 @@ const specSchema = z.object({
 export type DrawingSpec = z.infer<typeof specSchema>;
 
 export type EditResult =
-  | { ok: true; asset: Asset; /** A redraw: what the look turn did. */ look?: LookOutcome }
+  | { ok: true; asset: Asset; /** A redraw: what the look turn did, and the model that drew it. */ look?: LookOutcome; model?: string }
   | { ok: false; error: string };
 
 /** The drawing spec of an asset the illustrator made, or null for any other figure. */
@@ -60,15 +60,15 @@ export async function renderEditedDrawing(ctx: AppContext, assetId: string, sour
  * Asks the illustrator for a new drawing: it gets the current source, what the figure shows and the author's one-line
  * instruction, and the same compile, repair and look loop runs. When no drawing compiles, the figure stays as it is.
  */
-export async function redrawDrawing(ctx: AppContext, assetId: string, instruction: string, o: { signal?: AbortSignal } = {}): Promise<EditResult> {
+export async function redrawDrawing(ctx: AppContext, assetId: string, instruction: string, o: { signal?: AbortSignal; runId?: string | null; taskId?: string | null } = {}): Promise<EditResult> {
   const { asset, spec } = drawnAsset(ctx, assetId);
   const clean = instruction.trim();
   if (!clean) throw badInput('Say what the drawing should change.');
   const drawn = await illustrate(ctx, {
-    projectId: asset.projectId, signal: o.signal, language: loadProject(ctx, asset.projectId).language, symbols: spec.symbols,
+    projectId: asset.projectId, signal: o.signal, runId: o.runId, taskId: o.taskId, language: loadProject(ctx, asset.projectId).language, symbols: spec.symbols,
     caption: asset.caption, shows: spec.shows, family: spec.family, engine: spec.engine, redraw: { source: spec.source, instruction: clean },
   });
   if (!drawn.ok) return { ok: false, error: drawn.reason };
-  const detail = `Redrawn by the illustrator in ${spec.engine} at the author's request (look turn: ${drawn.look}).`;
-  return { ok: true, asset: replaceDrawing(ctx, asset, { ...spec, source: drawn.source }, drawn.svg, detail), look: drawn.look };
+  const detail = `Redrawn by the illustrator in ${spec.engine} at the author's request: ${whatHappened(drawn.compileAttempts, drawn.look)}.`;
+  return { ok: true, asset: replaceDrawing(ctx, asset, { ...spec, source: drawn.source }, drawn.svg, detail), look: drawn.look, model: drawn.model };
 }

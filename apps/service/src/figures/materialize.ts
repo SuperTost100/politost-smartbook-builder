@@ -9,7 +9,7 @@ import { paths, toDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { cellSchema, describeDiagram, levelsSchema, orbitalsSchema, periodicSchema, renderDiagramSvg, validateDiagram, type DiagramKind } from './diagram.ts';
-import { illustrate } from './drawing/illustrator.ts';
+import { illustrate, whatHappened } from './drawing/illustrator.ts';
 import { findStockPhoto } from './stock.ts';
 import { renderStructureSvg, structureIdentity, validateStructureSpec } from './structure.ts';
 import { codeString } from '../llm/schema.ts';
@@ -198,7 +198,7 @@ export async function buildFigures(ctx: AppContext, o: {
       made = {
         bytes: drawn.svg, ext: '.svg', mime: 'image/svg+xml', origin: 'generated-svg', caption: fig.caption, alt: fig.alt,
         spec: { kind: 'drawing', engine: drawn.engine, source: drawn.source, shows: fig.drawing.shows, family: fig.drawing.family, symbols },
-        check: `Drawn by the illustrator in ${drawn.engine}: compiled after ${drawn.compileAttempts} attempt${drawn.compileAttempts === 1 ? '' : 's'}, look turn: ${drawn.look}.`,
+        check: `Drawn by the illustrator in ${drawn.engine}: ${whatHappened(drawn.compileAttempts, drawn.look)}.`,
       };
     } else if (fig.kind === 'photo' && fig.photo) {
       if (!o.photos) { out.notes.push(`${key}: no stock photo service is set up`); continue; }

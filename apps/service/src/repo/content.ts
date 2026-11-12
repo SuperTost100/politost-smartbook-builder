@@ -9,7 +9,7 @@ import type { Rec } from './util.ts';
 export function mapRevision(r: Rec): ContentRevision {
   return {
     id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, markdown: r.markdown, origin: r.origin, model: r.model ?? null,
-    parentRevId: r.parent_rev_id ?? null, status: r.status, citations: json(r.citations, {}), createdAt: r.created_at,
+    parentRevId: r.parent_rev_id ?? null, restoredFromId: r.restored_from ?? null, status: r.status, citations: json(r.citations, {}), createdAt: r.created_at,
   };
 }
 
@@ -52,12 +52,12 @@ export function pendingProposals(ctx: AppContext, projectId: string): Map<string
 
 function insertRevision(ctx: AppContext, v: {
   projectId: string; nodeId: string; kind: ContentNodeKind; markdown: string; origin: ContentOrigin; model: string | null;
-  parentRevId: string | null; status: ContentRevision['status']; citations: Record<string, string[]>; taskId?: string | null;
+  parentRevId: string | null; status: ContentRevision['status']; citations: Record<string, string[]>; taskId?: string | null; restoredFromId?: string | null;
 }): ContentRevision {
   const id = newId();
   ctx.db.insert('content_revisions', {
     id, project_id: v.projectId, node_id: v.nodeId, kind: v.kind, markdown: v.markdown, origin: v.origin, model: v.model,
-    parent_rev_id: v.parentRevId, status: v.status, citations: v.citations, task_id: v.taskId ?? null, created_at: now(),
+    parent_rev_id: v.parentRevId, status: v.status, citations: v.citations, task_id: v.taskId ?? null, restored_from: v.restoredFromId ?? null, created_at: now(),
   });
   return getRevision(ctx, v.projectId, id);
 }
@@ -239,7 +239,7 @@ export function restoreRevision(ctx: AppContext, projectId: string, nodeId: stri
     const old = getRevision(ctx, projectId, revId);
     if (old.nodeId !== nodeId) throw notFound('This version');
     const head = currentHead(ctx, projectId, nodeId);
-    return makeCurrent(ctx, projectId, nodeId, head, { projectId, nodeId, kind: old.kind, markdown: old.markdown, origin: 'human', model: null, parentRevId: null, status: 'current', citations: old.citations });
+    return makeCurrent(ctx, projectId, nodeId, head, { projectId, nodeId, kind: old.kind, markdown: old.markdown, origin: 'human', model: null, parentRevId: null, status: 'current', citations: old.citations, restoredFromId: old.id });
   });
 }
 

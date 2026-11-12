@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import type { ContentRevision, SectionView } from '@smartbuilder/domain';
+import type { HistoryRevision, SectionView } from '@smartbuilder/domain';
 import { api, errorText } from '../../lib/api';
 import { qk } from '../../lib/queries';
 import { dateTime } from '../../lib/format';
@@ -11,15 +11,21 @@ import { useToast } from '../../components/Toast';
 const SITTING_MS = 10 * 60 * 1000;
 
 /** Newest first; each group is a run of consecutive human revisions, the latest first. Everything else stands alone. */
-function groupRevisions(revs: ContentRevision[]): ContentRevision[][] {
-  const groups: ContentRevision[][] = [];
-  const mine = (r: ContentRevision) => r.origin === 'human' && (r.status === 'current' || r.status === 'superseded');
+function groupRevisions(revs: HistoryRevision[]): HistoryRevision[][] {
+  const groups: HistoryRevision[][] = [];
+  const mine = (r: HistoryRevision) => r.origin === 'human' && !r.restoredFromId && (r.status === 'current' || r.status === 'superseded');
   for (const r of revs) {
     const prev = groups.at(-1)?.at(-1);
     if (prev && mine(prev) && mine(r) && Date.parse(prev.createdAt) - Date.parse(r.createdAt) <= SITTING_MS) groups.at(-1)!.push(r);
     else groups.push([r]);
   }
   return groups;
+}
+
+/** A version made by Restore says which version it copied, by the time that one was written. */
+function restoredNote(fromId: string, revs: HistoryRevision[]): string {
+  const from = revs.find((r) => r.id === fromId);
+  return from ? `Restored the version of ${dateTime(from.createdAt)}` : 'Restored an earlier version';
 }
 
 const ORIGIN: Record<string, string> = { ai: 'AI', human: 'You', repair: 'Repair' };
@@ -38,7 +44,7 @@ export function HistoryDialog({ open, onClose, pid, nodeId, currentId, onRestore
   const groups = groupRevisions(revs);
   const [shown, setShown] = useState<Set<string>>(new Set());
   const toggle = (id: string) => setShown((o) => { const n = new Set(o); if (!n.delete(id)) n.add(id); return n; });
-  const row = (r: ContentRevision, earlier: ContentRevision[] = []) => (
+  const row = (r: HistoryRevision, earlier: HistoryRevision[] = []) => (
     <li key={r.id} className="hi-item">
       <div className="ui-row">
         <span className={`ui-badge ui-badge--${ORIGIN_TONE[r.origin] ?? ''}`}>{ORIGIN[r.origin] ?? r.origin}</span>
@@ -48,6 +54,9 @@ export function HistoryDialog({ open, onClose, pid, nodeId, currentId, onRestore
         <span className="ui-muted hi-time">{dateTime(r.createdAt)}</span>
       </div>
       {r.model && <div className="ui-mono ui-muted">{r.model}</div>}
+      {r.restoredFromId
+        ? <p className="hi-note">{restoredNote(r.restoredFromId, revs)}</p>
+        : r.figureNote && <p className="hi-note">{r.figureNote}</p>}
       <p className="hi-snippet">{r.markdown.replace(/\s+/g, ' ').slice(0, 180)}{r.markdown.length > 180 ? '…' : ''}</p>
       <div className="ui-row">
         <button type="button" className="ui-btn ui-btn--sm" disabled={r.id === currentId || restore.isPending} onClick={() => restore.mutate(r.id)}>Restore</button>

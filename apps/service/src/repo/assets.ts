@@ -120,17 +120,6 @@ export function storeAsset(ctx: AppContext, projectId: string, input: NewAsset):
   return getAsset(ctx, id);
 }
 
-export function updateAsset(ctx: AppContext, id: string, patch: Partial<Pick<Asset, 'caption' | 'alt' | 'nodeId'>>): Asset {
-  const cur = getAsset(ctx, id);
-  const values: Record<string, unknown> = {};
-  if (patch.caption !== undefined) values.caption = patch.caption;
-  if (patch.alt !== undefined) values.alt = patch.alt;
-  if (patch.nodeId !== undefined) values.node_id = patch.nodeId;
-  ctx.db.update('assets', id, values);
-  ctx.events.emit('asset.updated', { assetId: id, nodeId: patch.nodeId !== undefined ? patch.nodeId : cur.nodeId }, { projectId: cur.projectId });
-  return getAsset(ctx, id);
-}
-
 export function deleteAsset(ctx: AppContext, id: string): void {
   const r = ctx.db.get<Rec>('SELECT * FROM assets WHERE id = ?', id);
   if (!r) return;

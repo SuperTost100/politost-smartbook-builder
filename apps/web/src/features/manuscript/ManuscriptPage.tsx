@@ -32,7 +32,7 @@ const RAIL_KEY = 'smartbuilder.rail';
 export default function ManuscriptPage() {
   const pid = useBookId();
   const { nodeId } = useParams();
-  const [search] = useSearchParams();
+  const [search, setSearch] = useSearchParams();
   const navigate = useNavigate();
   const qc = useQueryClient();
   const toast = useToast();
@@ -80,6 +80,22 @@ export default function ManuscriptPage() {
 
   const mapped = useMemo(() => (section ? mapSection(section) : null), [section]);
   const blocks = mapped?.blocks ?? [];
+
+  // Extras links here with ?figure=<file>: open that figure's dialog once, then drop the parameter so a reload does not open it again.
+  // The section in the cache can be older than the figure the link names, so the section is fetched again first and the parameter
+  // stays until that answer has been looked at. If the fetch fails the parameter stays, and a reload tries again.
+  const wantedFigure = search.get('figure');
+  useEffect(() => {
+    if (!wantedFigure || !nodeId) return;
+    let live = true;
+    qc.fetchQuery({ queryKey: qk.section(pid, nodeId), queryFn: () => api('GET /api/projects/:id/sections/:nodeId', { params: { id: pid, nodeId } }), staleTime: 0 }).then((fresh) => {
+      if (!live) return;
+      const at = mapSection(fresh).blocks.find((b) => b.kind === 'image' && imageFilename(b.source) === wantedFigure);
+      if (at) setFigureAt(at.index);
+      setSearch((p) => { p.delete('figure'); return p; }, { replace: true });
+    }, () => { /* the section's own query shows the error; the parameter stays so a reload tries again */ });
+    return () => { live = false; };
+  }, [wantedFigure, nodeId, pid, qc, setSearch]);
 
   // Figure blocks: the badge of their kind and the entry to the figure dialog.
   const figureOf = useMemo(() => {

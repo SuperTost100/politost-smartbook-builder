@@ -456,6 +456,21 @@ describe('exports', () => {
     }
   });
 
+  it('names the files in the report of an export too, so the Export screen keeps the section titles after a draft export', async () => {
+    const { projectId } = await projectWithOutline(t, 'exports-files');
+    const fake = installFakes({ compileBook: () => cleanBook([{ rule: 'unknown-formula', severity: 'blocker', message: 'Formula non trovata', file: 's1' }]) });
+    try {
+      const validated = (await t.req('POST', `/api/projects/${projectId}/validate`)).body;
+      const draft = await t.req('POST', `/api/projects/${projectId}/exports`, { approved: false });
+      assert.equal(draft.status, 200);
+      assert.deepEqual(draft.body.report.files, validated.files);
+      assert.deepEqual(draft.body.report.files.s1, { label: 'Definizione', target: { nodeId: 's1' } });
+    } finally {
+      fake.restore();
+      fakes = installFakes();
+    }
+  });
+
   it('names the files in the report and sends their errors and warnings to the AI fix', async () => {
     const { projectId } = await projectWithOutline(t, 'validate-fix');
     const qid = newId();
@@ -664,9 +679,8 @@ describe('review fixes (server)', () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('asset-events'));
     const svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><circle cx="5" cy="5" r="4"/></svg>';
     const up = multipart({}, [{ name: 'file', filename: 'c.svg', type: 'image/svg+xml', data: svg }]);
-    const asset = (await t.req('POST', `/api/projects/${p.id}/assets`, up.payload, up.headers)).body;
-    await t.req('PATCH', `/api/assets/${asset.id}`, { caption: 'Cerchio' });
-    assert.equal(eventTypes(p.id, 'asset.updated').length, 2);
+    await t.req('POST', `/api/projects/${p.id}/assets`, up.payload, up.headers);
+    assert.equal(eventTypes(p.id, 'asset.updated').length, 1);
     const eid = newId();
     t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'ide', payload: { id: 'x', title: 'x', language: 'python', code: 'print(1)' }, status: 'draft', checks: [], created_at: now() });
     await t.req('PATCH', `/api/enrichments/${eid}`, { payload: { id: 'x', title: 'y', language: 'python', code: 'print(2)' } });

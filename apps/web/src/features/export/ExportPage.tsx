@@ -83,7 +83,7 @@ export default function ExportPage() {
   const fix = useMutation({
     mutationFn: () => api('POST /api/projects/:id/validate/fix', { params: { id: pid } }),
     onSuccess: () => {
-      toast('Fixing the validation problems. Validate again when the run is done.', { action: { label: 'Open run', to: `/books/${pid}/run` } });
+      toast('Fixing the validation problems. The report is checked again when the run is done.', { action: { label: 'Open run', to: `/books/${pid}/run` } });
       void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.issues(pid) });
     },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
@@ -121,6 +121,13 @@ export default function ExportPage() {
   // Findings in files someone wrote (a section, an introduction, a question) can go to the AI fix; generated files cannot.
   const fixable = report ? [...report.errors, ...report.warnings].filter((f) => report.files?.[f.file]?.target).length : 0;
   const fixing = !!project.data?.activeRun && project.data.activeRun.kind === 'regenerate' && !['completed', 'failed', 'cancelled'].includes(project.data.activeRun.status);
+
+  // The report on screen describes the text as it was before the fix. When the fix run ends it is checked again, so an error that is gone no longer offers a second fix.
+  const wasFixing = useRef(false);
+  useEffect(() => {
+    if (wasFixing.current && !fixing) validate.mutate(true);
+    wasFixing.current = fixing;
+  }, [fixing, validate]);
 
   const rows = [...(exportsQ.data ?? [])].sort((a, b) => b.createdAt.localeCompare(a.createdAt));
 

@@ -48,6 +48,11 @@ export interface SectionView {
   compiled: string;
 }
 
+/** A revision in the History list, with what its figure action did when it changed one figure. */
+export interface HistoryRevision extends ContentRevision {
+  figureNote: string | null;
+}
+
 export interface ChapterView {
   chapterId: string;
   number: number;
@@ -152,7 +157,7 @@ export interface Api {
   'GET /api/projects/:id/sections/:nodeId': { res: SectionView };
   /** Saves a human edit. 409 when baseRevId is not the current revision. */
   'PUT /api/projects/:id/sections/:nodeId': { body: { markdown: string; baseRevId: string | null }; res: SectionView };
-  'GET /api/projects/:id/sections/:nodeId/history': { res: ContentRevision[] };
+  'GET /api/projects/:id/sections/:nodeId/history': { res: HistoryRevision[] };
   'POST /api/projects/:id/sections/:nodeId/restore': { body: { revId: string }; res: SectionView };
   'POST /api/projects/:id/sections/:nodeId/regenerate': { body: { instruction?: string; selection?: string }; res: RunSummary };
   'POST /api/projects/:id/sections/:nodeId/research': { res: RunSummary };
@@ -160,7 +165,7 @@ export interface Api {
   /** The figure the section's current text shows through this asset. 404 when the text does not show it. */
   'GET /api/projects/:id/sections/:nodeId/figures/:assetId': { res: FigureDetails };
   /** Saves the caption and, for a drawing, what it shows (which does not change the picture). */
-  'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; shows?: string }; res: SectionView };
+  'PATCH /api/projects/:id/sections/:nodeId/figures/:assetId': { body: { baseRevId: string; caption?: string; alt?: string; shows?: string }; res: SectionView };
   /** Compiles edited source. When it compiles, the figure shows the new drawing; otherwise 422 with the compiler's message and nothing changes. */
   'POST /api/projects/:id/sections/:nodeId/figures/:assetId/render': { body: { baseRevId: string; source: string }; res: SectionView };
   /** Starts a task that asks the illustrator for a new drawing from the one-line instruction. An edited `shows` (the description) is saved on the new drawing. */
@@ -195,7 +200,6 @@ export interface Api {
   /** Raw asset bytes. */
   'GET /api/assets/:assetId/file': { res: Blob };
   'POST /api/projects/:id/assets': { res: Asset };
-  'PATCH /api/assets/:assetId': { body: Partial<Pick<Asset, 'caption' | 'alt' | 'nodeId'>>; res: Asset };
   'GET /api/projects/:id/enrichments': { res: Enrichment[] };
   'PATCH /api/enrichments/:eid': { body: { payload: Record<string, unknown> }; res: Enrichment };
   'DELETE /api/enrichments/:eid': { res: { ok: true } };

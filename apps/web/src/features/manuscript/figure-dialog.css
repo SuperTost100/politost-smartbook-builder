@@ -15,6 +15,9 @@
 .fd-stale { font-size: 13px; color: var(--danger); display: flex; gap: 6px; align-items: flex-start; }
 .fd-stale svg { margin-top: 2px; flex: none; }
 .fd-shows { min-height: 96px; }
+.fd-alt { min-height: 56px; }
+.fd-alt[aria-invalid="true"] { border-color: var(--danger); }
+.fd-alt-missing { color: var(--danger); }
 .fd-details { border: 1px solid var(--border); border-radius: var(--radius-md); background: var(--surface); }
 .fd-details > summary { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; font: 600 14px/20px var(--font-sans); list-style: none; border-radius: var(--radius-md); }
 .fd-details > summary::-webkit-details-marker { display: none; }
@@ -39,9 +42,12 @@
 .fd-failure { overflow-wrap: anywhere; white-space: pre-wrap; }
 .fd-foot-l { margin-right: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .fd-error { margin-top: 12px; }
+.fd-note { margin: 0 0 14px; }
+.fd-conflict { margin-bottom: 12px; }
+.fd-conflict__code { font: 400 12.5px/18px var(--font-mono); overflow-wrap: anywhere; white-space: pre-wrap; }
 .fd-caption-id { font: 400 13px/1 var(--font-mono); color: var(--ink-subtle); }
 /* With two columns the picture stays in view while the form scrolls, so a render or a redraw can be watched from the button that started it. */
-@media (min-width: 761px) { .fd-grid > .fd-col:first-child { position: sticky; top: 0; } }
+@media (min-width: 761px) { .fd-grid > .fd-col--pin { position: sticky; top: 0; } }
 @media (max-width: 760px) {
   .fd-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
   .fd-preview { min-height: 180px; }

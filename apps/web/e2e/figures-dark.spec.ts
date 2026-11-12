@@ -31,6 +31,9 @@ async function open(page: Page, variant: 'new' | 'old', theme: 'light' | 'dark')
   const files = variant === 'new' ? NEW : OLD;
   const assets = Object.fromEntries(NAMES.flatMap((n) => [[`assets/${n}.svg`, `/api/assets/${n}/file`], [`${n}.svg`, `/api/assets/${n}/file`]]));
   await page.route('**/api/projects/p1/chapters/*/preview', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify({ markdown: compiled, number: 1, assets }) }));
+  const source = ['### Quattro figure', 'Le figure seguenti sono disegnate dal builder.', ...NAMES.map((n) => `:::image{src="assets/${n}.svg" alt="Figure ${n}" caption="Disegno di tipo ${n}"}\n:::`)].join('\n\n');
+  const section = { chapterId: 'c1', sectionId: 's1', title: 'Quattro figure', proposal: null, evidence: null, issues: [], compiled, current: { id: 'rv1', projectId: 'p1', nodeId: 's1', kind: 'section', markdown: source, origin: 'human', model: null, parentRevId: null, status: 'current', citations: {}, createdAt: '2026-11-11T10:00:00Z' } };
+  await page.route('**/api/projects/p1/manuscript', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify([{ chapterId: 'c1', number: 1, title: 'Figure di prova', intro: null, sections: [section] }]) }));
   await page.route('**/api/assets/*/file', (r) => r.fulfill({ contentType: 'image/svg+xml', body: files[/assets\/(\w+)\/file/.exec(r.request().url())![1]] }));
   await page.route('**/api/projects/p1/assets', (r) => r.fulfill({ contentType: 'application/json', body: JSON.stringify(NAMES.map((n) => ({ id: n, projectId: 'p1', nodeId: null, filename: `${n}.svg`, mime: 'image/svg+xml', origin: n === 'drawing' ? 'generated-svg' : n === 'diagram' ? 'diagram' : n, spec: null, caption: `Disegno ${n}`, alt: `Figure ${n}`, checks: [], createdAt: '2026-11-11T10:00:00Z' }))) }));
 }

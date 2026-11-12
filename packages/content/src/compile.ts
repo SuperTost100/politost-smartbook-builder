@@ -394,14 +394,15 @@ function emitUnit(unit: Unit, number: number, env: CompileEnv, markdown: string)
       if (src && env.assets && !env.assets.has(src)) {
         env.findings.push(finding('image', 'blocker', unit.id, `Image "${src}" is not among the book's assets.`, l.n, l.raw));
       }
-      // Figures are numbered per chapter, and captions/alt lose their LaTeX: the reader prints them as plain text.
-      const n = (env.figureCounts.get(number) ?? 0) + 1;
-      env.figureCounts.set(number, n);
-      // The asset record is canonical: what the author saves for a figure in Extras reaches the export.
+      // The asset record is canonical: the caption an author saved for a figure is what the export contains.
       const meta = src ? env.assetMeta?.[src] : undefined;
       const rawCaption = meta?.caption?.trim() ? meta.caption : (attrs.caption ?? '');
       const rawAlt = meta?.alt?.trim() ? meta.alt : (attrs.alt ?? '');
+      // Captions and alt lose their LaTeX: the reader prints them as plain text.
       const caption = captionToPlain(rawCaption).replace(/^Fig\.\s*[\d.]+\s*[—-]\s*/, '');
+      // Figures are numbered per chapter. A figure without a caption shows no "Fig." label, so it takes no number: the reader sees 1, 2, 3.
+      const n = caption ? (env.figureCounts.get(number) ?? 0) + 1 : 0;
+      if (caption) env.figureCounts.set(number, n);
       out.push('', `:::image{src="${src ?? ''}" alt="${latexToPlain(rawAlt)}"${caption ? ` caption="Fig. ${number}.${n} — ${caption}"` : ''}}`);
       i++;
       continue;

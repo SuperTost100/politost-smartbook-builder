@@ -408,6 +408,8 @@ export interface ContentRevision {
   origin: ContentOrigin;
   model: string | null;
   parentRevId: string | null;
+  /** The revision a Restore copied, for the revision that restore made. Null on every other revision. */
+  restoredFromId: string | null;
   status: ContentRevStatus;
   /** Evidence note ids the writer cited, keyed by block index within the markdown. */
   citations: Record<string, string[]>;

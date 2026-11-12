@@ -97,8 +97,8 @@ export function AddFigure({ pid, nodeId, drawing, prepare, onDrawing }: Props) {
     onError: (e) => setError(errorText(e)),
   });
 
-  // The chooser opens below the button: bring all of it into view, also when a panel makes it taller.
-  useEffect(() => { if (open) pop.current?.scrollIntoView({ block: 'nearest' }); }, [open, mode, search.data]);
+  // The chooser opens below the button: bring all of it into view, also when a panel or an error line makes it taller.
+  useEffect(() => { if (open) pop.current?.scrollIntoView({ block: 'nearest' }); }, [open, mode, search.data, error]);
 
   const chooseFile = (f: File | undefined) => {
     if (!f) return;
@@ -138,7 +138,8 @@ export function AddFigure({ pid, nodeId, drawing, prepare, onDrawing }: Props) {
               </div>
               <div className="ui-field">
                 <label className="ui-field__label" htmlFor={hint('cap')}>Caption <span className="ui-muted">(optional)</span></label>
-                <input id={hint('cap')} className="ui-input ui-input--sm" value={caption} onChange={(e) => setCaption(e.target.value)} />
+                <input id={hint('cap')} className="ui-input ui-input--sm" value={caption} onChange={(e) => setCaption(e.target.value)} aria-describedby={hint('cap-hint')} />
+                <span id={hint('cap-hint')} className="ui-field__hint">The caption is also the alt text. Without one, the alt text stays empty until you write it in the book's language in the figure's dialog, and the book cannot be exported as approved before that.</span>
               </div>
               {error && <div className="ui-banner ui-banner--danger" role="alert">{error}</div>}
               <div className="ins-actions">

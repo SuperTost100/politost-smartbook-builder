@@ -5,7 +5,14 @@ import { existsSync, readFileSync } from 'node:fs';
 import { ensureFigurePackages, missingFigurePackages } from '../../../../scripts/fetch-figure-packages.mjs';
 import { assetPath, currentHead, getAsset, listAssets, saveHuman, storeAsset } from '../repo/index.ts';
 import { commitAiRevision } from '../pipeline/draft.ts';
+import { compileBook } from '@smartbuilder/content';
+import { loadBookInput } from '../repo/index.ts';
 import { fakeRun, installFakes, multipart, projectWithOutline, startApp, type TestApp } from './testkit.ts';
+import { DEFAULT_ROUTES } from '@smartbuilder/domain';
+import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
+import { FakeFunnel, usageOf } from '../llm/testkit.ts';
+import { newId, now } from '../db/db.ts';
+import { figureRedraw } from '../pipeline/figureEdit.ts';
 
 let t: TestApp;
 let restore: () => void;
@@ -161,6 +168,77 @@ describe('save caption and description', () => {
   });
 });
 
+describe('save alt text', () => {
+  const previewAlts = (s: Seed) => {
+    const files = compileBook(loadBookInput(t.ctx, s.projectId)).files;
+    return Object.entries(files).filter(([name]) => name.startsWith('chapters/')).flatMap(([, text]) => [...String(text).matchAll(/:::image\{[^}]*alt="([^"]*)"/g)].map((m) => m[1]));
+  };
+
+  it('an alt text change is a new asset and a new revision, the block and the asset agree, and Restore brings back the earlier alt text', async () => {
+    const s = await seed();
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'A circle with its radius marked' });
+    assert.equal(r.status, 200);
+    const head = headOf(s);
+    assert.notEqual(head.id, s.headId);
+    assert.match(head.markdown, /alt="A circle with its radius marked"/);
+    assert.match(head.markdown, /caption="Un cerchio"/, 'the caption is untouched');
+    const fresh = listAssets(t.ctx, s.projectId).find((a) => head.markdown.includes(`assets/${a.filename}"`))!;
+    assert.notEqual(fresh.id, s.drawn);
+    assert.equal(fresh.alt, 'A circle with its radius marked');
+    assert.equal(getAsset(t.ctx, s.drawn).alt, 'Un cerchio', 'the earlier asset keeps the earlier alt text');
+    assert.deepEqual(previewAlts(s), ['A circle with its radius marked']);
+    const details = await t.req('GET', url(s, `/${fresh.id}`));
+    assert.equal(details.body.alt, 'A circle with its radius marked');
+    assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId: s.headId })).status, 200);
+    assert.deepEqual(previewAlts(s), ['Un cerchio']);
+  });
+
+  it('a double quote in the alt text is saved as the typographic quote a caption gets, whole and not as a single quote', async () => {
+    const s = await seed();
+    const r = await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'Doppie "quote" e città {x} $' });
+    assert.equal(r.status, 200);
+    const shown = listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    assert.equal(shown.alt, 'Doppie ”quote” e città {x} $');
+    assert.match(headOf(s).markdown, /alt="Doppie ”quote” e città \{x\} \$"/);
+    assert.equal((await t.req('GET', url(s, `/${shown.id}`))).body.alt, 'Doppie ”quote” e città {x} $');
+    // The caption in the block takes the same quote, which is what the compiler prints for a caption.
+    await t.req('PATCH', url(s, `/${shown.id}`), { baseRevId: headOf(s).id, caption: 'Un "cerchio"' });
+    assert.match(headOf(s).markdown, /caption="Un ”cerchio”"/);
+  });
+
+  it('caption and alt text saved together make one copy and one revision', async () => {
+    const s = await seed();
+    const before = listAssets(t.ctx, s.projectId).length;
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova', alt: 'Nuovo alt' })).status, 200);
+    assert.equal(listAssets(t.ctx, s.projectId).length, before + 1);
+    assert.match(headOf(s).markdown, /alt="Nuovo alt" caption="Nuova"|caption="Nuova" alt="Nuovo alt"/);
+  });
+
+  it('the alt text of the block wins nowhere: a block whose alt text differs from the asset is brought in line', async () => {
+    const s = await seed();
+    const md = headOf(s).markdown.replace('alt="Un cerchio"', 'alt="Old block alt"');
+    const head = saveHuman(t.ctx, s.projectId, 's1', md, s.headId);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: head.id, alt: 'Chosen alt' })).status, 200);
+    assert.deepEqual(previewAlts(s), ['Chosen alt']);
+    assert.ok(!headOf(s).markdown.includes('Old block alt'));
+  });
+
+  it('refuses an empty alt text, because the lint blocks an image without one, and saving what is stored makes no revision', async () => {
+    const s = await seed();
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: '   ' })).status, 400);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, alt: 'Un cerchio' })).status, 200);
+    assert.equal(headOf(s).id, s.headId);
+    assert.equal(listAssets(t.ctx, s.projectId).length, 1);
+  });
+
+  it('shows the alt text of the block when the asset stores none', async () => {
+    const s = await seed();
+    t.ctx.db.update('assets', s.drawn, { alt: '' });
+    const details = await t.req('GET', url(s, `/${s.drawn}`));
+    assert.equal(details.body.alt, 'Un cerchio');
+  });
+});
+
 describe('render edited source', () => {
   it('a source that compiles gives the figure a new picture, and the old asset stays for the revision that names it', async () => {
     const s = await seed();
@@ -208,6 +286,51 @@ describe('redraw', () => {
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: 'old', instruction: 'x' })).status, 409);
     assert.equal((await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: s.headId, instruction: '  ' })).status, 400);
     assert.equal(calls.redraw.length, 1);
+  });
+
+  it('after a Render, a redraw sent the way the dialog sends it starts from the rendered source, and a request for the figure it replaced is refused with 409', async () => {
+    const s = await seed();
+    const EDITED = '#rect(width: 20pt, height: 10pt) // R_1';
+    const rendered = await t.req('POST', url(s, `/${s.drawn}/render`), { baseRevId: s.headId, source: EDITED });
+    assert.equal(rendered.status, 200);
+    // The dialog finds the figure the new text shows in the asset list, reads its details, and sends what they name.
+    const filename = /src="assets\/([^"]+)"/.exec(rendered.body.current.markdown)![1];
+    const shown = listAssets(t.ctx, s.projectId).find((a) => a.filename === filename)!;
+    assert.notEqual(shown.id, s.drawn, 'a render gives the figure a new asset');
+    const details = (await t.req('GET', url(s, `/${shown.id}`))).body;
+    assert.equal(details.drawing.source, EDITED);
+    // The old id is refused, never run: 409, as for a stale head.
+    const old = await t.req('POST', url(s, `/${s.drawn}/redraw`), { baseRevId: details.headRevId, instruction: 'Make C bigger' });
+    assert.equal(old.status, 409);
+    assert.equal(calls.redraw.length, 0);
+    for (const call of ['render', 'remove']) assert.equal((await t.req('POST', url(s, `/${s.drawn}/${call}`), { baseRevId: details.headRevId, source: EDITED })).status, 409, call);
+    assert.equal((await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: details.headRevId, caption: 'x' })).status, 409);
+    assert.equal(headOf(s).id, details.headRevId, 'nothing was written');
+    // The id the dialog sends starts the task, and the model is given the rendered source.
+    assert.equal((await t.req('POST', url(s, `/${shown.id}/redraw`), { baseRevId: details.headRevId, instruction: 'Make C bigger' })).status, 200);
+    const input = calls.redraw[0] as { nodeId: string; assetId: string; instruction: string };
+    assert.equal(input.assetId, shown.id);
+    const fake = new FakeFunnel();
+    setFunnel(fake);
+    resetLlmState();
+    resetConnectionsCache();
+    t.ctx.saveSettings({ routes: DEFAULT_ROUTES });
+    try {
+      const runId = newId();
+      t.ctx.db.insert('runs', { id: runId, project_id: s.projectId, kind: 'figure', status: 'running', snapshot: {}, created_at: now() });
+      const id = newId();
+      t.ctx.db.insert('tasks', { id, run_id: runId, project_id: s.projectId, kind: 'figure.redraw', label: 'x', key: `figure.redraw:${id}`, input, state: 'running', pool: 'illustrator', attempts: 1, max_attempts: 2, created_at: now() });
+      const say = (text: string) => () => ({ text, usage: usageOf(10, 10) });
+      fake.next(say('#circle(radius: 8pt) // R_1 bigger C'), say('OK'));
+      await figureRedraw(t.ctx, {
+        task: { id, runId, projectId: s.projectId, kind: 'figure.redraw', key: `figure.redraw:${id}`, label: 'x', input, attempts: 1 }, signal: new AbortController().signal,
+        deps: {}, enqueue: () => [], progress: () => undefined, setProvider: () => undefined,
+      });
+      assert.ok(fake.calls[0].prompt.includes(`The figure is drawn by this source now:\n${EDITED}\n`), 'the model is given the rendered source');
+      assert.ok(!fake.calls[0].prompt.includes(SOURCE), 'and not the source the figure had before');
+    } finally {
+      setFunnel(null);
+    }
   });
 
   it('passes an edited description on to the task, and nothing when it is unchanged', async () => {
@@ -414,5 +537,94 @@ describe('an inserted figure counts as an author edit', () => {
     assert.equal(late.status, 'proposal');
     assert.equal(headOf(s).id, withFigure.id);
     assert.ok(headOf(s).markdown.includes('assets/mia.png'));
+  });
+});
+
+describe('history notes', () => {
+  it('the History list says what each figure action did, including a replacement and a removal', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova didascalia' });
+    const afterCaption = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
+    await t.req('POST', url(s, `/${shown().id}/replace`), form.payload, form.headers);
+    const afterReplace = headOf(s);
+    await t.req('POST', url(s, `/${shown().id}/remove`), { baseRevId: afterReplace.id });
+    const afterRemove = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    const note = (id: string) => history.find((r) => r.id === id)?.figureNote;
+    assert.equal(note(s.headId), null);
+    assert.equal(note(afterCaption.id), 'Figure "Un cerchio": caption changed to "Nuova didascalia"');
+    assert.equal(note(afterReplace.id), 'Figure "Nuova didascalia": the drawing was replaced with an image');
+    assert.equal(note(afterRemove.id), 'Figure "Nuova didascalia" removed');
+  });
+
+  it('a version made by Restore says which version it restored and gets no figure note, whatever differs from the version before it', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Nuova didascalia' });
+    const afterCaption = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('POST', url(s, `/${shown().id}/render`), { baseRevId: afterCaption.id, source: '#rect(width: 20pt, height: 10pt)' });
+    const afterRender = headOf(s);
+    const restore = async (revId: string) => { assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId })).status, 200); return headOf(s); };
+    const first = await restore(afterCaption.id);
+    const second = await restore(s.headId);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null; restoredFromId: string | null }[];
+    const row = (id: string) => history.find((r) => r.id === id)!;
+    assert.equal(row(first.id).restoredFromId, afterCaption.id);
+    assert.equal(row(first.id).figureNote, null, 'restoring the caption version is not "source rendered"');
+    assert.equal(row(second.id).restoredFromId, s.headId);
+    assert.equal(row(second.id).figureNote, null);
+    // The versions the author made by hand are labelled as before, and say nothing about a restore.
+    assert.equal(row(afterRender.id).restoredFromId, null);
+    assert.equal(row(afterRender.id).figureNote, 'Figure "Nuova didascalia": source rendered');
+    assert.equal(row(afterCaption.id).restoredFromId, null);
+  });
+
+  it('a long caption is quoted only when the part that changed is in the quote, and otherwise the note just says the caption changed', async () => {
+    const s = await seed();
+    const long = 'Circuito RC serie: la sorgente V0 è collegata a R e C attraverso un interruttore che si chiude al tempo zero.';
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: long });
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: headOf(s).id, caption: `${long} (v2)` });
+    const atEnd = headOf(s);
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: atEnd.id, caption: `Schema RC serie: ${long.slice(19)}` });
+    const atStart = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    const note = (id: string) => history.find((r) => r.id === id)!.figureNote;
+    assert.equal(note(atEnd.id), 'Figure "Circuito RC serie: la sorgente V0 è col…": caption changed');
+    assert.match(note(atStart.id)!, /caption changed to "Schema RC serie: la sorgente V0 è collegata a R e C attrave…"$/);
+  });
+
+  it('says an alt text changed, also on an uploaded image, where a new copy with the same caption is otherwise a replacement', async () => {
+    const s = await seed();
+    const form = multipart({ baseRevId: headOf(s).id }, [{ name: 'file', filename: 'foto.png', type: 'image/png', data: PNG }]);
+    await t.req('POST', url(s, `/${s.drawn}/replace`), form.payload, form.headers);
+    const afterReplace = headOf(s);
+    const shown = () => listAssets(t.ctx, s.projectId).find((a) => headOf(s).markdown.includes(`assets/${a.filename}"`))!;
+    await t.req('PATCH', url(s, `/${shown().id}`), { baseRevId: afterReplace.id, alt: 'Una foto della scheda' });
+    const afterAlt = headOf(s);
+    const history = (await t.req('GET', `/api/projects/${s.projectId}/sections/${s.nodeId}/history`)).body as { id: string; figureNote: string | null }[];
+    assert.equal(history.find((r) => r.id === afterAlt.id)?.figureNote, 'Figure "Un cerchio": alt text changed');
+  });
+});
+
+describe('a figure is changed only through its section', () => {
+  const exportedCaptions = (s: Seed) => {
+    const files = compileBook(loadBookInput(t.ctx, s.projectId)).files;
+    return Object.entries(files).filter(([name]) => name.startsWith('chapters/')).flatMap(([, text]) => [...String(text).matchAll(/caption="([^"]+)"/g)].map((m) => m[1]));
+  };
+
+  it('no route edits an asset in place, so a copy the text does not use cannot change what a Restore brings back or what is exported', async () => {
+    const s = await seed();
+    await t.req('PATCH', url(s, `/${s.drawn}`), { baseRevId: s.headId, caption: 'Didascalia nuova' });
+    // The first asset is the copy an older revision shows. Extras used to write to it directly.
+    const r = await t.req('PATCH', `/api/assets/${s.drawn}`, { caption: 'Scritta da Extras', alt: 'Alt da Extras' });
+    assert.equal(r.status, 404, 'the in-place edit is gone');
+    assert.equal(getAsset(t.ctx, s.drawn).caption, 'Un cerchio');
+    assert.deepEqual(exportedCaptions(s), ['Fig. 1.1 — Didascalia nuova']);
+    // Restoring the first revision brings back its own caption.
+    assert.equal((await t.req('POST', `/api/projects/${s.projectId}/sections/${s.nodeId}/restore`, { revId: s.headId })).status, 200);
+    assert.deepEqual(exportedCaptions(s), ['Fig. 1.1 — Un cerchio']);
   });
 });

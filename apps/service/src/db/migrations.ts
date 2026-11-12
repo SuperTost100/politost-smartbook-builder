@@ -334,4 +334,8 @@ export const MIGRATIONS: string[] = [
   ALTER TABLE usage ADD COLUMN attempt INTEGER;
   ALTER TABLE usage ADD COLUMN fallback INTEGER;
   `,
+  // 7: the revision a Restore copied, so History can say that a version is a restore and which one. Null on every other revision, and on restores made before this.
+  `
+  ALTER TABLE content_revisions ADD COLUMN restored_from TEXT;
+  `,
 ];

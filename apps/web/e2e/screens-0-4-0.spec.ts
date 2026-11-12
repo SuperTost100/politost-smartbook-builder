@@ -594,6 +594,38 @@ test.describe('Review: figure issues', () => {
 
 // ---------- Connections ----------
 
+test.describe('Export: after Fix with AI', () => {
+  test('the report is checked again when the fix run ends, so a fixed error does not offer a second fix', async ({ page }) => {
+    await mockApi(page);
+    let running = false;
+    let fixed = false;
+    let told = false;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const run = { id: 'r7', projectId: 'p1', kind: 'regenerate', status: 'running', createdAt: ago(0), finishedAt: null, counts: { running: 1 }, waiting: null, warnings: [] };
+    const bad = { ok: false, errors: [{ file: 'chapters/01.md', message: 'A literal backslash followed by n is in the text.' }], warnings: [], lint: [], files: { 'chapters/01.md': { label: '1.1 Definizione di limite', target: { nodeId: 's1' } } } };
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, { ...mockData().projects[0], activeRun: running ? run : null }));
+    await page.route(/\/api\/projects\/p1\/validate$/, (route) => answer(route, fixed ? { ok: true, errors: [], warnings: [], lint: [] } : bad));
+    await page.route(/\/api\/projects\/p1\/validate\/fix$/, (route) => { running = true; return answer(route, run); });
+    // The first connection waits until the test ends the run, then tells the page that a run changed state, as the service does.
+    await page.route(/\/api\/events/, async (route) => {
+      const first = !told;
+      told = true;
+      if (first) await gate;
+      return route.fulfill({ status: 200, headers: { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' }, body: `retry: 600000\n\n${first ? 'event: run.state\ndata: {"type":"run.state","data":{}}\n\n' : ': connected\n\n'}` });
+    });
+    await page.goto('/books/p1/export');
+    await expect(page.getByText('1 error to fix before the book is valid.')).toBeVisible();
+    await page.getByRole('button', { name: 'Fix with AI (1)' }).click();
+    await expect(page.getByRole('button', { name: 'Fixing…' })).toBeVisible();
+    running = false;
+    fixed = true;
+    release();
+    await expect(page.getByText('No errors. The package is valid.')).toBeVisible();
+    await expect(page.getByRole('button', { name: /Fix with AI/ })).toHaveCount(0);
+  });
+});
+
 test.describe('Connections: usage and routing', () => {
   test.beforeEach(async ({ page }) => { await mockApi(page); });
 

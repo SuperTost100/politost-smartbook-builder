@@ -45,21 +45,24 @@ export interface IllustratorBrief {
   redraw?: { source: string; instruction: string };
 }
 
+/** The author may have edited the source by hand after the description was written, so the two can differ. */
+const SOURCE_RULE = 'The description may be older than the source: where the description and the source disagree, the source is what the author wants, so keep it.';
+
 export function illustratorPrompt(b: IllustratorBrief): string {
   const symbols = b.symbols === 'american' ? 'American (a zigzag resistor)' : 'European (a rectangular resistor)';
   const head = `Book language: ${languageName(b.language)}. Circuit symbols: ${symbols}.\nCaption: ${b.caption}\nFamily: ${b.family}\nWhat the figure shows:\n${b.shows}`;
   if (!b.redraw) return `${head}\n\nWrite the source now.`;
-  return `${head}\n\nThe figure is drawn by this source now:\n${b.redraw.source}\n\nThe author asks for this change: ${b.redraw.instruction}\nMake that change and keep everything else as it is. Reply with the full new source.`;
+  return `${head}\n\nThe figure is drawn by this source now:\n${b.redraw.source}\n\nThe author asks for this change: ${b.redraw.instruction}\nMake that change. Everything the instruction does not mention stays exactly as in the current source: the same elements, positions, labels and values. ${SOURCE_RULE} Reply with the full new source.`;
 }
 
 /** The message that sends a compile error back. */
 export const repairMessage = (error: string) => `Your source did not compile. Compiler output:\n\n${error}\n\nReply with the full corrected source only.`;
 
-/** The message that goes with the picture of the drawing. The reply is exactly OK or the full corrected source. */
-export const LOOK_MESSAGE = `This is your drawing as the reader sees it, at the width it has in the book. Check it against the brief:
+/** The message that goes with the picture of the drawing. The reply is exactly OK or the full corrected source. A redraw keeps the author's source over the brief. */
+export const lookMessage = (redraw: boolean) => `This is your drawing as the reader sees it, at the width it has in the book. Check it against the brief:
 1. Every element, label and value of the brief is present.
 2. The connections are correct.
 3. Nothing overlaps or is cut off.
 4. It is readable at book width.
 5. Every label is written as the book writes the quantity: a symbol with a subscript has its argument, such as (t) or (jω), after the subscript, not inside it.
-Answer exactly OK if all five hold. Otherwise answer with the full corrected source and nothing else.`;
+${redraw ? `${SOURCE_RULE} Do not change a label, value or element back to the brief's wording for that reason alone.\n` : ''}Answer exactly OK if all five hold. Otherwise answer with the full corrected source and nothing else.`;

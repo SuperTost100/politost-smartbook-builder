@@ -8,8 +8,10 @@ import { FakeFunnel, makeCtx, seedProject, usageOf } from '../llm/testkit.ts';
 import { newId, now } from '../db/db.ts';
 import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { buildFigures, commitFigures, type FigureRequest } from '../figures/materialize.ts';
-import { saveFigureDetails } from '../figures/author.ts';
+import { copyAsset, saveFigureDetails, swapSrc, writeFigureRevision } from '../figures/author.ts';
+import { renderEditedDrawing } from '../figures/drawing/edit.ts';
 import { currentHead, getAsset, listAssets, listRevisions, saveHuman } from '../repo/index.ts';
+import { figureNotes } from '../figures/historyNote.ts';
 import { activeRedraw, figureDraw, figureRedraw, startRedraw } from './figureEdit.ts';
 
 const P = 'p1';
@@ -78,6 +80,70 @@ describe('redraw task', () => {
     assert.match(fake.calls[0].prompt, /asks for this change: Use a rectangle\./);
   });
 
+  test('a redraw of a figure the author rendered gets the rendered source, not the one the figure was first drawn with, and is told to keep the rest', async () => {
+    const { assetId } = await sectionWithDrawing();
+    // The author renders an edit in the figure dialog: a copy with the new source, and the text points at it (routes/figures.ts).
+    const copy = copyAsset(ctx(), getAsset(ctx(), assetId));
+    const rendered = await renderEditedDrawing(ctx(), copy.id, GOOD_2);
+    assert.ok(rendered.ok);
+    writeFigureRevision(ctx(), P, N, (md) => swapSrc(md, getAsset(ctx(), assetId).filename, copy.filename));
+    fake.next(say(GOOD_2), say('OK'));
+    // The dialog names the asset the text shows now, which is the copy.
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId: copy.id, instruction: 'Make it bigger.' }));
+    const prompt = fake.calls[0].prompt;
+    assert.ok(prompt.includes(`The figure is drawn by this source now:\n${GOOD_2}\n`), 'the prompt carries the rendered source');
+    assert.ok(!prompt.includes(GOOD), 'and not the first one');
+    assert.match(prompt, /Everything the instruction does not mention stays exactly as in the current source: the same elements, positions, labels and values\./);
+  });
+
+  test('a redraw tells the model that the source is the author\'s truth where the description is older, in the first prompt and in the look turn', async () => {
+    const { assetId } = await sectionWithDrawing();
+    fake.next(say(GOOD_2), say('OK'));
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Make it bigger.' }));
+    const [first, look] = fake.calls.map((c) => c.prompt);
+    const rule = /where the description and the source disagree, the source is what the author wants/;
+    assert.match(first, rule);
+    assert.match(look, rule);
+    assert.match(look, /Check it against the brief/);
+  });
+
+  test('the look turn of a new drawing has no such rule, because there is no author source to keep', async () => {
+    fake.next(say(GOOD), say('OK'));
+    const figure = { key: 'cerchio', kind: 'drawing', caption: 'Un cerchio', alt: 'Un cerchio', drawing: { shows: 'A circle.', family: 'sketch' } } as unknown as FigureRequest;
+    await buildFigures(ctx(), { projectId: P, nodeId: N, language: 'it', figures: [figure], photos: false });
+    assert.ok(!fake.calls.some((c) => /the source is what the author wants/.test(c.prompt)));
+  });
+
+  test('the usage rows of a redraw carry its run and task', async () => {
+    const { assetId } = await sectionWithDrawing();
+    ctx().db.run('DELETE FROM usage'); // the setup drew the first figure outside any run
+    fake.next(say(GOOD_2), say('OK'));
+    const t = task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' });
+    await figureRedraw(ctx(), t);
+    const rows = ctx().db.all<{ role: string; run_id: string | null; task_id: string | null }>("SELECT role, run_id, task_id FROM usage WHERE role = 'illustrator'");
+    assert.ok(rows.length >= 2, 'the drawing and the look turn');
+    for (const r of rows) assert.deepEqual([r.run_id, r.task_id], [t.task.runId, t.task.id]);
+  });
+
+  test('History says what each figure action did: a caption, a render, a redraw with its instruction and model', async () => {
+    const { assetId } = await sectionWithDrawing();
+    const first = currentHead(ctx(), P, N)!;
+    const caption = saveFigureDetails(ctx(), P, N, getAsset(ctx(), assetId), { caption: 'Un cerchio più grande' }, first.id)!;
+    const shownNow = () => listAssets(ctx(), P).find((a) => currentHead(ctx(), P, N)!.markdown.includes(`assets/${a.filename}"`))!;
+    const copy = copyAsset(ctx(), shownNow());
+    assert.ok((await renderEditedDrawing(ctx(), copy.id, GOOD_2)).ok);
+    const render = writeFigureRevision(ctx(), P, N, (md) => swapSrc(md, shownNow().filename, copy.filename))!;
+    fake.next(say(GOOD), say('OK'));
+    await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId: shownNow().id, instruction: 'Make the capacitor label C bigger' }));
+    const redraw = currentHead(ctx(), P, N)!;
+    const notes = figureNotes(ctx(), P, listRevisions(ctx(), P, N));
+    assert.equal(notes.get(first.id), undefined);
+    assert.equal(notes.get(caption.id), 'Figure "Un cerchio": caption changed to "Un cerchio più grande"');
+    assert.equal(notes.get(render.id), 'Figure "Un cerchio più grande": source rendered');
+    assert.equal(notes.get(redraw.id), 'Figure "Un cerchio più grande": redrawn: "Make the capacitor label C bigger"');
+    assert.ok(redraw.model, 'the revision names the model that drew it');
+  });
+
   test('a redraw that never compiles fails the task with the reason, keeps the figure and leaves no copy', async () => {
     const { assetId, head } = await sectionWithDrawing();
     fake.next(say('#circle('), say('#circle('), say('#circle('));
@@ -106,8 +172,9 @@ describe('redraw task', () => {
       saveHuman(ctx(), P, N, h.markdown.replace(/:::image\{[^}]*\}\n:::\n\n/, ''), h.id);
       return { text: GOOD_2, usage: usageOf(10, 10) };
     }, say('OK'));
-    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'x' })) as { skipped?: string };
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'x' })) as { skipped?: string; warning?: string };
     assert.match(out.skipped ?? '', /left the text/);
+    assert.match(out.warning ?? '', /^The new drawing was not used, because /, 'the run carries a warning, so the dialog does not say "Redrawn"');
     assert.ok(!currentHead(ctx(), P, N)!.markdown.includes(':::image'));
     assert.equal(listAssets(ctx(), P).length, 1, 'the copy was deleted');
     assert.ok(file);
@@ -121,8 +188,9 @@ describe('redraw task', () => {
       saved = saveFigureDetails(ctx(), P, N, getAsset(ctx(), assetId), { caption: 'Caption from another tab' }, h.id)!.id;
       return { text: GOOD_2, usage: usageOf(10, 10) };
     }, say('OK'));
-    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' })) as { skipped?: string };
+    const out = await figureRedraw(ctx(), task('figure.redraw', { nodeId: N, assetId, instruction: 'Use a rectangle.' })) as { skipped?: string; warning?: string };
     assert.match(out.skipped ?? '', /changed or left the text/);
+    assert.match(out.warning ?? '', /^The new drawing was not used, because /);
     const now = currentHead(ctx(), P, N)!;
     assert.equal(now.id, saved);
     assert.match(now.markdown, /caption="Caption from another tab"/);
@@ -174,6 +242,18 @@ describe('draw task', () => {
     assert.equal((asset.spec as { shows: string }).shows, 'A circle with a radius of 8 pt.');
     assert.match(blocks[3], /caption="Un cerchio"/);
     assert.equal(currentHead(ctx(), P, N)!.origin, 'ai');
+  });
+
+  test('a drawing described without a caption gets no alt text, because the description is English and the author writes the alt text in the book\'s language; a caption becomes the alt text', async () => {
+    saveHuman(ctx(), P, N, 'Primo.', null);
+    fake.next(say(GOOD), say('OK'));
+    await figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'A voltage divider with two resistors R1 and R2.', caption: '' }));
+    const bare = listAssets(ctx(), P)[0];
+    assert.equal(bare.alt, '');
+    assert.match(currentHead(ctx(), P, N)!.markdown, /alt=""/);
+    fake.next(say(GOOD), say('OK'));
+    await figureDraw(ctx(), task('figure.draw', { nodeId: N, afterBlock: 0, anchor: 'Primo.', description: 'A circle.', caption: 'Figura 2: Un cerchio' }));
+    assert.equal(listAssets(ctx(), P).find((a) => a.id !== bare.id)!.alt, 'Un cerchio');
   });
 
   test('a drawing that never compiles fails the task with the illustrator\'s reason and adds nothing', async () => {

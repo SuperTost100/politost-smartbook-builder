@@ -6,7 +6,7 @@ import type { AppContext } from '../context.ts';
 import { HttpError } from '../server.ts';
 import {
   assetFile, createQuestion, deleteEnrichment, deleteQuestion, getAsset, getEnrichment, getQuestion, listAssets, listEnrichments,
-  listQuestions, storeAsset, updateAsset, updateEnrichmentPayload, updateQuestion,
+  listQuestions, storeAsset, updateEnrichmentPayload, updateQuestion,
 } from '../repo/index.ts';
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
@@ -98,11 +98,6 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
     return storeAsset(ctx, projectId, {
       filename: file.filename, bytes: file.bytes, origin: 'imported', nodeId: fields.nodeId || null, caption: fields.caption ?? '', alt: fields.alt ?? '',
     });
-  });
-
-  app.patch('/api/assets/:assetId', async (req) => {
-    const patch = parse(z.object({ caption: z.string().max(1000).optional(), alt: z.string().max(1000).optional(), nodeId: z.string().nullable().optional() }), req.body);
-    return updateAsset(ctx, getAsset(ctx, idParam(req, 'assetId')).id, patch);
   });
 
   // ---------- enrichments ----------

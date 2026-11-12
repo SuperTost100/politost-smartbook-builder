@@ -11,7 +11,7 @@ import type { AppContext } from '../context.ts';
 import { newId, now } from '../db/db.ts';
 import { rewriteHead } from '../repo/content.ts';
 import { assertSafeSvg, assetPath, getAsset, mapAsset, storeAsset } from '../repo/assets.ts';
-import { badInput, notFound } from '../repo/errors.ts';
+import { badInput, conflict, notFound } from '../repo/errors.ts';
 import type { Rec } from '../repo/util.ts';
 import { relint } from '../routes/views.ts';
 import { IMAGE_ATTRS } from './materialize.ts';
@@ -21,7 +21,8 @@ import { drawingSpec } from './drawing/edit.ts';
 export const FIGURE_UPLOAD_MAX = 2 * 1024 * 1024;
 const UPLOAD_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.webp', '.svg']);
 
-const attr = (s: string) => s.replace(/"/g, "'").replace(/\s+/g, ' ').trim();
+/** An attribute value on one line, with the typographic quote a caption gets (latexToPlain) because a double quote would end the attribute. */
+const attr = (s: string) => s.replace(/"/g, '”').replace(/\s+/g, ' ').trim();
 
 /** True when the text has an image block that points at assets/<filename>. */
 export const showsFigure = (markdown: string, filename: string) => markdown.includes(`src="assets/${filename}"`);
@@ -33,6 +34,17 @@ export function figureOfSection(ctx: AppContext, projectId: string, assetId: str
   return asset;
 }
 
+/**
+ * The asset a write names. A figure of this project that the text does not show any more is one a change has replaced (a render,
+ * a save, a redraw each give the figure a new asset), so the dialog that names it is out of date: 409 like a stale head, and
+ * nothing runs on the older version. An asset that is not in this project is a 404 as for a read.
+ */
+export function figureToChange(ctx: AppContext, projectId: string, assetId: string, head: ContentRevision | null, nodeId: string): Asset {
+  const asset = getAsset(ctx, assetId);
+  if (asset.projectId === projectId && head && !showsFigure(head.markdown, asset.filename)) throw conflict('This figure changed since you opened it.', undefined, nodeId);
+  return figureOfSection(ctx, projectId, assetId, head);
+}
+
 export function figureKind(asset: Asset): FigureKindName {
   if (drawingSpec(asset)) return 'drawing';
   if (asset.origin === 'stock') return 'photo';
@@ -40,10 +52,20 @@ export function figureKind(asset: Asset): FigureKindName {
   return 'image';
 }
 
-export function figureDetails(asset: Asset, headRevId: string, redrawRunId: string | null): FigureDetails {
+/** The alt text of the block that shows `filename`, or '' when the block has none. */
+export function blockAlt(markdown: string, filename: string): string {
+  for (const m of markdown.matchAll(new RegExp(`:::image\\{(${IMAGE_ATTRS})\\}`, 'g'))) {
+    if (m[1].includes(`src="assets/${filename}"`)) return /\balt="([^"]*)"/.exec(m[1])?.[1] ?? '';
+  }
+  return '';
+}
+
+/** `head` is the section text the figure was read from. The compiler uses the asset's alt text and falls back to the block's, so the dialog shows the same. */
+export function figureDetails(asset: Asset, head: ContentRevision, redrawRunId: string | null): FigureDetails {
   const d = drawingSpec(asset);
+  const headRevId = head.id;
   return {
-    assetId: asset.id, filename: asset.filename, kind: figureKind(asset), caption: asset.caption, alt: asset.alt, createdAt: asset.createdAt,
+    assetId: asset.id, filename: asset.filename, kind: figureKind(asset), caption: asset.caption, alt: asset.alt.trim() ? asset.alt : blockAlt(head.markdown, asset.filename), createdAt: asset.createdAt,
     drawing: d ? { shows: d.shows, engine: d.engine, source: d.source, family: d.family } : null, headRevId, redrawRunId,
   };
 }
@@ -108,27 +130,31 @@ export function setBlockAttrs(markdown: string, filename: string, v: { caption?:
 }
 
 /**
- * Saves a new caption and/or description of a figure as a new revision. Both live on the asset record, which every revision that
- * names the asset reads, so the change is made on a copy and the text is pointed at it: an earlier revision keeps its own caption
- * and description when it is restored. Returns the new revision, or null when nothing differs or the figure is not in the text.
+ * Saves a new caption, alt text and/or description of a figure as a new revision. All three live on the asset record, which every
+ * revision that names the asset reads (and which wins over the block's attributes), so the change is made on a copy, the block gets
+ * the same text, and the text is pointed at the copy: an earlier revision keeps its own caption, alt text and description when it
+ * is restored. Returns the new revision, or null when nothing differs or the figure is not in the text.
  * `expectedHeadId` is the head the author saw (409 when it moved).
  */
 export function saveFigureDetails(
-  ctx: AppContext, projectId: string, nodeId: string, asset: Asset, v: { caption?: string; shows?: string }, expectedHeadId: string,
+  ctx: AppContext, projectId: string, nodeId: string, asset: Asset, v: { caption?: string; alt?: string; shows?: string }, expectedHeadId: string,
 ): ContentRevision | null {
   const drawing = drawingSpec(asset);
   const caption = v.caption !== undefined && v.caption !== asset.caption ? v.caption : undefined;
+  // The block can only hold the attribute form (no double quotes, one line), so the asset gets the same text.
+  const alt = v.alt !== undefined && attr(v.alt) !== asset.alt ? attr(v.alt) : undefined;
   const shows = v.shows !== undefined && drawing && v.shows !== drawing.shows ? v.shows : undefined;
-  if (caption === undefined && shows === undefined) return null;
+  if (caption === undefined && alt === undefined && shows === undefined) return null;
   const copy = copyAsset(ctx, asset, { keepDate: true });
   try {
     const values: Record<string, unknown> = {};
     if (caption !== undefined) values.caption = caption;
+    if (alt !== undefined) values.alt = alt;
     if (shows !== undefined && drawing) values.spec = { ...drawing, shows };
     ctx.db.update('assets', copy.id, values);
     const rev = writeFigureRevision(ctx, projectId, nodeId, (md) => {
       const swapped = swapSrc(md, asset.filename, copy.filename);
-      return caption === undefined ? swapped : setBlockAttrs(swapped, copy.filename, { caption });
+      return caption === undefined && alt === undefined ? swapped : setBlockAttrs(swapped, copy.filename, { caption, alt });
     }, { expectedHeadId });
     if (!rev) discardAsset(ctx, copy);
     return rev;

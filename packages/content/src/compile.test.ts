@@ -349,6 +349,19 @@ test('figure captions lose LaTeX and get chapter numbers', async () => {
   assert.equal(latexToPlain('$x^{10} = o(x^2)$'), 'x¹⁰ = o(x²)');
 });
 
+test('a figure without a caption takes no number, so the figures a reader sees are numbered 1, 2, 3', () => {
+  const img = (cap: string) => `:::image{src="assets/fig-vel.svg" alt="Una figura"${cap}}\n:::`;
+  const book = compileBook(fixtureBook({
+    chapters: [{ id: 'ch-1', slug: 'uno', number: 1, title: 'Uno', intro: '', sections: [
+      { id: 's1', title: 'Prima', markdown: `Testo.\n\n${img(' caption="Prima"')}\n\n${img('')}\n\n${img(' caption="Seconda"')}\n\n${img(' caption="Terza"')}` },
+    ] }],
+    questions: [], enrichments: [],
+  }));
+  const chapter = text(book, 'chapters/01-uno.md');
+  assert.deepEqual([...chapter.matchAll(/caption="(Fig\. [^"]+)"/g)].map((m) => m[1]), ['Fig. 1.1 — Prima', 'Fig. 1.2 — Seconda', 'Fig. 1.3 — Terza']);
+  assert.equal([...chapter.matchAll(/:::image\{/g)].length, 4);
+});
+
 test('figure captions turn bare x_n and x^n notation into Unicode subscripts and superscripts', async () => {
   const { captionToPlain } = await import('./plaintext.ts');
   assert.equal(captionToPlain('E_n = -R_h/n^2'), 'Eₙ = -Rₕ/n²');

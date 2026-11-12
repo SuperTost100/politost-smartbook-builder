@@ -1,7 +1,7 @@
 import { join } from 'node:path';
 import { expect, test, type Page } from '@playwright/test';
 import { mockApi } from './mocks';
-import { FIG_COMPILE_ERROR, mockFigureApi, type FigureMock } from './figures-mocks';
+import { FIG_ALT, FIG_COMPILE_ERROR, mockFigureApi, type FigureMock } from './figures-mocks';
 
 // The figure dialog (markers 2a-2g of the 0.4.0 mockup) and Add figure (3a-3d), with a mocked API that keeps its state like the
 // service does. Set FIGURE_SHOTS to a folder to also write a screenshot of every state.
@@ -41,6 +41,463 @@ async function typeSource(page: Page, text: string) {
   await page.keyboard.press('ControlOrMeta+a');
   await page.keyboard.insertText(text);
 }
+
+test.describe('Extras, Figures tab', () => {
+  test('lists the figures the text uses once each, with no editing, and a link into the Manuscript', async ({ page }) => {
+    await open(page);
+    // Two saves leave two older copies of the figure behind (the service keeps them for History).
+    for (const caption of ['Prima didascalia nuova.', 'Seconda didascalia nuova.']) {
+      const dialog = await openDialog(page);
+      await dialog.getByLabel('Caption').fill(caption);
+      await dialog.getByRole('button', { name: 'Save figure' }).click();
+      await expect(dialog).toBeHidden();
+    }
+    await page.goto('/books/p1/extras');
+    await expect(page.getByRole('tab', { name: 'Figures (1)' })).toBeVisible();
+    await expect(page.locator('.ex-card')).toHaveCount(1);
+    const card = page.locator('.ex-card');
+    await expect(card).toContainText('Seconda didascalia nuova.');
+    await expect(card).toContainText('Fig. 1.2 in 1. Definizione di limite');
+    await expect(page.getByRole('button', { name: 'Save figure' })).toHaveCount(0);
+    await expect(page.getByLabel('Caption')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: 'Import file' })).toHaveCount(0);
+    await noOverflow(page);
+    await shot(page, 'extras-figures');
+    await card.getByRole('link', { name: 'Edit in the Manuscript' }).click();
+    await expect(page).toHaveURL(/\/manuscript\/s1$/);
+    await expect(page.getByRole('dialog', { name: /^Figure/ })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByLabel('Caption')).toHaveValue('Seconda didascalia nuova.');
+  });
+});
+
+test.describe('History, figure versions', () => {
+  test('a version made by a figure action says what it did', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Nuova didascalia');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    await page.getByRole('button', { name: 'History' }).click();
+    await expect(page.getByRole('dialog', { name: 'History' }).getByText('Figure "Amplificatore invertente": caption changed to "Nuova didascalia"')).toBeVisible();
+  });
+});
+
+test.describe('History, a Restore', () => {
+  test('says it is a restore and which version it restored, and its own note does not describe the difference', async ({ page }) => {
+    const fm = await open(page);
+    fm.restored = true;
+    const [listed] = await Promise.all([page.waitForResponse((r) => r.url().endsWith('/sections/s1/history')), page.getByRole('button', { name: 'History' }).click()]);
+    const history = page.getByRole('dialog', { name: 'History' });
+    // The time is read from the version the list was given: a second look at the clock could fall in the next minute.
+    const restoredAt = ((await listed.json()) as { id: string; createdAt: string }[]).find((r) => r.id === 'rvf0')!.createdAt;
+    const when = await page.evaluate((iso) => new Date(iso).toLocaleString('en', { year: 'numeric', month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }), restoredAt);
+    await expect(history.getByText(`Restored the version of ${when}`)).toBeVisible();
+    // The version that was restored keeps its own note, and the restore stands in the list on its own, not inside a group of earlier edits.
+    await expect(history.getByText('Figure "Amplificatore invertente": source rendered')).toHaveCount(1);
+    await expect(history.getByText(/earlier edit/)).toHaveCount(0);
+    await shot(page, 'history-restore');
+  });
+});
+
+test.describe('figure dialog, edits that must not be lost', () => {
+  const saveButton = (dialog: ReturnType<Page['locator']>) => dialog.getByRole('button', { name: 'Save figure' });
+
+  test('a caption saved in another tab is not replaced silently: the dialog shows it and the author chooses', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('La mia didascalia');
+    fm.elsewhere({ caption: 'Didascalia salvata altrove' });
+    const headAfterOtherTab = fm.head();
+    const notice = dialog.getByRole('alert').filter({ hasText: 'The caption changed while you were editing' });
+    await expect(notice).toBeVisible();
+    await expect(notice).toContainText('It is now: “Didascalia salvata altrove”');
+    await expect(dialog.getByLabel('Caption')).toHaveValue('La mia didascalia');
+    // Nothing is sent until the author has chosen.
+    await expect(saveButton(dialog)).toBeDisabled();
+    await shot(page, 'conflict-caption');
+    await notice.getByRole('button', { name: 'Keep my version' }).click();
+    await expect(notice).toBeHidden();
+    await saveButton(dialog).click();
+    await expect(page.getByText('Figure saved')).toBeVisible();
+    expect(fm.writes.filter((w) => w.call.startsWith('PATCH')).map((w) => w.body)).toEqual([{ baseRevId: headAfterOtherTab, caption: 'La mia didascalia' }]);
+  });
+
+  test('taking the other caption puts it in the field and leaves nothing to save', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('La mia didascalia');
+    fm.elsewhere({ caption: 'Didascalia salvata altrove' });
+    const notice = dialog.getByRole('alert').filter({ hasText: 'The caption changed while you were editing' });
+    await notice.getByRole('button', { name: 'Use the other version' }).click();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia salvata altrove');
+    await expect(notice).toBeHidden();
+    await expect(saveButton(dialog)).toBeDisabled();
+  });
+
+  test('a description and a source changed in another tab get the same notice, and Render waits for the choice', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('What it shows').fill('Il mio testo.');
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    fm.elsewhere({ shows: 'Testo salvato altrove.', source: '#rect(width: 20pt, height: 10pt)' });
+    await expect(dialog.getByRole('alert').filter({ hasText: 'The description changed while you were editing' })).toContainText('It is now: “Testo salvato altrove.”');
+    const source = dialog.getByRole('alert').filter({ hasText: 'The source changed while you were editing' });
+    await expect(source).toContainText('#rect(width: 20pt, height: 10pt)');
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
+    await source.getByRole('button', { name: 'Keep my version' }).click();
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
+    await dialog.getByRole('alert').filter({ hasText: 'The description changed while you were editing' }).getByRole('button', { name: 'Use the other version' }).click();
+    await expect(dialog.getByLabel('What it shows')).toHaveValue('Testo salvato altrove.');
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeEnabled();
+  });
+
+  test('an edit to another block of the section does not stop a caption save, which goes on the new head', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('La mia didascalia');
+    fm.elsewhere({});
+    await expect(dialog.getByText('Drawn just now')).toBeVisible();
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await saveButton(dialog).click();
+    await expect(page.getByText('Figure saved')).toBeVisible();
+  });
+
+  for (const how of ['Escape', 'Cancel', 'Close', 'outside'] as const) {
+    test(`${how} with an unsaved caption asks before it discards, and Keep editing keeps the text`, async ({ page }) => {
+      await open(page);
+      const dialog = await openDialog(page);
+      await dialog.getByLabel('Caption').fill('Didascalia scritta e non salvata');
+      const close = async () => {
+        if (how === 'Escape') await page.keyboard.press('Escape');
+        else if (how === 'Cancel') await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+        else if (how === 'Close') await dialog.locator('.ui-dialog__head').getByRole('button', { name: 'Close' }).click();
+        else await page.mouse.click(4, 4);
+      };
+      await close();
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+      await shot(page, 'discard-ask');
+      await dialog.getByRole('button', { name: 'Keep editing' }).click();
+      await expect(dialog.getByText('Discard your changes to this figure?')).toBeHidden();
+      await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia scritta e non salvata');
+      await close();
+      await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+      await expect(dialog).toBeHidden();
+    });
+  }
+
+  test('an edited description or a source that is not rendered counts as unsaved, and an untouched dialog closes at once', async ({ page }) => {
+    await open(page);
+    let dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    dialog = await openDialog(page);
+    await dialog.getByLabel('What it shows').fill('Un altro testo.');
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await dialog.getByLabel('What it shows').fill(await dialog.getByLabel('What it shows').inputValue());
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).waitFor({ state: 'detached' }).catch(() => undefined);
+    await dialog.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    dialog = await openDialog(page);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  });
+});
+
+test.describe('figure dialog, leaving the page with unsaved edits', () => {
+  test('a reload or closing the tab asks first while a field or the source is unsaved, and not otherwise', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    // Nothing typed: the page leaves without a question.
+    let asked = 0;
+    page.on('dialog', (d) => { if (d.type() === 'beforeunload') asked++; void d.dismiss(); });
+    const prompt = async () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+    expect(await prompt()).toBe(false);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    expect(await prompt()).toBe(true);
+    // The source typed but not rendered counts too.
+    await dialog.getByLabel('Caption').fill('Amplificatore invertente con resistenze R₁ e R₂.');
+    expect(await prompt()).toBe(false);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    expect(await prompt()).toBe(true);
+    expect(asked).toBe(0);
+  });
+
+  test('a save or a discard takes the prompt away again', async ({ page }) => {
+    await open(page);
+    let dialog = await openDialog(page);
+    const prompt = async () => page.evaluate(() => { const e = new Event('beforeunload', { cancelable: true }); window.dispatchEvent(e); return e.defaultPrevented; });
+    await dialog.getByLabel('Caption').fill('Didascalia salvata');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    expect(await prompt()).toBe(false);
+    dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia scartata');
+    expect(await prompt()).toBe(true);
+    await page.keyboard.press('Escape');
+    await dialog.getByRole('button', { name: 'Discard' }).click();
+    await expect(dialog).toBeHidden();
+    expect(await prompt()).toBe(false);
+  });
+
+  test('browser Back with unsaved edits asks the discard question and stays on the section until the author chooses', async ({ page }) => {
+    await page.addInitScript(() => localStorage.setItem('smartbuilder.theme', 'light'));
+    await mockApi(page);
+    await mockFigureApi(page);
+    await page.goto('/books/p1/manuscript/s2');
+    await expect(page.locator('.ms-block').first()).toBeVisible();
+    // A move the app makes itself (the outline rail), so Back is a move the router knows about.
+    await page.locator('.ms-rail').getByRole('link', { name: /Definizione di limite/ }).click();
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await expect(page.locator('.ms-block', { has: page.locator('.sb-figure') })).toBeVisible();
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    await page.goBack();
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
+    await expect(page).toHaveURL(/manuscript\/s1$/);
+    await page.goBack();
+    await dialog.getByRole('button', { name: 'Discard' }).click();
+    await expect(page).toHaveURL(/manuscript\/s2$/);
+    await expect(dialog).toBeHidden();
+  });
+});
+
+test.describe('figure dialog, the discard question and focus', () => {
+  test('when the discard question appears focus moves to Keep editing and Tab stays inside the dialog', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    await dialog.getByLabel('Caption').press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('Tab');
+      expect(await page.evaluate(() => !!document.activeElement?.closest('dialog'))).toBe(true);
+    }
+    await page.keyboard.press('Shift+Tab');
+    await page.keyboard.press('Shift+Tab');
+    expect(await page.evaluate(() => !!document.activeElement?.closest('dialog'))).toBe(true);
+    // Keep editing hands focus back to the field the author was in, not to the top of the dialog.
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toBeFocused();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
+  });
+});
+
+test.describe('figure dialog, alt text', () => {
+  const saveButton = (dialog: ReturnType<Page['locator']>) => dialog.getByRole('button', { name: 'Save figure' });
+  const patches = (fm: FigureMock) => fm.writes.filter((w) => w.call.startsWith('PATCH')).map((w) => w.body);
+  const ALT_NOTICE = 'The alt text changed while you were editing';
+
+  test('the field sits under the caption with a hint, and saving sends the new alt text', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    const alt = dialog.getByLabel('Alt text');
+    await expect(alt).toHaveValue(FIG_ALT);
+    await expect(dialog.getByText('what a reader who cannot see the figure is told', { exact: false })).toBeVisible();
+    await expect(alt).toHaveAccessibleDescription(/A double quote is saved as\s”\./);
+    const below = await dialog.evaluate((d) => d.querySelector('#fd-alt')!.getBoundingClientRect().top - d.querySelector('#fd-caption')!.getBoundingClientRect().bottom);
+    expect(below).toBeGreaterThan(0);
+    await expect(saveButton(dialog)).toBeDisabled();
+    await alt.fill('Un amplificatore operazionale: R1 in serie all\'ingresso, R2 dall\'uscita all\'ingresso invertente.');
+    await shot(page, 'alt-text');
+    await saveButton(dialog).click();
+    await expect(page.getByText('Figure saved')).toBeVisible();
+    await expect(dialog).toBeHidden();
+    expect(patches(fm)).toEqual([{ baseRevId: 'rvf1', alt: 'Un amplificatore operazionale: R1 in serie all\'ingresso, R2 dall\'uscita all\'ingresso invertente.' }]);
+    const reopened = await openDialog(page);
+    await expect(reopened.getByLabel('Alt text')).toHaveValue('Un amplificatore operazionale: R1 in serie all\'ingresso, R2 dall\'uscita all\'ingresso invertente.');
+  });
+
+  test('caption and alt text go in one save', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Nuova didascalia.');
+    await dialog.getByLabel('Alt text').fill('Nuovo testo alternativo.');
+    await saveButton(dialog).click();
+    await expect(dialog).toBeHidden();
+    expect(patches(fm)).toEqual([{ baseRevId: 'rvf1', caption: 'Nuova didascalia.', alt: 'Nuovo testo alternativo.' }]);
+  });
+
+  test('an empty alt text cannot be saved and says why', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Alt text').fill('   ');
+    await expect(saveButton(dialog)).toBeDisabled();
+    await expect(dialog.getByLabel('Alt text')).toHaveAttribute('aria-invalid', 'true');
+    await expect(dialog.getByText('Alt text is needed', { exact: false })).toBeVisible();
+    await shot(page, 'alt-text-empty');
+  });
+
+  test('an unsaved alt text asks before it is discarded', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Alt text').fill('Testo alternativo non salvato');
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Testo alternativo non salvato');
+    await page.keyboard.press('Escape');
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('an alt text saved in another tab gets the same notice as the caption, and the author chooses', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Alt text').fill('Il mio testo alternativo');
+    fm.elsewhere({ alt: 'Testo alternativo salvato altrove' });
+    const headAfterOtherTab = fm.head();
+    const notice = dialog.getByRole('alert').filter({ hasText: ALT_NOTICE });
+    await expect(notice).toContainText('It is now: “Testo alternativo salvato altrove”');
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Il mio testo alternativo');
+    await expect(saveButton(dialog)).toBeDisabled();
+    await shot(page, 'conflict-alt');
+    await notice.getByRole('button', { name: 'Keep my version' }).click();
+    await saveButton(dialog).click();
+    await expect(dialog).toBeHidden();
+    expect(patches(fm)).toEqual([{ baseRevId: headAfterOtherTab, alt: 'Il mio testo alternativo' }]);
+  });
+
+  test('taking the other alt text puts it in the field and leaves nothing to save', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Alt text').fill('Il mio testo alternativo');
+    fm.elsewhere({ alt: 'Testo alternativo salvato altrove' });
+    await dialog.getByRole('alert').filter({ hasText: ALT_NOTICE }).getByRole('button', { name: 'Use the other version' }).click();
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Testo alternativo salvato altrove');
+    await expect(saveButton(dialog)).toBeDisabled();
+  });
+
+  test('fresh data keeps the alt text the author typed, and a field they did not touch takes the new value', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Alt text').fill('Quello che sto scrivendo');
+    fm.elsewhere({ caption: 'Didascalia da un altro tab' });
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia da un altro tab');
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Quello che sto scrivendo');
+    await expect(dialog.getByRole('alert')).toHaveCount(0);
+    await expect(saveButton(dialog)).toBeEnabled();
+  });
+});
+
+test.describe('figure dialog, Save with a source that is not rendered', () => {
+  test('the dialog stays open with the "Not rendered yet" line, and closes once nothing is pending', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia salvata con la sorgente ancora da disegnare.');
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect.poll(() => fm.writes.filter((w) => w.call.startsWith('PATCH')).length).toBe(1);
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByText('Not rendered yet. The figure still shows the last render.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia salvata con la sorgente ancora da disegnare.');
+    // The source is still guarded: closing asks.
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
+    await dialog.locator('.ui-dialog__foot').getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('the source stays visible after a save even when its section was collapsed', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await dialog.locator('summary', { hasText: 'Source' }).click();
+    await dialog.getByLabel('Caption').fill('Altra didascalia.');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog.getByText('Not rendered yet.')).toBeVisible();
+  });
+});
+
+test.describe('Extras link to a figure', () => {
+  test('opens the dialog even when the section in the cache is older than the figure the link names', async ({ page }) => {
+    await page.clock.install();
+    const fm = await open(page);
+    await expect(figureBlock(page)).toBeVisible();
+    // Another tab saves a new copy of the figure. This page is not told, so its cached section still has the old one.
+    fm.elsewhere({ caption: 'Didascalia nuova da un altro tab.' }, { quiet: true });
+    await page.clock.fastForward(11_000);
+    await page.getByRole('link', { name: 'Extras' }).click();
+    const card = page.locator('.ex-card');
+    await expect(card).toContainText('Didascalia nuova da un altro tab.');
+    await card.getByRole('link', { name: 'Edit in the Manuscript' }).click();
+    const dialog = page.getByRole('dialog', { name: /^Figure/ });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia nuova da un altro tab.');
+    await expect(page).toHaveURL(/\/manuscript\/s1$/);
+  });
+});
+
+test.describe('figure dialog, what Render and Replace do', () => {
+  test('the dialog says they act at once, and after one the closing button reads Close', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await expect(dialog.getByText(/Render and Replace change the figure in the book at once, and the earlier one stays in the section history\./)).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toBeVisible();
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(dialog.getByText('Not rendered yet')).toBeHidden();
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+    await shot(page, 'after-render');
+    await dialog.getByRole('button', { name: 'Close', exact: true }).last().click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('after a Replace the closing button reads Close too, and other unsaved fields still get the discard question', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Ancora da salvare');
+    await dialog.locator('input[type=file]').setInputFiles({ name: 'mio.png', mimeType: 'image/png', buffer: PNG });
+    await expect(dialog.getByRole('heading', { name: /Uploaded image/ })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Cancel', exact: true })).toHaveCount(0);
+    await dialog.locator('.ui-dialog__foot').getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+  });
+});
+
+test.describe('figure dialog, small things', () => {
+  test('a save does not ask for the figure it replaced', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Nuova didascalia');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    const next = await openDialog(page);
+    await expect(next.getByLabel('Caption')).toHaveValue('Nuova didascalia');
+    await page.waitForTimeout(500);
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('a redraw that finishes says so in the dialog', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Instruction for the redraw').fill('Move the labels');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    fm.complete();
+    await expect(dialog.getByRole('status').filter({ hasText: 'Redrawn. The earlier drawing is in the section history.' })).toBeVisible({ timeout: 12_000 });
+    expect(fm.notFound).toEqual([]);
+  });
+});
 
 test.describe('figure block (2g)', () => {
   test('a drawn figure shows its badge and an Edit figure entry once selected', async ({ page }) => {
@@ -111,11 +568,23 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(dialog.locator('.fd-preview')).toHaveClass(/is-busy/);
     await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
     await shot(page, '2c-rendering');
-    await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
     await expect(dialog.locator('.fd-preview')).not.toHaveClass(/is-busy/);
     expect(await dialog.locator('.fd-preview img').getAttribute('src')).not.toBe(before);
     expect(fm.writes.find((w) => w.call.endsWith('/render'))!.body).toEqual({ baseRevId: 'rvf1', source: '#circle(radius: 9pt)' });
     await expect(page.locator('.ms-block .sb-figure img')).toHaveAttribute('src', await dialog.locator('.fd-preview img').getAttribute('src') as string);
+  });
+
+  test('a double click on Render sends one request, so there is no conflict with the author\'s own render', async ({ page }) => {
+    const fm = await open(page);
+    fm.renderMs = 500;
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    await dialog.getByRole('button', { name: 'Render' }).dblclick();
+    await expect(dialog.getByText('Rendered. The figure in the book is updated.')).toBeVisible();
+    expect(fm.writes.filter((w) => w.call.endsWith('/render'))).toHaveLength(1);
+    await expect(dialog.locator('.fd-error')).toHaveCount(0);
   });
 
   test('a source that does not compile shows the compiler line under the editor and keeps the last drawing (2c)', async ({ page }) => {
@@ -200,7 +669,7 @@ test.describe('figure dialog, a drawn figure', () => {
     const dialog = await openDialog(page);
     await expect(dialog.getByText(/The figure then stops being a drawing and its source is removed/)).toBeVisible();
     await dialog.locator('input[type=file]').setInputFiles({ name: 'mio.png', mimeType: 'image/png', buffer: PNG });
-    await expect(page.getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
     await expect(dialog.getByRole('heading', { name: /Uploaded image/ })).toBeVisible();
     await expect(dialog.getByLabel('What it shows')).toHaveCount(0);
     await expect(dialog.locator('summary')).toHaveCount(0);
@@ -218,6 +687,27 @@ test.describe('figure dialog, a drawn figure', () => {
     await expect(dialog.getByRole('alert')).toContainText('PNG, JPEG, SVG or WebP');
     expect(fm.writes.some((w) => w.call.endsWith('/replace'))).toBe(false);
     await shot(page, '2e-refused');
+  });
+
+  test('a refused replacement says so next to the button, in view even when the dialog scrolls', async ({ page }) => {
+    const fm = await open(page);
+    await page.setViewportSize({ width: 1440, height: 560 });
+    const dialog = await openDialog(page);
+    const input = dialog.locator('input[type=file]');
+    const here = dialog.locator('.fd-col').first().getByRole('alert');
+    await input.setInputFiles({ name: 'grande.png', mimeType: 'image/png', buffer: Buffer.alloc(2 * 1024 * 1024 + 10) });
+    await expect(here).toContainText('The limit is 2 MB');
+    await expect(here).toBeInViewport();
+    // The service's own refusal (here: the text moved on) shows in the same place, and a new attempt clears the old message.
+    fm.stale = true;
+    await input.setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    await expect(here).toContainText('This text changed since you opened it');
+    await expect(here).toBeInViewport();
+    await expect(dialog.locator('.fd-error')).toHaveCount(0);
+    fm.stale = false;
+    await input.setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(here).toHaveCount(0);
   });
 
   test('remove asks first, Keep backs out, and Remove figure takes the block out of the text (2f)', async ({ page }) => {
@@ -318,6 +808,7 @@ test.describe('Add figure', () => {
     await page.getByRole('button', { name: 'Add figure', exact: true }).click();
     await pop.getByRole('button', { name: /Describe a drawing/ }).click();
     await expect(pop.getByText(/in English/)).toHaveCount(0);
+    await expect(pop.getByLabel(/Caption/)).toHaveAccessibleDescription(/Without one, the alt text stays empty until you write it in the book's language/);
     await shot(page, '3b-describe');
     await pop.getByLabel('What should the drawing show?').fill('An op-amp with R1 and R2, the input grounded.');
     await pop.getByLabel('Caption').fill('Amplificatore di prova');
@@ -425,6 +916,180 @@ test.describe('review findings of the figure dialog', () => {
     await expect.poll(async () => dialog.locator('.fd-preview img').getAttribute('src'), { timeout: 12_000 }).not.toBe(before);
     await expect(dialog.locator('.fd-code .cm-content')).toContainText('// still typing');
     await expect(dialog.getByText('Not rendered yet. The figure still shows the last render.')).toBeVisible();
+  });
+
+  test('after a Render the next request names the new figure and the new head, so a redraw starts from the rendered source', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    const first = fm.figures()[0].id;
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // R_1');
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect(dialog.getByText('Rendered. The figure in the book is updated.')).toBeVisible();
+    const rendered = fm.figures().find((f) => f.id !== first)!;
+    await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    const redraw = fm.writes.find((w) => w.call.endsWith('/redraw'))!;
+    expect(redraw.call).toBe(`POST /api/projects/p1/sections/s1/figures/${rendered.id}/redraw`);
+    expect(redraw.body).toEqual({ baseRevId: fm.head(), instruction: 'Make the capacitor label C bigger' });
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('a dialog opened again after a save shows the figure as the book has it now, and never asks for the figure it replaced', async ({ page }) => {
+    const fm = await open(page);
+    let dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia nuova.');
+    await dialog.getByLabel('Alt text').fill('Alt nuovo.');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    dialog = await openDialog(page);
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia nuova.');
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('Alt nuovo.');
+    await expect(dialog.getByRole('button', { name: 'Save figure' })).toBeDisabled();
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('while the page fetches the figure a Render made, the dialog holds its buttons instead of asking for the old figure', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    const first = fm.figures()[0].id;
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // R_1');
+    await dialog.getByLabel('Instruction for the redraw').fill('Make the capacitor label C bigger');
+    fm.readMs = 600;
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    await expect.poll(() => fm.figures().length).toBe(2); // the render is done on the service, the page has not read the new figure yet
+    // The new figure's details are on their way: the old ones still on screen belong to a head the book has left.
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
+    await expect(dialog.getByRole('button', { name: 'Redraw with AI' })).toBeEnabled();
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    const rendered = fm.figures().find((f) => f.id !== first)!;
+    await expect.poll(() => fm.writes.filter((w) => w.call.endsWith('/redraw')).map((w) => w.call)).toEqual([`POST /api/projects/p1/sections/s1/figures/${rendered.id}/redraw`]);
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('a dialog opened again after a save does not show the figure it replaced while the new one loads', async ({ page }) => {
+    const fm = await open(page);
+    let dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia nuova.');
+    fm.readMs = 900; // the new figure's details are still on their way when the dialog closes
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog).toBeHidden();
+    await figureBlock(page).click();
+    await page.locator('.ms-actions').getByRole('button', { name: 'Edit figure' }).click();
+    dialog = page.getByRole('dialog', { name: /^Figure/ });
+    await expect(dialog.getByRole('status', { name: 'Loading the figure' })).toBeVisible();
+    await expect(dialog.getByLabel('Caption')).toHaveCount(0);
+    await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia nuova.');
+    expect(fm.notFound).toEqual([]);
+  });
+
+  test('the fields wait while a save is on its way, so nothing typed after Save is dropped when the dialog closes', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    fm.saveMs = 600;
+    await dialog.getByLabel('Caption').fill('Didascalia A');
+    await dialog.getByRole('button', { name: 'Save figure' }).click();
+    await expect(dialog.getByLabel('Caption')).toBeDisabled();
+    await expect(dialog.getByLabel('Alt text')).toBeDisabled();
+    await expect(dialog.getByLabel('What it shows')).toBeDisabled();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('a redraw the service dropped says so instead of "Redrawn", and gives the instruction back', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    fm.runWarning = 'The new drawing was not used, because the figure was changed or left the text while it was being redrawn.';
+    await dialog.getByLabel('Instruction for the redraw').fill('Move the labels');
+    await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
+    await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();
+    fm.complete();
+    const notice = dialog.getByRole('alert').filter({ hasText: 'The redraw was not used.' });
+    await expect(notice).toContainText('because the figure was changed or left the text', { timeout: 12_000 });
+    await expect(dialog.getByText('Redrawn. The earlier drawing is in the section history.')).toHaveCount(0);
+    await expect(dialog.getByLabel('Instruction for the redraw')).toHaveValue('Move the labels');
+  });
+
+  test('a source edit whose drawing another tab replaced with an image is kept on screen, and closing asks until it is discarded', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // mine');
+    fm.elsewhere({ origin: 'imported' });
+    const notice = dialog.getByRole('alert').filter({ hasText: 'This figure was replaced with an image while you were editing its source' });
+    await expect(notice.getByLabel('Your unrendered source')).toHaveValue('#circle(radius: 9pt) // mine');
+    await expect(dialog.locator('.cm-editor')).toHaveCount(0);
+    await shot(page, 'source-of-a-replaced-drawing');
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await notice.getByRole('button', { name: 'Discard my source' }).click();
+    await expect(notice).toHaveCount(0);
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+  });
+
+  test('replacing a drawing from this dialog lets an unrendered source go without the notice', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt) // mine');
+    await dialog.getByLabel('Choose an image to replace this figure').setInputFiles({ name: 'foto.png', mimeType: 'image/png', buffer: PNG });
+    await expect(dialog.getByText('Image replaced. The earlier figure is in the section history.')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Remove figure' })).toBeEnabled();
+    await expect(dialog.getByText('This figure was replaced with an image while you were editing its source')).toHaveCount(0);
+    await dialog.locator('.ui-dialog__foot').getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog).toBeHidden();
+  });
+
+  test('when the figure a Render made cannot be read, the dialog says so next to the editor and offers to try again', async ({ page }) => {
+    const fm = await open(page);
+    const dialog = await openDialog(page);
+    await openSource(dialog);
+    await typeSource(page, '#circle(radius: 9pt)');
+    fm.detailsFail = true;
+    await dialog.getByRole('button', { name: 'Render' }).click();
+    const notice = dialog.getByRole('alert').filter({ hasText: 'The figure could not be read.' });
+    await expect(notice).toBeVisible({ timeout: 15_000 });
+    await expect(dialog.locator('.cm-editor')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Render' })).toBeDisabled();
+    fm.detailsFail = false;
+    await notice.getByRole('button', { name: 'Try again' }).click();
+    await expect(notice).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: 'Remove figure' })).toBeEnabled();
+  });
+
+  test('while the discard question is open, Tab reaches only its answers and the close button', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia non salvata');
+    await dialog.getByLabel('Caption').press('Escape');
+    await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+    const seen = new Set<string>();
+    for (let i = 0; i < 6; i++) {
+      await page.keyboard.press('Tab');
+      seen.add(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') ?? document.activeElement?.textContent ?? ''));
+    }
+    expect([...seen].sort()).toEqual(['Close', 'Discard', 'Keep editing']);
+    // The close button asks the same question again, and Keep editing still goes back to the field the author left.
+    await dialog.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(dialog.getByText('Discard your changes to this figure?')).toBeVisible();
+    await dialog.getByRole('button', { name: 'Keep editing' }).click();
+    await expect(dialog.getByLabel('Caption')).toBeFocused();
+  });
+
+  test('a figure whose alt text is still empty is drawn in the Manuscript, not shown as markup', async ({ page }) => {
+    const fm = await open(page);
+    await expect(page.locator('.ms-block .sb-figure img')).toBeVisible();
+    fm.elsewhere({ alt: '' });
+    await expect(page.locator('.ms-block .sb-figure img')).toHaveAttribute('alt', 'Figure without alt text');
+    await expect(page.getByText(':::image{')).toHaveCount(0);
+    // The dialog still asks for the alt text, which stays empty in the book until the author writes it.
+    const dialog = await openDialog(page);
+    await expect(dialog.getByLabel('Alt text')).toHaveValue('');
+    await expect(dialog.getByText('Alt text is needed')).toBeVisible();
   });
 
   test('Redraw with AI sends the description as it is in the field', async ({ page }) => {
@@ -548,7 +1213,7 @@ for (const width of [1440, 390]) for (const theme of ['light', 'dark'] as const)
       await expect(dialog.getByText('Rendering the source…')).toBeVisible();
       await fits('rendering');
       await shot(page, 'state-rendering');
-      await expect(page.getByText('Rendered. The figure in the section is updated.')).toBeVisible();
+      await expect(page.getByRole('dialog', { name: /^Figure/ }).getByText('Rendered. The figure in the book is updated. The earlier drawing is in the section history.')).toBeVisible();
       await dialog.getByLabel('Instruction for the redraw').fill('Move the labels off the wires');
       await dialog.getByRole('button', { name: 'Redraw with AI' }).click();
       await expect(dialog.locator('.fd-redraw__prog')).toBeVisible();

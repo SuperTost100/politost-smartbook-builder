@@ -11,19 +11,22 @@ const EVENT_TYPES: ServiceEvent['type'][] = [
 /** Tasks that finish write questions, assets, enrichments and issues without every one of them having its own event. */
 const TASK_SUCCEEDED_KEYS = ['questions', 'assets', 'enrichments', 'issues'];
 
-/** Query keys touched by each event type. A key is the first element of the query key. */
+/**
+ * Query keys touched by each event type. A key is the first element of the query key. The figure dialog's details are not listed: their key holds
+ * the section head and the asset, so a change of either is a new query, and asking again for the asset the text left would answer 404.
+ */
 const INVALIDATE: Record<string, string[]> = {
   // `resources` is here because a split with AI replaces a file's questions and its counts while the run is still going.
   'task.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment', 'resources'],
   'task.progress': ['run'],
   'run.state': ['runs', 'run', 'project', 'projects', 'program', 'alignment'],
-  'content.saved': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects', 'figure'],
+  'content.saved': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],
   'proposal.created': ['manuscript', 'section', 'history', 'issues'],
   'proposal.decided': ['manuscript', 'section', 'history', 'preview', 'issues', 'project', 'projects'],
   'issue.created': ['issues', 'section', 'project', 'projects'],
   'issue.updated': ['issues', 'section', 'project', 'projects'],
   'question.updated': ['questions', 'topics'],
-  'asset.updated': ['assets', 'preview', 'figure'],
+  'asset.updated': ['assets', 'preview'],
   'enrichment.updated': ['enrichments'],
   'resource.state': ['resources', 'pages', 'page', 'source-index', 'project', 'projects'],
   'outline.created': ['outline', 'topics', 'project', 'projects'],

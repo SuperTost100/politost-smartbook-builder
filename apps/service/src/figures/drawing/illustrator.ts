@@ -13,7 +13,7 @@
 import type { DrawingFamily } from '@smartbuilder/domain';
 import type { AppContext } from '../../context.ts';
 import { FollowUpError, withRole, type ParseResult, type RoleConversation } from '../../llm/index.ts';
-import { illustratorPrompt, illustratorSystem, LOOK_MESSAGE, repairMessage } from './prompt.ts';
+import { illustratorPrompt, illustratorSystem, lookMessage, repairMessage } from './prompt.ts';
 import { rasterizeDrawing, renderDrawing } from './index.ts';
 import type { CircuitSymbols, DrawingEngine } from './types.ts';
 
@@ -55,6 +55,17 @@ export type LookOutcome =
   | 'kept'
   /** The look did not happen: the follow-up failed (a route that cannot read images, a limit). */
   | 'skipped';
+
+/** The compile attempts and the look turn as a plain phrase for the check line of a figure. */
+export function whatHappened(attempts: number, look: LookOutcome): string {
+  const compiled = attempts === 1 ? 'compiled on the first attempt' : `compiled after ${attempts} attempts`;
+  switch (look) {
+    case 'ok': return `${compiled}, then the model looked at its render and left it as it was`;
+    case 'corrected': return `${compiled}, then corrected after the model looked at its render`;
+    case 'kept': return `${compiled}, then the model looked at its render, but its correction did not compile, so the first drawing was kept`;
+    case 'skipped': return `${compiled}, and the model could not look at its render`;
+  }
+}
 
 export type Illustrated =
   | {
@@ -149,7 +160,7 @@ export async function illustrate(ctx: AppContext, o: IllustrateInput): Promise<I
       let best = first;
       let look: LookOutcome = 'skipped';
       try {
-        const reply = await talk.send(LOOK_MESSAGE, { images: [rasterizeDrawing(first.svg, 1000)] });
+        const reply = await talk.send(lookMessage(!!o.redraw), { images: [rasterizeDrawing(first.svg, 1000)] });
         add(reply.usage);
         if (saysOk(reply.text)) {
           look = 'ok';

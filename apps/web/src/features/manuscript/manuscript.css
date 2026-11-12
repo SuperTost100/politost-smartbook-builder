@@ -92,6 +92,7 @@
 .hi-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .hi-item { display: flex; flex-direction: column; gap: 6px; padding: 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); }
 .hi-time { font-size: 13px; margin-left: auto; }
+.hi-note { margin: 0; font-size: 13.5px; font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .hi-snippet { font-family: var(--font-serif); font-size: 14.5px; color: var(--ink); overflow-wrap: anywhere; }
 .fg-scope { border: 0; margin: 0; padding: 0; display: grid; gap: 10px; min-width: 0; }
 .fg-scope legend { padding: 0; margin-bottom: 4px; }

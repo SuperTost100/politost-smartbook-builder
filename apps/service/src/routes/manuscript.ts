@@ -1,10 +1,11 @@
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import type { ContentRevision, SectionView } from '@smartbuilder/domain';
+import type { ContentRevision, HistoryRevision, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import {
   acceptProposal, findNode, getRevision, listRevisions, rejectProposal, restoreRevision, saveHuman,
 } from '../repo/index.ts';
+import { figureNotes } from '../figures/historyNote.ts';
 import { HttpError } from '../server.ts';
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
@@ -40,7 +41,9 @@ export function registerManuscriptRoutes(app: FastifyInstance, ctx: AppContext) 
     const projectId = projectOf(ctx, req);
     const nodeId = idParam(req, 'nodeId');
     nodeOf(ctx, projectId, nodeId);
-    return listRevisions(ctx, projectId, nodeId);
+    const revisions = listRevisions(ctx, projectId, nodeId);
+    const notes = figureNotes(ctx, projectId, revisions);
+    return revisions.map((r): HistoryRevision => ({ ...r, figureNote: notes.get(r.id) ?? null }));
   });
 
   app.post('/api/projects/:id/sections/:nodeId/restore', async (req) => {
