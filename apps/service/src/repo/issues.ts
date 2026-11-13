@@ -103,11 +103,19 @@ export function replaceLintIssues(
       return same;
     });
     // The formatter may have rewritten the line an issue quotes (a heading that changed level), so its fresh finding has
-    // another quote. A kept row then goes with the finding that quotes its line as the formatter wrote it, and failing that
-    // with the one unmatched finding of its rule and message, when there is exactly one of each.
+    // another quote. A kept row then goes with the finding that quotes its line as the formatter wrote it, or the one
+    // finding that quotes a part of it, and failing that with the one unmatched finding of its rule and message, when there
+    // is exactly one of each. A row that none of these finds again is replaced by a fresh one.
     for (const r of kept) {
       if (used.has(r.id as string)) continue;
-      const at = findings.findIndex((f, n) => !rows[n] && f.rule === r.category && f.message === r.message && (f.quote ?? '') === moved(r.quote as string));
+      const now = moved(r.quote as string);
+      const free = (f: { rule: string; message: string }, n: number) => !rows[n] && f.rule === r.category && f.message === r.message;
+      let at = findings.findIndex((f, n) => free(f, n) && (f.quote ?? '') === now);
+      if (at < 0) {
+        // The formatter split the line (a formula moved to lines of its own): the finding now quotes one part of it.
+        const parts = findings.map((f, n) => (free(f, n) && f.quote && now.includes(f.quote) ? n : -1)).filter((n) => n >= 0);
+        if (parts.length === 1) at = parts[0];
+      }
       if (at < 0) continue;
       rows[at] = r;
       used.add(r.id as string);

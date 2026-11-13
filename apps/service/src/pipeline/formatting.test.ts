@@ -240,6 +240,22 @@ describe('a fix settles formatting findings in code', () => {
     assert.deepEqual(ctx.db.all<{ quote: string }>(`SELECT quote FROM review_issues WHERE node_id = 's1' AND category = 'placeholder' ORDER BY quote`).map((r) => r.quote), ['### Altro [?]', '### Valore [?]']);
   });
 
+  test('when the formatter splits a quoted line, the kept row follows the part that holds its finding', async () => {
+    seedOutline();
+    const text = 'Vale $a$ e $$ b [?] $$ sempre.\n\nSegue $c$ e $$ d [?] $$ sempre.';
+    const rev = seedHead('s1', text);
+    const placeholders = lintSection(text, { sectionId: 's1', language: 'it' }).filter((f) => f.rule === 'placeholder');
+    assert.equal(placeholders.length, 2);
+    const [first] = placeholders.map((f) => addIssue({ nodeId: 's1', revId: rev, severity: f.severity, category: 'placeholder', quote: f.quote, message: f.message }));
+    const mixed = addIssue({ nodeId: 's1', revId: rev, category: 'math-mixed', message: 'Display math ($$) and inline math ($) in the same block' });
+    fake.next(patchAnswer({ changes: [] }));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [first, mixed] }));
+    const row = ctx.db.get<{ quote: string }>('SELECT quote FROM review_issues WHERE id = ?', first);
+    assert.ok(row, 'the row the fix was asked about still exists');
+    assert.match(row.quote, /b \[\?\]/, 'and it is the row of its own formula');
+    assert.equal(ctx.db.all(`SELECT 1 FROM review_issues WHERE node_id = 's1' AND category = 'placeholder'`).length, 2);
+  });
+
   test('another lint issue in the same fix keeps its row, so the fix can close it and a proposal can mark it', async () => {
     seedOutline();
     const text = '### Uno\n\nIl valore è [?] ohm.\n\nVale $a$ e $$ b $$ sempre.';
