@@ -200,6 +200,23 @@ describe('a fix settles formatting findings in code', () => {
     assert.equal(head('s1').markdown, '### Uno\n\nIl valore è 6 ohm.\n\nVale $a$ e\n\n$$\nb\n$$\n\nsempre.');
   });
 
+  test('another lint issue in the same fix keeps its row, so the fix can close it and a proposal can mark it', async () => {
+    seedOutline();
+    const text = '### Uno\n\nIl valore è [?] ohm.\n\nVale $a$ e $$ b $$ sempre.';
+    const rev = seedHead('s1', text);
+    const findings = lintSection(text, { sectionId: 's1', language: 'it' });
+    const placeholder = findings.find((f) => f.rule === 'placeholder')!;
+    const other = addIssue({ nodeId: 's1', revId: rev, severity: placeholder.severity, category: 'placeholder', quote: placeholder.quote, message: placeholder.message });
+    const mixed = addIssue({ nodeId: 's1', revId: rev, category: 'math-mixed', message: 'Display math ($$) and inline math ($) in the same block' });
+    fake.next(patchAnswer({ changes: [{ block: 1, text: 'Il valore è 5 ohm.' }] }), () => ({ structured: { changes: [{ block: 1, verdict: 'good', reason: '' }], issues: [{ index: 1, fixed: true, reason: '' }] } as never, text: '{}', usage: usageOf(1, 1) }));
+    const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [other, mixed] }));
+    assert.equal(r.status, 'current');
+    assert.equal(issue(mixed).status, 'fixed');
+    assert.equal(issue(other).status, 'fixed', 'the issue the model fixed is still the same row');
+    assert.match(issue(other).resolution, /Fixed by AI in revision/);
+    assert.equal(ctx.db.all(`SELECT 1 FROM review_issues WHERE node_id = 's1' AND category = 'placeholder'`).length, 1, 'no second row for it');
+  });
+
   test('the fix model\'s own result is formatted before the guards compare it', async () => {
     seedOutline();
     const rev = seedHead('s1', 'Testo.\n\nIl valore è 5 ohm.');

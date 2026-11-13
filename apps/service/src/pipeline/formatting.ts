@@ -40,7 +40,7 @@ function settle(ctx: AppContext, projectId: string, issues: FormatIssue[], left:
  * new current revision (origin "repair", no model) and the lint issues of the section are made again from it, with the reason
  * of each issue left open put back on its new row.
  */
-export function settleSectionFormatting(ctx: AppContext, p: { projectId: string; nodeId: string; language: string; head: { id: string; markdown: string }; issues: FormatIssue[] }): { revId: string | null; markdown: string; closed: number } {
+export function settleSectionFormatting(ctx: AppContext, p: { projectId: string; nodeId: string; language: string; head: { id: string; markdown: string }; issues: FormatIssue[]; /** Other open issues of the same fix: the new lint run keeps their rows. */ keep?: string[] }): { revId: string | null; markdown: string; closed: number } {
   const { projectId, nodeId, head } = p;
   const issues = p.issues.filter((i) => i.status === 'open');
   if (!issues.length) return { revId: null, markdown: head.markdown, closed: 0 };
@@ -50,7 +50,7 @@ export function settleSectionFormatting(ctx: AppContext, p: { projectId: string;
   const left = remaining(lintSection(formatted, { sectionId: nodeId, language: p.language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) }), 'section');
   const closed = settle(ctx, projectId, issues, left, revision ? `Fixed by the formatter in revision ${revision.id}` : 'The text already has it right, so nothing was changed.');
   if (revision) {
-    relint(ctx, projectId, nodeId);
+    relint(ctx, projectId, nodeId, p.keep);
     for (const [rule, message] of left) {
       ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open' AND category = ? AND resolution = ''`, `The formatter could not fix this, so it stays open for you to edit by hand: ${message}`, projectId, nodeId, rule);
     }

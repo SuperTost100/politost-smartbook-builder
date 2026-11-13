@@ -82,14 +82,31 @@ export function resolveProposalIssues(ctx: AppContext, projectId: string, revId:
   return ids;
 }
 
-/** Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. */
+/**
+ * Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. An open issue listed in
+ * `keepIds` that a fresh finding still matches (same rule, message and quote) keeps its row and id, because a running fix
+ * refers to it; its revision moves to `revId`.
+ */
 export function replaceLintIssues(
   ctx: AppContext, projectId: string, nodeId: string, revId: string | null,
   findings: { rule: string; severity: IssueSeverity; message: string; quote?: string }[],
+  keepIds: string[] = [],
 ): ReviewIssue[] {
   return ctx.db.tx(() => {
-    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'`, projectId, nodeId);
-    return findings.map((f) => insertIssue(ctx, { projectId, nodeId, revId, source: 'lint', severity: f.severity, category: f.rule, message: f.message, quote: f.quote ?? '' }));
+    const kept = ctx.db.all<Rec>(`SELECT id, category, message, quote FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'`, projectId, nodeId).filter((r) => keepIds.includes(r.id as string));
+    const used = new Set<string>();
+    const rows = findings.map((f) => {
+      const same = kept.find((r) => !used.has(r.id as string) && r.category === f.rule && r.message === f.message && r.quote === (f.quote ?? ''));
+      if (same) used.add(same.id as string);
+      return same;
+    });
+    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'${used.size ? ` AND id NOT IN (${[...used].map(() => '?').join(',')})` : ''}`, projectId, nodeId, ...used);
+    return findings.map((f, n) => {
+      const same = rows[n];
+      if (!same) return insertIssue(ctx, { projectId, nodeId, revId, source: 'lint', severity: f.severity, category: f.rule, message: f.message, quote: f.quote ?? '' });
+      ctx.db.run('UPDATE review_issues SET rev_id = ? WHERE id = ?', revId, same.id as string);
+      return getIssue(ctx, same.id as string);
+    });
   });
 }
 

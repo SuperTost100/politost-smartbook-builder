@@ -373,7 +373,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const unrouted = selected.filter((i) => !kindOf(i));
   const issues = unrouted.filter((i) => !isFormatIssue(i, 'section'));
   const routed = routeIssues(ctx, t, { nodeId, title: findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId)?.section.title ?? '', figures: selected.filter((i) => kindOf(i) === 'figure'), graphs: selected.filter((i) => kindOf(i) === 'graph') });
-  const settled = settleSectionFormatting(ctx, { projectId, nodeId, language: project.language, head, issues: unrouted.filter((i) => isFormatIssue(i, 'section')) });
+  const settled = settleSectionFormatting(ctx, { projectId, nodeId, language: project.language, head, issues: unrouted.filter((i) => isFormatIssue(i, 'section')), keep: issues.map((i) => i.id) });
   // The model works on the text the formatter left, so it is never asked about a layout the code already fixed.
   if (settled.revId) head = { ...head, id: settled.revId, markdown: settled.markdown };
   const requests = [

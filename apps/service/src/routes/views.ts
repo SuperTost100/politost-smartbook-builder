@@ -128,12 +128,13 @@ export function previewChapter(ctx: AppContext, projectId: string, chapterId: st
 
 /** Keys of numbered formulas used anywhere in the project, so lints can tell a missing key from a known one. */
 /** Re-runs the section lints for a node and replaces its open lint issues. A lint failure never blocks saving. */
-export function relint(ctx: AppContext, projectId: string, nodeId: string): void {
+/** `keepIds`: open lint issues a running fix still refers to keep their rows (see replaceLintIssues). */
+export function relint(ctx: AppContext, projectId: string, nodeId: string, keepIds: string[] = []): void {
   const head = currentHead(ctx, projectId, nodeId);
   if (!head) return;
   try {
     const findings = deps.lintSection(head.markdown, { sectionId: nodeId, language: getProject(ctx, projectId).language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) });
-    replaceLintIssues(ctx, projectId, nodeId, head.id, findings);
+    replaceLintIssues(ctx, projectId, nodeId, head.id, findings, keepIds);
   } catch {
     // The lints are advisory; the text is already saved.
   }
