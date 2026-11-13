@@ -200,6 +200,27 @@ describe('a fix settles formatting findings in code', () => {
     assert.equal(head('s1').markdown, '### Uno\n\nIl valore è 6 ohm.\n\nVale $a$ e\n\n$$\nb\n$$\n\nsempre.');
   });
 
+  test('an issue whose quoted line the formatter rewrote keeps its row too', async () => {
+    seedOutline();
+    // The heading has the wrong level and a placeholder: the formatter changes the line the placeholder issue quotes.
+    const text = '#### Valore [?]\n\nTesto.';
+    const rev = seedHead('s1', text);
+    const findings = lintSection(text, { sectionId: 's1', language: 'it' });
+    const placeholder = findings.find((f) => f.rule === 'placeholder')!;
+    const other = addIssue({ nodeId: 's1', revId: rev, severity: placeholder.severity, category: 'placeholder', quote: placeholder.quote, message: placeholder.message });
+    const level = addIssue({ nodeId: 's1', revId: rev, category: 'heading-level', message: 'Only "###" headings are allowed inside a section (found level 4).' });
+    fake.next(patchAnswer({ changes: [{ block: 0, text: '### Valore 5' }] }), () => ({ structured: { changes: [{ block: 0, verdict: 'good', reason: '' }], issues: [{ index: 1, fixed: true, reason: '' }] } as never, text: '{}', usage: usageOf(1, 1) }));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [other, level] }));
+    assert.equal(issue(level).status, 'fixed');
+    // The guards refuse a renamed heading, so the placeholder stays open. What matters here is that the answer lands on its own row.
+    const row = ctx.db.get<{ status: string; resolution: string; quote: string }>('SELECT status, resolution, quote FROM review_issues WHERE id = ?', other);
+    assert.ok(row, 'the row the fix was asked about still exists');
+    assert.equal(row.status, 'open');
+    assert.match(row.resolution, /The AI fix was not applied/);
+    assert.equal(row.quote, '### Valore [?]', 'and it quotes the line as it is now');
+    assert.equal(ctx.db.all(`SELECT 1 FROM review_issues WHERE node_id = 's1' AND category = 'placeholder'`).length, 1, 'no second row for it');
+  });
+
   test('another lint issue in the same fix keeps its row, so the fix can close it and a proposal can mark it', async () => {
     seedOutline();
     const text = '### Uno\n\nIl valore è [?] ohm.\n\nVale $a$ e $$ b $$ sempre.';
