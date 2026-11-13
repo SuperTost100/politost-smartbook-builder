@@ -106,3 +106,8 @@ test('question text keeps its headings and the lint still reports them', () => {
   assert.equal(out, '# Titolo\n\nTesto $x$ e\n\n$$\ny.\n$$');
   assert.equal(lintQuestionText(out, { file: 'statement', language: 'it' }).filter((f) => f.rule === 'heading-level').length, 1);
 });
+
+test('a heading-like line inside a longer fence is left alone', () => {
+  const md = '~~~~\n~~~\n# literal\n~~~~\n\n# Titolo';
+  assert.equal(formatModelText(md), '~~~~\n~~~\n# literal\n~~~~\n\n### Titolo');
+});

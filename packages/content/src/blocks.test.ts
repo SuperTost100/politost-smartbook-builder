@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { figureNumber, imageFilename, joinBlocks, splitBlocks } from './blocks.ts';
+import { figureNumber, imageFilename, joinBlocks, proseLines, splitBlocks } from './blocks.ts';
 
 const NESTED = `Testo introduttivo.
 
@@ -95,4 +95,16 @@ test('figureNumber reads the number the compiler put in front of a caption, also
   assert.equal(figureNumber(':::image{alt="f(x) = a_{1}" src="assets/x.png" caption="Figura 2: Un cerchio"}'), '2');
   assert.equal(figureNumber(':::image{src="assets/x.png" alt="A" caption="Un cerchio"}'), null);
   assert.equal(figureNumber(null), null);
+});
+
+test('proseLines: a fence is closed by the same character, at least as long, with nothing after it', () => {
+  const flags = (md: string) => proseLines(md.split('\n'));
+  // a shorter fence, another character, or a fence with text after it is code
+  assert.deepEqual(flags('~~~~\n~~~\n# x\n~~~~\nfine'), [false, false, false, false, true]);
+  assert.deepEqual(flags('````\n```\n# x\n````\nfine'), [false, false, false, false, true]);
+  assert.deepEqual(flags('```\n~~~\n# x\n```\nfine'), [false, false, false, false, true]);
+  assert.deepEqual(flags('```\n```js\n# x\n```\nfine'), [false, false, false, false, true]);
+  // a longer fence closes, and so does one with trailing spaces
+  assert.deepEqual(flags('~~~\n# x\n~~~~~  \nfine'), [false, false, false, true]);
+  assert.deepEqual(flags('```\n# x\n```\nfine'), [false, false, false, true]);
 });
