@@ -72,6 +72,15 @@ From this release the version carries a stage name, so 0.5.0 alpha is the first 
 - **A book that is already written can be repaired.** `npm run normalize-text -- --project <id> --dry-run` lists what the formatter would change. Without `--dry-run` it writes the changes. It skips sections you edited by hand, unless you pass `--include-hand-edits`.
 - **What the formatter cannot repair:** words that a fix model already changed, such as a deleted comma or a duplicated line. Those stay as they are until you correct them.
 
+## After 0.5.0 alpha (not released yet)
+
+These changes came from five validation notes on three exam solutions, where "Fix with AI" was refused and the text had to be corrected by hand.
+
+- **A numbered formula block in a question is unwrapped by code.** A model sometimes wrote `:::formula{...}` inside a solution, which exercises do not allow. The formatter now removes the wrapper and keeps the math as display math, so the `formula-malformed` note of a question closes with no model call.
+- **A note about an unknown formula reference may change words.** The editor gets the numbered formulas of the book with their labels, and either points the reference at one of them or writes plain words. Before, any such fix was refused for changing a word.
+- **The end-of-proof sign is read as one symbol.** `∎` and `$\square$` (also `\blacksquare`, `\Box`, `\qed`) no longer count as a changed word.
+- **Validate closes the notes it no longer finds.** A `compile:` note whose finding is gone after a hand edit becomes fixed the next time you press Validate, so it stops holding back **Approve and export**.
+
 ## Decisions that still explain the design
 
 - **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.

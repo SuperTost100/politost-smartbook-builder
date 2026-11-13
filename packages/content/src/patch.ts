@@ -276,6 +276,8 @@ export const MATH_SYMBOLS: Record<string, string> = {
   wedge: '∧', vee: '∨', oplus: '⊕', otimes: '⊗', perp: '⊥', parallel: '∥', angle: '∠', therefore: '∴', because: '∵', cdots: '⋯',
   to: '→', rightarrow: '→', leftarrow: '←', leftrightarrow: '↔', Rightarrow: '⇒', Leftarrow: '⇐', Leftrightarrow: '⇔', implies: '⇒', iff: '⇔', mapsto: '↦',
   uparrow: '↑', downarrow: '↓', hbar: 'ℏ', ell: 'ℓ', Re: 'ℜ', Im: 'ℑ', aleph: 'ℵ',
+  // The end-of-proof sign (U+220E), which the unicode-math rule flags and which the repair writes in one of these ways.
+  blacksquare: '∎', square: '∎', Box: '∎', qed: '∎', qedsymbol: '∎',
 };
 /**
  * LaTeX commands that only decorate, size, space or group what they hold, so a repair may add or drop them. Any other command
@@ -386,6 +388,44 @@ export function unwrapFormulaKeys(markdown: string, taken: Set<string>): string 
     const key = /^\s*:::formula\{[^}]*key="([^"]+)"[^}]*\}\s*$/.exec(line)?.[1];
     if (key && taken.has(key)) { open = true; continue; }
     if (open && line.trim() === ':::') { open = false; continue; }
+    out.push(line);
+  }
+  return out.join('\n');
+}
+
+/**
+ * Every numbered formula block of a question loses its wrapper (the ::: lines) and keeps its `$$ ... $$` body, whatever its key:
+ * the reader has no numbered formulas inside exercises. Code fences are left alone, and so is a block that does not close or
+ * whose body is anything but one display formula, because dropping its wrapper would show text the reader now drops.
+ * shortcut: such a block stays for a hand edit with the "formatter could not fix this" reason, until a real case needs more.
+ */
+export function unwrapFormulaBlocks(markdown: string): string {
+  const lines = markdown.split('\n');
+  const out: string[] = [];
+  let code: { char: string; len: number } | null = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const t = line.trim();
+    const fence = /^(`{3,}|~{3,})(.*)$/.exec(t);
+    if (code) {
+      if (fence && fence[1][0] === code.char && fence[1].length >= code.len && !fence[2].trim()) code = null;
+    } else if (fence && !fence[2].includes('`')) {
+      code = { char: fence[1][0], len: fence[1].length };
+    } else if (/^:::formula\{.*\}$/.test(t)) {
+      let close = -1;
+      for (let j = i + 1; j < lines.length && close < 0; j++) {
+        const tj = lines[j].trim();
+        if (tj === ':::') close = j;
+        else if (tj.startsWith(':::')) break;
+      }
+      const body = close < 0 ? '' : lines.slice(i + 1, close).join('\n').trim();
+      const display = /^\$\$([\s\S]*?)\$\$$/.exec(body);
+      if (display && !display[1].includes('$$')) {
+        out.push(...lines.slice(i + 1, close));
+        i = close;
+        continue;
+      }
+    }
     out.push(line);
   }
   return out.join('\n');

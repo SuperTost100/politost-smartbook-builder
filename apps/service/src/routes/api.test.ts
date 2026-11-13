@@ -8,6 +8,7 @@ import { paths, resolveDataPath } from '../config.ts';
 import { deps, overrideDeps } from './deps.ts';
 import { HttpError } from '../server.ts';
 import { extractResource, renderPageImage, storeResource } from '../extract/index.ts';
+import { compileBook } from '@smartbuilder/content';
 import { cleanBook, installFakes, multipart, projectBody, projectWithOutline, startApp, type TestApp } from './testkit.ts';
 
 let t: TestApp;
@@ -516,6 +517,75 @@ describe('exports', () => {
       fake.restore();
       fakes = installFakes();
     }
+  });
+
+  describe('Validate closes the compile notes whose finding is gone', () => {
+    const BLOCK = ':::formula{key="green-lavoro" label="Teorema di Green"}\n$$\\oint F = 1$$\n:::';
+    const status = (id: string) => t.ctx.db.get<{ status: string; resolution: string }>('SELECT status, resolution FROM review_issues WHERE id = ?', id)!;
+    const note = (projectId: string, o: { id: string; questionId?: string | null; nodeId?: string; category: string; quote?: string; source?: string; status?: string }) =>
+      t.ctx.db.insert('review_issues', { id: o.id, project_id: projectId, node_id: o.nodeId ?? 'c1', question_id: o.questionId ?? null, source: o.source ?? 'lint', severity: 'blocker', category: o.category, quote: o.quote ?? '', message: 'm', status: o.status ?? 'open', resolution: '', created_at: now() });
+
+    it('closes a question note after a hand edit, and leaves the rows it must not touch', async () => {
+      const { projectId } = await projectWithOutline(t, 'validate-close');
+      await t.req('PUT', `/api/projects/${projectId}/sections/s1`, { markdown: 'Testo di prova.', baseRevId: null });
+      const qid = newId();
+      t.ctx.db.insert('questions', { id: qid, project_id: projectId, kind: 'exam', origin: 'generated', number: '1', chapter_id: 'c1', statement: 'Calcola il lavoro.', solution: `Si ha\n\n${BLOCK}\n\nquindi $L=1$.`, topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+      // A question in a chapter the book does not contain yet: Validate does not read it, so its note must stay.
+      const unread = newId();
+      t.ctx.db.insert('questions', { id: unread, project_id: projectId, kind: 'exam', origin: 'generated', chapter_id: null, statement: 'Altro.', solution: BLOCK, topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+      const quote = ':::formula{key="green-lavoro" label="Teorema di Green"}';
+      note(projectId, { id: 'n-block', questionId: qid, category: 'compile:formula-malformed', quote });
+      note(projectId, { id: 'n-math', questionId: qid, category: 'compile:math-mixed' });
+      note(projectId, { id: 'n-bare', questionId: qid, category: 'compile' });
+      note(projectId, { id: 'n-review', questionId: qid, category: 'compile:formula-malformed', source: 'review' });
+      note(projectId, { id: 'n-dismissed', questionId: qid, category: 'compile:formula-malformed', status: 'dismissed' });
+      note(projectId, { id: 'n-unread', questionId: unread, category: 'compile:formula-malformed', quote });
+      note(projectId, { id: 'n-section', nodeId: 's1', category: 'compile:katex', quote: 'Testo' });
+      const fake = installFakes({ compileBook });
+      try {
+        const changed: string[] = [];
+        const off = t.ctx.events.subscribe((e) => { if (e.type === 'issue.updated') changed.push(...(e.data.issueIds as string[])); });
+        const before = (await t.req('POST', `/api/projects/${projectId}/validate`)).body;
+        assert.ok(before.errors.some((e: { file: string }) => e.file === `question:${qid}`), 'the compile finds the block');
+        assert.equal(status('n-block').status, 'open', 'its finding is there');
+
+        // The author edits the solution by hand, as the question editor does.
+        const edit = await t.req('PATCH', `/api/questions/${qid}`, { rev: 1, solution: 'Si ha\n\n$$\\oint F = 1$$\n\nquindi $L=1$.' });
+        assert.equal(edit.status, 200);
+        const after = (await t.req('POST', `/api/projects/${projectId}/validate`)).body;
+        assert.equal(after.errors.filter((e: { file: string }) => e.file === `question:${qid}`).length, 0);
+
+        assert.deepEqual([status('n-block').status, status('n-block').resolution], ['fixed', 'Validate no longer finds this, so it was closed.']);
+        assert.equal(status('n-math').status, 'fixed', 'a note whose rule finds nothing on the question closes');
+        assert.equal(status('n-section').status, 'fixed', 'a section note closes the same way');
+        for (const id of ['n-bare', 'n-review', 'n-unread']) assert.equal(status(id).status, 'open', id);
+        assert.equal(status('n-dismissed').status, 'dismissed');
+        assert.equal(t.ctx.db.all('SELECT 1 FROM review_issues WHERE project_id = ?', projectId).length, 7, 'no row is deleted');
+        off();
+        assert.deepEqual(changed.sort(), ['n-block', 'n-math', 'n-section'], 'clients are told which notes closed');
+      } finally {
+        fake.restore();
+        fakes = installFakes();
+      }
+    });
+
+    it('keeps a note open while the same passage still has a finding of its rule, and also when only the rule is the same on another passage', async () => {
+      const { projectId } = await projectWithOutline(t, 'validate-keep');
+      await t.req('PUT', `/api/projects/${projectId}/sections/s1`, { markdown: 'Testo di prova.', baseRevId: null });
+      const qid = newId();
+      t.ctx.db.insert('questions', { id: qid, project_id: projectId, kind: 'exam', origin: 'generated', chapter_id: 'c1', statement: 'Calcola.', solution: BLOCK, topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+      note(projectId, { id: 'same', questionId: qid, category: 'compile:formula-malformed', quote: ':::formula{key="green-lavoro" label="Teorema di Green"}' });
+      note(projectId, { id: 'other', questionId: qid, category: 'compile:formula-malformed', quote: ':::formula{key="altra" label="Un altro"}' });
+      const fake = installFakes({ compileBook });
+      try {
+        await t.req('POST', `/api/projects/${projectId}/validate`);
+        assert.equal(status('same').status, 'open');
+        assert.equal(status('other').status, 'fixed', 'the passage it quoted is gone');
+      } finally {
+        fake.restore();
+        fakes = installFakes();
+      }
+    });
   });
 
   it('refuses to start a validation fix when nothing can be fixed', async () => {

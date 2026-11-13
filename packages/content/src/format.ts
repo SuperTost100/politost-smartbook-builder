@@ -3,7 +3,7 @@ import type { LintRule } from './lint.ts';
 import { separateDisplayMath } from './displayMath.ts';
 import { rewriteLatexNames, stripGeneratorMarkup } from './sanitize.ts';
 import { maskMath } from './scan.ts';
-import { unwrapFormulaKeys } from './patch.ts';
+import { unwrapFormulaBlocks, unwrapFormulaKeys } from './patch.ts';
 
 /** Section text (source dialect, headings are ###) or the text of a question (statement, hint, solution: no headings). */
 export type TextKind = 'section' | 'question';
@@ -26,7 +26,9 @@ export interface FormatOptions {
  */
 export function formatModelText(markdown: string, opts: FormatOptions = {}): string {
   let text = rewriteLatexNames(stripGeneratorMarkup(markdown));
-  if (opts.takenFormulaKeys) text = unwrapFormulaKeys(text, opts.takenFormulaKeys);
+  // An exercise has no numbered formulas, so a question loses every formula wrapper and a section only those of a key taken elsewhere.
+  if (opts.kind === 'question') text = unwrapFormulaBlocks(text);
+  else if (opts.takenFormulaKeys) text = unwrapFormulaKeys(text, opts.takenFormulaKeys);
   if (opts.kind !== 'question') text = headingsToThree(text);
   return separateDisplayMath(text);
 }
@@ -39,6 +41,7 @@ export function formatForRules(markdown: string, rules: Iterable<string>, kind: 
   const names = new Set([...rules].map((r) => r.replace(/^compile:/, '')));
   let text = markdown;
   if (kind !== 'question' && names.has('heading-level')) text = headingsToThree(text);
+  if (kind === 'question' && names.has('formula-malformed')) text = unwrapFormulaBlocks(text);
   if (names.has('math-mixed') || names.has('math-blank-line')) text = separateDisplayMath(text);
   return text;
 }
@@ -64,10 +67,12 @@ function headingsToThree(markdown: string): string {
 /**
  * Lint rules the formatter settles, by the kind of text. A finding of one of these rules is never sent to a model: the
  * formatter runs, the text is linted again, and what is gone is closed. `heading-level` of a section is handled except the
- * blocker "## pN | ..." (a compiler heading in the source), which needs the author's or a model's decision.
+ * blocker "## pN | ..." (a compiler heading in the source), which needs the author's or a model's decision. In a question the formula-malformed note is about a numbered formula block, which has no place in an exercise.
  */
 export function formatterHandles(rule: string, severity: string, kind: TextKind): boolean {
   const name = rule.replace(/^compile:/, '') as LintRule;
   if (name === 'math-mixed' || name === 'math-blank-line') return true;
+  // A finding the unwrap cannot remove stays open with the formatter's reason (see unwrapFormulaBlocks).
+  if (kind === 'question' && name === 'formula-malformed') return true;
   return kind === 'section' && name === 'heading-level' && severity !== 'blocker';
 }
