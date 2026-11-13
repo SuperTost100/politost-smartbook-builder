@@ -591,20 +591,24 @@ describe('exports', () => {
   it('keeps a chapter note open while its rule still finds something in a generated file, and closes it when that is gone', async () => {
     const { projectId } = await projectWithOutline(t, 'validate-chapter-note');
     await t.req('PUT', `/api/projects/${projectId}/sections/s1`, { markdown: 'Testo di prova.', baseRevId: null });
-    const row = (id: string, nodeId: string) => t.ctx.db.insert('review_issues', { id, project_id: projectId, node_id: nodeId, question_id: null, source: 'lint', severity: 'blocker', category: 'compile:content-core', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    const row = (id: string, nodeId: string, quote = '') => t.ctx.db.insert('review_issues', { id, project_id: projectId, node_id: nodeId, question_id: null, source: 'lint', severity: 'blocker', category: 'compile:content-core', quote, message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
     const status = (id: string) => t.ctx.db.get<{ status: string }>('SELECT status FROM review_issues WHERE id = ?', id)!.status;
     // The review stores a finding it cannot place in a section under the chapter id.
     row('on-chapter', 'c1');
+    // The finding it was made from quoted another passage of the generated file than today's finding does.
+    row('on-chapter-quoted', 'c1', 'Un passaggio di prima');
     row('on-section', 's1');
-    let fake = installFakes({ compileBook: () => cleanBook([{ rule: 'content-core', severity: 'blocker', message: 'x', file: 'esami.md' }]) });
+    let fake = installFakes({ compileBook: () => cleanBook([{ rule: 'content-core', severity: 'blocker', message: 'x', file: 'esami.md', quote: 'Un altro passaggio, più sotto' }]) });
     try {
       await t.req('POST', `/api/projects/${projectId}/validate`);
       assert.equal(status('on-chapter'), 'open', 'the finding in esami.md may be the one this note is about');
+      assert.equal(status('on-chapter-quoted'), 'open', 'also when that finding quotes another passage');
       assert.equal(status('on-section'), 'fixed', 'a section note is only about its section');
       fake.restore();
       fake = installFakes({ compileBook: () => cleanBook([]) });
       await t.req('POST', `/api/projects/${projectId}/validate`);
       assert.equal(status('on-chapter'), 'fixed');
+      assert.equal(status('on-chapter-quoted'), 'fixed');
     } finally {
       fake.restore();
       fakes = installFakes();

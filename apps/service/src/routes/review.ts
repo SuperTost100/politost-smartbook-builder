@@ -72,7 +72,7 @@ const FIX_HINTS: Record<string, string> = {
  * got milder is still there. A note on text the compile did not read (a chapter with no text, an unplaced question) stays,
  * and so do rows with the bare category `compile`, which the chapter review owns. The review stores a finding it cannot place
  * in a section under its chapter, so a chapter's note also stays while its rule finds something in a file that is neither a
- * section nor a question (a generated file, an asset). Nothing is deleted.
+ * section nor a question (a generated file, an asset), whatever passage that finding quotes. Nothing is deleted.
  */
 function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
   const sections = new Set(input.chapters.flatMap((c) => c.sections.map((s) => s.id)));
@@ -85,7 +85,9 @@ function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookIn
     const file = i.question_id ? `question:${i.question_id}` : i.node_id;
     const rule = i.category.slice('compile:'.length);
     const chapterNote = !!file && !placed(file);
-    return !!file && read.has(file) && !findings.some((f) => f.rule === rule && (f.file === file || (chapterNote && !placed(f.file))) && (!f.quote || !i.quote || sameQuote(i.quote, f.quote)));
+    // The passage is compared only on the note's own file: a chapter note about a generated file quotes an earlier finding, and the same problem there may now sit in another passage.
+    return !!file && read.has(file) && !findings.some((f) => f.rule === rule
+      && ((f.file === file && (!f.quote || !i.quote || sameQuote(i.quote, f.quote))) || (chapterNote && !placed(f.file))));
   }).map((i) => i.id);
   if (!gone.length) return;
   ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));
