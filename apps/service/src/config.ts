@@ -42,7 +42,7 @@ export function parseArgs(argv: string[]): Config {
     port: Number(value('port') ?? process.env.PORT ?? 5300),
     dev: flag('dev'),
     webDist: resolve(import.meta.dirname, '../../web/dist'),
-    version: '0.5.0-alpha',
+    version: '0.5.1-alpha',
   };
 }
 
