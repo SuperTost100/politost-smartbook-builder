@@ -251,4 +251,16 @@ describe('a question fix settles formatting findings in code too', () => {
     assert.equal(issue(iss).status, 'fixed');
     assert.match(issue(iss).resolution, /formatter/);
   });
+
+  test('a fix whose issue rows are gone calls no model and leaves the question as it is', async () => {
+    const id = newId();
+    ctx.db.insert('questions', { id, project_id: P, kind: 'exercise', origin: 'generated', statement: 'Sia $f$ con $$ g(x) = x $$ vera.', hint: '', solution: 'Vale 1.', difficulty: 'medio', topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    const iss = addIssue({ questionId: id, category: 'compile:math-mixed' });
+    ctx.db.run('DELETE FROM review_issues WHERE id = ?', iss);
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iss] }));
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(r, { skipped: 'the requested issues are gone' });
+    const row = ctx.db.get<{ statement: string; status: string; rev: number }>('SELECT statement, status, rev FROM questions WHERE id = ?', id)!;
+    assert.deepEqual([row.statement, row.status, row.rev], ['Sia $f$ con $$ g(x) = x $$ vera.', 'verified', 1]);
+  });
 });

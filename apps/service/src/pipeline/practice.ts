@@ -483,6 +483,8 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   let q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
   const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string }>(`SELECT id, message, suggestion, source, category, severity, status FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  // The issues may be gone (a relint of the chapter deletes open lint rows): with nothing left to fix the editor must not run and save its answer as a draft.
+  if (ids.length && !selected.length) return { skipped: 'the requested issues are gone' };
   const project = loadProject(ctx, q.projectId);
   // Formatting findings are settled by code and never listed in a prompt. A fix made of them alone makes no model call.
   const formatIssues = selected.filter((i) => isFormatIssue(i, 'question'));
