@@ -235,6 +235,20 @@ describe('the draft prompt goes from what every section shares to what only this
   });
 });
 
+describe('the repair of a draft that also has a formatting finding', () => {
+  test('is kept when it fixes the other finding, because the formatter settles the formatting one', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const blank = 'Con $\\nu_1$ a riga:\n\n$$\ni_1 = 2\n\ni_2 = 3\n$$';
+    fake.next(written({ markdown: `Il valore è [?] ohm.\n\n${blank}` }), plain(`Il valore è 5 ohm.\n\n${blank}`));
+    const r = await sectionDraft(ctx, startTask('section.draft', { nodeId: 's1' }));
+    assert.equal(r.status, 'current');
+    assert.equal(fake.calls.length, 2);
+    assert.match(fake.calls[1].prompt, /placeholder:/);
+    assert.doesNotMatch(fake.calls[1].prompt, /math-blank-line/, 'the formatting finding is not sent to the model');
+    assert.equal(current('s1'), 'Il valore è 5 ohm.\n\nCon $\\nu_1$ a riga:\n\n$$\ni_1 = 2\ni_2 = 3\n$$');
+  });
+});
+
 describe('a draft keeps its citations when an image block is removed', () => {
   test('the citation of a paragraph after a dropped figure stays on that paragraph', async () => {
     seedOutline([['c1', ['s1']]]);

@@ -259,7 +259,8 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   markdown = dropUnpairedBold(markdown);
   let findings = lintSection(markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
   // A finding the formatter settles never goes to a model: the commit below formats the text and the issues are linted on what is stored.
-  const serious = findings.filter((f) => f.severity !== 'minor' && !formatterHandles(f.rule, f.severity, 'section'));
+  const seriousOf = (all: LintFinding[]) => all.filter((f) => f.severity !== 'minor' && !formatterHandles(f.rule, f.severity, 'section'));
+  const serious = seriousOf(findings);
   if (serious.length) {
     t.progress(`Fixing ${serious.length} formatting problems`);
     const listing = serious.map((f) => `${f.rule}: ${f.message}${f.line ? ` (line ${f.line})` : ''}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`).join('\n');
@@ -267,7 +268,7 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
       const fix = await runRole(ctx, { role: 'editor', ...repairPrompt({ language: project.language, markdown: withMarkers(markdown, citations), findings: listing }), parse: repairParser, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
       const repaired = extractCitations(fix.data.markdown, splitBlocks);
       const after = lintSection(repaired.markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: new Set([...known.map((k) => k.key), ...formulaKeyLabels(repaired.markdown).map((k) => k.key)]) });
-      if (after.filter((f) => f.severity !== 'minor').length < serious.length) {
+      if (seriousOf(after).length < serious.length) {
         markdown = repaired.markdown;
         citations = repaired.citations;
         findings = after;
