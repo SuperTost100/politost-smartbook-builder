@@ -70,17 +70,22 @@ const FIX_HINTS: Record<string, string> = {
  * error. A note is closed when the compile has no finding of its rule on its section or question (and, where both have a
  * quote, on the same passage). Findings of every severity count, because a minor one never has a note and a finding that only
  * got milder is still there. A note on text the compile did not read (a chapter with no text, an unplaced question) stays,
- * and so do rows with the bare category `compile`, which the chapter review owns. Nothing is deleted.
+ * and so do rows with the bare category `compile`, which the chapter review owns. The review stores a finding it cannot place
+ * in a section under its chapter, so a chapter's note also stays while its rule finds something in a file that is neither a
+ * section nor a question (a generated file, an asset). Nothing is deleted.
  */
 function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
-  const read = new Set(input.chapters.flatMap((c) => [...(c.intro?.trim() ? [c.id] : []), ...c.sections.map((s) => s.id)]));
+  const sections = new Set(input.chapters.flatMap((c) => c.sections.map((s) => s.id)));
+  const read = new Set([...input.chapters.map((c) => c.id), ...sections]);
   for (const q of input.questions) read.add(`question:${q.id}`);
+  const placed = (file: string) => sections.has(file) || file.startsWith('question:');
   const open = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string; quote: string }>(
     `SELECT id, node_id, question_id, category, quote FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND category LIKE 'compile:%'`, projectId);
   const gone = open.filter((i) => {
     const file = i.question_id ? `question:${i.question_id}` : i.node_id;
     const rule = i.category.slice('compile:'.length);
-    return !!file && read.has(file) && !findings.some((f) => f.file === file && f.rule === rule && (!f.quote || !i.quote || sameQuote(i.quote, f.quote)));
+    const chapterNote = !!file && !placed(file);
+    return !!file && read.has(file) && !findings.some((f) => f.rule === rule && (f.file === file || (chapterNote && !placed(f.file))) && (!f.quote || !i.quote || sameQuote(i.quote, f.quote)));
   }).map((i) => i.id);
   if (!gone.length) return;
   ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));
@@ -169,7 +174,10 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
     const { approved } = parse(z.object({ approved: z.boolean() }), req.body);
     const project = getProject(ctx, projectId);
 
-    const compiled = deps.compileBook(loadBookInput(ctx, projectId, { approvedOnly: approved }));
+    const input = loadBookInput(ctx, projectId, { approvedOnly: approved });
+    const compiled = deps.compileBook(input);
+    // An approval counts the open blockers below, so the notes this compile no longer finds are closed first.
+    closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
     const report = buildReport(compiled);
 
     if (approved) {

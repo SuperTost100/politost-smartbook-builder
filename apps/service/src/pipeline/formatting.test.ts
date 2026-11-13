@@ -371,8 +371,11 @@ describe('formula blocks in a question', () => {
   });
 
   test('with a formula-ref-unknown note too, the formatter settles the block and the editor may change the reference', async () => {
+    seedOutline();
     const id = seedQuestion(`${BLOCK}\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-seno}} si ha $L=2$.`);
     ctx.db.insert('content_revisions', { id: newId(), project_id: P, node_id: 's1', kind: 'section', markdown: ':::formula{key="laplace-trasformata" label="Trasformata del seno"}\n$$a$$\n:::', origin: 'ai', model: null, parent_rev_id: null, status: 'current', citations: {}, created_at: now() });
+    // A section taken out of the outline keeps its text, and the book does not define its formulas.
+    ctx.db.insert('content_revisions', { id: newId(), project_id: P, node_id: 'not-in-outline', kind: 'section', markdown: ':::formula{key="chiave-tolta" label="Formula tolta"}\n$$b$$\n:::', origin: 'ai', model: null, parent_rev_id: null, status: 'current', citations: {}, created_at: now() });
     const block = note(id, 'formula-malformed', ':::formula{key="green-rettangolo" label="Teorema di Green"}');
     const ref = note(id, 'formula-ref-unknown', '{{formula:@laplace-seno}}');
     fake.next(() => ({ structured: { statement: 'Calcola il lavoro.', hint: '', solution: '$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-trasformata}} si ha $L=2$.' } as never, text: '{}', usage: usageOf(1, 1) }));
@@ -383,6 +386,7 @@ describe('formula blocks in a question', () => {
     assert.match(prompt, /unknown|exists in the book/);
     assert.doesNotMatch(prompt, /Numbered formula blocks/, 'the formatter note never reaches the model');
     assert.match(prompt, /laplace-trasformata: Trasformata del seno/, 'the editor gets the keys of the book with their labels');
+    assert.doesNotMatch(prompt, /chiave-tolta/, 'a formula of a section that is not in the outline is not offered');
     assert.match(solutionOf(id).solution, /@laplace-trasformata/);
     assert.equal(solutionOf(id).status, 'draft', 'a changed text is verified again');
     assert.equal(issue(block).status, 'fixed');

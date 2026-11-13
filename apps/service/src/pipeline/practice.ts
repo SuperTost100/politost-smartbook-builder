@@ -14,6 +14,7 @@ import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
 import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
+import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
 
@@ -496,8 +497,10 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   // The model works on the text the formatter left.
   if (settled.changed) q = getQuestion(ctx, q.id);
   // The editor cannot tell which formula keys exist, so a note about an unknown reference comes with the book's keys and labels.
+  // Only sections of the outline count: a section taken out of it keeps its text, and the book does not define its formulas.
+  const inBook = new Set(effectiveOutline(ctx, q.projectId)?.revision.outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
   const keyList = issues.some((i) => ruleOf(i.category) === 'formula-ref-unknown')
-    ? `\n\nNUMBERED FORMULAS OF THE BOOK (key: label):\n${bookFormulaKeys(ctx, q.projectId).map((k) => `${k.key}: ${k.label}`).join('\n') || '(none)'}\nFor an unknown formula reference, point {{formula:@key}} at one of these keys only when that formula states the same result. Otherwise replace the reference with plain words.`
+    ? `\n\nNUMBERED FORMULAS OF THE BOOK (key: label):\n${bookFormulaKeys(ctx, q.projectId, undefined, inBook).map((k) => `${k.key}: ${k.label}`).join('\n') || '(none)'}\nFor an unknown formula reference, point {{formula:@key}} at one of these keys only when that formula states the same result. Otherwise replace the reference with plain words.`
     : '';
   const { data, route } = await runRole(ctx, {
     role: 'editor',
