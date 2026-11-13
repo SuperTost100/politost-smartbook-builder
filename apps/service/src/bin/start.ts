@@ -17,7 +17,7 @@ const app = await buildServer(ctx);
 await app.listen({ host: config.host, port: config.port });
 ctx.queue.start();
 
-const lines = [`PoliTost Smart Builder ${config.version}`, `Data: ${config.dataDir}`];
+const lines = [`PoliTost Smart Builder ${config.version.replace('-', ' ')}`, `Data: ${config.dataDir}`];
 if (config.lan) {
   const token = lanToken(ctx);
   const addrs = Object.values(networkInterfaces()).flat().filter((a) => a && a.family === 'IPv4' && !a.internal).map((a) => a!.address);
