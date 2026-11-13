@@ -120,7 +120,8 @@ export default function ReviewPage() {
     const text = (
       <>
         {i.quote && <blockquote className="rv-quote"><MathText text={i.quote} /></blockquote>}
-        <p className="rv-msg"><MathText text={i.message} /></p>
+        {/* A lint message is the builder's own English and names delimiters such as "$$": it is shown as written. A reviewer's message may hold formulas. */}
+        <p className="rv-msg">{i.source === 'lint' ? i.message : <MathText text={i.message} />}</p>
         {i.suggestion && <p className="rv-sug"><strong>Suggestion:</strong> <MathText text={i.suggestion} /></p>}
         {i.resolution && <p className="ui-muted rv-sug">Resolution: {i.resolution}</p>}
         <div className="ui-row">

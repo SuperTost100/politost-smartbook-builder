@@ -548,6 +548,21 @@ test.describe('Review: minor notes', () => {
     await expect(page.getByText('The book is ready to export.')).toHaveCount(0);
   });
 
+  test('a lint note shows its message as written, dollar signs included, and a reviewer\'s note still shows its formula', async ({ page }) => {
+    await reviewData(page, [
+      issue('l1', 'major', { source: 'lint', category: 'math-mixed', message: 'Display math ($$) and inline math ($) in the same block; separate them with a blank line.' }),
+      issue('l2', 'major', { source: 'lint', category: 'math-blank-line', message: 'Blank line inside a display formula ($$ ... $$); remove it.' }),
+      issue('r1', 'major', { message: 'The bound $x^2 \\le 4$ needs $x$ real.' }),
+    ]);
+    await page.goto('/books/p1/review');
+    const mixed = page.locator('.rv-msg', { hasText: 'Display math' });
+    await expect(mixed).toHaveText('Display math ($$) and inline math ($) in the same block; separate them with a blank line.');
+    await expect(mixed.locator('.katex')).toHaveCount(0);
+    await expect(page.locator('.rv-msg', { hasText: 'Blank line inside' })).toHaveText('Blank line inside a display formula ($$ ... $$); remove it.');
+    const reviewer = page.getByRole('listitem').filter({ hasText: 'needs' });
+    await expect(reviewer.locator('.katex').first()).toBeVisible();
+  });
+
   test('the severity filter "Minor" opens the group by itself', async ({ page }) => {
     await reviewData(page, issues);
     await page.goto('/books/p1/review');
