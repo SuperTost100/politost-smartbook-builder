@@ -50,22 +50,34 @@ export function separateDisplayMath(markdown: string): string {
 
 const SPAN = /(`[^`\n]*`)|\$\$([\s\S]*?)\$\$/g;
 const INLINE = /(?<!\$)\$(?!\$)[^$\n]+\$(?!\$)/;
-/** A line with nothing on it, or only quote marks: blank inside a display, also in a quote. */
-const BLANKISH = /^[ \t]*(?:>[ \t]*)*$/;
 const LISTY = /^\s*([-*+]|\d+[.)])\s|^\s*[>|]/;
 
-interface Span { start: number; end: number; tex: string }
+interface Span { start: number; end: number; tex: string; /** How many block quotes the line that opens the display sits in. */ depth: number }
 interface Fixed { lines: string[]; /** The block starts with a display of its own. */ start: boolean; /** The block ends with one. */ end: boolean }
 
-/** `tex` is the formula without its blank lines and without the space next to the delimiters. */
+/**
+ * The row without the quote marks of the `depth` quotes the display sits in. Only those marks are layout: a ">" beyond them
+ * (a row "> >" in a quote, a row ">" outside any quote) belongs to the formula.
+ */
+const unquote = (row: string, depth: number) => row.replace(new RegExp(`^(?:[ \\t]*>[ \\t]?){0,${depth}}`), '');
+/** A row with nothing in the formula on it. */
+const blankRow = (row: string, depth: number) => !unquote(row, depth).trim();
+/** The number of quote marks that start the line the display opens on. */
+const quoteDepth = (text: string, at: number) => /^(?:[ \t]*>)*/.exec(text.slice(text.lastIndexOf('\n', at - 1) + 1))![0].split('>').length - 1;
+
+/** `tex` is the formula without its blank rows, without the quote marks and without the space next to the delimiters. */
 function displaySpans(text: string): Span[] {
   const spans: Span[] = [];
   for (const m of text.matchAll(SPAN)) {
     if (!m[2]?.trim()) continue;
-    const rows = m[2].split('\n').filter((l) => !BLANKISH.test(l));
+    const depth = quoteDepth(text, m.index);
+    // The first row follows the opening $$ on its line, so it has no quote marks of its own.
+    const rows = m[2].split('\n').map((l, i) => (i ? unquote(l, depth) : l)).filter((l) => l.trim());
+    // A formula of blank rows only ("> $$", ">", "> $$") has nothing to lay out: the lint reports it.
+    if (!rows.length) continue;
     rows[0] = rows[0].trimStart();
     rows[rows.length - 1] = rows[rows.length - 1].trimEnd();
-    spans.push({ start: m.index, end: m.index + m[0].length, tex: rows.join('\n') });
+    spans.push({ start: m.index, end: m.index + m[0].length, tex: rows.join('\n'), depth });
   }
   return spans;
 }
@@ -80,13 +92,12 @@ function fixBlock(lines: string[]): Fixed | null {
   const mixed = rest.split('\n').some((l) => INLINE.test(l));
   if (!mixed && (text.replace(/`[^`\n]*`/g, '').match(/\$\$/g) ?? []).length % 2) return null;
 
-  const quote = lines.every((l) => /^\s*>/.test(l));
-  const inline = (tex: string) => `$\\displaystyle ${tex.replace(quote ? /\s*\n[ \t]*(?:>[ \t]*)*/g : /\s*\n\s*/g, ' ')}$`;
+  const inline = (tex: string) => `$\\displaystyle ${tex.replace(/\s*\n\s*/g, ' ')}$`;
   // A line inside a formula that starts with "+ " or "- " is not a list item, so only the text outside the formulas decides.
   if (rest.split('\n').some((l) => LISTY.test(l))) {
     // A blank line inside the formula goes, whatever else the block holds. Mixed blocks get inline formulas instead.
     let out = text;
-    for (const s of [...spans].reverse()) out = out.slice(0, s.start) + (mixed ? inline(s.tex) : tidy(text.slice(s.start, s.end))) + out.slice(s.end);
+    for (const s of [...spans].reverse()) out = out.slice(0, s.start) + (mixed ? inline(s.tex) : tidy(text.slice(s.start, s.end), s.depth)) + out.slice(s.end);
     return { lines: out.split('\n'), start: false, end: false };
   }
 
@@ -110,7 +121,7 @@ function fixBlock(lines: string[]): Fixed | null {
       if (punct) pos += punct[0].length;
       pieces.push({ text: cur, display: false }, { text: `$$\n${s.tex}${punct && !/[.,;:]$/.test(s.tex) ? punct[1] : ''}\n$$`, display: true });
       cur = '';
-    } else cur += mixed ? inline(s.tex) : tidy(text.slice(s.start, s.end));
+    } else cur += mixed ? inline(s.tex) : tidy(text.slice(s.start, s.end), s.depth);
   }
   pieces.push({ text: cur + text.slice(pos), display: false });
   const kept = pieces.map((p) => ({ ...p, text: p.text.trim() })).filter((p) => p.text);
@@ -123,9 +134,9 @@ function ownLines(text: string, s: Span): boolean {
 }
 
 /** The span's lines without the blank ones between its first and last line. */
-function tidy(span: string): string {
+function tidy(span: string, depth: number): string {
   const rows = span.split('\n');
-  return rows.filter((l, i) => i === 0 || i === rows.length - 1 || !BLANKISH.test(l)).join('\n');
+  return rows.filter((l, i) => i === 0 || i === rows.length - 1 || !blankRow(l, depth)).join('\n');
 }
 
 /** True when ** and single * markers outside math and code pair up. */
