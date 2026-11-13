@@ -28,7 +28,7 @@ export function formatModelText(markdown: string, opts: FormatOptions = {}): str
   let text = rewriteLatexNames(stripGeneratorMarkup(markdown));
   if (opts.takenFormulaKeys) text = unwrapFormulaKeys(text, opts.takenFormulaKeys);
   if (opts.kind !== 'question') text = headingsToThree(text);
-  return layOutDisplayMath(text);
+  return separateDisplayMath(text);
 }
 
 /**
@@ -39,21 +39,8 @@ export function formatForRules(markdown: string, rules: Iterable<string>, kind: 
   const names = new Set([...rules].map((r) => r.replace(/^compile:/, '')));
   let text = markdown;
   if (kind !== 'question' && names.has('heading-level')) text = headingsToThree(text);
-  if (names.has('math-mixed') || names.has('math-blank-line')) text = layOutDisplayMath(text);
+  if (names.has('math-mixed') || names.has('math-blank-line')) text = separateDisplayMath(text);
   return text;
-}
-
-/**
- * Display math gets its layout only when every $$ is closed. With one left open, everything up to the next $$ would count
- * as a formula, and laying that out would join paragraphs into it. The lint reports the unclosed $$, which a person or a
- * model has to close first.
- */
-function layOutDisplayMath(markdown: string): string {
-  const lines = markdown.split('\n');
-  const prose = proseLines(lines);
-  let display = false;
-  lines.forEach((line, i) => { if (prose[i]) display = maskMath(line, display).inDisplay; });
-  return display ? markdown : separateDisplayMath(markdown);
 }
 
 /** Every heading of a section is `###`. `## pN | Title` is the compiler's own heading, and headings in code, ::: blocks and display math are not headings. */

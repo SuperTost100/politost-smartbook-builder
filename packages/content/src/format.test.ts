@@ -39,6 +39,12 @@ test('with an unclosed $$ the display math is not laid out, because everything a
   const rest = 'Testo $a$ con $$ x = 1 mai chiuso.\n\nSecondo paragrafo con $b$.\n\nTerzo $$ y $$ fine.';
   assert.equal(formatModelText(`#### Titolo isolato\n\n${rest}`), `### Titolo isolato\n\n${rest}`);
   assert.equal(formatModelText(rest), rest);
+  // The same inside one block, when a code fence and a later $$ make the count of the whole text even.
+  const fenced = `${rest}\n\n\`\`\`\ncodice\n\`\`\`\n\nQuarto $$ z fine.`;
+  assert.equal(formatModelText(fenced), fenced);
+  // A block that closes its own $$ is still laid out next to one that does not.
+  const two = `Primo $c$ e $$ w $$ qui.\n\n\`\`\`\ncodice\n\`\`\`\n\n${rest}`;
+  assert.equal(formatModelText(two), `Primo $c$ e\n\n$$\nw\n$$\n\nqui.\n\n\`\`\`\ncodice\n\`\`\`\n\n${rest}`);
   // Closed, the same text is laid out.
   const closed = rest.split('mai chiuso.').join('$$ chiuso.');
   assert.notEqual(formatModelText(closed), closed);
