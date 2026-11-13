@@ -1,5 +1,5 @@
 // Draft: evidence per section, the section text with figures, then the chapter introduction.
-import { addsCommentary, applyGuardedChanges, paragraphWords, sanitizeModelCode, dropUnpairedBold, lintSection, lostStructure, repairSectionRefs, separateDisplayMath, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
+import { addsCommentary, applyGuardedChanges, dropUnpairedBold, formatModelText, formatterHandles, lintSection, lostStructure, paragraphWords, repairSectionRefs, sanitizeModelCode, splitBlocks, unwrapFormulaKeys, type LintFinding } from '@smartbuilder/content';
 import type { EvidencePacket } from '@smartbuilder/domain';
 import { rmSync } from 'node:fs';
 import { resolveDataPath } from '../config.ts';
@@ -112,20 +112,23 @@ export function evidenceText(ctx: AppContext, packet: EvidencePacket | null, max
  * Commit AI text: becomes current if nobody edited since baseRevId, otherwise (or with forceProposal) a proposal whose
  * parent is baseRevId. One implementation with the repo (older pending proposals of the node become 'superseded').
  * `taskId` is stored so a retried task returns its own committed revision instead of calling the model again.
+ * The text is formatted on the way in (`formatModelText`) unless `format` is false, which is for text that is not all
+ * model-written: the caller formats the model's part itself, so the author's own blocks are never rewritten. The result's
+ * `markdown` is the text as stored, which is the text to lint.
  */
-export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string; taskId?: string }) {
+export function commitAiRevision(ctx: AppContext, p: { projectId: string; nodeId: string; kind: 'section' | 'chapter-intro'; markdown: string; baseRevId: string | null; model: string; origin?: 'ai' | 'repair'; citations?: Record<string, string[]>; forceProposal?: boolean; runId?: string; taskId?: string; format?: boolean }) {
   return ctx.db.tx(() => {
-    // A formula key another section already defines is unwrapped; display math sharing a block with inline math is
-    // separated for good (human saves are never touched). Block citations follow.
+    // A formula key another section already defines is unwrapped; the formatter fixes the layout of model text for good
+    // (human saves are never touched). Block citations follow.
     const taken = new Set(bookFormulaKeys(ctx, p.projectId, p.nodeId).map((k) => k.key));
     // Links to an id the model miscopied point at the node it meant, or lose the link.
     const nodes = (loadOutline(ctx, p.projectId)?.outline.chapters ?? []).flatMap((c) => [{ id: c.id, slug: c.slug }, ...c.sections.map((s) => ({ id: s.id }))]);
     const linked = nodes.length ? repairSectionRefs(p.markdown, nodes) : p.markdown;
-    const markdown = separateDisplayMath(unwrapFormulaKeys(linked, taken));
+    const markdown = p.format === false ? unwrapFormulaKeys(linked, taken) : formatModelText(linked, { takenFormulaKeys: taken });
     const citations = markdown === p.markdown ? p.citations ?? {} : carryCitations(p.markdown, markdown, p.citations ?? {});
     const { revision, applied } = insertProposal(ctx, p.projectId, p.nodeId, markdown, p.baseRevId, p.origin ?? 'ai', p.model, citations, { kind: p.kind, forceProposal: p.forceProposal, taskId: p.taskId });
     ctx.events.emit(applied ? 'content.saved' : 'proposal.created', { nodeId: p.nodeId, revId: revision.id, origin: p.origin ?? 'ai', status: revision.status }, { projectId: p.projectId, runId: p.runId ?? null });
-    return { revId: revision.id, status: applied ? 'current' as const : 'proposal' as const };
+    return { revId: revision.id, status: applied ? 'current' as const : 'proposal' as const, markdown };
   });
 }
 
@@ -255,7 +258,8 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
   // A stray ** is dropped here, so it does not cost a repair round. One repair round for problems that break rendering or meaning.
   markdown = dropUnpairedBold(markdown);
   let findings = lintSection(markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
-  const serious = findings.filter((f) => f.severity !== 'minor');
+  // A finding the formatter settles never goes to a model: the commit below formats the text and the issues are linted on what is stored.
+  const serious = findings.filter((f) => f.severity !== 'minor' && !formatterHandles(f.rule, f.severity, 'section'));
   if (serious.length) {
     t.progress(`Fixing ${serious.length} formatting problems`);
     const listing = serious.map((f) => `${f.rule}: ${f.message}${f.line ? ` (line ${f.line})` : ''}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`).join('\n');
@@ -283,6 +287,8 @@ export async function sectionDraft(ctx: AppContext, t: TaskContext) {
       const applies = (currentHead(ctx, projectId, nodeId)?.id ?? null) === (head?.id ?? null);
       ({ markdown, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown, replace: applies, replaced }));
       committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head?.id ?? null, model: route.model, citations, runId: t.task.runId, taskId: t.task.id });
+      // The commit fixes the text (layout, formula keys, section links), so the issues come from the stored text and never from the writer's answer.
+      findings = lintSection(committed.markdown, { sectionId: nodeId, language: project.language, knownFormulaKeys: knownKeys });
       recordLintIssues(ctx, projectId, nodeId, committed.revId, findings);
     });
   } catch (err) {
@@ -399,6 +405,6 @@ export async function chapterIntro(ctx: AppContext, t: TaskContext) {
   });
   const { markdown } = extractCitations(data.markdown, splitBlocks);
   const committed = commitAiRevision(ctx, { projectId, nodeId: chapterId, kind: 'chapter-intro', markdown, baseRevId: head?.id ?? null, model: route.model, runId: t.task.runId, taskId: t.task.id });
-  recordLintIssues(ctx, projectId, chapterId, committed.revId, lintSection(markdown, { sectionId: chapterId, language: project.language }));
+  recordLintIssues(ctx, projectId, chapterId, committed.revId, lintSection(committed.markdown, { sectionId: chapterId, language: project.language }));
   return { revId: committed.revId };
 }

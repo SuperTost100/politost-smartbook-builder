@@ -20,7 +20,8 @@ export const REMOVAL_FACTOR = 5;
 /** A fix that leaves less than this share of the section's text is not applied; it waits as a proposal. */
 export const MIN_KEPT_SHARE = 0.8;
 
-const headings = (s: string) => [...s.matchAll(/^#{1,6}[ \t]+\S.*$/gm)].map((m) => m[0].trim());
+/** The heading lines of a text. The level is left out: the formatter sets every heading of a section to ###, so a change of level is not a lost heading. */
+const headings = (s: string) => [...s.matchAll(/^#{1,6}([ \t]+\S.*)$/gm)].map((m) => `###${m[1]}`.trimEnd());
 const formulaKeys = (s: string) => [...s.matchAll(/:::formula\{[^}]*\bkey="([^"]+)"/g)].map((m) => m[1]);
 /** The first item of `before` that `after` has fewer times than `before`: two identical headings of which one goes count as a loss. */
 function firstLost(before: string[], after: string[]): string | undefined {

@@ -12,4 +12,5 @@ export * from './decompile.ts';
 export * from './sanitize.ts';
 export * from './patch.ts';
 export * from './displayMath.ts';
+export * from './format.ts';
 export { ALLOWED_FUNCTIONS } from './expr.ts';
