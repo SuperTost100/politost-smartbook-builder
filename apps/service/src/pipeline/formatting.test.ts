@@ -127,6 +127,33 @@ describe('the lint findings stored with a draft are about the stored text', () =
 describe('a fix settles formatting findings in code', () => {
   const messy = '### Uno\n\n#### Due\n\nVale $a$ e $$ b = 1 $$ sempre.\n\n$$\n\nc\n$$';
 
+  test('a fix of the heading note alone leaves the math the author typed, and its note, as they are', async () => {
+    seedOutline();
+    const text = '#### Selezionare\n\nAltro $a$ e $$ b+2 $$ fine.';
+    const rev = seedHead('s1', text);
+    const level = addIssue({ nodeId: 's1', revId: rev, category: 'heading-level' });
+    const mixed = addIssue({ nodeId: 's1', revId: rev, category: 'math-mixed', message: 'Display math ($$) and inline math ($) in the same block; separate them with a blank line.', quote: 'Altro $a$ e $$ b+2 $$ fine.' });
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [level] }));
+    assert.equal(fake.calls.length, 0);
+    assert.equal(head('s1').markdown, '### Selezionare\n\nAltro $a$ e $$ b+2 $$ fine.');
+    assert.equal(issue(level).status, 'fixed');
+    const open = ctx.db.all<{ category: string; resolution: string }>(`SELECT category, resolution FROM review_issues WHERE node_id = 's1' AND status = 'open'`);
+    assert.deepEqual(open.map((i) => i.category), ['math-mixed'], 'the note that was not chosen is still open');
+    assert.equal(open[0].resolution, '', 'and nothing says the formatter tried it');
+    assert.equal(ctx.db.get('SELECT 1 FROM review_issues WHERE id = ?', mixed) !== undefined || open.length === 1, true);
+  });
+
+  test('with an unclosed $$ in the section, a fix of the heading note does not move any other text', async () => {
+    seedOutline();
+    const rest = 'Testo $a$ con $$ x = 1 mai chiuso.\n\nSecondo paragrafo con $b$.\n\nTerzo $$ y $$ fine.';
+    const rev = seedHead('s1', `#### Titolo isolato\n\n${rest}`);
+    const level = addIssue({ nodeId: 's1', revId: rev, category: 'heading-level' });
+    const mixed = addIssue({ nodeId: 's1', revId: rev, category: 'math-mixed' });
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [level, mixed] }));
+    assert.equal(fake.calls.length, 0);
+    assert.equal(head('s1').markdown, `### Titolo isolato\n\n${rest}`, 'only the heading changed');
+  });
+
   test('issues of math-mixed, heading-level and math-blank-line are closed with no model call, and the text is formatted', async () => {
     seedOutline();
     const rev = seedHead('s1', messy);
