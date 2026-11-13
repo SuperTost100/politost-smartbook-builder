@@ -4,7 +4,7 @@ import { createReadStream, existsSync, mkdirSync, renameSync, rmSync, statSync, 
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
-import { sameQuote, type CompiledBook } from '@smartbuilder/content';
+import { sameQuote, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { ExportRow, ReportFile, ValidationReport } from '@smartbuilder/domain';
 import { newId, now } from '../db/db.ts';
 import { loadOutline } from '../pipeline/util.ts';
@@ -12,7 +12,7 @@ import { paths } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { HttpError } from '../server.ts';
 import {
-  countUnresolvedBlockers, getExport, getIssue, getProject, listExports, listIssues, loadBookInput, insertExport, setStage, updateIssue,
+  countUnresolvedBlockers, getExport, getIssue, getProject, issuesChanged, listExports, listIssues, loadBookInput, insertExport, setStage, updateIssue,
 } from '../repo/index.ts';
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
@@ -60,8 +60,39 @@ function withFiles(ctx: AppContext, projectId: string, report: ValidationReport)
 
 /** How to fix validator findings whose message only names the rule. */
 const FIX_HINTS: Record<string, string> = {
+  'formula-ref-unknown': 'Point the reference at a numbered formula of the book that states the same result, or replace it with plain words.',
   'exercise-fence': 'Exercises cannot hold blocks such as figures. Describe what the block showed in one or two sentences of text and keep the sentence that introduced it consistent with that, or remove both.',
 };
+
+/**
+ * Validate is the one place that compiles the whole book, so it also closes the `compile:<rule>` notes whose finding is gone,
+ * for instance after a hand edit: such a note would otherwise hold back "Approve and export" although Validate reports no
+ * error. A note is closed when the compile has no finding of its rule on its section or question (and, where both have a
+ * quote, on the same passage). Findings of every severity count, because a minor one never has a note and a finding that only
+ * got milder is still there. A note on text the compile did not read (a chapter with no text, an unplaced question) stays,
+ * and so do rows with the bare category `compile`, which the chapter review owns. The review stores a finding it cannot place
+ * in a section under its chapter, so a chapter's note also stays while its rule finds something in a file that is neither a
+ * section nor a question (a generated file, an asset), whatever passage that finding quotes. Nothing is deleted.
+ */
+function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
+  const sections = new Set(input.chapters.flatMap((c) => c.sections.map((s) => s.id)));
+  const read = new Set([...input.chapters.map((c) => c.id), ...sections]);
+  for (const q of input.questions) read.add(`question:${q.id}`);
+  const placed = (file: string) => sections.has(file) || file.startsWith('question:');
+  const open = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string; quote: string }>(
+    `SELECT id, node_id, question_id, category, quote FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND category LIKE 'compile:%'`, projectId);
+  const gone = open.filter((i) => {
+    const file = i.question_id ? `question:${i.question_id}` : i.node_id;
+    const rule = i.category.slice('compile:'.length);
+    const chapterNote = !!file && !placed(file);
+    // The passage is compared only on the note's own file: a chapter note about a generated file quotes an earlier finding, and the same problem there may now sit in another passage.
+    return !!file && read.has(file) && !findings.some((f) => f.rule === rule
+      && ((f.file === file && (!f.quote || !i.quote || sameQuote(i.quote, f.quote))) || (chapterNote && !placed(f.file))));
+  }).map((i) => i.id);
+  if (!gone.length) return;
+  ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));
+  issuesChanged(ctx, projectId, gone);
+}
 
 const pad = (n: number) => String(n).padStart(2, '0');
 function stamp(d = new Date()) {
@@ -98,14 +129,20 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
 
   app.post('/api/projects/:id/validate', async (req): Promise<ValidationReport> => {
     const projectId = projectOf(ctx, req);
-    return withFiles(ctx, projectId, buildReport(deps.compileBook(loadBookInput(ctx, projectId))));
+    const input = loadBookInput(ctx, projectId);
+    const compiled = deps.compileBook(input);
+    closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
+    return withFiles(ctx, projectId, buildReport(compiled));
   });
 
   // Errors and warnings of the validation, sent to the same AI fix as "Fix selected issues": each finding becomes an open
   // lint issue on its section or question (reusing one already open for the same rule and passage), and the run fixes them.
   app.post('/api/projects/:id/validate/fix', async (req) => {
     const projectId = projectOf(ctx, req);
-    const findings = deps.compileBook(loadBookInput(ctx, projectId)).findings.filter((f) => f.severity !== 'minor');
+    const input = loadBookInput(ctx, projectId);
+    const compiled = deps.compileBook(input);
+    closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
+    const findings = compiled.findings.filter((f) => f.severity !== 'minor');
     const files = locateFiles(ctx, projectId, findings.map((f) => f.file));
     const issueIds: string[] = [];
     ctx.db.tx(() => {
@@ -139,7 +176,10 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
     const { approved } = parse(z.object({ approved: z.boolean() }), req.body);
     const project = getProject(ctx, projectId);
 
-    const compiled = deps.compileBook(loadBookInput(ctx, projectId, { approvedOnly: approved }));
+    const input = loadBookInput(ctx, projectId, { approvedOnly: approved });
+    const compiled = deps.compileBook(input);
+    // An approval counts the open blockers below, so the notes this compile no longer finds are closed first.
+    closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
     const report = buildReport(compiled);
 
     if (approved) {

@@ -145,10 +145,10 @@ export function recordLintIssues(ctx: AppContext, projectId: string, nodeId: str
   });
 }
 
-/** Known formula keys across the book (current revisions), excluding one node. */
-export function bookFormulaKeys(ctx: AppContext, projectId: string, excludeNode?: string) {
+/** Known formula keys across the book (current revisions), excluding one node. With `only`, just the keys of those nodes. */
+export function bookFormulaKeys(ctx: AppContext, projectId: string, excludeNode?: string, only?: Set<string>) {
   const rows = ctx.db.all<{ node_id: string; markdown: string }>(`SELECT node_id, markdown FROM content_revisions WHERE project_id = ? AND status = 'current'`, projectId);
-  return rows.filter((r) => r.node_id !== excludeNode).flatMap((r) => formulaKeyLabels(r.markdown));
+  return rows.filter((r) => r.node_id !== excludeNode && (!only || only.has(r.node_id))).flatMap((r) => formulaKeyLabels(r.markdown));
 }
 
 /** The summary a section's draft task recorded for the writers of later sections. */

@@ -347,3 +347,49 @@ describe('a question fix settles formatting findings in code too', () => {
     assert.deepEqual([row.statement, row.status, row.rev], ['Sia $f$ con $$ g(x) = x $$ vera.', 'verified', 1]);
   });
 });
+
+describe('formula blocks in a question', () => {
+  const BLOCK = ':::formula{key="green-rettangolo" label="Teorema di Green"}\n$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n:::';
+  const seedQuestion = (solution: string) => {
+    const id = newId();
+    ctx.db.insert('questions', { id, project_id: P, kind: 'exam', origin: 'generated', statement: 'Calcola il lavoro.', hint: '', solution, difficulty: 'medio', topic_ids: [], status: 'verified', checks: [], rev: 1, created_at: now(), updated_at: now() });
+    return id;
+  };
+  const note = (questionId: string, rule: string, quote: string) => addIssue({ questionId, category: `compile:${rule}`, severity: 'blocker', quote });
+  const solutionOf = (id: string) => ctx.db.get<{ solution: string; status: string }>('SELECT solution, status FROM questions WHERE id = ?', id)!;
+
+  test('a formula-malformed note on a question is settled by the formatter with no model call', async () => {
+    const id = seedQuestion(`Per il teorema,\n\n${BLOCK}\n\nsi ha $L=2$.`);
+    const iss = note(id, 'formula-malformed', ':::formula{key="green-rettangolo" label="Teorema di Green"}');
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iss] }));
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(r, { revised: true });
+    const row = solutionOf(id);
+    assert.equal(row.solution, 'Per il teorema,\n\n$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n\nsi ha $L=2$.');
+    assert.equal(row.status, 'verified', 'the mathematics did not change, so the check stays');
+    assert.equal(issue(iss).status, 'fixed');
+  });
+
+  test('with a formula-ref-unknown note too, the formatter settles the block and the editor may change the reference', async () => {
+    seedOutline();
+    const id = seedQuestion(`${BLOCK}\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-seno}} si ha $L=2$.`);
+    ctx.db.insert('content_revisions', { id: newId(), project_id: P, node_id: 's1', kind: 'section', markdown: ':::formula{key="laplace-trasformata" label="Trasformata del seno"}\n$$a$$\n:::', origin: 'ai', model: null, parent_rev_id: null, status: 'current', citations: {}, created_at: now() });
+    // A section taken out of the outline keeps its text, and the book does not define its formulas.
+    ctx.db.insert('content_revisions', { id: newId(), project_id: P, node_id: 'not-in-outline', kind: 'section', markdown: ':::formula{key="chiave-tolta" label="Formula tolta"}\n$$b$$\n:::', origin: 'ai', model: null, parent_rev_id: null, status: 'current', citations: {}, created_at: now() });
+    const block = note(id, 'formula-malformed', ':::formula{key="green-rettangolo" label="Teorema di Green"}');
+    const ref = note(id, 'formula-ref-unknown', '{{formula:@laplace-seno}}');
+    fake.next(() => ({ structured: { statement: 'Calcola il lavoro.', hint: '', solution: '$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-trasformata}} si ha $L=2$.' } as never, text: '{}', usage: usageOf(1, 1) }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [block, ref] }));
+    assert.deepEqual(r, { revised: true });
+    assert.equal(fake.calls.length, 1, 'only the reference note went to the editor');
+    const prompt = String(fake.calls[0].prompt);
+    assert.match(prompt, /unknown|exists in the book/);
+    assert.doesNotMatch(prompt, /Numbered formula blocks/, 'the formatter note never reaches the model');
+    assert.match(prompt, /laplace-trasformata: Trasformata del seno/, 'the editor gets the keys of the book with their labels');
+    assert.doesNotMatch(prompt, /chiave-tolta/, 'a formula of a section that is not in the outline is not offered');
+    assert.match(solutionOf(id).solution, /@laplace-trasformata/);
+    assert.equal(solutionOf(id).status, 'draft', 'a changed text is verified again');
+    assert.equal(issue(block).status, 'fixed');
+    assert.equal(issue(ref).status, 'fixed');
+  });
+});

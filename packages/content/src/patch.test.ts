@@ -377,3 +377,9 @@ test('a heading that changes level is not a lost heading, and a renamed one stil
   assert.match(renamed.reverted[0].reason, /heading/);
   assert.equal(lostStructure('#### Calcolo\n\nTesto.', '### Calcolo\n\nTesto.'), null);
 });
+
+test('the end-of-proof sign may be written as a LaTeX command, so the guard does not read it as a changed word', () => {
+  assert.equal(changedWords('fine. ∎', 'fine. $\\square$'), null);
+  for (const name of ['blacksquare', 'square', 'Box', 'qed', 'qedsymbol']) assert.equal(changedWords('fine. ∎', `fine. $\\${name}$`), null, name);
+  assert.notEqual(changedWords('fine. ∎', 'fine. $\\triangle$'), null);
+});

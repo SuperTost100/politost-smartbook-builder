@@ -14,6 +14,7 @@ import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
 import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
+import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
 
@@ -34,6 +35,8 @@ const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
+const ruleOf = (category: string) => category.replace(/^compile:/, '');
+
 /** The text of a question as it is stored: model-written, so formatted. */
 const layout = (text: string) => formatModelText(text, { kind: 'question' });
 
@@ -45,8 +48,8 @@ function wordsChanged(before: QuestionText, after: QuestionText): string | null 
   }
   return null;
 }
-/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language). Every other rule is formatting. */
-const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift']);
+/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language, a reference to a formula the book lacks). Every other rule is formatting. */
+const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift', 'formula-ref-unknown']);
 
 /**
  * One formatting repair for question text that would not render or reads broken (unbalanced $, LaTeX KaTeX rejects,
@@ -493,14 +496,20 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing' };
   // The model works on the text the formatter left.
   if (settled.changed) q = getQuestion(ctx, q.id);
+  // The editor cannot tell which formula keys exist, so a note about an unknown reference comes with the book's keys and labels.
+  // Only sections of the outline count: a section taken out of it keeps its text, and the book does not define its formulas.
+  const inBook = new Set(effectiveOutline(ctx, q.projectId)?.revision.outline.chapters.flatMap((c) => [c.id, ...c.sections.map((s) => s.id)]));
+  const keyList = issues.some((i) => ruleOf(i.category) === 'formula-ref-unknown')
+    ? `\n\nNUMBERED FORMULAS OF THE BOOK (key: label):\n${bookFormulaKeys(ctx, q.projectId, undefined, inBook).map((k) => `${k.key}: ${k.label}`).join('\n') || '(none)'}\nFor an unknown formula reference, point {{formula:@key}} at one of these keys only when that formula states the same result. Otherwise replace the reference with plain words.`
+    : '';
   const { data, route } = await runRole(ctx, {
     role: 'editor',
     system: `You correct a textbook exercise in ${project.language === 'it' ? 'Italian' : project.language}. Fix exactly the reported problems; keep everything else.\n\n${formatRules(project.language)}`,
-    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
+    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}${keyList}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix of formatting findings may change line breaks, spacing and markup, never a word or a number.
-  const formatting = issues.length > 0 && issues.every((i) => i.source === 'lint' && !WORD_RULES.has(i.category.replace(/^compile:/, '')));
+  const formatting = issues.length > 0 && issues.every((i) => i.source === 'lint' && !WORD_RULES.has(ruleOf(i.category)));
   const why = formatting ? wordsChanged(q, data) : null;
   if (why) {
     // The reason goes only on issues that are still open: a decision the author made while the editor ran stays.

@@ -1,6 +1,6 @@
 # Status
 
-Smart Builder 0.5.0 alpha, as of 13 November 2026.
+Smart Builder 0.5.1 alpha, as of 13 November 2026.
 
 ## What works today
 
@@ -72,6 +72,15 @@ From this release the version carries a stage name, so 0.5.0 alpha is the first 
 - **A book that is already written can be repaired.** `npm run normalize-text -- --project <id> --dry-run` lists what the formatter would change. Without `--dry-run` it writes the changes. It skips sections you edited by hand, unless you pass `--include-hand-edits`.
 - **What the formatter cannot repair:** words that a fix model already changed, such as a deleted comma or a duplicated line. Those stay as they are until you correct them.
 
+## What 0.5.1 alpha fixed
+
+These changes came from five validation notes on three exam solutions, where "Fix with AI" was refused and the text had to be corrected by hand.
+
+- **A numbered formula block in a question is unwrapped by code.** A model sometimes wrote `:::formula{...}` inside a solution, which exercises do not allow. The formatter now removes the wrapper and keeps the math as display math, so the `formula-malformed` note of a question closes with no model call.
+- **A note about an unknown formula reference may change words.** The editor gets the numbered formulas of the book with their labels, and either points the reference at one of them or writes plain words. Before, any such fix was refused for changing a word.
+- **The end-of-proof sign is read as one symbol.** `∎` and `$\square$` (also `\blacksquare`, `\Box`, `\qed`) no longer count as a changed word.
+- **Validate closes the notes it no longer finds.** A `compile:` note whose finding is gone after a hand edit becomes fixed the next time you press Validate or export, so it stops holding back **Approve and export**.
+
 ## Decisions that still explain the design
 
 - **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.
@@ -108,7 +117,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 231 content tests (229 pass and 2 are skipped because they need two real books that are not in the repository) and 925 service tests. `npm run test:e2e` runs 220 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 238 content tests (236 pass and 2 are skipped because they need two real books that are not in the repository) and 933 service tests. `npm run test:e2e` runs 221 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 

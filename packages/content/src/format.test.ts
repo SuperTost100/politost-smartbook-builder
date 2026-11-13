@@ -139,3 +139,36 @@ test('a heading-like line inside a longer fence is left alone', () => {
   const md = '~~~~\n~~~\n# literal\n~~~~\n\n# Titolo';
   assert.equal(formatModelText(md), '~~~~\n~~~\n# literal\n~~~~\n\n### Titolo');
 });
+
+const QUESTION_BLOCK = 'Si applica il teorema.\n\n:::formula{key="green-rettangolo" label="Teorema di Green"}\n$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R \\mathrm{rot}\\,F\\,dA$$\n:::\n\nQuindi $L=2$.';
+
+test('a question loses the wrapper of every numbered formula block, whatever its key, and keeps the math', () => {
+  const out = formatModelText(QUESTION_BLOCK, { kind: 'question' });
+  assert.equal(out, 'Si applica il teorema.\n\n$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R \\mathrm{rot}\\,F\\,dA$$\n\nQuindi $L=2$.');
+  assert.deepEqual(lintQuestionText(out, { file: 'solution', language: 'it' }).filter((f) => f.rule === 'formula-malformed'), []);
+  assert.equal(formatModelText(out, { kind: 'question' }), out, 'a second run changes nothing');
+  assert.equal(formatModelText('A\n\n:::formula{key="a" label="A"}\n$$x$$\n:::\n\nB\n\n:::formula{key="b" label="B"}\n$$y$$\n:::', { kind: 'question' }), 'A\n\n$$x$$\n\nB\n\n$$y$$');
+});
+
+test('a section keeps a formula block whose key no other section has', () => {
+  assert.equal(formatModelText(QUESTION_BLOCK), QUESTION_BLOCK);
+});
+
+test('in a question the unwrap leaves code fences, other ::: blocks and blocks that are not one display formula alone', () => {
+  const fenced = '```\n:::formula{key="k" label="L"}\n$$a$$\n:::\n```';
+  assert.equal(formatModelText(fenced, { kind: 'question' }), fenced);
+  const hint = ':::hint\nUsa $x$.\n:::';
+  assert.equal(formatModelText(hint, { kind: 'question' }), hint);
+  for (const bad of [':::formula{key="k" label="L"}\n$$a$$\n\nTesto accanto\n:::', ':::formula{key="k" label="L"}\n$$a$$ $$b$$\n:::', ':::formula{key="k" label="L"}\n$$a$$\n\nSenza chiusura', ':::formula{key="k" label="L"}\nx = 1\n:::']) {
+    assert.equal(formatModelText(bad, { kind: 'question' }), bad, JSON.stringify(bad));
+  }
+});
+
+test('formatForRules unwraps the blocks of a question for formula-malformed only, and formatterHandles says so', () => {
+  assert.equal(formatForRules(QUESTION_BLOCK, ['compile:formula-malformed'], 'question'), formatModelText(QUESTION_BLOCK, { kind: 'question' }));
+  assert.equal(formatForRules(QUESTION_BLOCK, ['formula-ref-unknown'], 'question'), QUESTION_BLOCK);
+  assert.equal(formatForRules(QUESTION_BLOCK, ['formula-malformed']), QUESTION_BLOCK, 'a section is not touched');
+  assert.ok(formatterHandles('compile:formula-malformed', 'blocker', 'question'));
+  assert.ok(!formatterHandles('formula-malformed', 'blocker', 'section'));
+  assert.ok(!formatterHandles('formula-ref-unknown', 'blocker', 'question'));
+});
