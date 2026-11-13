@@ -68,6 +68,7 @@ From this release the version carries a stage name, so 0.5.0 alpha is the first 
 - **Display math is laid out by code.** There is no blank line inside a `$$` formula, and a display formula that follows a sentence directly gets blank lines around it.
 - **Lint reports the text as it is stored.** Before, a `math-mixed` note could describe the model's raw answer after the builder had already fixed it. Now every note is about the text you see.
 - **Formatting notes are settled without a model.** *Fix selected issues* closes the formatting notes (`math-mixed`, `math-blank-line` and `heading-level`) by formatting the text in code, so a fix that holds only such notes makes no model call. When it holds other notes too, the model is not asked about the formatting ones. Before, a model acted on notes about text that was already right and could damage a formula.
+- **A fix touches only what you chose.** A fix of a heading note does not lay out the math of the same section, and a fix of a math note does not change headings. Text you typed and did not select stays as typed.
 - **A book that is already written can be repaired.** `npm run normalize-text -- --project <id> --dry-run` lists what the formatter would change. Without `--dry-run` it writes the changes. It skips sections you edited by hand, unless you pass `--include-hand-edits`.
 - **What the formatter cannot repair:** words that a fix model already changed, such as a deleted comma or a duplicated line. Those stay as they are until you correct them.
 
