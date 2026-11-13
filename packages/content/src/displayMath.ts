@@ -22,7 +22,9 @@ export function separateDisplayMath(markdown: string): string {
   /** The last thing written ends a display block, so the next line needs a blank line before it. */
   let closed = false;
   const flush = () => {
-    const fixed = buf.length ? fixBlock(buf) : null;
+    // A block that ends with a $$ still open is left as it is: everything up to the next $$ would count as one formula, and
+    // laying that out would join the paragraphs in between into it. The lint reports the unclosed $$.
+    const fixed = buf.length && !display ? fixBlock(buf) : null;
     if (fixed) {
       if (fixed.start && out.length && out[out.length - 1].trim()) { out.push(''); changed = true; }
       if (fixed.lines.length !== buf.length || fixed.lines.some((l, i) => l !== buf[i])) changed = true;

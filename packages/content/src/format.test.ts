@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { formatModelText, formatterHandles } from './format.ts';
+import { formatForRules, formatModelText, formatterHandles } from './format.ts';
 import { lintQuestionText, lintSection } from './lint.ts';
 
 /** Passages of the owner's "Analisi Matematica 2" revisions: d2a8b8fe (####), 997962f6 and 7c33a051 (the fix model's damage), 3f099707 and 7ee9e029 (correct drafts). */
@@ -32,6 +32,34 @@ test('headings: levels 1 to 6 become ###, the compiler heading, code, ::: blocks
   assert.equal(formatModelText(kept), kept);
   assert.equal(formatModelText('#### Titolo', { kind: 'question' }), '#### Titolo');
   assert.equal(formatModelText('####senza spazio'), '####senza spazio');
+});
+
+test('with an unclosed $$ the display math is not laid out, because everything after it would count as one formula', () => {
+  // The lint reports the unclosed $$ as a blocker. Laying it out would join the paragraphs up to the next $$ into one block.
+  const rest = 'Testo $a$ con $$ x = 1 mai chiuso.\n\nSecondo paragrafo con $b$.\n\nTerzo $$ y $$ fine.';
+  assert.equal(formatModelText(`#### Titolo isolato\n\n${rest}`), `### Titolo isolato\n\n${rest}`);
+  assert.equal(formatModelText(rest), rest);
+  // The same inside one block, when a code fence and a later $$ make the count of the whole text even.
+  const fenced = `${rest}\n\n\`\`\`\ncodice\n\`\`\`\n\nQuarto $$ z fine.`;
+  assert.equal(formatModelText(fenced), fenced);
+  // A block that closes its own $$ is still laid out next to one that does not.
+  const two = `Primo $c$ e $$ w $$ qui.\n\n\`\`\`\ncodice\n\`\`\`\n\n${rest}`;
+  assert.equal(formatModelText(two), `Primo $c$ e\n\n$$\nw\n$$\n\nqui.\n\n\`\`\`\ncodice\n\`\`\`\n\n${rest}`);
+  // Closed, the same text is laid out.
+  const closed = rest.split('mai chiuso.').join('$$ chiuso.');
+  assert.notEqual(formatModelText(closed), closed);
+  assert.match(formatModelText(closed), /\n\nSecondo paragrafo con \$b\$\.\n\n/, 'and the paragraphs stay paragraphs');
+});
+
+test('a fix for chosen notes runs only the formatter of their rules', () => {
+  const text = '#### Titolo\n\nVale $a$ e $$ b+2 $$ fine.';
+  assert.equal(formatForRules(text, ['heading-level']), '### Titolo\n\nVale $a$ e $$ b+2 $$ fine.', 'the math stays as typed');
+  const math = formatForRules(text, ['math-mixed']);
+  assert.match(math, /^#### Titolo\n/, 'the heading stays as typed');
+  assert.match(math, /\n\$\$\nb\+2\n\$\$\n/);
+  assert.equal(formatForRules(text, ['math-blank-line', 'compile:heading-level']), formatModelText(text));
+  assert.equal(formatForRules(text, ['placeholder']), text);
+  assert.equal(formatForRules('#### In una domanda', ['heading-level'], 'question'), '#### In una domanda', 'a question keeps its headings');
 });
 
 test('a blank line inside a $$ block goes, as in revision 997962f6', () => {

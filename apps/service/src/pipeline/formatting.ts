@@ -1,6 +1,6 @@
 // Formatting findings are settled by code, never by a model: the formatter runs on the current text, the lint runs again, and
 // each issue closes when its rule no longer finds anything. What the formatter cannot change stays open with a plain reason.
-import { formatModelText, formatterHandles, lintQuestionText, lintSection, type LintFinding, type TextKind } from '@smartbuilder/content';
+import { formatForRules, formatterHandles, lintQuestionText, lintSection, type LintFinding, type TextKind } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { getQuestion, issuesChanged, repairQuestionText, rewriteHead } from '../repo/index.ts';
 import { knownFormulaKeys, relint } from '../routes/views.ts';
@@ -44,14 +44,18 @@ export function settleSectionFormatting(ctx: AppContext, p: { projectId: string;
   const { projectId, nodeId, head } = p;
   const issues = p.issues.filter((i) => i.status === 'open');
   if (!issues.length) return { revId: null, markdown: head.markdown, closed: 0 };
-  const formatted = formatModelText(head.markdown);
+  // Only the rules of the chosen notes: this text may be the author's own, and what they did not choose stays as typed.
+  const formatted = formatForRules(head.markdown, issues.map((i) => i.category));
   // The head was read in this same step, so a conflict means another save came in between: nothing is settled and the issues stay as they are.
   const revision = formatted === head.markdown ? null : rewriteHead(ctx, projectId, nodeId, () => formatted, { origin: 'repair', expectedHeadId: head.id });
   const left = remaining(lintSection(formatted, { sectionId: nodeId, language: p.language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) }), 'section');
   const closed = settle(ctx, projectId, issues, left, revision ? `Fixed by the formatter in revision ${revision.id}` : 'The text already has it right, so nothing was changed.');
   if (revision) {
     relint(ctx, projectId, nodeId, p.keep);
+    // The reason goes on the notes of the chosen rules only: a note the author did not choose was not tried.
+    const chosen = new Set(issues.map((i) => ruleOf(i.category)));
     for (const [rule, message] of left) {
+      if (!chosen.has(rule)) continue;
       ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open' AND category = ? AND resolution = ''`, `The formatter could not fix this, so it stays open for you to edit by hand: ${message}`, projectId, nodeId, rule);
     }
   }
@@ -62,7 +66,7 @@ export function settleSectionFormatting(ctx: AppContext, p: { projectId: string;
 export function settleQuestionFormatting(ctx: AppContext, p: { projectId: string; questionId: string; language: string; issues: FormatIssue[] }): { changed: boolean; closed: number } {
   const issues = p.issues.filter((i) => i.status === 'open');
   if (!issues.length) return { changed: false, closed: 0 };
-  const changed = repairQuestionText(ctx, p.questionId, (text) => formatModelText(text, { kind: 'question' }));
+  const changed = repairQuestionText(ctx, p.questionId, (text) => formatForRules(text, issues.map((i) => i.category), 'question'));
   const q = getQuestion(ctx, p.questionId);
   const left = remaining((['statement', 'hint', 'solution'] as const).flatMap((part) => lintQuestionText(q[part], { file: part, language: p.language, skipRules: ['formula-ref-unknown'] })), 'question');
   const closed = settle(ctx, p.projectId, issues, left, changed ? 'Fixed by the formatter.' : 'The text already has it right, so nothing was changed.');

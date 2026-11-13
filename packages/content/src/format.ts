@@ -31,6 +31,18 @@ export function formatModelText(markdown: string, opts: FormatOptions = {}): str
   return separateDisplayMath(text);
 }
 
+/**
+ * The formatter's fix for the given lint rules only. A fix the author asks for on chosen notes changes what those notes are
+ * about: the rest of the text is the author's and stays as typed.
+ */
+export function formatForRules(markdown: string, rules: Iterable<string>, kind: TextKind = 'section'): string {
+  const names = new Set([...rules].map((r) => r.replace(/^compile:/, '')));
+  let text = markdown;
+  if (kind !== 'question' && names.has('heading-level')) text = headingsToThree(text);
+  if (names.has('math-mixed') || names.has('math-blank-line')) text = separateDisplayMath(text);
+  return text;
+}
+
 /** Every heading of a section is `###`. `## pN | Title` is the compiler's own heading, and headings in code, ::: blocks and display math are not headings. */
 function headingsToThree(markdown: string): string {
   const lines = markdown.split('\n');

@@ -1,6 +1,6 @@
 # Status
 
-Smart Builder 0.4.1, as of 12 November 2026.
+Smart Builder 0.5.0 alpha, as of 13 November 2026.
 
 ## What works today
 
@@ -60,6 +60,18 @@ The problems this run found were fixed afterwards in PR #84 and PR #86. Neither 
 - **Smaller corrections.** A drawing is not added after a block you removed while it was being drawn, a graph is shown as visible only when a point lies in the x and y range together, `x^0.5` stays as written in a caption, and a unit such as km/h or L is no longer reported as a mismatch against an SI value.
 - **Sources and the figure dialog.** Sources says that adding a file or a link starts Prepare by itself and that Prepare reads it with the AI models. The figure dialog now says when another tab removed the open figure, and keeps the redraw notice when the drawing became an image.
 
+## What 0.5.0 alpha changed
+
+From this release the version carries a stage name, so 0.5.0 alpha is the first alpha. The earlier releases keep their names. The change itself is about the formatting of the text a model writes.
+
+- **Headings come out at the right level.** A section heading a model wrote as `##` or `####` is corrected to `###` by the builder when the text is stored, so you no longer fix them by hand. Code, `:::` blocks and display math are left alone.
+- **Display math is laid out by code.** There is no blank line inside a `$$` formula, and a display formula that follows a sentence directly gets blank lines around it.
+- **Lint reports the text as it is stored.** Before, a `math-mixed` note could describe the model's raw answer after the builder had already fixed it. Now every note is about the text you see.
+- **Formatting notes are settled without a model.** *Fix selected issues* closes the formatting notes (`math-mixed`, `math-blank-line` and `heading-level`) by formatting the text in code, so a fix that holds only such notes makes no model call. When it holds other notes too, the model is not asked about the formatting ones. Before, a model acted on notes about text that was already right and could damage a formula.
+- **A fix touches only what you chose.** A fix of a heading note does not lay out the math of the same section, and a fix of a math note does not change headings. Text you typed and did not select stays as typed.
+- **A book that is already written can be repaired.** `npm run normalize-text -- --project <id> --dry-run` lists what the formatter would change. Without `--dry-run` it writes the changes. It skips sections you edited by hand, unless you pass `--include-hand-edits`.
+- **What the formatter cannot repair:** words that a fix model already changed, such as a deleted comma or a duplicated line. Those stay as they are until you correct them.
+
 ## Decisions that still explain the design
 
 - **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.
@@ -96,7 +108,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 213 content tests (211 pass and 2 are skipped because they need two real books that are not in the repository) and 903 service tests. `npm run test:e2e` runs 220 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 231 content tests (229 pass and 2 are skipped because they need two real books that are not in the repository) and 925 service tests. `npm run test:e2e` runs 220 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 
