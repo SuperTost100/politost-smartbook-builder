@@ -1,5 +1,5 @@
 // Review: independent model pass over a chapter, and targeted revisions requested by the author.
-import { applyGuardedChanges, compileChapter, dropReferences, lintSection, MIN_KEPT_SHARE, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
+import { applyGuardedChanges, compileChapter, dropReferences, formatModelText, lintSection, MIN_KEPT_SHARE, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
 import { outlineSchema, subjectProfileOf, type EvidenceNote } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
 import { countOpenSerious, issuesChanged, setIssuesStatus } from '../repo/issues.ts';
@@ -14,6 +14,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { commitAiRevision, bookFormulaKeys, evidenceText, recordLintIssues } from './draft.ts';
 import { readyProgram } from '../repo/program.ts';
 import { dropDecorative, figurePlaces } from './figureCheck.ts';
+import { isFormatIssue, settleSectionFormatting } from './formatting.ts';
 import { chapterTopicIds, examSymbols } from './exam.ts';
 import { CUT, figureSetupOf, fixCheckPrompt, fixCheckSchema, patchParser, patchPrompt, programItemsText, reviewPrompt, reviewSchema, repairSchema, resolutionCheckPrompt, resolutionCheckSchema, secondOpinionPrompt, secondOpinionSchema } from './prompts.ts';
 import { extractCitations, findSection, formulaKeyLabels, headRevision, loadOutline, loadProject, revisionForTask, truncate } from './util.ts';
@@ -359,23 +360,32 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   // Checkpoint: this task already stored its result in an earlier attempt.
   const mine = revisionForTask(ctx, projectId, nodeId, t.task.id);
   if (mine) return { revId: mine.id, status: mine.status, reused: true };
-  const head = headRevision(ctx, projectId, nodeId);
+  let head = headRevision(ctx, projectId, nodeId);
   if (!head) return { skipped: 'no text yet' };
   const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
-  const selected = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string; source: string }>(`SELECT id, quote, message, suggestion, severity, category, source FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
+  const selected = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string; source: string; status: string }>(`SELECT id, quote, message, suggestion, severity, category, source, status FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
   // Two kinds of issue the text writer cannot fix go elsewhere: a missing figure to the figures pass, a graph that failed its check to a redraw.
   const sectionBlocks = splitBlocks(head.markdown).map((b) => b.text);
   const kindOf = (i: (typeof selected)[number]) => (i.source === 'verification' && i.category === 'graph' ? 'graph' as const : asksForFigure(i, sectionBlocks) ? 'figure' as const : null);
-  const issues = selected.filter((i) => !kindOf(i));
+  // Formatting findings are settled by code and never listed in a prompt (see settleSectionFormatting).
+  const unrouted = selected.filter((i) => !kindOf(i));
+  const issues = unrouted.filter((i) => !isFormatIssue(i, 'section'));
   const routed = routeIssues(ctx, t, { nodeId, title: findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId)?.section.title ?? '', figures: selected.filter((i) => kindOf(i) === 'figure'), graphs: selected.filter((i) => kindOf(i) === 'graph') });
+  const settled = settleSectionFormatting(ctx, { projectId, nodeId, language: project.language, head, issues: unrouted.filter((i) => isFormatIssue(i, 'section')), keep: issues.map((i) => i.id) });
+  // The model works on the text the formatter left, so it is never asked about a layout the code already fixed.
+  if (settled.revId) head = { ...head, id: settled.revId, markdown: settled.markdown };
   const requests = [
     t.task.input.instruction ? `Author's instruction: ${t.task.input.instruction}` : '',
     t.task.input.selection ? `Apply it to this passage: "${t.task.input.selection}"` : '',
     ...issues.map((i, n) => `${n + 1}. ${adds(i) ? '[add material] ' : ''}${i.message}${i.quote ? ` (at: "${i.quote}")` : ''}${i.suggestion ? ` Suggested fix: ${i.suggestion}` : ''}`),
   ].filter(Boolean).join('\n');
-  if (!requests) return routed ? { skipped: 'routed', routed } : { skipped: 'nothing requested' };
+  if (!requests) {
+    if (routed) return { skipped: 'routed', routed, ...(settled.closed ? { resolved: settled.closed } : {}) };
+    if (settled.revId) return { revId: settled.revId, status: 'current', resolved: settled.closed };
+    return settled.closed || unrouted.length > issues.length ? { skipped: 'the formatter changed nothing', ...(settled.closed ? { resolved: settled.closed } : {}) } : { skipped: 'nothing requested' };
+  }
   // Stored text has no citation markers; put the base revision's back so the model can keep them.
   const baseCitations = json<Record<string, string[]>>(ctx.db.get<{ citations: string }>('SELECT citations FROM content_revisions WHERE id = ?', head.id)?.citations, {});
   // One string per block, marker included. withMarkers joins the blocks and splits them again, and a marker after a closing ":::"
@@ -471,7 +481,8 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   });
   figureNotes.push(...built.notes);
   const existing = existingAssetNames(ctx, projectId);
-  for (const c of data.changes) c.text = rewriteImageRefs(c.text, built, existing);
+  // The model's own text is formatted before the guards compare it, so a patch cannot leave a blank line in $$ or a fourth-level heading behind. Blocks it did not change are not touched.
+  for (const c of data.changes) c.text = formatModelText(rewriteImageRefs(c.text, built, existing));
   const isIntro = !findSection(outline?.outline ?? outlineSchema.parse({ chapters: [] }), nodeId);
   const kind = isIntro ? 'chapter-intro' as const : 'section' as const;
 
@@ -532,7 +543,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
       settleClaims(head.id);
     });
     issuesChanged(ctx, projectId, issues.map((i) => i.id));
-    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
+    return { skipped: confirmed.size && !fixable.length ? 'the text already fixes the issues' : 'no change survived the checks', reverted: reasons, ...(confirmed.size + settled.closed ? { resolved: confirmed.size + settled.closed } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
   }
 
   const { markdown, citations } = extractCitations(working.filter((b) => b.trim()).join('\n\n'), splitBlocks);
@@ -548,7 +559,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
     ctx.db.tx(() => {
       let text = markdown;
       ({ markdown: text, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown: text, replace: false, replaced: [] }));
-      committed = commitAiRevision(ctx, { projectId, nodeId, kind, markdown: text, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: instructed || shrunk || !issues.length, runId: t.task.runId, taskId: t.task.id });
+      committed = commitAiRevision(ctx, { projectId, nodeId, kind, markdown: text, baseRevId: head.id, model: route.model, origin: 'repair', citations, forceProposal: instructed || shrunk || !issues.length, runId: t.task.runId, taskId: t.task.id, format: false });
       const applied = committed.status === 'current';
       // Formulas a removal took out of this section: other sections in the book refer to them by name from now on.
       if (applied && issues.some((i) => i.category === 'program-off')) {
@@ -587,8 +598,8 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   if (stored.length) ctx.events.emit('asset.updated', { nodeId, assetIds: stored }, { projectId });
   if (issues.length) issuesChanged(ctx, projectId, issues.map((i) => i.id));
   if (committed.status === 'current') relint(ctx, projectId, nodeId);
-  const findings = lintSection(markdown, { sectionId: nodeId, language: project.language });
-  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(confirmed.size ? { resolved: confirmed.size } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
+  const findings = lintSection(committed.markdown, { sectionId: nodeId, language: project.language });
+  return { revId: committed.revId, status: committed.status, findings: findings.length, reverted: reasons, ...(confirmed.size + settled.closed ? { resolved: confirmed.size + settled.closed } : {}), ...(routed ? { routed } : {}), ...(checked === undefined ? {} : { checked }), ...(shrunk ? { shrunk: true } : {}), ...(figureNotes.length ? { figureProblems: figureNotes } : {}) };
 }
 
 export { recordLintIssues };

@@ -124,7 +124,8 @@ async function figuresPass(ctx: AppContext, t: TaskContext) {
       let markdown = texts.join('\n\n');
       ({ markdown, stored } = commitFigures(ctx, { projectId, nodeId, built, markdown, replace: false, replaced: [] }));
       // Applied when nobody edited the section meanwhile, otherwise a proposal.
-      committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head.id, model: route.model, citations, runId: t.task.runId, taskId: t.task.id });
+      // The text is the section as it stands plus figure blocks, so the formatter has nothing of the model's to fix and the author's text stays as it is.
+      committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown, baseRevId: head.id, model: route.model, citations, runId: t.task.runId, taskId: t.task.id, format: false });
     });
     saved = true;
   } finally {

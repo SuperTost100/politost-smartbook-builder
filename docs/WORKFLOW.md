@@ -106,16 +106,23 @@ The draft task records which happened as `selfCheck`: `ok`, `corrected`, `kept` 
 
 ### Clean-up, lint and repair
 
-Some fixes need no model:
+Some fixes need no model. One function, `formatModelText` (`packages/content/src/format.ts`), collects them and runs on every text a model wrote when it is stored: a draft, the writer's self-check correction, the repair of a formatting problem, a regenerated or fixed block, a chapter introduction, an outside-research addition and the text of a question. It never changes a word, a number or the content of a formula, leaves code fences and `:::` blocks alone, and gives the same text again when it runs on its own output.
 
+- Tool-call markup and terminal codes left in model output are removed, and a line break in the writer's text stays a line break.
 - Function names KaTeX lacks, such as `\cotan` or `\sen`, become `\operatorname{...}`.
 - A formula block reusing a key another section already defines keeps its math and loses the key.
 - A link to a section id the model miscopied points at the section that id was meant for when only one matches, and becomes plain text otherwise.
-- Terminal codes and control characters left in model output are removed, and a line break in the writer's text stays a line break.
-- Display math is moved out of sentences, and statements are numbered per chapter at compile.
-- A reference to a formula reads "(7.2)" in the reader: a chip in the same chapter, a link to the formula in another chapter. Parentheses the writer put around it are dropped so it never shows as "((7.2))".
+- Every heading of a section becomes `###`. The compiler's own `## pN | ...` heading is not source text, so it stays and the lint reports it as a blocker.
+- A `$$` block has no blank line inside it. Outside lists, tables and quotes it opens and closes on lines of its own, with a blank line before and after, and display math that shares a block with inline math moves to a block of its own (inside a list, table or quote it becomes inline `$\displaystyle ...$`). A formula in the middle of a sentence, with no inline math in the block, stays where it is.
+- A statement is numbered per chapter at compile. A reference to a formula reads "(7.2)" in the reader: a chip in the same chapter, a link to the formula in another chapter. Parentheses the writer put around it are dropped so it never shows as "((7.2))".
 
-Formatting problems that break the reader then trigger one repair request, and what remains becomes an issue. A placeholder such as `[?]` or `???` is a blocker, and so is a literal backslash followed by `n` or `t` in text outside math and code, which is a line break or a tab that was never decoded. The lint covers every book text, questions and solutions included, so Validate reports it and an approved export is blocked by it, whatever path wrote the text. A draft export stays available.
+The author's own edits are never formatted: for those the lint only reports. A fix that changes some blocks formats only the blocks the model changed, and Add figures with AI formats nothing, because it only adds figure blocks to the text as it stands.
+
+The lint issues stored with a draft or an introduction are the findings of the text as stored, after all of this has run, so an issue never describes a problem the code already fixed. Formatting findings are the lint rules `math-mixed`, `math-blank-line` and `heading-level` (except the blocker for a `## pN` heading, which needs a decision). A fix settles them by code, as described under [Fix](#fix).
+
+Formatting problems that break the reader and that the formatter cannot fix then trigger one repair request, and what remains becomes an issue. A placeholder such as `[?]` or `???` is a blocker, and so is a literal backslash followed by `n` or `t` in text outside math and code, which is a line break or a tab that was never decoded. The lint covers every book text, questions and solutions included, so Validate reports it and an approved export is blocked by it, whatever path wrote the text. A draft export stays available.
+
+To format the books that already exist, run `npm run normalize-text -- --project <id> --dry-run` first. It lists what a real run would change and writes nothing. The same command without `--dry-run` writes one new revision for each section it changes, which History shows as a repair without a model. Sections whose current text the author wrote or edited by hand, and questions the author edited, are counted and left alone, and `--include-hand-edits` includes them. Add `--data-dir <dir>` for a data folder other than the default.
 
 ### Exam guide
 
@@ -195,6 +202,8 @@ The Review tab lists lint findings, failed checks and reviewer issues, each poin
 - a change that raises the count of blocker or major lint findings for any one rule is reverted, even if it lowers others (a change that swaps one finding for another of the same rule and severity passes this guard);
 - a cheap second model reads each change against the issue and drops any that adds an error or removes more than asked. It also rejects a change that adds more than one new sentence of claims or caveats, because those sentences were what the next review found fault with. When that check can't run, the other guards decide alone and the limit isn't enforced;
 - a fix that would remove more than a fifth of the text is not applied. It waits as a proposal in the Manuscript, and so does a fix for a section you edited while it ran.
+
+Formatting findings never go to the fix model. When a fix is asked for issues of the rules `math-mixed`, `math-blank-line` or `heading-level`, the formatter runs on the current text, the lint runs again, and an issue closes when its rule finds nothing any more. The resolution says "Fixed by the formatter in revision ..." when the text changed and "The text already has it right" when it did not, which is what happens with an issue recorded for text that was already put right. An issue the formatter cannot settle (a heading inside a `:::` block, for example) stays open with the reason. A fix whose issues are all of this kind makes no model call, and in a mixed fix the model is sent only the other issues, on the formatted text. The model's own changed blocks are formatted before the guards compare them, so a patch cannot leave a blank line inside `$$` or a fourth-level heading behind, and the guard does not count a heading that only changed its level as a lost heading. A question fix works the same way for the rules `math-mixed` and `math-blank-line`, and a question whose issues are all of this kind is not checked again by a model.
 
 The fix model is told these rules in its prompt, generated from the guard's own limits, so it does not delete a heading, a formula or more blocks than the guard allows. A figure block is deleted only when a figure problem is open, also in a fix that removes off-program material. It makes the smallest edit that corrects the sentence. It reads only the evidence notes that the blocks it fixes cite, and the whole packet when it cannot tell which blocks those are. It answers in plain text, one part per changed block, so LaTeX backslashes arrive as written. A malformed answer gets one repair turn.
 

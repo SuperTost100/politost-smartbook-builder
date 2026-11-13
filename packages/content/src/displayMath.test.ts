@@ -74,3 +74,56 @@ test('punctuation right after a split formula moves inside the display', () => {
   assert.equal(separateDisplayMath('Sia $f$ pari. Vale $$g(x) = x^3$$. Quindi $g$ è dispari.'), 'Sia $f$ pari. Vale\n\n$$\ng(x) = x^3.\n$$\n\nQuindi $g$ è dispari.');
   assert.equal(separateDisplayMath('Sia $f$ tale che $$f(x) = 1.$$ Allora $f$ è costante.'), 'Sia $f$ tale che\n\n$$\nf(x) = 1.\n$$\n\nAllora $f$ è costante.');
 });
+
+/**
+ * The formatter changes the layout of a formula and never a character of it. Each case writes the same rows in a place
+ * (plain text, list, quote, nested quote; with and without inline math) and checks that the characters inside the
+ * formula are the same afterwards, ignoring white space and the quote marks of a real quote.
+ */
+const ODD_ROWS = ['x', '>', '<', '-', '+', '=', '\\\\', '&', '>=', '< 0', '+ 1', '- 2', '= 3'];
+const PLACES: { name: string; depth: number; open: (rows: string[]) => string }[] = [
+  { name: 'text', depth: 0, open: (r) => `Sia $a$ e\n$$\n${r.join('\n')}\n$$\nfine` },
+  { name: 'display alone', depth: 0, open: (r) => `$$\n${r.join('\n')}\n$$` },
+  { name: 'list with inline math', depth: 0, open: (r) => `- Vale $a$\n  $$\n${r.map((l) => `  ${l}`).join('\n')}\n  $$` },
+  { name: 'list', depth: 0, open: (r) => `- Vale\n  $$\n${r.map((l) => `  ${l}`).join('\n')}\n  $$` },
+  { name: 'quote with inline math', depth: 1, open: (r) => `> Sia $a$\n> $$\n${r.map((l) => `> ${l}`.trimEnd()).join('\n')}\n> $$` },
+  { name: 'quote', depth: 1, open: (r) => `> Sia\n> $$\n${r.map((l) => `> ${l}`.trimEnd()).join('\n')}\n> $$` },
+  { name: 'nested quote with inline math', depth: 2, open: (r) => `> > Sia $a$\n> > $$\n${r.map((l) => `> > ${l}`.trimEnd()).join('\n')}\n> > $$` },
+];
+const formulaChars = (text: string, depth: number): string[] => {
+  const plain = text.split('\n').map((l) => l.replace(new RegExp(`^(?:[ \\t]*>){0,${depth}}`), '')).join('\n');
+  return [...plain.matchAll(/\$\$([\s\S]*?)\$\$|\$\\displaystyle ([\s\S]*?)\$/g)].map((m) => (m[1] ?? m[2]).replace(/\s+/g, ''));
+};
+
+test('the formatter keeps every character of a display formula, whatever its rows are', () => {
+  for (const place of PLACES) {
+    const rowSets = [
+      ODD_ROWS,
+      ODD_ROWS.flatMap((r) => [r, '']),
+      // a row of spaces is blank and may go
+      ['x', '   ', '>', 'y'],
+      [...ODD_ROWS].reverse(),
+    ];
+    for (const rows of rowSets) {
+      // Inside a quote a formula row ">" is written "> >": the first mark is the quote's, and a row of the quote mark alone is blank.
+      const input = place.open(rows);
+      const out = separateDisplayMath(input);
+      const want = [rows.join('').replace(/\s+/g, '')];
+      assert.deepEqual(formulaChars(out, place.depth), want, `${place.name}: ${JSON.stringify(input)} became ${JSON.stringify(out)}`);
+      assert.equal(separateDisplayMath(out), out, `${place.name}: second run changes ${JSON.stringify(out)}`);
+    }
+  }
+});
+
+test('a row with only ">" is part of an ordinary formula and a blank row inside a real quote', () => {
+  assert.equal(separateDisplayMath('$$\nx\n>\ny\n$$'), '$$\nx\n>\ny\n$$');
+  assert.equal(separateDisplayMath('Sia $a$\n$$\nx\n>\ny\n$$'), 'Sia $a$\n\n$$\nx\n>\ny\n$$');
+  assert.equal(separateDisplayMath('- $$\n  x\n  >\n  y\n  $$'), '- $$\n  x\n  >\n  y\n  $$');
+  assert.equal(separateDisplayMath('> Sia $a$\n> $$\n> x\n>\n> y\n> $$'), '> Sia $a$\n> $\\displaystyle x y$');
+  // inside a quote a row "> >" is a formula row holding ">"
+  assert.equal(separateDisplayMath('> Sia $a$\n> $$\n> x\n> >\n> y\n> $$'), '> Sia $a$\n> $\\displaystyle x > y$');
+});
+
+test('a display with no formula rows left is not touched and does not throw', () => {
+  for (const md of ['> $$\n>\n> $$', '> Sia $a$ e\n> $$\n>\n> $$ ok', '$$\n\n$$', '- $$\n  \n  $$']) assert.equal(separateDisplayMath(md), md);
+});

@@ -5,6 +5,7 @@ import type { AppContext } from '../context.ts';
 import { now } from '../db/db.ts';
 import { HttpError } from '../server.ts';
 import type { TaskSpec } from '../queue/queue.ts';
+import { isFormatIssue } from './formatting.ts';
 import { headRevision, loadOutline, loadProject } from './util.ts';
 
 export interface RunScope {
@@ -259,12 +260,16 @@ export function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunSc
     specs.push({ kind: 'section.revise', key: `revise:${nodeId}:${stamp}`, label: 'Regenerate the selection', input: { nodeId, instruction: scope.instruction ?? '', selection: scope.selection ?? '' }, pool: 'writer' });
   }
   if (scope.issueIds?.length) {
-    const issues = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string }>(`SELECT id, node_id, question_id, category FROM review_issues WHERE project_id = ? AND id IN (${scope.issueIds.map(() => '?').join(',')})`, projectId, ...scope.issueIds);
+    const issues = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string; source: string; severity: string; status: string }>(`SELECT id, node_id, question_id, category, source, severity, status FROM review_issues WHERE project_id = ? AND id IN (${scope.issueIds.map(() => '?').join(',')})`, projectId, ...scope.issueIds);
     const byNode = new Map<string, string[]>();
     // An off-program cut may delete whole blocks, so it gets a task of its own, after the section's other fixes: its
     // permission never covers another issue's changes.
     const offByNode = new Map<string, string[]>();
     const byQuestion = new Map<string, string[]>();
+    // A question whose issues are all formatting issues is settled by code and keeps its checked status, so it needs no new check.
+    const formatOnly = new Set<string>();
+    for (const i of issues) if (i.question_id) formatOnly.add(i.question_id);
+    for (const i of issues) if (i.question_id && !isFormatIssue(i, 'question')) formatOnly.delete(i.question_id);
     for (const i of issues) {
       if (i.question_id) byQuestion.set(i.question_id, [...(byQuestion.get(i.question_id) ?? []), i.id]);
       else if (i.node_id && i.category === 'program-off') offByNode.set(i.node_id, [...(offByNode.get(i.node_id) ?? []), i.id]);
@@ -276,6 +281,7 @@ export function regenerateSpecs(ctx: AppContext, projectId: string, scope: RunSc
     }
     for (const [questionId, ids] of byQuestion) {
       specs.push({ kind: 'question.revise', key: `qfix:${questionId}:${stamp}`, label: 'Fix an exercise', input: { questionId, issueIds: ids }, pool: 'editor' });
+      if (formatOnly.has(questionId)) continue;
       specs.push({ kind: 'question.verify', key: `qverify:${questionId}:${stamp}`, label: 'Check the corrected exercise', input: { questionId }, deps: [`qfix:${questionId}:${stamp}`], pool: 'checker' });
     }
   }

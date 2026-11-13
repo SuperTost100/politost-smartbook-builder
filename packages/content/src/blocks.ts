@@ -90,16 +90,18 @@ function classify(lines: string[]): Block['kind'] {
  */
 export function proseLines(lines: string[]): boolean[] {
   const out: boolean[] = [];
-  let code: string | null = null;
+  /** The fence that is open: its character and its length. */
+  let code: { char: string; len: number } | null = null;
   let depth = 0;
   for (let i = 0; i < lines.length; i++) {
     const t = lines[i].trim();
-    const fence = /^(```|~~~)(.*)$/.exec(t);
+    const fence = /^(`{3,}|~{3,})(.*)$/.exec(t);
     if (code !== null) {
-      if (fence && fence[1] === code) code = null;
+      // Only the same character, at least as long and with nothing after it closes the fence: "~~~" inside "~~~~" is code.
+      if (fence && fence[1][0] === code.char && fence[1].length >= code.len && !fence[2].trim()) code = null;
       out.push(false);
     } else if (fence && !fence[2].includes('`')) {
-      code = fence[1];
+      code = { char: fence[1][0], len: fence[1].length };
       out.push(false);
     } else if (/^:::[A-Za-z]/.test(t)) {
       out.push(false);

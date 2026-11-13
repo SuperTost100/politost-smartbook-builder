@@ -1,5 +1,5 @@
 // Outside research: web material a section lacks, proposed with the pages that support it. Every quote is checked on its page.
-import { lintSection, splitBlocks } from '@smartbuilder/content';
+import { formatModelText, lintSection, splitBlocks } from '@smartbuilder/content';
 import type { EvidenceNote } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { quoteInText } from '../evidence/verify.ts';
@@ -79,7 +79,8 @@ export async function sectionResearch(ctx: AppContext, t: TaskContext) {
         dropped.push(`${s.url}: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
-    const text = a.markdown.trim();
+    // The model's addition is formatted here, so the author's blocks around it stay as they are.
+    const text = formatModelText(a.markdown.trim());
     const blockers = lintSection(text, { sectionId: nodeId, language: project.language }).filter((f) => f.severity === 'blocker');
     if (!notes.length || !text || blockers.length) {
       if (blockers.length) dropped.push(`addition after block ${a.afterBlock}: ${blockers[0].message}`);
@@ -113,7 +114,7 @@ export async function sectionResearch(ctx: AppContext, t: TaskContext) {
     const webNotes = withIds.flatMap((k) => k.notes);
     if (packet) ctx.db.run('UPDATE evidence_packets SET notes = ? WHERE id = ?', JSON.stringify([...packet.notes, ...webNotes]), packet.id);
     else insertEvidence(ctx, { projectId, nodeId, provider: 'web', query: found.section.title, answer: '', notes: webNotes });
-    const committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown: texts.join('\n\n'), baseRevId: head.id, model: route.model, citations, forceProposal: true, runId: t.task.runId, taskId: t.task.id });
+    const committed = commitAiRevision(ctx, { projectId, nodeId, kind: 'section', markdown: texts.join('\n\n'), baseRevId: head.id, model: route.model, citations, forceProposal: true, runId: t.task.runId, taskId: t.task.id, format: false });
     return { revId: committed.revId, proposed: kept.length, sources: webNotes.length, dropped };
   });
 }

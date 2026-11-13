@@ -1,6 +1,6 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
-import { changedWords, lintQuestionText, separateDisplayMath as layout, stripDifficultyDecoration } from '@smartbuilder/content';
+import { changedWords, formatModelText, formatterHandles, lintQuestionText, stripDifficultyDecoration } from '@smartbuilder/content';
 import { subjectProfileOf, type Question } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
@@ -11,9 +11,10 @@ import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
+import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
 import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
-import { questionsChanged } from '../repo/questions.ts';
+import { getQuestion, questionsChanged } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
 
 /** Authentic exam questions included per chapter, most recent sessions first. */
@@ -33,6 +34,9 @@ const COLLECTION_SEARCH_PAGES = 100;
 
 type QuestionText = { statement: string; hint: string; solution: string };
 
+/** The text of a question as it is stored: model-written, so formatted. */
+const layout = (text: string) => formatModelText(text, { kind: 'question' });
+
 /** Why a formatting repair of question text must not replace the original: it changed a word or a number, in the first part that did. Null when it may. */
 function wordsChanged(before: QuestionText, after: QuestionText): string | null {
   for (const part of ['statement', 'hint', 'solution'] as const) {
@@ -51,7 +55,7 @@ const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'diffi
 async function repairQuestionFormat(ctx: AppContext, t: TaskContext, projectId: string, language: string, text: QuestionText): Promise<QuestionText> {
   const problems = (x: QuestionText) => (['statement', 'hint', 'solution'] as const).flatMap((part) =>
     lintQuestionText(layout(x[part]), { file: part, language, skipRules: ['formula-ref-unknown'] })
-      .filter((f) => f.severity !== 'minor')
+      .filter((f) => f.severity !== 'minor' && !formatterHandles(f.rule, f.severity, 'question'))
       .map((f) => `[${part}] ${f.rule}: ${f.message}${f.quote ? ` — "${truncate(f.quote, 160)}"` : ''}`));
   const found = problems(text);
   if (!found.length) return text;
@@ -476,10 +480,19 @@ export const questionReviseSchema = z.object({ statement: z.string(), hint: z.st
 export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const r = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!r) return { skipped: true };
-  const q = rowToQuestion(r);
+  let q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
-  const issues = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string }>(`SELECT id, message, suggestion, source, category FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string }>(`SELECT id, message, suggestion, source, category, severity, status FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  // The issues may be gone (a relint of the chapter deletes open lint rows): with nothing left to fix the editor must not run and save its answer as a draft.
+  if (ids.length && !selected.length) return { skipped: 'the requested issues are gone' };
   const project = loadProject(ctx, q.projectId);
+  // Formatting findings are settled by code and never listed in a prompt. A fix made of them alone makes no model call.
+  const formatIssues = selected.filter((i) => isFormatIssue(i, 'question'));
+  const issues = selected.filter((i) => !isFormatIssue(i, 'question'));
+  const settled = settleQuestionFormatting(ctx, { projectId: q.projectId, questionId: q.id, language: project.language, issues: formatIssues });
+  if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing' };
+  // The model works on the text the formatter left.
+  if (settled.changed) q = getQuestion(ctx, q.id);
   const { data, route } = await runRole(ctx, {
     role: 'editor',
     system: `You correct a textbook exercise in ${project.language === 'it' ? 'Italian' : project.language}. Fix exactly the reported problems; keep everything else.\n\n${formatRules(project.language)}`,

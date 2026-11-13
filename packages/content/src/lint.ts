@@ -18,6 +18,7 @@ export const LINT_RULES = [
   'unicode-math',
   'code-fence',
   'math-mixed',
+  'math-blank-line',
   'katex',
   'heading-level',
   'image',
@@ -123,6 +124,7 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   'duplicate-graph': 'major',
   'heading-level': 'minor',
   'math-mixed': 'minor',
+  'math-blank-line': 'minor',
   table: 'minor',
   'empty-section': 'minor',
 };
@@ -324,6 +326,8 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     // Inline code is left out (an old MATLAB error starts with ???); math is not, so masked text cannot be used here.
     const noCode = l.kind === 'math' || l.kind === 'formula-body' ? t : t.replace(/`[^`]*`/g, '');
     for (const _ of noCode.matchAll(/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/g)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
+    // A blank line is only of kind 'math' inside an open $$: the reader may end the formula there.
+    if (l.kind === 'math' && !l.raw.trim() && lines[l.n - 2]?.raw.trim()) add(mk('math-blank-line', file, 'Blank line inside a display formula ($$ ... $$); remove it.', l.n, lines.slice(Math.max(0, l.n - 3), l.n + 1).map((x) => x.raw).join(' ')));
     if (l.kind === 'math' || l.kind === 'formula-body') continue;
     if (/^\s*:{4,}\s*\w/.test(t)) add(mk('formula-malformed', file, 'Block fences use exactly three colons (:::).', l.n, t));
 

@@ -82,14 +82,60 @@ export function resolveProposalIssues(ctx: AppContext, projectId: string, revId:
   return ids;
 }
 
-/** Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. */
+/**
+ * Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. An open issue listed in
+ * `keepIds` that a fresh finding still matches (same rule, message and quote; or the quote as the formatter rewrote it; or the
+ * only one of its rule and message when the quote changed some other way) keeps its row and id, because a running fix refers to it; its revision and quote move to the fresh finding's.
+ */
 export function replaceLintIssues(
   ctx: AppContext, projectId: string, nodeId: string, revId: string | null,
   findings: { rule: string; severity: IssueSeverity; message: string; quote?: string }[],
+  keepIds: string[] = [],
+  /** What a kept row's quote reads after the text was formatted, so the row is found again by its own line. */
+  moved: (quote: string) => string = (quote) => quote,
 ): ReviewIssue[] {
   return ctx.db.tx(() => {
-    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'`, projectId, nodeId);
-    return findings.map((f) => insertIssue(ctx, { projectId, nodeId, revId, source: 'lint', severity: f.severity, category: f.rule, message: f.message, quote: f.quote ?? '' }));
+    const kept = ctx.db.all<Rec>(`SELECT id, category, message, quote FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'`, projectId, nodeId).filter((r) => keepIds.includes(r.id as string));
+    const used = new Set<string>();
+    const rows = findings.map((f) => {
+      const same = kept.find((r) => !used.has(r.id as string) && r.category === f.rule && r.message === f.message && r.quote === (f.quote ?? ''));
+      if (same) used.add(same.id as string);
+      return same;
+    });
+    // The formatter may have rewritten the line an issue quotes (a heading that changed level), so its fresh finding has
+    // another quote. A kept row then goes with the finding that quotes its line as the formatter wrote it, or the one
+    // finding that quotes a part of it, and failing that with the one unmatched finding of its rule and message, when there
+    // is exactly one of each. A row that none of these finds again is replaced by a fresh one.
+    for (const r of kept) {
+      if (used.has(r.id as string)) continue;
+      const now = moved(r.quote as string);
+      const free = (f: { rule: string; message: string }, n: number) => !rows[n] && f.rule === r.category && f.message === r.message;
+      let at = findings.findIndex((f, n) => free(f, n) && (f.quote ?? '') === now);
+      if (at < 0) {
+        // The formatter split the line (a formula moved to lines of its own): the finding now quotes one part of it.
+        const parts = findings.map((f, n) => (free(f, n) && f.quote && now.includes(f.quote) ? n : -1)).filter((n) => n >= 0);
+        if (parts.length === 1) at = parts[0];
+      }
+      if (at < 0) continue;
+      rows[at] = r;
+      used.add(r.id as string);
+    }
+    for (const r of kept) {
+      if (used.has(r.id as string)) continue;
+      const alike = (x: { rule: string; message: string }) => x.rule === r.category && x.message === r.message;
+      const open = findings.map((f, n) => (rows[n] || !alike(f) ? -1 : n)).filter((n) => n >= 0);
+      const rivals = kept.filter((k) => !used.has(k.id as string) && k.category === r.category && k.message === r.message);
+      if (open.length !== 1 || rivals.length !== 1) continue;
+      rows[open[0]] = r;
+      used.add(r.id as string);
+    }
+    ctx.db.run(`DELETE FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'${used.size ? ` AND id NOT IN (${[...used].map(() => '?').join(',')})` : ''}`, projectId, nodeId, ...used);
+    return findings.map((f, n) => {
+      const same = rows[n];
+      if (!same) return insertIssue(ctx, { projectId, nodeId, revId, source: 'lint', severity: f.severity, category: f.rule, message: f.message, quote: f.quote ?? '' });
+      ctx.db.run('UPDATE review_issues SET rev_id = ?, quote = ? WHERE id = ?', revId, f.quote ?? '', same.id as string);
+      return getIssue(ctx, same.id as string);
+    });
   });
 }
 

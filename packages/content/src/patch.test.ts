@@ -369,3 +369,11 @@ test('changedWords: every Greek letter and every symbol of the table is a symbol
     assert.ok(symbols.has(ch), `${ch} (U+${c.toString(16)}) has no LaTeX command in MATH_SYMBOLS`);
   }
 });
+
+test('a heading that changes level is not a lost heading, and a renamed one still is', () => {
+  const kept = applyGuardedChanges(['#### Calcolo\n\nTesto.'], [{ block: 0, text: '### Calcolo\n\nTesto corretto.' }], () => []);
+  assert.deepEqual(kept.kept, [0]);
+  const renamed = applyGuardedChanges(['#### Calcolo\n\nTesto.'], [{ block: 0, text: '### Altro\n\nTesto.' }], () => []);
+  assert.match(renamed.reverted[0].reason, /heading/);
+  assert.equal(lostStructure('#### Calcolo\n\nTesto.', '### Calcolo\n\nTesto.'), null);
+});
