@@ -84,13 +84,15 @@ export function resolveProposalIssues(ctx: AppContext, projectId: string, revId:
 
 /**
  * Replaces the open lint issues of a node with fresh findings. Resolved and dismissed history stays. An open issue listed in
- * `keepIds` that a fresh finding still matches (same rule, message and quote, or the only one of its rule and message when
- * the quote changed) keeps its row and id, because a running fix refers to it; its revision and quote move to the fresh finding's.
+ * `keepIds` that a fresh finding still matches (same rule, message and quote; or the quote as the formatter rewrote it; or the
+ * only one of its rule and message when the quote changed some other way) keeps its row and id, because a running fix refers to it; its revision and quote move to the fresh finding's.
  */
 export function replaceLintIssues(
   ctx: AppContext, projectId: string, nodeId: string, revId: string | null,
   findings: { rule: string; severity: IssueSeverity; message: string; quote?: string }[],
   keepIds: string[] = [],
+  /** What a kept row's quote reads after the text was formatted, so the row is found again by its own line. */
+  moved: (quote: string) => string = (quote) => quote,
 ): ReviewIssue[] {
   return ctx.db.tx(() => {
     const kept = ctx.db.all<Rec>(`SELECT id, category, message, quote FROM review_issues WHERE project_id = ? AND node_id = ? AND source = 'lint' AND status = 'open'`, projectId, nodeId).filter((r) => keepIds.includes(r.id as string));
@@ -101,7 +103,15 @@ export function replaceLintIssues(
       return same;
     });
     // The formatter may have rewritten the line an issue quotes (a heading that changed level), so its fresh finding has
-    // another quote. A kept row then goes with the one unmatched finding of its rule and message, when there is exactly one of each.
+    // another quote. A kept row then goes with the finding that quotes its line as the formatter wrote it, and failing that
+    // with the one unmatched finding of its rule and message, when there is exactly one of each.
+    for (const r of kept) {
+      if (used.has(r.id as string)) continue;
+      const at = findings.findIndex((f, n) => !rows[n] && f.rule === r.category && f.message === r.message && (f.quote ?? '') === moved(r.quote as string));
+      if (at < 0) continue;
+      rows[at] = r;
+      used.add(r.id as string);
+    }
     for (const r of kept) {
       if (used.has(r.id as string)) continue;
       const alike = (x: { rule: string; message: string }) => x.rule === r.category && x.message === r.message;

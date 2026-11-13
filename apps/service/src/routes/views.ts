@@ -1,5 +1,5 @@
 // Manuscript read models: outline + current text + proposals + evidence + issues + compiled Markdown.
-import { numberChapters, type ChapterInput } from '@smartbuilder/content';
+import { formatModelText, numberChapters, type ChapterInput } from '@smartbuilder/content';
 import type { ChapterView, Outline, SectionView } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { HttpError } from '../server.ts';
@@ -134,7 +134,7 @@ export function relint(ctx: AppContext, projectId: string, nodeId: string, keepI
   if (!head) return;
   try {
     const findings = deps.lintSection(head.markdown, { sectionId: nodeId, language: getProject(ctx, projectId).language, knownFormulaKeys: knownFormulaKeys(ctx, projectId) });
-    replaceLintIssues(ctx, projectId, nodeId, head.id, findings, keepIds);
+    replaceLintIssues(ctx, projectId, nodeId, head.id, findings, keepIds, (quote) => formatModelText(quote));
   } catch {
     // The lints are advisory; the text is already saved.
   }

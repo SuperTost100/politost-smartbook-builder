@@ -221,6 +221,25 @@ describe('a fix settles formatting findings in code', () => {
     assert.equal(ctx.db.all(`SELECT 1 FROM review_issues WHERE node_id = 's1' AND category = 'placeholder'`).length, 1, 'no second row for it');
   });
 
+  test('with two such lines, the kept row follows its own line', async () => {
+    seedOutline();
+    const text = '#### Valore [?]\n\n#### Altro [?]\n\nTesto.';
+    const rev = seedHead('s1', text);
+    const placeholders = lintSection(text, { sectionId: 's1', language: 'it' }).filter((f) => f.rule === 'placeholder');
+    assert.equal(placeholders.length, 2);
+    // The fix is asked about the second heading's placeholder only. The first one's row is not part of the fix.
+    const [first, second] = placeholders.map((f) => addIssue({ nodeId: 's1', revId: rev, severity: f.severity, category: 'placeholder', quote: f.quote, message: f.message }));
+    const level = addIssue({ nodeId: 's1', revId: rev, category: 'heading-level', message: 'Only "###" headings are allowed inside a section (found level 4).' });
+    fake.next(patchAnswer({ changes: [{ block: 1, text: '### Altro 5' }] }), () => ({ structured: { changes: [{ block: 1, verdict: 'good', reason: '' }], issues: [{ index: 1, fixed: true, reason: '' }] } as never, text: '{}', usage: usageOf(1, 1) }));
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [second, level] }));
+    const row = ctx.db.get<{ status: string; resolution: string; quote: string }>('SELECT status, resolution, quote FROM review_issues WHERE id = ?', second);
+    assert.ok(row, 'the row the fix was asked about still exists');
+    assert.equal(row.quote, '### Altro [?]', 'and it is the row of its own heading');
+    assert.match(row.resolution, /The AI fix was not applied/);
+    assert.equal(ctx.db.get('SELECT 1 FROM review_issues WHERE id = ?', first), undefined, 'the other placeholder was not kept, so it got a fresh row');
+    assert.deepEqual(ctx.db.all<{ quote: string }>(`SELECT quote FROM review_issues WHERE node_id = 's1' AND category = 'placeholder' ORDER BY quote`).map((r) => r.quote), ['### Altro [?]', '### Valore [?]']);
+  });
+
   test('another lint issue in the same fix keeps its row, so the fix can close it and a proposal can mark it', async () => {
     seedOutline();
     const text = '### Uno\n\nIl valore è [?] ohm.\n\nVale $a$ e $$ b $$ sempre.';
