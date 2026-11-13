@@ -12,7 +12,7 @@ import { formatModelText } from '@smartbuilder/content';
 import { parseArgs, paths } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import { findSection, loadOutline } from '../pipeline/util.ts';
-import { currentHeads, getProject, listQuestions, repairHead, repairQuestionText } from '../repo/index.ts';
+import { currentHead, currentHeads, getProject, getQuestion, listQuestions, repairHead, repairQuestionText } from '../repo/index.ts';
 import { relint } from '../routes/views.ts';
 
 export interface NormalizeResult {
@@ -36,19 +36,31 @@ export function normalizeText(ctx: AppContext, projectId: string, opts: { dryRun
     return chapter ? `Introduction of ${chapter.title}` : nodeId;
   };
   const out: NormalizeResult = { sections: 0, questions: 0, handEdited: 0, changed: [] };
-  for (const [nodeId, head] of currentHeads(ctx, projectId)) {
-    if (head.origin === 'human' && !opts.handEdits) { out.handEdited++; continue; }
-    if (opts.dryRun ? formatModelText(head.markdown) === head.markdown : !repairHead(ctx, projectId, nodeId, (md) => formatModelText(md))) continue;
+  // The running service can save a hand edit at any time, so each text is checked and written in one transaction.
+  for (const nodeId of currentHeads(ctx, projectId).keys()) {
+    const result = ctx.db.tx(() => {
+      const head = currentHead(ctx, projectId, nodeId);
+      if (!head) return 'none';
+      if (head.origin === 'human' && !opts.handEdits) return 'hand';
+      if (opts.dryRun ? formatModelText(head.markdown) === head.markdown : !repairHead(ctx, projectId, nodeId, (md) => formatModelText(md))) return 'none';
+      return 'changed';
+    });
+    if (result === 'hand') { out.handEdited++; continue; }
+    if (result === 'none') continue;
     if (!opts.dryRun) relint(ctx, projectId, nodeId);
     out.sections++;
     out.changed.push(nameOf(nodeId));
   }
-  const edited = new Set(ctx.db.all<{ id: string }>('SELECT id FROM questions WHERE project_id = ? AND edited_at IS NOT NULL', projectId).map((r) => r.id));
   const format = (text: string) => formatModelText(text, { kind: 'question' });
   for (const q of listQuestions(ctx, projectId)) {
-    if (edited.has(q.id) && !opts.handEdits) { out.handEdited++; continue; }
-    const changes = opts.dryRun ? [q.statement, q.hint, q.solution].some((t) => format(t) !== t) : repairQuestionText(ctx, q.id, format);
-    if (!changes) continue;
+    const result = ctx.db.tx(() => {
+      const edited = ctx.db.get<{ edited_at: string | null }>('SELECT edited_at FROM questions WHERE id = ?', q.id)?.edited_at != null;
+      if (edited && !opts.handEdits) return 'hand';
+      const cur = getQuestion(ctx, q.id);
+      return (opts.dryRun ? [cur.statement, cur.hint, cur.solution].some((t) => format(t) !== t) : repairQuestionText(ctx, q.id, format)) ? 'changed' : 'none';
+    });
+    if (result === 'hand') { out.handEdited++; continue; }
+    if (result === 'none') continue;
     out.questions++;
     out.changed.push(`Question ${q.number ?? q.id.slice(0, 8)}`);
   }

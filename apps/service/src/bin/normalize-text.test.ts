@@ -95,3 +95,33 @@ test('a dry run lists what would change and writes nothing', () => {
   assert.equal(listRevisions(ctx, 'p1', 's1').length, 1);
   assert.equal(ctx.db.get<{ rev: number; statement: string }>('SELECT rev, statement FROM questions WHERE id = ?', 'q1')!.statement, MIXED);
 });
+
+/** Runs `then` once, right after the first query whose SQL matches `sql` returned, as a save by the running service would. */
+function afterFirstQuery(sql: RegExp, then: () => void) {
+  const db = ctx.db;
+  const all = db.all.bind(db);
+  let done = false;
+  db.all = ((query: string, ...params: never[]) => {
+    const rows = all(query, ...params);
+    if (!done && sql.test(query)) { done = true; then(); }
+    return rows;
+  }) as typeof db.all;
+}
+
+test('a section edited by hand after the run listed it is not formatted without --include-hand-edits', () => {
+  const a = aiText('s1', '#### Titolo');
+  afterFirstQuery(/FROM content_revisions WHERE project_id = \? AND status = 'current'/, () => { saveHuman(ctx, 'p1', 's1', '#### Titolo dell\'autrice', a.id); });
+  const r = normalizeText(ctx, 'p1');
+  assert.deepEqual(r, { sections: 0, questions: 0, handEdited: 1, changed: [] });
+  assert.equal(currentHead(ctx, 'p1', 's1')!.markdown, '#### Titolo dell\'autrice');
+});
+
+test('a question edited by hand after the run listed it is not formatted without --include-hand-edits', () => {
+  ctx.db.insert('questions', {
+    id: 'q1', project_id: 'p1', kind: 'exercise', origin: 'generated', statement: MIXED, hint: '', solution: '', difficulty: 'medio', topic_ids: [], status: 'draft', checks: [], rev: 1, created_at: '2026-01-01', updated_at: '2026-01-01',
+  });
+  afterFirstQuery(/FROM questions/, () => { ctx.db.run(`UPDATE questions SET edited_at = '2026-01-02' WHERE id = 'q1'`); });
+  const r = normalizeText(ctx, 'p1');
+  assert.deepEqual(r, { sections: 0, questions: 0, handEdited: 1, changed: [] });
+  assert.equal(ctx.db.get<{ statement: string }>('SELECT statement FROM questions WHERE id = ?', 'q1')!.statement, MIXED);
+});
