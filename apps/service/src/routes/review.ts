@@ -147,7 +147,8 @@ export function prepareExport(ctx: AppContext, projectId: string, opts: { approv
 
   const bytes = deps.packPtsb(compiled);
   const back = deps.readBackPtsb(bytes, compiled);
-  if (!back.ok) {
+  // A book the approval already refuses keeps that refusal: its errors are usually why the package does not read back.
+  if (!back.ok && !blocked) {
     throw new HttpError(500, 'export_unreadable', `The exported file did not pass the read-back check: ${back.errors.slice(0, 3).join('; ')}.`, 'Run validation and fix the problems it lists, then export again.');
   }
   for (const w of back.warnings) report.warnings.push({ file: 'package', message: w });

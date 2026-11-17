@@ -47,7 +47,8 @@ export interface RunRoleOptions<T> {
 
 export type ParseResult<T> = { ok: true; data: T } | { ok: false; problem: string };
 
-export interface RunRoleResult<T> { text: string; data: T; route: Route; usage: { inputTokens: number | null; outputTokens: number | null } }
+/** `fallback`: the answer came from the role's fallback route, not its primary. */
+export interface RunRoleResult<T> { text: string; data: T; route: Route; fallback: boolean; usage: { inputTokens: number | null; outputTokens: number | null } }
 
 /** Tunables that tests change. */
 export const llmTuning = { callTimeoutMs: 10 * 60_000 };
@@ -314,9 +315,9 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
   try {
     const first = await convo.first(jsonSchema);
     add(first.usage);
-    if (!opts.schema && !opts.parse) return { result: { text: first.text, data: first.text as T, route, usage: total }, convo };
+    if (!opts.schema && !opts.parse) return { result: { text: first.text, data: first.text as T, route, fallback: meta.fallback, usage: total }, convo };
     const verdict = check(first);
-    if (verdict.ok) return { result: { text: verdict.text, data: verdict.data, route, usage: total }, convo };
+    if (verdict.ok) return { result: { text: verdict.text, data: verdict.data, route, fallback: meta.fallback, usage: total }, convo };
 
     const fix = opts.parse
       ? ['Your previous answer could not be used.', '', 'Problems:', verdict.problem, '', 'Reply with the full corrected answer in the same format as before, not only the parts that change.']
@@ -324,7 +325,7 @@ async function attemptRoute<T>(ctx: AppContext, funnel: FunnelLike, opts: RunRol
     const second = await convo.next(fix.join('\n'), { jsonSchema });
     add(second.usage);
     const again = check(second);
-    if (again.ok) return { result: { text: again.text, data: again.data, route, usage: total }, convo };
+    if (again.ok) return { result: { text: again.text, data: again.data, route, fallback: meta.fallback, usage: total }, convo };
     throw new TaskError(`The ${opts.role} model returned an invalid answer twice: ${again.problem}`, 'input', 'Retry, or choose a different model for this role.');
   } catch (err) {
     convo.close();

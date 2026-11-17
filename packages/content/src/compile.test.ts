@@ -584,22 +584,20 @@ test('an exported graph is linted, and a finding the author accepted is not repo
   assert.deepEqual(lint(['duplicate:Gay-Lussac']), []);
 });
 
-test('a graph whose section no longer states the formula it was drawn from is reported as stale; one without a spec is not', () => {
+test('a graph checked against an earlier revision of its section is reported as stale; one never checked is not', () => {
   const payload = { id: 'v', title: 'Velocità', type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', name: 'v = a t', x: [0, 1, 2], y: [0, 2, 4] }], layout: {} } };
-  const stale = (spec: Record<string, unknown> | null, rewrite?: string) => {
-    const input = fixtureBook({ enrichments: [enrichment({ id: 'g', kind: 'graph', nodeId: 'sec-vel', payload, spec })] });
-    const sec = input.chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!;
-    if (rewrite !== undefined) sec.markdown = rewrite;
+  const stale = (checkedRevisionId: string | null, head: string | undefined) => {
+    const input = fixtureBook({ enrichments: [enrichment({ id: 'g', kind: 'graph', nodeId: 'sec-vel', payload, checkedRevisionId })] });
+    input.chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!.revisionId = head;
     return compileBook(input).findings.filter((f) => f.rule === 'graph-stale');
   };
-  const quoted = fixtureBook().chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!.markdown.match(/\$\$([^$]+)\$\$/)![1]!;
-  const spec = { traces: [{ kind: 'function', label: 'v', fn: '2*x', source: quoted }] };
-  assert.deepEqual(stale(spec), [], 'the section still states it');
-  const found = stale(spec, 'Il testo ora parla di altro.');
+  assert.deepEqual(stale('rev-1', 'rev-1'), [], 'checked against the text that ships');
+  // A changed number outside any quoted formula, or a decimal-comma fix inside one: either is a new revision.
+  const found = stale('rev-1', 'rev-2');
   assert.equal(found.length, 1);
   assert.equal(found[0]!.severity, 'minor');
-  assert.match(found[0]!.message, /"Velocità" was drawn from .* which its section no longer states/);
-  assert.deepEqual(stale(null, 'Il testo ora parla di altro.'), [], 'an old graph has no spec to compare');
+  assert.match(found[0]!.message, /"Velocità" was checked against an earlier text of its section/);
+  assert.deepEqual(stale(null, 'rev-2'), [], 'a graph the checker never read has nothing to compare');
 });
 
 test('a truth table and a matrix written as KaTeX arrays survive the compile and the reader parser', () => {
