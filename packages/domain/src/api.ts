@@ -143,7 +143,7 @@ export interface Api {
   'POST /api/projects/:id/outline/approve': { body: { revId: string }; res: OutlineRevision };
 
   /** Starts a run. kind=prepare: extract+map; plan: outline; generate: draft everything in scope. */
-  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; reviewMode?: 'full' | 'recheck'; missingOnly?: boolean } }; res: RunSummary };
+  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; generatedQuestions?: boolean; reviewMode?: 'full' | 'recheck'; missingOnly?: boolean } }; res: RunSummary };
   'GET /api/projects/:id/runs': { res: RunSummary[] };
   'GET /api/runs/:runId': { res: RunSummary & { tasks: TaskRow[]; usage: UsageRow[] } };
   'POST /api/runs/:runId/pause': { res: RunSummary };

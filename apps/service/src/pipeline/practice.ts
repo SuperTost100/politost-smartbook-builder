@@ -12,10 +12,10 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { mismatchMessage, readMismatches, recomputeFinalValues, type NumericCheck } from './numeric.ts';
+import { mismatchMessage, readMismatches, recomputeFinalValues, runConsistency, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
-import { getQuestion, questionsChanged } from '../repo/questions.ts';
+import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
 import { COUNTED_QUESTION_SQL, loadOutline, loadProject, loadTopics, truncate } from './util.ts';
 
 /** Authentic exam questions included per chapter, most recent sessions first. */
@@ -32,8 +32,6 @@ const MAX_SESSION_PAGES = 12;
 const MAX_SESSION_CHARS = 60_000;
 /** Pages of the exercise collections the full-text search returns when looking for examples for one chapter. */
 const COLLECTION_SEARCH_PAGES = 100;
-
-type QuestionText = { statement: string; hint: string; solution: string };
 
 const ruleOf = (category: string) => category.replace(/^compile:/, '');
 
@@ -236,6 +234,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   const rev = question.rev;
   const project = loadProject(ctx, question.projectId);
   let data = sessionRead(t, question);
+  const models: string[] = [];
   if (!data) {
     const pages: string[] = [];
     for (const idx of importPages(question)) pages.push(pageText(await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
@@ -245,6 +244,7 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
       parse: examReadParser([question.number ?? '']), projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     data = read.data.exercises[0]!;
+    models.push(read.route.model);
   }
   if (!data.readable) {
     // Out of the book until the author types it in: its raw text-layer statement is garbled.
@@ -266,11 +266,17 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
       schema: z.object({ markdown: z.string() }), projectId: question.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     solution = solved.data.markdown;
+    models.push(solved.route.model);
     checks.push({ method: 'lint', ok: true, detail: `No official solution; written by ${solved.route.model}` });
   }
   const fixed = await repairQuestionFormat(ctx, t, question.projectId, project.language, { statement: data.statement, hint: '', solution });
   const at = now();
-  const changed = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', layout(fixed.statement), layout(fixed.solution), JSON.stringify(checks), at, at, question.id, rev).changes;
+  const after = { statement: layout(fixed.statement), hint: question.hint, solution: layout(fixed.solution) };
+  const changed = ctx.db.tx(() => {
+    const n = ctx.db.run('UPDATE questions SET statement = ?, solution = ?, checks = ?, imported_at = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', after.statement, after.solution, JSON.stringify(checks), at, at, question.id, rev).changes;
+    if (n) recordQuestionRevision(ctx, question.id, question, after, { origin: 'imported', model: models.join(', ') || null, taskId: t.task.id });
+    return n;
+  });
   if (!changed) {
     keepStaleOutput(ctx, question, data.statement, data.solution);
     return { stale: true };
@@ -363,22 +369,27 @@ async function generateStage(ctx: AppContext, t: TaskContext, kind: 'exercise' |
       : topics.filter((tp) => tp.priority !== 'low').slice(0, 2).map((tp) => ({ key: keyOf(tp.id), name: tp.name, n: 1 }));
     const count = list.reduce((a, b) => a + b.n, 0);
     if (count) {
-      const { data } = await runRole(ctx, {
+      const { data, route } = await runRole(ctx, {
         role: 'exercises',
         ...exercisesPrompt({ language: project.language, kind, chapterTitle: chapter.title, topics: list.map((x) => `${x.key}: ${x.name} — ${x.n}`).join('\n'), count, examples, collection, knownFormulas: known }),
         schema: generatedQuestionsSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
       });
       const valid = new Map(topics.map((tp) => [keyOf(tp.id), tp.id]));
+      // A problem the writer itself says has no answer (E17.5 of Chimica: "the data imply 3.75 oxygen atoms") is not kept.
+      const solvable = data.questions.filter((g) => g.solvable);
+      if (solvable.length < data.questions.length) t.progress(`${data.questions.length - solvable.length} generated problem${data.questions.length - solvable.length > 1 ? 's' : ''} without an answer left out`);
       const written: typeof data.questions = [];
-      for (const g of data.questions) written.push({ ...g, ...await repairQuestionFormat(ctx, t, projectId, project.language, { statement: stripDifficultyDecoration(g.statement), hint: kind === 'exam' ? '' : g.hint, solution: g.solution }) });
+      for (const g of solvable) written.push({ ...g, ...await repairQuestionFormat(ctx, t, projectId, project.language, { statement: stripDifficultyDecoration(g.statement), hint: kind === 'exam' ? '' : g.hint, solution: g.solution }) });
       ids = ctx.db.tx(() => written.map((g) => {
         const id = newId();
+        const text = { statement: layout(g.statement), hint: layout(g.hint), solution: layout(g.solution) };
         ctx.db.insert('questions', {
           id, project_id: projectId, kind, origin: 'generated', resource_id: null, page_from: null, page_to: null, exam_group: null, exam_date: null,
-          number: null, statement: layout(g.statement), hint: layout(g.hint), solution: layout(g.solution), difficulty: g.difficulty,
+          number: null, ...text, difficulty: g.difficulty,
           topic_ids: g.topics.map((k) => valid.get(k)).filter(Boolean), chapter_id: chapterId, status: 'draft',
           checks: [{ method: 'lint', ok: true, detail: `final answer: ${g.finalAnswer}` }], rev: 1, created_at: now(), updated_at: now(),
         });
+        recordQuestionRevision(ctx, id, null, text, { origin: 'generated', model: route.model, taskId: t.task.id });
         return id;
       }));
     }
@@ -414,6 +425,35 @@ export async function practiceDone(ctx: AppContext, t: TaskContext) {
   return { tasks: rows.length, failed: rows.filter((r) => r.state === 'failed').length, blocked: rows.filter((r) => r.blocked).length };
 }
 
+/** The answer of one exercise check (`verifySchema`). */
+export type VerifyAnswer = z.infer<typeof verifySchema>;
+
+/**
+ * Why the statement's data fail the check, in one message for one blocker, or null when they pass: the problem is well posed,
+ * no data problem is listed, and the consistency program printed CONSISTENT. A program that crashed, timed out or printed no
+ * verdict fails. No program at all passes only because the prompt allows that for a problem with no numeric data.
+ */
+export function dataFailure(d: Pick<VerifyAnswer, 'wellPosed' | 'wellPosedReason' | 'dataProblems'>, consistency: ConsistencyCheck | null): string | null {
+  const parts: string[] = [];
+  if (!d.wellPosed) parts.push(`The statement's data do not determine one answer${d.wellPosedReason.trim() ? `: ${d.wellPosedReason.trim().replace(/\.$/, '')}` : ''}.`);
+  if (d.dataProblems.length) parts.push(`Data problems: ${d.dataProblems.map((p) => p.trim().replace(/\.$/, '')).join('; ')}.`);
+  if (consistency?.verdict === 'inconsistent') parts.push(`The consistency check printed: ${consistency.detail}`);
+  if (consistency?.verdict === 'failed') parts.push(consistency.detail);
+  return parts.length ? parts.join(' ') : null;
+}
+
+/**
+ * The verdict of the exercise check. A question is verified only when the two solutions agree, no problem above minor is
+ * listed, the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that agree on a
+ * problem with impossible data (Chimica E17.5: both said "no solution") do not pass.
+ */
+export function verifyVerdict(d: VerifyAnswer, mismatches: number, consistency: ConsistencyCheck | null) {
+  const resultsAgree = d.resultsAgree && !mismatches;
+  const data = dataFailure(d, consistency);
+  const ok = d.agrees && resultsAgree && !d.problems.some((p) => p.severity !== 'minor') && !data;
+  return { ok, resultsAgree, data };
+}
+
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
   const r = ctx.db.get('SELECT * FROM questions WHERE id = ?', t.task.input.questionId as string);
   if (!r) return { skipped: true };
@@ -425,23 +465,27 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.
-  // A numeric final answer is also recomputed in the sandbox from the program the checker returned, with no extra model call.
+  // A numeric final answer is recomputed, and the statement's data are checked, in the sandbox from the programs the checker
+  // returned, with no extra model call.
   let { data, route } = await check('checker');
   let recomputed = await recomputeFinalValues(data.computation, data.statedValues);
-  const suspicious = (d: typeof data, r: NumericCheck | null) => !d.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!r?.mismatches.length;
-  if (suspicious(data, recomputed) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
+  let consistency = await runConsistency(data.consistency);
+  const suspicious = (d: typeof data, r: NumericCheck | null, c: ConsistencyCheck | null) => !d.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!r?.mismatches.length || !!dataFailure(d, c);
+  if (suspicious(data, recomputed, consistency) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
     ({ data, route } = await check('reviewer'));
     // The reviewer's recomputation replaces the checker's only when it ran: a reviewer that gave no usable program does not erase a mismatch.
     recomputed = (await recomputeFinalValues(data.computation, data.statedValues)) ?? recomputed;
+    // Its consistency program is its verdict on the data; with no program, the checker's result stands.
+    consistency = (await runConsistency(data.consistency)) ?? consistency;
   }
   const mismatches = recomputed?.mismatches ?? [];
-  const resultsAgree = data.resultsAgree && !mismatches.length;
-  const ok = data.agrees && resultsAgree && !data.problems.some((p) => p.severity !== 'minor');
+  const { ok, resultsAgree, data: badData } = verifyVerdict(data, mismatches.length, consistency);
   const checks = [
-    ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric'),
+    ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric' && c.method !== 'consistency'),
     { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model },
     ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
+    { method: 'consistency' as const, ok: !badData, detail: badData ?? consistency?.detail ?? 'No numeric data to check; the statement was judged well posed.' },
   ];
   return ctx.db.tx(() => {
     // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
@@ -460,7 +504,9 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
         : `The independent solution reaches a different result: ${data.independentAnswer}`;
       addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
     }
-    return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}) };
+    // Data that are inconsistent, impossible or not shown consistent always block, whatever the solutions say.
+    if (badData) addIssue(ctx, q, 'blocker', 'data', badData, 'Correct the data of the statement so that they are consistent and determine one answer, and the solution with them. Accept the issue only if the check is wrong.');
+    return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}), ...(badData ? { data: badData } : {}) };
   });
 }
 
@@ -530,12 +576,14 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     // The author may have closed the issues while the editor ran. A rewrite made for issues that are all closed now is not applied over that decision.
     const open = stillOpen(ctx, issues.map((i) => i.id));
     if (issues.length && !open.length) return { stale: true };
+    const after = { statement: layout(data.statement), hint: layout(data.hint), solution: layout(data.solution) };
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
-      layout(data.statement), layout(data.hint), layout(data.solution), q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
+      after.statement, after.hint, after.solution, q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
     if (!changed) {
       keepStaleOutput(ctx, q, data.statement, data.solution, data.hint);
       return { stale: true };
     }
+    recordQuestionRevision(ctx, q.id, q, after, { origin: 'revised', model: route.model, taskId: t.task.id });
     if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, open);
