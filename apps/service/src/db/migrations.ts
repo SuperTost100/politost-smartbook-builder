@@ -338,4 +338,29 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE content_revisions ADD COLUMN restored_from TEXT;
   `,
+  // 8: every write of a question's text after it was split from its file, so an audit can see who changed what. The old_*
+  // columns are NULL on the row that records a generated or author-made question's first text. origin: generated, imported
+  // (read from the pages), revised (AI fix), author, backport (a fix carried back from the books repo), format (code repair), reference-dropped (a removed formula's reference
+  // taken out). model is the model that wrote the text, when one did.
+  `
+  CREATE TABLE question_revisions (
+    id TEXT PRIMARY KEY,
+    question_id TEXT NOT NULL REFERENCES questions(id) ON DELETE CASCADE,
+    old_statement TEXT,
+    old_hint TEXT,
+    old_solution TEXT,
+    statement TEXT NOT NULL,
+    hint TEXT NOT NULL,
+    solution TEXT NOT NULL,
+    origin TEXT NOT NULL,
+    model TEXT,
+    task_id TEXT,
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX question_revisions_question ON question_revisions(question_id, created_at);
+  `,
+  // 9: graph lint findings the author accepted, as "code:trace" keys (see lintKey in @smartbuilder/content).
+  `
+  ALTER TABLE enrichments ADD COLUMN lint_accepted TEXT NOT NULL DEFAULT '[]';
+  `,
 ];

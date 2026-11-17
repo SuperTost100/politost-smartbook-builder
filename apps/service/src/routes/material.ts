@@ -11,7 +11,7 @@ import {
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
 
-const checkSchema = z.object({ method: z.enum(['independent-solve', 'numeric', 'symbolic', 'lint']), ok: z.boolean(), detail: z.string(), model: z.string().optional() });
+const checkSchema = z.object({ method: z.enum(['independent-solve', 'numeric', 'consistency', 'symbolic', 'lint']), ok: z.boolean(), detail: z.string(), model: z.string().optional() });
 
 // Fields a client may set. Ids, rev and timestamps are owned by the service.
 const questionFields = {
@@ -105,8 +105,8 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/enrichments', async (req) => listEnrichments(ctx, projectOf(ctx, req)));
 
   app.patch('/api/enrichments/:eid', async (req) => {
-    const { payload } = parse(z.object({ payload: z.record(z.string(), z.unknown()) }), req.body);
-    return updateEnrichmentPayload(ctx, getEnrichment(ctx, idParam(req, 'eid')).id, payload);
+    const { payload, acceptLint } = parse(z.object({ payload: z.record(z.string(), z.unknown()), acceptLint: z.boolean().optional() }), req.body);
+    return updateEnrichmentPayload(ctx, getEnrichment(ctx, idParam(req, 'eid')).id, payload, { acceptLint });
   });
 
   app.delete('/api/enrichments/:eid', async (req) => {

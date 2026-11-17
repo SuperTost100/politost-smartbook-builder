@@ -218,7 +218,7 @@ export type QuestionStatus = 'draft' | 'verified' | 'issue';
 export type Difficulty = 'facile' | 'medio' | 'difficile';
 
 export interface QuestionCheck {
-  method: 'independent-solve' | 'numeric' | 'symbolic' | 'lint';
+  method: 'independent-solve' | 'numeric' | 'consistency' | 'symbolic' | 'lint';
   ok: boolean;
   detail: string;
   model?: string;
@@ -470,6 +470,8 @@ export interface Enrichment {
   payload: Record<string, unknown>;
   status: 'draft' | 'verified' | 'issue';
   checks: QuestionCheck[];
+  /** Graph lint findings the author accepted ("Accept anyway"), as "code:trace" keys. They no longer fail the lint check. */
+  lintAccepted: string[];
   createdAt: string;
 }
 

@@ -12,22 +12,24 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, verifyVerdict } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { examReadParser, parseQuestionText, patchPrompt, reviewSchema } from './prompts.ts';
+import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifySchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, repairQuestionText, saveHuman, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
 let ctx: AppContext;
 const P = 'project01';
 const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) });
+/** The data part of an exercise check that finds nothing wrong with the statement. No program: nothing to run in the sandbox. */
+const posed = { wellPosed: true, wellPosedReason: 'I dati determinano una sola risposta.', dataProblems: [] as string[], consistency: '' };
 /** The editor's answer to a formatting repair: the three parts as plain text. */
 const questionText = (statement: string, hint: string, solution: string) => () => ({ text: `@@@ statement\n${statement}\n@@@ hint\n${hint}\n@@@ solution\n${solution}`, usage: usageOf(10, 10) });
 /** The figure check's answer: keep the first n figures. */
@@ -100,7 +102,7 @@ describe('1. question updates do not overwrite author edits', () => {
 
   test('verify: an edit during the check leaves the status alone and reports stale', async () => {
     const id = q();
-    fake.next(() => { edit(id)(); return { structured: { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] } as never, text: '{}', usage: usageOf(1, 1) }; });
+    fake.next(() => { edit(id)(); return { structured: { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] } as never, text: '{}', usage: usageOf(1, 1) }; });
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { stale: true });
     assert.equal(row(id).status, 'draft');
@@ -110,7 +112,7 @@ describe('1. question updates do not overwrite author edits', () => {
 
   test('verify: without an edit the question is verified and rev moves on', async () => {
     const id = q();
-    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.equal(row(id).status, 'verified');
     assert.equal(row(id).rev, 2);
@@ -374,24 +376,24 @@ describe('5b. a corrected solution of an authentic exam question leaves a trace'
 describe('15. disagreement is a blocker', () => {
   test('agrees=false with no problems, or only minor/major ones, adds a blocker; an existing blocker is not duplicated', async () => {
     const a = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
+    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.deepEqual(issues(`question_id = '${a}'`).map((i) => i.severity), ['blocker']);
 
     const b = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
+    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.severity).sort(), ['blocker', 'major']);
 
     const c = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }), answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
+    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: c }));
     assert.deepEqual(issues(`question_id = '${c}'`).map((i) => i.severity), ['blocker']);
     assert.equal(row(c).status, 'issue');
 
     // Same result, gap in the argument: the reviewer's severity stands, no extra blocker.
     const d = q();
-    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }), answer({ independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
+    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: d }));
     assert.deepEqual(issues(`question_id = '${d}'`).map((i) => i.severity), ['major']);
   });
@@ -399,7 +401,7 @@ describe('15. disagreement is a blocker', () => {
 
 describe('15b. numeric final answers are recomputed in the sandbox', () => {
   const circuit = 'Due resistori da 1 kΩ in parallelo. Calcola la resistenza equivalente.';
-  const verdict = (o: Record<string, unknown>) => answer({ independentAnswer: '500 Ω', resultsAgree: true, agrees: true, problems: [], ...o });
+  const verdict = (o: Record<string, unknown>) => answer({ ...posed, independentAnswer: '500 Ω', resultsAgree: true, agrees: true, problems: [], ...o });
   const program = 'r = 1 / (1 / 1000 + 1 / 1000)\nprint(f"R_eq = {r} ohm")';
 
   test('a computation that agrees adds a numeric check and costs no extra call', async () => {
@@ -409,7 +411,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.deepEqual(r, { ok: true, problems: 0, recomputed: 1, mismatches: 0 });
     assert.equal(fake.calls.length, 1);
     assert.equal(row(id).status, 'verified');
-    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row(id).checks, []).map((c) => [c.method, c.ok]), [['independent-solve', true], ['numeric', true]]);
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row(id).checks, []).map((c) => [c.method, c.ok]), [['independent-solve', true], ['numeric', true], ['consistency', true]]);
     assert.equal(issues().length, 0);
   });
 
@@ -446,7 +448,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: true, problems: 0 });
     assert.equal(row(id).status, 'verified');
-    assert.deepEqual(json<{ method: string }[]>(row(id).checks, []).map((c) => c.method), ['independent-solve']);
+    assert.deepEqual(json<{ method: string }[]>(row(id).checks, []).map((c) => c.method), ['independent-solve', 'consistency']);
   });
 
   test('a symbolic answer stays on the model check', async () => {
@@ -459,13 +461,193 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
   });
 });
 
+describe('15c. the exercise check asks whether the problem is well posed', () => {
+  const good = { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] as { severity: 'blocker' | 'major' | 'minor'; message: string; suggestion: string }[] };
+  // Fisica E8.4: principal moments 3, 3 and 12 kg m^2 break the triangle inequality, and both models agree on the ellipsoid.
+  const tensor = 'I tensore d\'inerzia è diag(3, 3, 12) kg m². Scrivi l\'ellissoide d\'inerzia.';
+  const triangle = (a: number, b: number, c: number) => `I = sorted([${a}, ${b}, ${c}])\nprint("CONSISTENT" if I[2] <= I[0] + I[1] else f"INCONSISTENT: {I[2]} > {I[0]} + {I[1]}")`;
+
+  test('the answer must carry the new fields: one without them does not parse', () => {
+    assert.equal(verifySchema.safeParse({ ...good, consistency: 'print("CONSISTENT")' }).success, true);
+    for (const field of ['wellPosed', 'wellPosedReason', 'dataProblems', 'consistency'] as const) {
+      const { [field]: _left, ...rest } = good;
+      assert.equal(verifySchema.safeParse(rest).success, false, field);
+    }
+    const g = { topics: [], difficulty: 'medio', statement: 's', hint: '', solution: 's', finalAnswer: '1' };
+    assert.equal(generatedQuestionsSchema.safeParse({ questions: [{ ...g, solvable: true }] }).success, true);
+    assert.equal(generatedQuestionsSchema.safeParse({ questions: [g] }).success, false);
+  });
+
+  test('the verdict: each failing field blocks on its own', () => {
+    const consistent = { verdict: 'consistent', detail: 'CONSISTENT' } as const;
+    assert.equal(verifyVerdict(good, 0, consistent).ok, true);
+    assert.equal(verifyVerdict(good, 0, null).ok, true, 'no program: the prompt allows it for a problem with no numeric data');
+    assert.equal(verifyVerdict({ ...good, problems: [{ severity: 'minor', message: 'm', suggestion: 's' }] }, 0, consistent).ok, true);
+    assert.equal(verifyVerdict({ ...good, dataProblems: ['', ' '] }, 0, consistent).ok, true, 'blank entries are not problems');
+    const blocked: [string, ReturnType<typeof verifyVerdict>][] = [
+      ['agrees', verifyVerdict({ ...good, agrees: false }, 0, consistent)],
+      ['resultsAgree', verifyVerdict({ ...good, resultsAgree: false }, 0, consistent)],
+      ['numeric mismatch', verifyVerdict(good, 1, consistent)],
+      ['major problem', verifyVerdict({ ...good, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }, 0, consistent)],
+      ['wellPosed', verifyVerdict({ ...good, wellPosed: false, wellPosedReason: 'Gli atomi di O risultano 3,75.' }, 0, consistent)],
+      ['dataProblems', verifyVerdict({ ...good, dataProblems: ['La massa molare 60 non è quella di C3H6O.'] }, 0, consistent)],
+      ['INCONSISTENT', verifyVerdict(good, 0, { verdict: 'inconsistent', detail: 'INCONSISTENT: 12 > 3 + 3' })],
+      ['program failed', verifyVerdict(good, 0, { verdict: 'failed', detail: 'The consistency program failed: Timed out after 15 s' })],
+    ];
+    for (const [field, v] of blocked) assert.equal(v.ok, false, field);
+    assert.equal(blocked[4]![1].data, "The statement's data do not determine one answer: Gli atomi di O risultano 3,75.");
+    assert.equal(blocked[5]![1].data, 'Data problems: La massa molare 60 non è quella di C3H6O.');
+    assert.equal(blocked[6]![1].data, 'The consistency check printed: INCONSISTENT: 12 > 3 + 3');
+    assert.equal(blocked[7]![1].data, 'The consistency program failed: Timed out after 15 s');
+    assert.equal(blocked[0]![1].data, null, 'a disagreement is not a data problem');
+  });
+
+  test('two models that agree on a problem whose data are impossible do not verify it: the reviewer is asked and one data blocker is added', async () => {
+    ctx.db.run(`UPDATE projects SET title = 'Fisica 1', subject = 'Fisica' WHERE id = ?`, P);
+    const id = q({ statement: tensor, solution: 'L\'ellissoide è 3x²+3y²+12z²=1.' });
+    const both = answer({ ...good, independentAnswer: '3x²+3y²+12z²=1', wellPosed: false, wellPosedReason: 'I momenti principali violano la disuguaglianza triangolare.' });
+    fake.next(both, both);
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(fake.calls.length, 2, 'the checker, then the reviewer');
+    assert.match(fake.calls[0].prompt, /principal moments of inertia satisfy the triangle inequality/, 'a physics book gets the physics constraints');
+    assert.equal(row(id).status, 'issue');
+    assert.equal((r as { ok: boolean }).ok, false);
+    const found = issues(`question_id = '${id}'`);
+    assert.deepEqual(found.map((i) => [i.severity, i.category]), [['blocker', 'data']]);
+    assert.match(found[0]!.message, /disuguaglianza triangolare/);
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row(id).checks, []).map((c) => [c.method, c.ok]), [['independent-solve', false], ['consistency', false]]);
+  });
+
+  test('in the real sandbox: an INCONSISTENT program and a crashing one block, a CONSISTENT one verifies', async () => {
+    const run = async (consistency: string) => {
+      const id = q({ statement: tensor, solution: 'L\'ellissoide è 3x²+3y²+12z²=1.' });
+      const a = answer({ ...good, consistency });
+      fake.next(a, a);
+      await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+      return { status: row(id).status, issues: issues(`question_id = '${id}'`).map((i) => `${i.severity} ${i.category}: ${i.message}`), checks: json<{ method: string; ok: boolean; detail: string }[]>(row(id).checks, []) };
+    };
+    const bad = await run(triangle(3, 3, 12));
+    assert.equal(bad.status, 'issue');
+    assert.deepEqual(bad.issues, ['blocker data: The consistency check printed: INCONSISTENT: 12 > 3 + 3']);
+    const crashed = await run('import sympy\nprint("CONSISTENT")');
+    assert.equal(crashed.status, 'issue');
+    assert.match(crashed.issues[0]!, /^blocker data: The consistency program failed: .*ModuleNotFoundError/);
+    const calls = fake.calls.length;
+    const fine = await run(triangle(3, 4, 5));
+    assert.equal(fake.calls.length, calls + 1, 'nothing suspicious: no second opinion');
+    assert.equal(fine.status, 'verified');
+    assert.deepEqual(fine.issues, []);
+    assert.deepEqual(fine.checks.find((c) => c.method === 'consistency'), { method: 'consistency', ok: true, detail: 'CONSISTENT' });
+  });
+
+  test('a reviewer that finds the data fine clears the checker\'s doubt; one that gives no program keeps the checker\'s result', async () => {
+    const a = q({ statement: tensor });
+    fake.next(answer({ ...good, consistency: triangle(3, 3, 12) }), answer({ ...good, consistency: triangle(3, 4, 5) }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: a }));
+    assert.equal(row(a).status, 'verified');
+    const b = q({ statement: tensor });
+    fake.next(answer({ ...good, consistency: triangle(3, 3, 12) }), answer(good));
+    await questionVerify(ctx, startTask('question.verify', { questionId: b }));
+    assert.equal(row(b).status, 'issue');
+    assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.category), ['data']);
+  });
+});
+
+describe('15d. every rewrite of a question is kept in question_revisions', () => {
+  const history = (id: string) => ctx.db.all<Record<string, any>>('SELECT * FROM question_revisions WHERE question_id = ? ORDER BY created_at, rowid', id);
+  const topic = (key: string) => {
+    const id = `${P.slice(0, 8)}-${key}`;
+    ctx.db.insert('topics', { id, project_id: P, name: key, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
+    return id;
+  };
+
+  test('generation: a problem the writer marks as having no answer is not stored, and each stored one has its first revision', async () => {
+    const t = topic('limiti');
+    seedOutline([['c1', ['s1']]], { topicIds: [t] });
+    const g = { topics: ['limiti'], difficulty: 'medio', hint: 'h', solution: 's' };
+    fake.next(answer({ questions: [
+      { ...g, statement: 'Calcola il limite.', finalAnswer: '1', solvable: true },
+      { ...g, statement: 'Trova la formula del composto.', finalAnswer: 'Nessuna soluzione: i dati implicano 3,75 atomi di ossigeno', solvable: false },
+    ] }));
+    const task = startTask('practice.generate', { chapterId: 'c1', kind: 'exercise' });
+    assert.deepEqual(await practiceGenerate(ctx, task), { generated: 1, reused: 0 });
+    const [stored] = ctx.db.all<{ id: string; statement: string }>(`SELECT id, statement FROM questions WHERE origin = 'generated'`);
+    assert.equal(stored!.statement, 'Calcola il limite.');
+    const [first] = history(stored!.id);
+    assert.deepEqual([first!.origin, first!.old_statement, first!.statement, first!.task_id], ['generated', null, 'Calcola il limite.', task.task.id]);
+    assert.equal(first!.model, DEFAULT_ROUTES.exercises.primary.model);
+  });
+
+  test('an author edit and a back-port through updateQuestion record old and new text; a patch that keeps the text records nothing', () => {
+    const id = q();
+    updateQuestion(ctx, id, 1, { solution: 'Vale 2.' });
+    updateQuestion(ctx, id, 2, { statement: 'Calcola il limite per x → 0.' }, { origin: 'backport' });
+    updateQuestion(ctx, id, 3, { difficulty: 'facile' });
+    updateQuestion(ctx, id, 4, { solution: 'Vale 2.' });
+    const rows = history(id);
+    assert.deepEqual(rows.map((r) => [r.origin, r.old_solution, r.solution, r.old_statement, r.statement]), [
+      ['author', 'Vale 1.', 'Vale 2.', 'Calcola il limite.', 'Calcola il limite.'],
+      ['backport', 'Vale 2.', 'Vale 2.', 'Calcola il limite.', 'Calcola il limite per x → 0.'],
+    ]);
+  });
+
+  test('an AI fix, a page import and a code repair each record who wrote the text', async () => {
+    const id = q();
+    const issue = newId();
+    ctx.db.insert('review_issues', { id: issue, project_id: P, node_id: null, question_id: id, rev_id: null, source: 'verification', severity: 'blocker', category: 'data', quote: '', message: 'Dati incoerenti.', suggestion: 'Correggi.', status: 'open', resolution: '', created_at: now() });
+    fake.next(answer({ statement: 'Calcola il limite corretto.', hint: '', solution: 'Vale 1.' }));
+    const fix = startTask('question.revise', { questionId: id, issueIds: [issue] });
+    await questionRevise(ctx, fix);
+    assert.deepEqual(history(id).map((r) => [r.origin, r.old_statement, r.statement, r.model, r.task_id]),
+      [['revised', 'Calcola il limite.', 'Calcola il limite corretto.', DEFAULT_ROUTES.editor.primary.model, fix.task.id]]);
+
+    seedResource(ctx, { projectId: P, id: 'r-exam', role: 'exams' });
+    seedPage(ctx, 'r-exam', 0, 'Esercizio 1 testo', '# Esercizio 1\nCalcola.');
+    const ex = q({ origin: 'authentic', kind: 'exam', resource_id: 'r-exam', page_from: 0, page_to: 0, exam_group: 'Giugno', number: '1', statement: 'grezzo', solution: '' });
+    fake.next(examRead({ number: '1', statement: 'Calcola.', solution: 'Fatto.' }));
+    await questionImport(ctx, startTask('question.import', { questionId: ex }));
+    assert.deepEqual(history(ex).map((r) => [r.origin, r.old_statement, r.statement, r.old_solution, r.solution]), [['imported', 'grezzo', 'Calcola.', '', 'Fatto.']]);
+
+    assert.equal(repairQuestionText(ctx, ex, (text) => text.replace('Calcola.', 'Calcola:')), true);
+    assert.equal(repairQuestionText(ctx, ex, (text) => text), false);
+    assert.deepEqual(history(ex).map((r) => r.origin), ['imported', 'format']);
+  });
+
+  test('deleting a question deletes its history', () => {
+    const id = q();
+    updateQuestion(ctx, id, 1, { solution: 'Vale 2.' });
+    ctx.db.run('DELETE FROM questions WHERE id = ?', id);
+    assert.equal(history(id).length, 0);
+  });
+});
+
+describe('15e. checking again every generated question of a book', () => {
+  // startRun wakes the queue; these tests only look at the planned tasks.
+  beforeEach(() => { (ctx.queue as unknown as { wake(): void }).wake = () => undefined; });
+
+  test('a review run with generatedQuestions verifies the generated questions in a chapter of the book, and nothing else', () => {
+    seedOutline([['c1', ['s1']], ['c2', ['s2']]]);
+    const a = q({ chapter_id: 'c1' });
+    const b = q({ chapter_id: 'c2', kind: 'exam' });
+    q({ chapter_id: null });
+    q({ chapter_id: 'removed-chapter' });
+    q({ chapter_id: 'c1', origin: 'authentic', kind: 'exam' });
+    const run = startRun(ctx, P, 'review', { generatedQuestions: true });
+    assert.deepEqual(ctx.db.all<{ kind: string; key: string }>('SELECT kind, key FROM tasks WHERE run_id = ? ORDER BY rowid', run.id).map((t) => `${t.kind} ${t.key}`), [`question.verify verify:${a}`, `question.verify verify:${b}`]);
+  });
+
+  test('a book without generated questions gets a clear refusal', () => {
+    assert.throws(() => startRun(ctx, P, 'review', { generatedQuestions: true }), /no generated exercises/);
+  });
+});
+
 describe('4. practice generation stages', () => {
   const topic = (key: string) => {
     const id = `${P.slice(0, 8)}-${key}`;
     ctx.db.insert('topics', { id, project_id: P, name: key, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
     return id;
   };
-  const gen = (n: number, kind: string) => ({ questions: Array.from({ length: n }, (_, i) => ({ topics: ['limiti'], difficulty: 'medio', statement: `${kind} ${i}`, hint: 'h', solution: 's', finalAnswer: '1' })) });
+  const gen = (n: number, kind: string) => ({ questions: Array.from({ length: n }, (_, i) => ({ topics: ['limiti'], difficulty: 'medio', statement: `${kind} ${i}`, hint: 'h', solution: 's', finalAnswer: '1', solvable: true })) });
 
   test('chapterPractice enqueues a separate exam stage only when there are no authentic questions', async () => {
     const t = topic('limiti');
@@ -573,7 +755,7 @@ describe('4b. collection examples are found by search, not classified', () => {
     ctx.db.insert('topics', { id, project_id: P, name: key, aliases: [], description: '', prerequisites: [], sources: [], exam_sessions: 0, priority: 'high' });
     return id;
   };
-  const gen = { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'esercizio', hint: 'h', solution: 's', finalAnswer: '1' }] };
+  const gen = { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'esercizio', hint: 'h', solution: 's', finalAnswer: '1', solvable: true }] };
   const item = (statement: string, page: number, o: Record<string, unknown> = {}) =>
     q({ kind: 'exercise', origin: 'authentic', resource_id: 'coll', page_from: page, page_to: page, exam_group: 'Quiz A', statement, solution: '', topic_ids: [], ...o });
 
@@ -661,6 +843,8 @@ describe('4c. one extraction call per exam session', () => {
     assert.equal(fake.calls.length, 1, 'the imports read their text from the session answer');
     assert.deepEqual(ids.map((id) => [row(id).statement, row(id).solution, row(id).rev]), [['Calcola 1.', 'Fatto 1.', 2], ['Calcola 2.', 'Fatto 2.', 2], ['Calcola 3.', 'Fatto 3.', 2]]);
     assert.ok(ids.every((id) => row(id).imported_at));
+    // The history names the model that read the session, which the imports did not call themselves.
+    assert.deepEqual(ctx.db.all<{ origin: string; model: string }>('SELECT origin, model FROM question_revisions WHERE question_id = ?', ids[0]).map((r) => [r.origin, r.model]), [['imported', DEFAULT_ROUTES.bulk.primary.model]]);
   });
 
   test('a chapter plans one session task that its imports wait for; a lone question has none', async () => {
@@ -841,8 +1025,8 @@ describe('4c. one extraction call per exam session', () => {
     // Which answer a call needs depends on its prompt, because the pools run side by side.
     const dispatch = (input: { prompt: string }) => {
       if (/Exercises to copy/.test(input.prompt)) return { text: examText([ex(1), ex(2), ex(3)]), usage: usageOf(1, 1) };
-      const body = /^STATEMENT:/.test(input.prompt) ? { independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }
-          : { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'Esercizio nuovo.', hint: 'h', solution: 's', finalAnswer: '1' }] };
+      const body = /^STATEMENT:/.test(input.prompt) ? { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }
+          : { questions: [{ topics: ['limiti'], difficulty: 'medio', statement: 'Esercizio nuovo.', hint: 'h', solution: 's', finalAnswer: '1', solvable: true }] };
       return { structured: body as never, text: JSON.stringify(body), usage: usageOf(1, 1) };
     };
     for (let i = 0; i < 20; i++) fake.next(dispatch);
@@ -928,12 +1112,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     seedRevision('s2', 'Testo due.');
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: true }), P);
     const t = startTask('chapter.enrich', { chapterId: 'c1' });
-    fake.next(answer({ graphs: [{ sectionId: 's1', purpose: 'parabola' }], ide: [{ sectionId: 's2', purpose: 'serie' }] }));
+    fake.next(answer({ graphs: [{ sectionId: 's1', relation: 'y = x^2', purpose: 'parabola' }], ide: [{ sectionId: 's2', purpose: 'serie' }] }));
     const r = await chapterEnrich(ctx, t);
     assert.deepEqual(r, { picked: 2 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.ide:s2']);
     const child = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE key = 'enrich.graph:s1'`)!.input, {});
-    assert.deepEqual(child, { nodeId: 's1', purpose: 'parabola' });
+    assert.deepEqual(child, { nodeId: 's1', purpose: 'parabola', relation: 'y = x^2' });
     assert.equal(fake.calls.length, 1);
     const again = await chapterEnrich(ctx, t);
     assert.deepEqual(again, { reused: 2 });
@@ -965,11 +1149,26 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: true, labLanguage: 'matlab' }), P);
     const t = startTask('chapter.enrich', { chapterId: 'c1' });
     fake.next(answer({
-      graphs: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's1', purpose: 'doppione' }, { sectionId: 's2', purpose: 'b' }],
+      graphs: [{ sectionId: 'x9', relation: 'y = x', purpose: 'inventata' }, { sectionId: 's1', relation: 'y = x', purpose: 'a' }, { sectionId: 's1', relation: 'y = x', purpose: 'doppione' }, { sectionId: 's2', relation: 'y = 2x', purpose: 'b' }],
       ide: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's2', purpose: 'b' }],
     }));
     assert.deepEqual(await chapterEnrich(ctx, t), { picked: 4 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.graph:s2', 'enrich.ide:s1', 'enrich.ide:s2']);
+  });
+
+  test('a graph pick that states no relation is dropped, and the relation of a kept one reaches the graph prompt', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Le classi di idrocarburi: alcani, alcheni, alchini.');
+    seedRevision('s2', 'La legge di Hooke:\n\n$$F = k\\,x$$\n\nlega forza e allungamento.');
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: false }), P);
+    const t = startTask('chapter.enrich', { chapterId: 'c1' });
+    fake.next(answer({ graphs: [{ sectionId: 's1', relation: ' ', purpose: 'confrontare le classi' }, { sectionId: 's2', relation: 'F = k x', purpose: 'Hooke' }], ide: [] }));
+    assert.deepEqual(await chapterEnrich(ctx, t), { picked: 1 });
+    assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s2']);
+    assert.match(fake.calls.at(-1)!.prompt, /s2 \| .* \| formulas: F = k\\,x/, 'the picker sees the display formulas');
+    fake.next(answer(graph));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's2', purpose: 'Hooke', relation: 'F = k x' }));
+    assert.match(fake.calls.at(-1)!.prompt, /Relation to plot, as the section states it: F = k x/);
   });
 
   test('MATLAB code with A\\b and a string holding \\n is stored exactly as written', async () => {
@@ -1007,6 +1206,19 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await enrichGraph(ctx, t), { reused: true });
     assert.equal(fake.calls.length, 1);
     assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 1);
+  });
+
+  test('a graph that draws but fails the graph lint is stored as an issue, so Auto Fix redraws it', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Le leggi di Charles e di Gay-Lussac.');
+    fake.next(answer({ ...graph, functions: [{ fn: 'x', label: 'Charles' }, { fn: 'x', label: 'Gay-Lussac' }], yDomain: [-2, 2] }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' })), { made: 1 });
+    const row = ctx.db.get<{ status: string; checks: string }>(`SELECT status, checks FROM enrichments`)!;
+    assert.equal(row.status, 'issue');
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', false]]);
+    const issue = ctx.db.get<{ message: string }>(`SELECT message FROM review_issues WHERE source = 'verification'`)!;
+    assert.match(issue.message, /failed its check: duplicate \("Gay-Lussac"\): same data as "Charles"/);
+    assert.doesNotMatch(issue.message, /Sampled/, 'the issue names what failed, not the checks that passed');
   });
 
   test('a Bode pair saves two graphs on the same log frequency axis', async () => {
@@ -1566,7 +1778,7 @@ describe('r3. verifying again never overwrites an author-repaired authentic ques
     assert.deepEqual(await questionImport(ctx, startTask('question.import', { questionId: id })), { skipped: 'edited by the author' });
     assert.equal(fake.calls.length, calls);
 
-    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.match(fake.calls.at(-1)!.prompt, /Testo riscritto a mano/);
     assert.equal(row(id).statement, 'Testo riscritto a mano');
@@ -2520,12 +2732,12 @@ describe('author-set topic priority', () => {
 describe('cheap check first', () => {
   test('a clean check stays on the checker; a problem goes to the reviewer for the recorded verdict', async () => {
     const a = q();
-    fake.next(answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.equal(fake.calls.at(-1)!.selection.model, ctx.settings().routes.checker.primary.model);
     const before = fake.calls.length;
     const b = q();
-    fake.next(answer({ independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
+    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.equal(fake.calls.length, before + 2);
     assert.equal(fake.calls.at(-1)!.selection.model, ctx.settings().routes.reviewer.primary.model);

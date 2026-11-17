@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 23;
+export const PROMPT_VERSION = 24;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -588,6 +588,7 @@ export const generatedQuestionsSchema = z.object({
     hint: z.string(),
     solution: z.string(),
     finalAnswer: z.string().describe('the final result in one line, LaTeX allowed'),
+    solvable: z.boolean().describe('false when the problem as written has no answer: its data contradict each other, are impossible or do not determine the result'),
   })),
 });
 
@@ -607,7 +608,7 @@ ${p.collection ? `Items from the exercise collections students practise with, on
 Known formula keys you may cite in hints and solutions with {{formula:@key}}:
 ${p.knownFormulas || '(none)'}
 
-Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (${p.kind === 'exam' ? 'always empty: exams have no hints' : 'one or two sentences that point the way without solving'}) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Difficulty goes only in its own field: never write stars or labels such as (**) or (facile) in a statement. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
+Write ${p.count} problems in total, distributing them as requested across topics and difficulties (facile, medio, difficile). Statement, hint (${p.kind === 'exam' ? 'always empty: exams have no hints' : 'one or two sentences that point the way without solving'}) and solution (every step, with the final result clearly stated) are separate fields in source Markdown without headings. Difficulty goes only in its own field: never write stars or labels such as (**) or (facile) in a statement. Before writing a problem, check that its data are consistent and admit exactly one answer. Never write a problem whose answer is that no solution exists; set solvable to false for any problem you could not make consistent. Check every computation; prefer problems whose answer can be checked (a number, a limit, an interval, a function). Return JSON.`,
   };
 }
 
@@ -740,6 +741,10 @@ export const verifySchema = z.object({
   problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
   computation: codeString().optional().describe('Python that recomputes numeric final results, or empty'),
   statedValues: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe('the final numeric results the given solution states, one per printed line of the computation'),
+  wellPosed: z.boolean().describe('the data of the STATEMENT are consistent and possible, and they determine the requested answer'),
+  wellPosedReason: z.string().describe('one sentence: why the data determine exactly one answer, or why they do not'),
+  dataProblems: z.array(z.string()).describe('each inconsistency or impossibility in the statement data, and each value the given solution uses that differs from the statement; empty when none'),
+  consistency: codeString().describe('Python that recomputes from the STATEMENT alone every quantity the data fix twice or that must meet a constraint, and prints CONSISTENT or INCONSISTENT: <what>; empty only for a problem with no numeric data'),
 });
 
 export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
@@ -754,14 +759,22 @@ ${p.solution}
 
 Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.
 
-Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.`,
+Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.
+
+Before you trust the solution, check the statement itself. Its data must be consistent and possible, for example: ${profile.constraints}. If the data admit no answer, or more than one, the problem is not well posed, even when the given solution says so itself or quietly uses other numbers.
+
+Also return: wellPosed (false when the data are inconsistent, impossible or insufficient), wellPosedReason (one sentence), dataProblems (each problem in one sentence, in ${languageName(p.language)}; also list each place where the GIVEN SOLUTION uses a number that differs from the statement's data), and consistency: a short Python program, standard library only (math, fractions; no sympy, no numpy), no input and no files, that recomputes from the STATEMENT data alone every quantity the data determine in two ways or that must satisfy a constraint, and prints exactly one last line, CONSISTENT or INCONSISTENT: <what>. Compare floating-point values with a tolerance that fits the precision of the data. Leave consistency empty only for a problem with no numeric data.`,
   };
 }
 
 // ---------- enrichment ----------
 
 export const enrichPickSchema = z.object({
-  graphs: z.array(z.object({ sectionId: z.string(), purpose: z.string() })),
+  graphs: z.array(z.object({
+    sectionId: z.string(),
+    relation: z.string().describe('the relation between two quantities the graph plots, as the section writes it (a formula y = f(x) or a law with a parameter); empty when the section states none'),
+    purpose: z.string(),
+  })),
   ide: z.array(z.object({ sectionId: z.string(), purpose: z.string() })),
 });
 
@@ -770,11 +783,11 @@ export function enrichPickPrompt(p: { sections: string; graphs: boolean; ide: bo
     ? `at most ${p.maxIde} sections for a MATLAB example. The book teaches MATLAB, so give a script to every section whose commands, functions or methods a student should try (most of them); skip only sections with nothing to run`
     : `at most ${p.maxIde} section${p.maxIde === 1 ? '' : 's'} for a Python example`;
   return {
-    system: `You decide where interactive material helps students learn. Interactive graphs fit concepts students understand by exploring a function. ${p.lab === 'matlab' ? 'MATLAB examples fit commands and functions worth trying, numerical methods, matrices, plots and computations worth running.' : 'Python examples fit numerical methods, sequences and series, approximations and computations worth running.'} Choose high-value places; it is fine to choose none.`,
+    system: `You decide where interactive material helps students learn. An interactive graph fits only where the section states a relation between two quantities, a formula y = f(x) or a law with a parameter, that a student understands better by seeing it on a plane; give that relation as the section writes it. It never fits classifications, structures, names, three-dimensional shapes, a few discrete values or a single computed result, and a made-up or schematic curve is worse than no graph. ${p.lab === 'matlab' ? 'MATLAB examples fit commands and functions worth trying, numerical methods, matrices, plots and computations worth running.' : 'Python examples fit numerical methods, sequences and series, approximations and computations worth running.'} Choose high-value places; it is fine to choose none.`,
     prompt: `Sections (id | title | summary):
 ${p.sections}
 
-Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? ide : `no ${p.lab === 'matlab' ? 'MATLAB' : 'Python'} examples`}. Return JSON with sectionId and purpose for each.`,
+Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? ide : `no ${p.lab === 'matlab' ? 'MATLAB' : 'Python'} examples`}. Return JSON with sectionId and purpose for each, and relation for each graph.`,
   };
 }
 
@@ -806,11 +819,11 @@ export const graphSchema = z.object({
   pair: graphPairSchema.optional().describe('a second graph on the same x axis, or null'),
 });
 
-export function graphPrompt(p: { language: string; purpose: string; section: string }) {
+export function graphPrompt(p: { language: string; purpose: string; relation?: string; section: string }) {
   return {
     system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
     prompt: `Purpose: ${p.purpose}
-Section text:
+${p.relation ? `Relation to plot, as the section states it: ${p.relation}\n` : ''}Section text:
 ${p.section}
 
 Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,
