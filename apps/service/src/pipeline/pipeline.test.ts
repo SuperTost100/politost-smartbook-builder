@@ -625,10 +625,12 @@ describe('15e. checking again every generated question of a book', () => {
   // startRun wakes the queue; these tests only look at the planned tasks.
   beforeEach(() => { (ctx.queue as unknown as { wake(): void }).wake = () => undefined; });
 
-  test('a review run with generatedQuestions verifies the generated questions in a chapter, and nothing else', () => {
+  test('a review run with generatedQuestions verifies the generated questions in a chapter of the book, and nothing else', () => {
+    seedOutline([['c1', ['s1']], ['c2', ['s2']]]);
     const a = q({ chapter_id: 'c1' });
     const b = q({ chapter_id: 'c2', kind: 'exam' });
     q({ chapter_id: null });
+    q({ chapter_id: 'removed-chapter' });
     q({ chapter_id: 'c1', origin: 'authentic', kind: 'exam' });
     const run = startRun(ctx, P, 'review', { generatedQuestions: true });
     assert.deepEqual(ctx.db.all<{ kind: string; key: string }>('SELECT kind, key FROM tasks WHERE run_id = ? ORDER BY rowid', run.id).map((t) => `${t.kind} ${t.key}`), [`question.verify verify:${a}`, `question.verify verify:${b}`]);
@@ -841,6 +843,8 @@ describe('4c. one extraction call per exam session', () => {
     assert.equal(fake.calls.length, 1, 'the imports read their text from the session answer');
     assert.deepEqual(ids.map((id) => [row(id).statement, row(id).solution, row(id).rev]), [['Calcola 1.', 'Fatto 1.', 2], ['Calcola 2.', 'Fatto 2.', 2], ['Calcola 3.', 'Fatto 3.', 2]]);
     assert.ok(ids.every((id) => row(id).imported_at));
+    // The history names the model that read the session, which the imports did not call themselves.
+    assert.deepEqual(ctx.db.all<{ origin: string; model: string }>('SELECT origin, model FROM question_revisions WHERE question_id = ?', ids[0]).map((r) => [r.origin, r.model]), [['imported', DEFAULT_ROUTES.bulk.primary.model]]);
   });
 
   test('a chapter plans one session task that its imports wait for; a lone question has none', async () => {

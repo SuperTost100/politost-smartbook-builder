@@ -7,6 +7,7 @@ import { HttpError } from '../server.ts';
 import type { TaskSpec } from '../queue/queue.ts';
 import { isFormatIssue } from './formatting.ts';
 import { headRevision, loadOutline, loadProject } from './util.ts';
+import { effectiveOutline } from '../repo/outline.ts';
 
 export interface RunScope {
   chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck';
@@ -82,8 +83,10 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
       break;
     }
     case 'review': {
+      // Only chapters of the outline the export uses: a removed chapter keeps its questions, which the book leaves out.
+      const inBook = new Set(effectiveOutline(ctx, projectId)?.revision.outline.chapters.map((c) => c.id));
       const questionIds = scope.generatedQuestions
-        ? ctx.db.all<{ id: string }>(`SELECT id FROM questions WHERE project_id = ? AND origin = 'generated' AND chapter_id IS NOT NULL ORDER BY rowid`, projectId).map((r) => r.id)
+        ? ctx.db.all<{ id: string; chapter_id: string }>(`SELECT id, chapter_id FROM questions WHERE project_id = ? AND origin = 'generated' AND chapter_id IS NOT NULL ORDER BY rowid`, projectId).filter((r) => inBook.has(r.chapter_id)).map((r) => r.id)
         : scope.questionIds;
       if (scope.generatedQuestions && !questionIds?.length) throw new HttpError(409, 'nothing_to_review', 'This book has no generated exercises to check.', 'Generate the chapters first.');
       const specs: TaskSpec[] = questionIds?.length

@@ -199,11 +199,11 @@ export async function sessionImport(ctx: AppContext, t: TaskContext) {
     t.progress(`Reading ${questions.length} exercises of ${examGroup ?? 'the session'} together`);
     const project = loadProject(ctx, t.task.projectId);
     // The parser accepts only an answer that has every listed number once and no other, in the listed order.
-    const { data } = await runRole(ctx, {
+    const { data, route } = await runRole(ctx, {
       role: 'bulk', ...sessionExtractPrompt({ language: project.language, examGroup: examGroup ?? '', exercises: questions.map((q, i) => ({ number: numbers[i]!, solutionText: truncate(q.solution, 4000) })), pages: text }),
       parse: examReadParser(numbers), projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
-    return { exercises: questions.length, extracted: Object.fromEntries(questions.map((q, i) => { const e = data.exercises[i]!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
+    return { exercises: questions.length, model: route.model, extracted: Object.fromEntries(questions.map((q, i) => { const e = data.exercises[i]!; return [q.id, { statement: e.statement, solution: e.solution, readable: e.readable }]; })) };
   } catch (err) {
     if (err instanceof TaskError && err.kind === 'input') return { fallback: err.message };
     // The imports wait for this task, so a task that failed for good would fail the chapter. On the last attempt an error a retry could have cured gives way to their own reads.
@@ -213,11 +213,12 @@ export async function sessionImport(ctx: AppContext, t: TaskContext) {
   }
 }
 
-/** The session task's reading of this question, when the question waited for one and it gave a usable answer. */
-function sessionRead(t: TaskContext, q: Question): ImportRead | null {
+/** The session task's reading of this question and the model that read it, when the question waited for one and it gave a usable answer. */
+function sessionRead(t: TaskContext, q: Question): { read: ImportRead; model: string | null } | null {
   if (q.resourceId === null) return null;
-  const result = t.deps[sessionImportKey(q.resourceId, q.examGroup)] as { extracted?: Record<string, ImportRead> } | null | undefined;
-  return result?.extracted?.[q.id] ?? null;
+  const result = t.deps[sessionImportKey(q.resourceId, q.examGroup)] as { extracted?: Record<string, ImportRead>; model?: string } | null | undefined;
+  const read = result?.extracted?.[q.id];
+  return read ? { read, model: result?.model ?? null } : null;
 }
 
 /** Clean statement and official solution from vision transcripts of the question's pages: from its session's single reading, or else one call of its own. */
@@ -233,8 +234,9 @@ export async function questionImport(ctx: AppContext, t: TaskContext) {
   // Every update below applies only if the author has not edited the question since this read.
   const rev = question.rev;
   const project = loadProject(ctx, question.projectId);
-  let data = sessionRead(t, question);
-  const models: string[] = [];
+  const session = sessionRead(t, question);
+  let data = session?.read ?? null;
+  const models: string[] = session?.model ? [session.model] : [];
   if (!data) {
     const pages: string[] = [];
     for (const idx of importPages(question)) pages.push(pageText(await transcribePage(ctx, question.resourceId, idx, { signal: t.signal, runId: t.task.runId, taskId: t.task.id })));
