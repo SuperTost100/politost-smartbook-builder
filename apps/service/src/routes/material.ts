@@ -11,7 +11,7 @@ import {
 import { deps } from './deps.ts';
 import { idParam, parse, projectOf } from './util.ts';
 
-const checkSchema = z.object({ method: z.enum(['independent-solve', 'numeric', 'symbolic', 'lint']), ok: z.boolean(), detail: z.string(), model: z.string().optional() });
+const checkSchema = z.object({ method: z.enum(['independent-solve', 'numeric', 'consistency', 'symbolic', 'lint']), ok: z.boolean(), detail: z.string(), model: z.string().optional() });
 
 // Fields a client may set. Ids, rev and timestamps are owned by the service.
 const questionFields = {

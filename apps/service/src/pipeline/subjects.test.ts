@@ -50,7 +50,7 @@ describe('subject area inference', () => {
       assert.ok(p.figureKinds.includes('plot'), area);
       assert.ok(p.figureKinds.includes('drawing'), `${area} offers drawings`);
       assert.ok(p.figureKinds.every((k) => FIGURE_KINDS.includes(k)), area);
-      for (const text of [p.notation, p.hypotheses, p.excluded, p.plotExamples, p.photoExamples]) assert.ok(text.length > 10, area);
+      for (const text of [p.notation, p.hypotheses, p.excluded, p.constraints, p.plotExamples, p.photoExamples]) assert.ok(text.length > 10, area);
     }
     assert.deepEqual([...SUBJECT_PROFILES.chemistry.figureKinds].sort(), [...FIGURE_KINDS].sort(), 'chemistry keeps every kind it has today');
   });

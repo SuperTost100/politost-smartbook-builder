@@ -77,3 +77,22 @@ test('migration 6 adds what a model call cost to the usage table and keeps the r
   assert.deepEqual([fresh.cached_input_tokens, fresh.cache_creation_tokens, fresh.error_kind, fresh.attempt, fresh.fallback], [40, 10, 'quota', 2, 1]);
   db.close();
 });
+
+test('migration 8 adds an empty question history to a book that has questions, and the history goes with its question', () => {
+  const file = join(mkdtempSync(join(tmpdir(), 'sbm-')), 'db.sqlite');
+  const raw = new DatabaseSync(file);
+  for (const m of MIGRATIONS.slice(0, 7)) raw.exec(m);
+  raw.exec('CREATE TABLE schema_version (version INTEGER NOT NULL); INSERT INTO schema_version (version) VALUES (7)');
+  raw.exec(`INSERT INTO projects (id, slug, title, subject, created_at, updated_at) VALUES ('p', 'p', 'P', 'S', 'now', 'now')`);
+  raw.exec(`INSERT INTO questions (id, project_id, kind, origin, statement, created_at, updated_at) VALUES ('q', 'p', 'exercise', 'generated', 'Testo', 'c', 'u')`);
+  raw.close();
+
+  const db = new Db(file);
+  assert.equal(db.get<{ version: number }>('SELECT version FROM schema_version')!.version, MIGRATIONS.length);
+  assert.equal(db.get(`SELECT 1 FROM question_revisions`), undefined, 'questions from before have no history row');
+  db.run(`INSERT INTO question_revisions (id, question_id, statement, hint, solution, origin, created_at) VALUES ('r', 'q', 'Testo', '', '', 'author', 'now')`);
+  assert.deepEqual(Object.values(db.get<Record<string, unknown>>(`SELECT old_statement, model, task_id FROM question_revisions`)!), [null, null, null]);
+  db.run(`DELETE FROM projects WHERE id = 'p'`);
+  assert.equal(db.get(`SELECT 1 FROM question_revisions`), undefined);
+  db.close();
+});
