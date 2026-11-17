@@ -31,6 +31,25 @@ export function getQuestion(ctx: AppContext, id: string): Question {
   return mapQuestion(r);
 }
 
+/** The text of a question that a revision records. */
+export type QuestionText = { statement: string; hint: string; solution: string };
+
+/** What wrote a question's text: the step, and the model when one did. See migration 8. */
+export interface QuestionWriter { origin: 'generated' | 'imported' | 'revised' | 'author' | 'backport' | 'format' | 'reference-dropped'; model?: string | null; taskId?: string | null }
+
+/**
+ * Records one write of a question's text in `question_revisions`, inside the caller's transaction. `before` is null for the
+ * question's first text. A write that leaves the text as it was records nothing. Returns whether a row was written.
+ */
+export function recordQuestionRevision(ctx: AppContext, questionId: string, before: QuestionText | null, after: QuestionText, by: QuestionWriter): boolean {
+  if (before && before.statement === after.statement && before.hint === after.hint && before.solution === after.solution) return false;
+  ctx.db.insert('question_revisions', {
+    id: newId(), question_id: questionId, old_statement: before?.statement ?? null, old_hint: before?.hint ?? null, old_solution: before?.solution ?? null,
+    statement: after.statement, hint: after.hint, solution: after.solution, origin: by.origin, model: by.model ?? null, task_id: by.taskId ?? null, created_at: now(),
+  });
+  return true;
+}
+
 export type QuestionFields = Partial<Omit<Question, 'id' | 'projectId' | 'rev' | 'createdAt' | 'updatedAt'>>;
 
 const COLUMNS: Record<keyof QuestionFields, string> = {
@@ -48,20 +67,26 @@ function toColumns(fields: QuestionFields): Record<string, unknown> {
 export function createQuestion(ctx: AppContext, projectId: string, fields: QuestionFields): Question {
   const id = newId();
   const t = now();
-  ctx.db.insert('questions', {
-    kind: 'exercise', origin: 'adapted', ...toColumns(fields), id, project_id: projectId, rev: 1, created_at: t, updated_at: t,
+  const created = ctx.db.tx(() => {
+    ctx.db.insert('questions', {
+      kind: 'exercise', origin: 'adapted', ...toColumns(fields), id, project_id: projectId, rev: 1, created_at: t, updated_at: t,
+    });
+    const q = getQuestion(ctx, id);
+    recordQuestionRevision(ctx, id, null, q, { origin: 'author' });
+    return q;
   });
   questionsChanged(ctx, projectId, [id]);
-  return getQuestion(ctx, id);
+  return created;
 }
 
 /**
  * Rev-checked update: 409 when `rev` is not the stored one. Bumps rev. Editing the text of a question that was
  * verified puts it back to 'draft' (its checks no longer apply) unless the patch sets the status itself. Any change of
  * statement, hint or solution marks the question as author-edited (`edited_at`): it is verified as written and never
- * re-imported from its source pages. The import marker (`imported_at`) is not touched.
+ * re-imported from its source pages. The import marker (`imported_at`) is not touched. A change of text is recorded in
+ * `question_revisions` as written by `by` (the author unless the caller says otherwise).
  */
-export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: QuestionFields): Question {
+export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: QuestionFields, by: QuestionWriter = { origin: 'author' }): Question {
   return ctx.db.tx(() => {
     const cur = getQuestion(ctx, id);
     if (cur.rev !== rev) throw conflict('This question was changed somewhere else since you opened it.', 'Reload to see the latest version, then reapply your edit.', id);
@@ -76,8 +101,10 @@ export function updateQuestion(ctx: AppContext, id: string, rev: number, patch: 
     ctx.db.run(
       `UPDATE questions SET ${[...Object.keys(values), 'rev', 'updated_at'].map((k) => (k === 'rev' ? 'rev = rev + 1' : `${k} = ?`)).join(', ')} WHERE id = ? AND rev = ?`,
       ...Object.values(values).map((v) => (v !== null && typeof v === 'object' ? JSON.stringify(v) : (v as string | number | null))), t, id, rev);
+    const next = getQuestion(ctx, id);
+    if (textChanged) recordQuestionRevision(ctx, id, cur, next, by);
     questionsChanged(ctx, cur.projectId, [id]);
-    return getQuestion(ctx, id);
+    return next;
   });
 }
 
@@ -89,7 +116,7 @@ export function repairQuestionText(ctx: AppContext, id: string, fix: (text: stri
   return ctx.db.tx(() => {
     const cur = getQuestion(ctx, id);
     const next = { statement: fix(cur.statement), hint: fix(cur.hint), solution: fix(cur.solution) };
-    if (next.statement === cur.statement && next.hint === cur.hint && next.solution === cur.solution) return false;
+    if (!recordQuestionRevision(ctx, id, cur, next, { origin: 'format' })) return false;
     ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, rev = rev + 1, updated_at = ? WHERE id = ?', next.statement, next.hint, next.solution, now(), id);
     questionsChanged(ctx, cur.projectId, [id]);
     return true;

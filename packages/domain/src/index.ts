@@ -218,7 +218,7 @@ export type QuestionStatus = 'draft' | 'verified' | 'issue';
 export type Difficulty = 'facile' | 'medio' | 'difficile';
 
 export interface QuestionCheck {
-  method: 'independent-solve' | 'numeric' | 'symbolic' | 'lint';
+  method: 'independent-solve' | 'numeric' | 'consistency' | 'symbolic' | 'lint';
   ok: boolean;
   detail: string;
   model?: string;

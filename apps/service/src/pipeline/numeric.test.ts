@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues } from './numeric.ts';
+import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
 import type { PythonResult } from './python.ts';
 
 const ran = (stdout: string, ok = true): (() => Promise<PythonResult>) => async () => ({ ok, stdout, version: 'test' });
@@ -128,4 +128,31 @@ test('the blocker text of a numeric mismatch can be read back value by value', (
   const found = [{ name: 'f_c', stated: '21,28 kHz', computed: '3386.2754 Hz' }, { name: 'G', stated: '-10', computed: '-9.9' }];
   assert.deepEqual(readMismatches(mismatchMessage(found)), found);
   assert.deepEqual(readMismatches('The independent solution reaches a different result: 2'), []);
+});
+
+describe('runConsistency', () => {
+  test('in the real sandbox: CONSISTENT passes, INCONSISTENT names the problem, a crash is a failed check', async () => {
+    // Chimica E17.6: the formula C3H6O has M = 58.08 g/mol, the statement says 60.
+    const molar = (m: number) => `M_formula = 3 * 12.011 + 6 * 1.008 + 15.999\nprint("CONSISTENT" if abs(M_formula - ${m}) < 0.5 else f"INCONSISTENT: C3H6O has M={M_formula:.2f}, not ${m}")`;
+    assert.deepEqual(await runConsistency(molar(58)), { verdict: 'consistent', detail: 'CONSISTENT' });
+    assert.deepEqual(await runConsistency(molar(60)), { verdict: 'inconsistent', detail: 'INCONSISTENT: C3H6O has M=58.08, not 60' });
+    const crashed = await runConsistency('from sympy import Rational\nprint("CONSISTENT")');
+    assert.equal(crashed!.verdict, 'failed');
+    assert.match(crashed!.detail, /^The consistency program failed: .*ModuleNotFoundError/);
+  });
+
+  test('a timeout, a program that prints no verdict and a sandbox that does not start are failed checks; no program is no check', async () => {
+    assert.deepEqual(await runConsistency('while True: pass', async () => ({ ok: false, stdout: '', error: 'Timed out after 15 s', version: '?' })),
+      { verdict: 'failed', detail: 'The consistency program failed: Timed out after 15 s' });
+    assert.equal((await runConsistency('print(1)', ran('1')))!.verdict, 'failed');
+    assert.equal((await runConsistency('pass', ran('')))!.detail, 'The consistency program printed nothing.');
+    assert.equal((await runConsistency('pass', async () => { throw new Error('no sandbox'); }))!.verdict, 'failed');
+    // Only the last line counts, and a crash after INCONSISTENT keeps the finding.
+    assert.equal((await runConsistency('pass', ran('CONSISTENT\nINCONSISTENT: x')))!.verdict, 'inconsistent');
+    assert.equal((await runConsistency('pass', ran('INCONSISTENT: x\nCONSISTENT')))!.verdict, 'consistent');
+    assert.equal((await runConsistency('pass', ran('INCONSISTENT: r', false)))!.verdict, 'inconsistent');
+    assert.equal((await runConsistency('pass', ran('CONSISTENT', false)))!.verdict, 'failed');
+    assert.equal(await runConsistency('  ', ran('CONSISTENT')), null);
+    assert.equal(await runConsistency(undefined, ran('CONSISTENT')), null);
+  });
 });
