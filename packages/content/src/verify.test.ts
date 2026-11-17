@@ -329,14 +329,27 @@ test('sampleGraph draws every trace kind with the Plotly parts the reader keeps'
   assert.ok(Math.abs(circle!.x[100]! - Math.cos(6.2832 / 4)) < 1e-6, 'a parametric curve is sampled in t');
   assert.deepEqual([pts!.mode, pts!.marker!.symbol], ['markers', ['circle-open', 'circle']]);
   assert.deepEqual([vline!.x, vline!.y], [[2, 2], [-3, 3]]);
-  const bars = sampleGraph({ id: 'b', title: 'B', xDomain: [0, 1], yDomain: [0, 10], xLabel: 'Composto', yLabel: 'n', traces: [{ kind: 'bars', label: 'Atomi di H', bars: [{ category: 'Etano', value: 6 }, { category: 'Etene', value: 4 }] }] });
+  const bars = sampleGraph({ id: 'b', title: 'B', xDomain: [0, 1], yDomain: [0, 10], xLabel: 'Composto', yLabel: 'n', traces: [{ kind: 'bars', label: 'Atomi di H', bars: [{ category: 'Etano', value: 6 }, { category: 'Etene', value: 4 }, { category: 'Etino', value: 2 }] }] });
   assert.equal(bars.ok, true, bars.detail);
+  assert.deepEqual((bars.payload.config.layout as { xaxis: unknown }).xaxis, { title: 'Composto' }, 'a category axis gets no numeric range that would clip the third bar');
   // Everything the sampler writes survives the reader's sanitiser, symbols of open points included.
   for (const p of [r.payload, bars.payload]) {
     const shown = readerSanitize(p.config.data, p.config.layout);
     assert.ok(shown, 'the reader accepts the graph');
     assert.deepEqual(shown.data, JSON.parse(JSON.stringify(p.config.data)));
   }
+});
+
+test('sampleGraph breaks a parametric curve at a pole in t and leaves a smooth one whole', async () => {
+  const { sampleGraph } = await import('./verify.ts');
+  const base = { id: 'p', title: 'P', xDomain: [-1, 2] as [number, number], yDomain: [-10, 10] as [number, number], xLabel: 'x', yLabel: 'y' };
+  const nulls = (xt: string, yt: string, tRange: [number, number]) => {
+    const r = sampleGraph({ ...base, traces: [{ kind: 'parametric', label: 'c', xt, yt, tRange }] });
+    const d = r.payload.config.data[0] as { x: (number | null)[] };
+    return d.x.filter((v) => v === null).length;
+  };
+  assert.equal(nulls('t', '1/t', [-1, 2]), 1, 'the hyperbola is not joined across t = 0');
+  assert.equal(nulls('cos(t)', 'sin(t)', [0, 6.2832]), 0);
 });
 
 test('sampleGraph reports traces it cannot draw', async () => {
@@ -385,5 +398,11 @@ test('compareExpected checks the data against the expected curve and fits free c
   assert.equal(compareExpected('C1 + C2*x^2', xs, ys, 60000)!.ok, true, 'two constants');
   assert.equal(compareExpected('exp(C*x)', xs, ys, 60000), null, 'not affine in its constant: no verdict');
   assert.equal(compareExpected('', xs, ys, 60000), null);
+  // A branch drawn where the expected curve does not exist is a difference, not a point to skip.
+  const wide = Array.from({ length: 41 }, (_, k) => -2 + k / 10).filter((x) => x !== 0);
+  const branch = compareExpected('log(x)', wide, wide.map((x) => Math.log(Math.abs(x))), 4)!;
+  assert.equal(branch.ok, false);
+  assert.match(branch.detail, /the data has a value and log\(x\) is undefined/);
+  assert.equal(compareExpected('log(x)', [-5, -4, -3, -2, -1], [1, 2, 3, 4, 5], 10)!.ok, false, 'drawn only where the expected curve is undefined');
   assert.equal(compareExpected('x', [1, 2], [1, 2], 1), null, 'too few points');
 });

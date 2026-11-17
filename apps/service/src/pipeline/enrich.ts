@@ -205,6 +205,11 @@ export async function independentGraphCheck(ctx: AppContext, t: TaskContext, p: 
   const lines: string[] = [];
   let ok = r.data.fit === 'fits';
   if (!ok) lines.push('The checker finds no relation in the section that this graph can show.');
+  // An answer that skips traces checked only some of them, so it cannot vouch for the graph.
+  if (r.data.traces.length !== spec.traces.length) {
+    ok = false;
+    lines.push(`The checker answered for ${r.data.traces.length} of ${spec.traces.length} traces.`);
+  }
   spec.traces.forEach((tr, k) => {
     const answer = r.data.traces[k];
     if (!answer) return;

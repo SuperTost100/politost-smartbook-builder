@@ -315,12 +315,31 @@ export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
       const ys: (number | null)[] = [];
       let finite = 0;
       let visible = 0;
+      // Each coordinate as drawn, in units of its window, so the jump test of function traces applies to both.
+      const tx = xScale === 'log' ? Math.log10 : (v: number) => v;
+      const coord = (c: typeof cx, scale: AxisScale, to: (v: number) => number, span: number) => (s: number) => {
+        const v = c.ok ? c.evaluate({ t: s }) : Number.NaN;
+        return showable(v, scale) ? to(v) / span : Number.NaN;
+      };
+      const fx = coord(cx, xScale, tx, tx(x1) - tx(x0));
+      const fy = coord(cy, yScale, ty, ty(y1) - ty(y0));
+      let prev: { s: number; X: number; Y: number } | null = null;
       for (let k = 0; k <= samples; k++) {
         const s = a + ((b - a) * k) / samples;
         const X = cx.evaluate({ t: s });
         const Y = cy.evaluate({ t: s });
         const ok = showable(X, xScale) && showable(Y, yScale);
-        if (ok) { finite++; if (inView(X, Y)) visible++; }
+        if (ok) {
+          finite++;
+          if (inView(X, Y)) visible++;
+          // A pole in t (y = 1/t) breaks the curve as it breaks a function trace.
+          const X1 = fx(s); const Y1 = fy(s);
+          if (prev && ((Math.abs(X1 - prev.X) > 0.02 && jumpsBetween(fx, prev.s, s, prev.X, X1)) || (Math.abs(Y1 - prev.Y) > 0.02 && jumpsBetween(fy, prev.s, s, prev.Y, Y1)))) {
+            xs.push(null);
+            ys.push(null);
+          }
+          prev = { s, X: X1, Y: Y1 };
+        } else prev = null;
         xs.push(ok ? r8(X) : null);
         ys.push(ok ? r8(Y) : null);
       }
@@ -354,9 +373,10 @@ export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
   if (x1 <= x0 || y1 <= y0) problems.push('The domain or range is empty.');
   // The reader keeps an axis "type" and "range" (its sanitiser lists both). Plotly reads the range of a log axis as exponents.
   const axis = (title: string, scale: AxisScale, lo: number, hi: number) => (scale === 'log' ? { title, type: 'log', range: [Math.log10(lo), Math.log10(hi)] } : { title, range: [lo, hi] });
+  // Bars sit on a category axis, where Plotly places them at 0, 1, 2, ...: a numeric range would clip them.
   const layout = {
     title: spec.title,
-    xaxis: axis(spec.xLabel, xScale, x0, x1),
+    xaxis: spec.traces.some((t) => t.kind === 'bars') ? { title: spec.xLabel } : axis(spec.xLabel, xScale, x0, x1),
     yaxis: axis(spec.yLabel, yScale, y0, y1),
     showlegend: spec.traces.length > 1,
   };
@@ -441,12 +461,17 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
   const c = compileExpr(expected, ['x', ...names]);
   if (!c.ok) return null;
   const at = (x: number, values: number[]) => c.evaluate({ x, ...Object.fromEntries(names.map((n, i) => [n, values[i]!])) });
+  // A drawn point where the expected curve is undefined is a branch the section does not have: it counts as a difference.
   const pts: [number, number][] = [];
+  let undefinedAt: number | null = null;
+  let undefinedCount = 0;
   xs.forEach((x, k) => {
     const y = ys[k];
-    if (typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y) && Number.isFinite(at(x, names.map(() => 0)))) pts.push([x, y]);
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (Number.isFinite(at(x, names.map(() => 0)))) pts.push([x, y]);
+    else { undefinedCount++; undefinedAt ??= x; }
   });
-  if (pts.length < 5) return null;
+  if (pts.length < 5) return undefinedCount >= 5 ? { ok: false, detail: `${expected} is undefined at ${undefinedCount} of the ${undefinedCount + pts.length} drawn points, from x=${undefinedAt}` } : null;
   // With constants, y = f0(x) + sum of c_i g_i(x). The basis is read off the expression and checked at c = 2 before fitting.
   let fitted = names.map(() => 0);
   if (names.length) {
@@ -465,8 +490,8 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
     if (!sol) return null;
     fitted = sol;
   }
-  let bad = 0;
-  let worst = '';
+  let bad = undefinedCount;
+  let worst = undefinedAt === null ? '' : `at x=${undefinedAt} the data has a value and ${expected} is undefined`;
   for (const [x, y] of pts) {
     const e = at(x, fitted);
     if (Math.abs(e - y) > 0.01 * yspan + 1e-6 * Math.abs(e)) {
@@ -475,7 +500,8 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
     }
   }
   const constants = names.length ? ` with ${names.map((n, i) => `${n} = ${Number(fitted[i]!.toPrecision(6))}`).join(', ')}` : '';
-  return bad > 0.05 * pts.length
-    ? { ok: false, detail: `${bad}/${pts.length} points differ from ${expected}${constants}; ${worst}` }
-    : { ok: true, detail: `matches ${expected}${constants} at ${pts.length - bad}/${pts.length} points` };
+  const n = pts.length + undefinedCount;
+  return bad > 0.05 * n
+    ? { ok: false, detail: `${bad}/${n} points differ from ${expected}${constants}; ${worst}` }
+    : { ok: true, detail: `matches ${expected}${constants} at ${n - bad}/${n} points` };
 }

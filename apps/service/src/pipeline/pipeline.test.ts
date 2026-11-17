@@ -1276,6 +1276,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.match(details[0]![1], /finds no relation in the section/);
     assert.equal(details[1]![0], 'issue');
     assert.match(details[1]![1], /matches x\^2 .*problem: Il testo chiama y la velocità/);
+    // An answer that leaves traces out checked only part of the graph.
+    fake.next(drawn, answer({ traces: [], fit: 'fits' }));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }));
+    const last = ctx.db.get<{ status: string; checks: string }>('SELECT status, checks FROM enrichments ORDER BY rowid DESC LIMIT 1')!;
+    assert.equal(last.status, 'issue');
+    assert.match(last.checks, /The checker answered for 0 of 1 traces/);
   });
 
   test('a Bode pair saves two graphs on the same log frequency axis', async () => {
