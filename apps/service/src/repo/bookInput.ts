@@ -23,7 +23,7 @@ export function loadBookInput(ctx: AppContext, projectId: string, opts: { approv
   const all: ChapterInput[] = found.revision.outline.chapters.map((c, i) => ({
     id: c.id, slug: c.slug, number: i + 1, title: c.title,
     intro: heads.get(c.id)?.markdown ?? '',
-    sections: c.sections.map((s) => ({ id: s.id, title: s.title, markdown: heads.get(s.id)?.markdown ?? '' })),
+    sections: c.sections.map((s) => ({ id: s.id, title: s.title, markdown: heads.get(s.id)?.markdown ?? '', revisionId: heads.get(s.id)?.id })),
   }));
   // Chapters with no text yet stay out of the package; the others keep their outline numbers, so formula
   // numbers do not change when more chapters are written later.

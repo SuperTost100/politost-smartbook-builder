@@ -42,7 +42,7 @@ function book(): BookInput {
       q({ id: 'q1', kind: 'exercise', chapterId: 'c1', statement: 'Calcola $v$ per $s = 10$ e $t = 2$.', solution: 'Con la {{formula:@vel-media}} vale $v = 4$.' }),
       q({ id: 'x1', kind: 'exam', chapterId: 'c1', origin: 'generated', statement: 'Un treno percorre 120 km in 2 ore.', solution: 'La velocità vale 60 km/h.' }),
     ],
-    enrichments: [{ id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', payload: PARABOLA, status: 'verified', checks: [], lintAccepted: [], spec: null, createdAt: '2026-01-01T00:00:00Z' }],
+    enrichments: [{ id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', payload: PARABOLA, status: 'verified', checks: [], lintAccepted: [], spec: null, checkedRevisionId: null, lintOpen: [], createdAt: '2026-01-01T00:00:00Z' }],
     assets: [{ filename: 'fig.svg', bytes: SVG, caption: 'Moto con a_x costante', alt: 'Spazio e tempo' }],
     sections: { esercizi: true, esami: true, ide: false, grafici: true },
   };

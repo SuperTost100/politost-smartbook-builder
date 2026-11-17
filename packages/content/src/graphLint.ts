@@ -16,7 +16,9 @@ export interface GraphLintFinding {
   detail: string;
 }
 
-const BLOCKING = new Set(['duplicate', 'joined-jump', 'invisible', 'label-mismatch', 'needs-parametric', 'point-as-curve', 'all-constant', 'placeholder', 'axis-scale', 'empty']);
+// needs-parametric, placeholder and axis-scale are warnings: on correct textbook graphs they misfire (an isochore on a P-T
+// plane, "Seno" with "Coseno", an axis titled "ln k"), and they were never the only rule to catch a bad graph (issue #128).
+const BLOCKING = new Set(['duplicate', 'joined-jump', 'invisible', 'label-mismatch', 'point-as-curve', 'all-constant', 'empty']);
 
 type Trace = Record<string, unknown>;
 type Point = [unknown, unknown];
@@ -83,25 +85,34 @@ function axisVar(title: string): string | null {
 /**
  * The parts of a label that may state a formula: a parenthesised aside holding "=" ("Isocora (V = 2)") is a part of its own,
  * and the rest is split at ";", ":", ", ", " con " and " per ". Parentheses without "=" stay, so "y = 2(x+1)" is one formula.
+ * An aside that lists several values ("(k = 0,80; A = 2,0; d = 0,10)") gives the parameters of the curve, not the curve.
  */
 function labelSegments(name: string): string[] {
   const asides: string[] = [];
   let rest = name;
   for (let m = /\(([^()]*=[^()]*)\)/.exec(rest); m; m = /\(([^()]*=[^()]*)\)/.exec(rest)) {
-    asides.push(m[1]!);
+    if (!/;/.test(m[1]!) && (m[1]!.match(/=/g) ?? []).length === 1) asides.push(m[1]!);
     rest = `${rest.slice(0, m.index)}; ${rest.slice(m.index + m[0].length)}`;
   }
   return [...rest.split(/[;:]|,\s(?=[^\d])|\scon\s|\sper\s/), ...asides];
 }
 
 type Claim =
-  | { kind: 'fn'; evaluate: (x: number) => number; src: string }
-  | { kind: 'const' | 'vline' | 'circle' | 'ray'; value: number; src: string };
+  | { kind: 'fn'; evaluate: (x: number) => number; src: string; alt?: (x: number) => number }
+  | { kind: 'const' | 'vline' | 'ray'; value: number; src: string }
+  | { kind: 'circle'; value: number; centre: [number, number]; src: string };
+
+/** The centre a label states for a circle: "centro (1, 1)", "center (0,5; 2)", "C(1, -2)". */
+function statedCentre(name: string): [number, number] | null {
+  const m = /(?:centro|centre|center|\bC)\s*(?:in\s*)?\(\s*(-?\d+(?:[.,]\d+)?)\s*[;,]\s*(-?\d+(?:[.,]\d+)?)\s*\)/i.exec(name.replace(/[−–]/g, '-'));
+  return m ? [Number(m[1]!.replace(',', '.')), Number(m[2]!.replace(',', '.'))] : null;
+}
 
 /**
  * What a label states about its trace, from its "lhs = rhs" segments whose right side is maths: y = f(x), y constant,
- * x constant, a circle of radius r or a ray at angle θ. Prose, parameters ("con K = 60,9") and labels that define several
- * functions are not claims about the curve.
+ * x constant, a circle of radius r around a centre the label states, or a ray at angle θ. Prose, parameters ("con K = 60,9")
+ * and labels that define several functions are not claims about the curve. A bare "log" is read both ways, natural and
+ * decimal, because chemistry and physics write log for log10 ("pH = −log(c)").
  */
 export function labelClaims(name: string, xTitle: string, yTitle: string): Claim[] {
   const claims: Claim[] = [];
@@ -109,6 +120,7 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
   const lower = name.toLowerCase();
   if ((name.match(/[a-zA-Z]\([^)]*\)\s*=/g) ?? []).length > 1) return claims;
   const circle = /circonferenza|cerchio|circle/.test(lower);
+  const centre = statedCentre(name);
   const ray = /semiretta|ray/.test(lower);
   for (const seg of labelSegments(name)) {
     const parts = seg.split('=');
@@ -124,13 +136,17 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
       const free = freeSymbols(rhs);
       if (!free) continue;
       const src = seg.trim();
+      // "ln" is natural; a "log" the label wrote itself may be either.
+      const ambiguousLog = /\blog\b(?!10)/.test(raw.replace(/[−–]/g, '-'));
       if (free.size === 0) {
         const c = compileExpr(rhs, []);
         if (!c.ok) continue;
         const value = c.evaluate({});
         if (!isNum(value)) continue;
-        if (circle && lhsSym === 'r') claims.push({ kind: 'circle', value, src });
-        else if (ray && /^(θ|theta)$/.test(lhsSym)) claims.push({ kind: 'ray', value, src });
+        if (circle && lhsSym === 'r') {
+          // Without a stated centre the data cannot be checked: a circle off the x axis is as right as one on it.
+          if (centre) claims.push({ kind: 'circle', value, centre, src });
+        } else if (ray && /^(θ|theta)$/.test(lhsSym)) claims.push({ kind: 'ray', value, src });
         else if (lhsSym === xv) claims.push({ kind: 'vline', value, src });
         // The left side must name the plotted quantity: y, a function f(...) of a variable, or the y axis symbol. A value at
         // one point such as an initial condition "y(1) = 3" says nothing about the rest of the curve.
@@ -139,19 +155,24 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
         const v = [...free][0]!;
         if (v !== xv && v !== 'x') continue;
         const c = compileExpr(rhs, [v]);
-        if (c.ok) claims.push({ kind: 'fn', evaluate: (x) => c.evaluate({ [v]: x }), src });
+        const d = ambiguousLog ? compileExpr(rhs.replace(/\blog\b(?!10)/g, 'log10'), [v]) : null;
+        if (c.ok) claims.push({ kind: 'fn', evaluate: (x) => c.evaluate({ [v]: x }), src, ...(d?.ok ? { alt: (x: number) => d.evaluate({ [v]: x }) } : {}) });
       }
     }
   }
   return claims;
 }
 
-/** Where the data contradicts a claim, or null when at most 2% of the points do. */
+/** Where the data contradicts a claim, or null when at most 2% of the points do. A claim with two readings fails only when both do. */
 function checkClaim(claim: Claim, pts: Point[]): string | null {
+  const bad = checkReading(claim, pts);
+  if (bad && claim.kind === 'fn' && claim.alt && !checkReading({ kind: 'fn', evaluate: claim.alt, src: claim.src }, pts)) return null;
+  return bad;
+}
+
+function checkReading(claim: Claim, pts: Point[]): string | null {
   const fin = finitePoints(pts);
   if (fin.length < 2) return null;
-  const xs = fin.map(([x]) => x);
-  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
   const scale = Math.max(1e-9, ...fin.map(([, y]) => Math.abs(y)));
   let bad = 0;
   let worst = '';
@@ -160,7 +181,7 @@ function checkClaim(claim: Claim, pts: Point[]): string | null {
     if (claim.kind === 'vline') {
       if (Math.abs(x - claim.value) > 1e-6 * Math.max(1, Math.abs(claim.value))) miss(`x=${x} but the label says ${claim.src}`);
     } else if (claim.kind === 'circle') {
-      const r = Math.hypot(x - cx, y);
+      const r = Math.hypot(x - claim.centre[0], y - claim.centre[1]);
       if (Math.abs(r - claim.value) > 1e-3 * claim.value) miss(`point (${x}, ${y}) is at distance ${r.toPrecision(4)}, the label says ${claim.src}`);
     } else if (claim.kind === 'ray') {
       const th = Math.atan2(y, x);
@@ -225,7 +246,10 @@ export function lintGraph(payload: Record<string, unknown>): GraphLintFinding[] 
     if (fin.length < 2) { add('empty', nameOf(t), 'fewer than two finite points'); continue; }
 
     // A vertical segment: one step far larger than its neighbours, or a sign flip over half the window, in a y = f(x) trace.
+    // The step must also be narrow, under 1% of the trace's x extent: a two-point segment or a hand-drawn heating curve
+    // climbs over a wide step on purpose.
     const increasing = fin.every(([x], k) => k === 0 || x > fin[k - 1]![0]);
+    const xExtent = fin.at(-1)![0] - fin[0]![0];
     const dy: (number | null)[] = [];
     for (let k = 1; k < pts.length; k++) {
       const a = pts[k - 1]![1];
@@ -239,9 +263,10 @@ export function lintGraph(payload: Record<string, unknown>): GraphLintFinding[] 
       for (let j = Math.max(0, k - 4); j <= Math.min(dy.length - 1, k + 4); j++) if (j !== k && dy[j] != null) near.push(dy[j]!);
       const a = pts[k]![1] as number;
       const b = pts[k + 1]![1] as number;
+      const narrow = Math.abs((pts[k + 1]![0] as number) - (pts[k]![0] as number)) < 0.01 * xExtent;
       const isolated = d > 20 * Math.max(median(near), 1e-12 * yspan);
-      const poleFlip = Math.sign(a) !== Math.sign(b) && d > 0.5 * yspan;
-      if (d > 0.05 * yspan && (isolated || poleFlip)) {
+      const poleFlip = a * b < 0 && d > 0.5 * yspan;
+      if (narrow && d > 0.05 * yspan && (isolated || poleFlip)) {
         add('joined-jump', nameOf(t), `vertical segment between x=${String(pts[k]![0])} and x=${String(pts[k + 1]![0])} (Δy=${Number(d.toPrecision(3))}, ${Math.round((100 * d) / yspan)}% of the y range)`);
         break;
       }

@@ -370,6 +370,10 @@ test('graphSourceCheck wants every trace to quote the section, and warns about o
   assert.equal(sourceQuoted('y(t)=\\frac{2}{2-t^2}', section), true, 'spaces and $ do not matter');
   assert.equal(sourceQuoted('y(t) = \\frac{1}{1 - t^2/4}', section), false);
   assert.equal(sourceQuoted('y', section), false, 'a quote of one or two characters proves nothing');
+  // A quote must hold maths: prose occurs in the section and states no formula.
+  const nernst = 'Per la reazione di Nernst con $n=2$ elettroni vale $E = E^\\circ - \\frac{0{,}0592}{n}\\log Q$.';
+  for (const prose of ['la reazione', 'Nernst', 'con']) assert.equal(sourceQuoted(prose, nernst), false, prose);
+  for (const maths of ['n=2', 'E^\\circ', '\\log Q']) assert.equal(sourceQuoted(maths, nernst), true, maths);
   const ok = graphSourceCheck([{ kind: 'function', label: 'y', fn: '2/(2-x^2)', source: 'y(t) = \\frac{2}{2 - t^2}' }], section);
   assert.equal(ok.ok, true, ok.detail);
   const invented = graphSourceCheck([{ kind: 'function', label: 'y2', fn: '1/(1-x^2/4)', source: 'y(t) = \\frac{1}{1 - t^2/4}' }], section);
@@ -395,6 +399,7 @@ test('compareExpected checks the data against the expected curve and fits free c
   const fit = compareExpected('C - 500*x^2', xs, ys, 60000)!;
   assert.equal(fit.ok, true, fit.detail);
   assert.match(fit.detail, /C = 101325/);
+  assert.deepEqual(fit.constants, { C: 101325 }, 'the fitted value, to compare across the traces of one graph');
   assert.equal(compareExpected('C - 400*x^2', xs, ys, 60000)!.ok, false);
   assert.equal(compareExpected('C1 + C2*x^2', xs, ys, 60000)!.ok, true, 'two constants');
   assert.equal(compareExpected('exp(C*x)', xs, ys, 60000), null, 'not affine in its constant: no verdict');

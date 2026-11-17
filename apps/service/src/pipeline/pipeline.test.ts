@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { lintQuestionText, MAX_DELETED_BLOCKS } from '@smartbuilder/content';
+import { compileBook, lintQuestionText, MAX_DELETED_BLOCKS, sampleGraph, type GraphSpec } from '@smartbuilder/content';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
@@ -11,7 +11,7 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
-import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
+import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, verifyVerdict } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, sectionRevise, sweepDue } from './review.ts';
@@ -21,7 +21,7 @@ import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPromp
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, repairQuestionText, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listEnrichments, listIssues, loadBookInput, repairQuestionText, saveHuman, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -32,6 +32,18 @@ const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.s
 const crossNone = answer({ issues: [] });
 /** The independent graph checker's answer when it finds nothing wrong. */
 const checkerFits = answer({ traces: [{ label: 'f', expected: '', problem: '' }], fit: 'fits' });
+/**
+ * Stores the graphs of a writer's answer for section s1 as drawn, with their sampling check and an issue when it fails. Generation
+ * no longer saves a failing graph, but an edited or re-checked one can fail, and Fix redraws it.
+ */
+function storeAnswer(a: Record<string, any>) {
+  const spec = (id: string, title: string, yDomain: [number, number], yScale: 'log' | null | undefined, yLabel: string, traces: GraphSpec['traces']): GraphSpec => ({ id, title, xDomain: a.xDomain, yDomain, xScale: a.xScale ?? undefined, yScale: yScale ?? undefined, xLabel: a.xLabel, yLabel, traces });
+  const specs = [spec(a.id, a.title, a.yDomain, a.yScale, a.yLabel, a.traces), ...(a.pair ? [spec(a.pair.id === a.id ? `${a.pair.id}-2` : a.pair.id, a.pair.title, a.pair.yDomain, a.pair.yScale, a.pair.yLabel, a.pair.traces)] : [])];
+  for (const s of specs) {
+    const g = sampleGraph(s);
+    saveEnrichment(ctx, P, 's1', 'graph', g.payload, [{ method: 'numeric', ok: g.ok, detail: g.detail }], { spec: s });
+  }
+}
 /** The data part of an exercise check that finds nothing wrong with the statement. No program: nothing to run in the sandbox. */
 const posed = { wellPosed: true, wellPosedReason: 'I dati determinano una sola risposta.', dataProblems: [] as string[], consistency: '' };
 /** The editor's answer to a formatting repair: the three parts as plain text. */
@@ -1108,7 +1120,7 @@ describe('14. practice-done barrier and the first-chapter gate', () => {
 });
 
 describe('5. enrichment: pick once, one child task per extra', () => {
-  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'Testo' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
+  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'y = x^2' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
 
   test('chapter.enrich only picks and enqueues; a retry reuses the children instead of picking again', async () => {
     seedOutline([['c1', ['s1', 's2']]]);
@@ -1170,9 +1182,9 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await chapterEnrich(ctx, t), { picked: 1 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s2']);
     assert.match(fake.calls.at(-1)!.prompt, /s2 \| .* \| formulas: F = k\\,x/, 'the picker sees the display formulas');
-    fake.next(answer(graph));
+    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'F', source: 'F = k\\,x' }] }), checkerFits);
     await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's2', purpose: 'Hooke', relation: 'F = k x' }));
-    assert.match(fake.calls.at(-1)!.prompt, /Relation to plot, as the section states it: F = k x/);
+    assert.match(fake.calls.at(-2)!.prompt, /Relation to plot, as the section states it: F = k x/);
   });
 
   test('MATLAB code with A\\b and a string holding \\n is stored exactly as written', async () => {
@@ -1203,28 +1215,35 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 
   test('a child is idempotent: it saves one graph and skips when the section already has one', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Testo uno.');
+    const rev = seedRevision('s1', 'Testo uno: $$y = x^2$$');
     const t = startTask('enrich.graph', { nodeId: 's1', purpose: 'p' });
     fake.next(answer(graph), checkerFits);
     assert.deepEqual(await enrichGraph(ctx, t), { made: 1 });
     assert.deepEqual(await enrichGraph(ctx, t), { reused: true });
     assert.equal(fake.calls.length, 2, 'the drawing and its independent check');
     assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 1);
+    assert.equal(ctx.db.get<{ checked_rev_id: string }>(`SELECT checked_rev_id FROM enrichments`)!.checked_rev_id, rev, 'the graph remembers the section revision its checker read');
   });
-
-  test('a graph that draws but fails the graph lint is stored as an issue, so Auto Fix redraws it', async () => {
+  test('a graph that fails its checks is drawn once more with what failed, and a second failure saves nothing', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Le leggi di Charles e di Gay-Lussac.');
-    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'Charles' }, { kind: 'function', fn: 'x', label: 'Gay-Lussac', source: 'Gay-Lussac' }], yDomain: [-2, 2] }));
+    seedRevision('s1', 'Le leggi di Charles, $V = k_1 T$, e di Gay-Lussac, $P = k_2 T$.');
+    const twins = answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'V = k_1 T' }, { kind: 'function', fn: 'x', label: 'Gay-Lussac', source: 'P = k_2 T' }], yDomain: [-2, 2] });
+    fake.next(twins, twins);
+    const r = await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' }));
+    assert.equal(r.made, 0);
+    assert.match(String(r.skipped), /failed its checks twice and was not saved: duplicate \("Gay-Lussac"\): same data as "Charles"/);
+    assert.equal(fake.calls.length, 2, 'two drawings, and no checker call for a graph that failed the checks that cost nothing');
+    assert.match(fake.calls[1]!.prompt, /A first draft failed its checks: duplicate \("Gay-Lussac"\)/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
+    assert.equal(ctx.db.all('SELECT 1 FROM review_issues').length, 0, 'nothing for the author to clean up');
+    // A second drawing that passes is saved, with every check.
+    fake.next(twins, answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'V = k_1 T' }, { kind: 'function', fn: '2*x', label: 'Gay-Lussac', source: 'P = k_2 T' }], yDomain: [-5, 5] }),
+      answer({ traces: [{ label: 'Charles', expected: '', problem: '' }, { label: 'Gay-Lussac', expected: '', problem: '' }], fit: 'fits' }));
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' })), { made: 1 });
     const row = ctx.db.get<{ status: string; checks: string }>(`SELECT status, checks FROM enrichments`)!;
-    assert.equal(row.status, 'issue');
-    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', false], ['source', true]]);
-    const issue = ctx.db.get<{ message: string }>(`SELECT message FROM review_issues WHERE source = 'verification'`)!;
-    assert.match(issue.message, /failed its check: duplicate \("Gay-Lussac"\): same data as "Charles"/);
-    assert.doesNotMatch(issue.message, /Sampled/, 'the issue names what failed, not the checks that passed');
+    assert.equal(row.status, 'verified');
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', true], ['source', true], ['independent', true]]);
   });
-
   test('a "none" verdict saves no graph: the section states no relation to plot', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Le classi di idrocarburi: alcani, alcheni, alchini.');
@@ -1234,66 +1253,150 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.equal(fake.calls.length, 1, 'no checker call');
   });
 
-  test('a trace that quotes nothing the section states is an issue, and no checker is asked', async () => {
+  test('a trace must quote a formula of the section: an invented one or a word of prose fails, and no checker is asked', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'La soluzione è $$y = \\frac{2}{2 - t^2}$$');
-    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'y = \\frac{1}{1 - t^2/4}' }], yDomain: [0, 4] }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Cauchy' }));
-    const row = ctx.db.get<{ status: string; checks: string }>('SELECT status, checks FROM enrichments')!;
-    assert.equal(row.status, 'issue');
-    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', true], ['source', false]]);
-    assert.match(ctx.db.get<{ message: string }>('SELECT message FROM review_issues')!.message, /quotes "y = \\frac\{1\}\{1 - t\^2\/4\}", which the section does not contain/);
-    assert.equal(fake.calls.length, 1);
+    const invented = answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'y = \\frac{1}{1 - t^2/4}' }], yDomain: [0, 4] });
+    const prose = answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'La soluzione' }], yDomain: [0, 4] });
+    fake.next(invented, prose);
+    const r = await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Cauchy' }));
+    assert.match(String(r.skipped), /quotes "La soluzione", which the section does not contain/);
+    assert.match(fake.calls[1]!.prompt, /quotes "y = \\frac\{1\}\{1 - t\^2\/4\}", which the section does not contain/);
+    assert.equal(fake.calls.length, 2);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
   });
-
-  test('the independent checker writes the expected curve; a trace whose data differs makes the graph an issue that names it', async () => {
+  test('the independent checker writes the expected curve; a trace whose data differs is drawn again with the expected curve', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo: la parabola $$y = x^2$$');
     // The label states no formula, so the lint cannot see that the curve is shifted up by one.
     fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2 + 1', label: 'parabola', source: 'y = x^2' }], yDomain: [0, 6] }),
+      answer({ traces: [{ label: 'parabola', expected: 'x^2', problem: '' }], fit: 'fits' }),
+      answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'parabola', source: 'y = x^2' }], yDomain: [0, 6] }),
       answer({ traces: [{ label: 'parabola', expected: 'x^2', problem: '' }], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
-    assert.match(fake.calls[1]!.prompt, /1\. parabola   \(source: y = x\^2\)/, 'the checker sees labels and sources, not the data');
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' })), { made: 1 });
+    assert.match(fake.calls[1]!.prompt, /1\. parabola: a curve y = f\(x\) drawn for x from -2 to 2   \(source: y = x\^2\)/, 'the checker sees labels, intervals and sources, not the formulas');
     assert.doesNotMatch(fake.calls[1]!.prompt, /x\^2 \+ 1/);
+    assert.match(fake.calls[2]!.prompt, /A first draft failed its checks: "parabola": \d+\/\d+ points differ from x\^2/, 'the second drawing is told the expected curve');
     const row = ctx.db.get<{ status: string; checks: string; spec: string }>('SELECT status, checks, spec FROM enrichments')!;
-    assert.equal(row.status, 'issue');
+    assert.equal(row.status, 'verified');
     const independent = json<{ method: string; ok: boolean; detail: string; model?: string }[]>(row.checks, []).find((c) => c.method === 'independent')!;
-    assert.equal(independent.ok, false);
-    assert.match(independent.detail, /points differ from x\^2/);
+    assert.match(independent.detail, /matches x\^2/);
     assert.ok(independent.model, 'the check names the model that wrote the expected curve');
-    assert.match(ctx.db.get<{ message: string }>('SELECT message FROM review_issues')!.message, /points differ from x\^2/);
-    assert.deepEqual(json<{ traces: { fn: string; source: string }[] }>(row.spec, { traces: [] }).traces.map((t) => [t.fn, t.source]), [['x^2 + 1', 'y = x^2']], 'the spec is kept with the graph');
+    assert.deepEqual(json<{ traces: { fn: string; source: string }[] }>(row.spec, { traces: [] }).traces.map((t) => [t.fn, t.source]), [['x^2', 'y = x^2']], 'the spec is kept with the graph');
   });
-
   test('a checker that finds no relation for the graph, or a contradiction, fails the check', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo: la parabola $$y = x^2$$');
     const drawn = answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'y = x^2', source: 'y = x^2' }] });
-    fake.next(drawn, answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: '' }], fit: 'not-a-function-graph' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
-    fake.next(drawn, answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: 'Il testo chiama y la velocità, l\'asse dice spazio.' }], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }));
-    const details = ctx.db.all<{ status: string; checks: string }>('SELECT status, checks FROM enrichments ORDER BY rowid').map((r) => [r.status, json<{ method: string; detail: string }[]>(r.checks, []).find((c) => c.method === 'independent')!.detail]);
-    assert.equal(details[0]![0], 'issue');
-    assert.match(details[0]![1], /finds no relation in the section/);
-    assert.equal(details[1]![0], 'issue');
-    assert.match(details[1]![1], /matches x\^2 .*problem: Il testo chiama y la velocità/);
+    const twice = async (check: ReturnType<typeof answer>) => {
+      fake.next(drawn, check, drawn, check);
+      return String((await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }))).skipped);
+    };
+    assert.match(await twice(answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: '' }], fit: 'not-a-function-graph' })), /finds no relation in the section/);
+    assert.match(await twice(answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: 'Il testo chiama y la velocità, l\'asse dice spazio.' }], fit: 'fits' })), /matches x\^2 .*problem: Il testo chiama y la velocità/);
     // An answer that leaves traces out checked only part of the graph.
-    fake.next(drawn, answer({ traces: [], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }));
-    const last = ctx.db.get<{ status: string; checks: string }>('SELECT status, checks FROM enrichments ORDER BY rowid DESC LIMIT 1')!;
-    assert.equal(last.status, 'issue');
-    assert.match(last.checks, /The checker answered for 0 of 1 traces/);
+    assert.match(await twice(answer({ traces: [], fit: 'fits' })), /The checker answered for 0 of 1 traces/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
   });
 
+  test('the checker is told where each trace lies, so a branch on the wrong side of the axis is a contradiction it can name', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il valore assoluto: $$|x| = -x \\text{ per } x < 0$$ e un punto angoloso in $x = 0$.');
+    const branch = (domain: number[]) => answer({ ...graph, xDomain: [-5, 5], yDomain: [-6, 6], traces: [
+      { kind: 'function', fn: '-x', label: 'y = -x (ramo sinistro, x < 0)', source: '|x| = -x', domain },
+      { kind: 'points', label: 'Punto angoloso', source: 'x = 0', points: [{ x: 0, y: 0 }] },
+    ] });
+    const verdict = (problem: string) => answer({ traces: [{ label: 'y = -x', expected: '-x', problem }, { label: 'Punto angoloso', expected: '', problem: '' }], fit: 'fits' });
+    fake.next(branch([0, 5]), verdict('Il ramo sinistro è disegnato per x da 0 a 5.'), branch([-5, 0]), verdict(''));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'modulo' })), { made: 1 });
+    assert.match(fake.calls[1]!.prompt, /1\. y = -x \(ramo sinistro, x < 0\): a curve y = f\(x\) drawn for x from 0 to 5/);
+    assert.match(fake.calls[1]!.prompt, /2\. Punto angoloso: points \(0, 0\)/);
+    assert.match(fake.calls[1]!.system ?? '', /only for a contradiction/);
+    assert.match(fake.calls[2]!.prompt, /problem: Il ramo sinistro è disegnato per x da 0 a 5/);
+    assert.match(fake.calls[3]!.prompt, /drawn for x from -5 to 0/);
+  });
+
+  test('a constant fitted to different values in the traces of one graph fails the check; one value for all passes', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Energia reticolare: $$U = -\\frac{k\\,|z_+ z_-|}{d}$$');
+    const traces = (factors: number[]) => factors.map((f, k) => ({ kind: 'function', fn: `-${f}/x`, label: `Cariche ±${k + 1}`, source: 'U = -\\frac{k\\,|z_+ z_-|}{d}' }));
+    const lattice = (factors: number[]) => answer({ ...graph, xDomain: [0.5, 4], yDomain: [-20, 0], traces: traces(factors) });
+    // What the checker wrote for the published graph: the charges squared, with one unknown k.
+    const expected = answer({ traces: ['-C/x', '-4*C/x', '-9*C/x'].map((e, k) => ({ label: `Cariche ±${k + 1}`, expected: e, problem: '' })), fit: 'fits' });
+    fake.next(lattice([1, 2, 3]), expected, lattice([1, 4, 9]), expected);
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'reticolo' })), { made: 1 });
+    assert.match(fake.calls[2]!.prompt, /C is fitted to 1 on "Cariche ±1", 0\.5 on "Cariche ±2", 0\.3333 on "Cariche ±3"/);
+    const independent = json<{ method: string; ok: boolean; detail: string }[]>(ctx.db.get<{ checks: string }>('SELECT checks FROM enrichments')!.checks, []).find((c) => c.method === 'independent')!;
+    assert.equal(independent.ok, true);
+    assert.doesNotMatch(independent.detail, /is fitted to/);
+  });
+
+  test('writer and checker read the whole section, past the first 8000 characters', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `${'Testo introduttivo. '.repeat(500)}\n\nEsempio finale: $$y = x^2$$`);
+    fake.next(answer(graph), checkerFits);
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
+    for (const call of fake.calls) assert.match(call.prompt, /Esempio finale: \$\$y = x\^2\$\$/);
+  });
+
+  test('a steep curve the sampler kept whole is accepted at generation, so an edit that keeps it does not fail', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Distribuzione di Fermi: $$f = \\frac{1}{e^{(E - 1)/0{,}0005} + 1}$$');
+    const fermi = { ...graph, xDomain: [0, 2], yDomain: [0, 1.1], traces: [{ kind: 'function', fn: '1/(exp((x-1)/0.0005)+1)', label: 'Occupazione', source: 'f = \\frac{1}{e^{(E - 1)/0{,}0005} + 1}' }] };
+    fake.next(answer(fermi), answer({ traces: [{ label: 'Occupazione', expected: '', problem: '' }], fit: 'fits' }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Fermi' })), { made: 1 });
+    const row = ctx.db.get<{ id: string; payload: string; lint_accepted: string }>('SELECT id, payload, lint_accepted FROM enrichments')!;
+    assert.deepEqual(json(row.lint_accepted, []), ['joined-jump:Occupazione']);
+    const payload = json<Record<string, unknown>>(row.payload, {});
+    const edited = updateEnrichmentPayload(ctx, row.id, { ...payload, title: 'Occupazione dei livelli' });
+    assert.equal(edited.status, 'verified');
+    assert.deepEqual(edited.lintOpen, []);
+    // The same data typed in by an author, with nothing accepted, is a joined jump.
+    ctx.db.run(`UPDATE enrichments SET lint_accepted = '[]' WHERE id = ?`, row.id);
+    assert.equal(updateEnrichmentPayload(ctx, row.id, payload).status, 'issue');
+  });
+
+  test('an edit drops the spec and the checker\'s revision; Accept anyway keeps them and the independent check', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'Seno', source: 'y = x^2' }, { kind: 'function', fn: 'x', label: 'Coseno', source: 'y = x^2' }], yDomain: [-2, 4] }),
+      answer({ traces: [{ label: 'Seno', expected: 'x^2', problem: '' }, { label: 'Coseno', expected: 'x', problem: '' }], fit: 'fits' }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
+    const id = ctx.db.get<{ id: string }>('SELECT id FROM enrichments')!.id;
+    const stored = listEnrichments(ctx, P)[0]!;
+    assert.deepEqual(stored.lintOpen, ['placeholder:'], 'a warning the author has not accepted');
+    assert.equal(stored.status, 'verified', 'a warning does not fail the graph');
+    const accepted = updateEnrichmentPayload(ctx, id, stored.payload, { acceptLint: true });
+    assert.deepEqual(accepted.lintAccepted, ['placeholder:'], 'Accept anyway takes warnings too');
+    assert.deepEqual(accepted.lintOpen, []);
+    assert.deepEqual(accepted.checks.map((c) => c.method), ['numeric', 'lint', 'source', 'independent'], 'the same payload keeps the checks that were about it');
+    assert.ok(accepted.spec && accepted.checkedRevisionId);
+    const edited = updateEnrichmentPayload(ctx, id, { ...stored.payload, title: 'Altro titolo' });
+    assert.deepEqual(edited.checks.map((c) => c.method), ['numeric', 'lint']);
+    assert.equal(edited.spec, null, 'the spec described the graph as drawn, not as edited');
+    assert.equal(edited.checkedRevisionId, null);
+  });
+
+  test('a graph whose section changed after its check is stale at export', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const rev = seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    fake.next(answer(graph), checkerFits);
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' }));
+    const stale = () => compileBook(loadBookInput(ctx, P)).findings.filter((f) => f.rule === 'graph-stale');
+    assert.deepEqual(stale(), []);
+    // A typo fix outside the quoted formula is a new revision of the section all the same.
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, rev);
+    seedRevision('s1', 'Testo uno, corretto: $$y = x^2$$');
+    assert.equal(stale().length, 1);
+  });
   test('a Bode pair saves two graphs on the same log frequency axis', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
     const t = startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' });
     fake.next(answer({
-      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }],
+      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }],
       xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
-      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
     }), checkerFits, checkerFits);
     assert.deepEqual(await enrichGraph(ctx, t), { made: 2 });
     const rows = ctx.db.all<{ payload: string; status: string }>(`SELECT payload, status FROM enrichments WHERE kind = 'graph' ORDER BY rowid`);
@@ -1305,12 +1408,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 
   test('a Bode pair is saved in one transaction: when the second graph cannot be written, the first is not kept, so a retry draws the pair again', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
     ctx.db.raw.exec(`CREATE TRIGGER second_graph_fails BEFORE INSERT ON enrichments WHEN (SELECT count(*) FROM enrichments) >= 1 BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     const pair = {
-      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }],
+      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }],
       xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
-      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
     };
     fake.next(answer(pair), checkerFits, checkerFits);
     await assert.rejects(enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), /disk full/);
@@ -1322,13 +1425,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 });
 
 describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
-  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'Testo' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
+  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'y = x^2' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
   const off = { ...graph, yDomain: [10, 20] };
   const failing = async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Testo uno.');
-    fake.next(answer(off));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
+    seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    storeAnswer(off);
     return { enrichment: ctx.db.get<{ id: string }>(`SELECT id FROM enrichments`)!.id, issue: ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE source = 'verification'`)!.id };
   };
 
@@ -1336,19 +1438,24 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     const { enrichment, issue } = await failing();
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM enrichments')!.status, 'issue', 'the failed graph is stored with a verification issue, as the issue describes');
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] })), { skipped: 'routed', routed: { graphs: 1 } });
-    assert.equal(fake.calls.length, 1, 'the text writer is not asked');
+    assert.equal(fake.calls.length, 0, 'the text writer is not asked');
     const input = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%'`)!.input, {});
     assert.deepEqual([input.force, input.replaceId, input.issueIds], [true, enrichment, [issue]]);
     assert.match(String(input.purpose), /failed its check[\s\S]*never enters the visible range/);
 
-    // The redraw fails again: the old graph stays, no second graph and no second issue appear, the reason is shown.
-    fake.next(answer(off));
+    // The redraw fails twice: the old graph stays, no second graph and no second issue appear, the reason is shown.
+    fake.next(answer(off), answer(off));
     await enrichGraph(ctx, startTask('enrich.graph', input));
-    assert.match(fake.calls[1].prompt, /failed its check/);
+    assert.match(fake.calls[0]!.prompt, /The last check of the graph failed: .*never enters the visible range/, 'the redraw is told the last failure');
+    assert.match(fake.calls[1]!.prompt, /A first draft failed its checks/);
     assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 1);
     assert.equal(ctx.db.all(`SELECT 1 FROM review_issues`).length, 1);
     assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues')!.resolution, /redrawn but failed its check again: .*never enters the visible range/);
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
+    // The next Fix tells the redraw why the last one failed.
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
+    const next = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%' ORDER BY rowid DESC LIMIT 1`)!.input, {});
+    assert.match(String(next.purpose), /redrawn but failed its check again: .*never enters the visible range/);
 
     fake.next(answer(graph), checkerFits);
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', input)), { made: 1, replaced: true });
@@ -1404,7 +1511,7 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
     assert.deepEqual(r, { skipped: 'nothing requested' });
-    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls.length, 0);
     assert.deepEqual({ ...ctx.db.get<Record<string, unknown>>('SELECT status, resolution FROM review_issues') }, { status: 'fixed', resolution: 'The graph passes its check now.' });
     ctx.db.run(`UPDATE review_issues SET status = 'open'`);
     ctx.db.run('DELETE FROM enrichments');
@@ -1414,14 +1521,13 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
 });
 
 describe('Auto Fix redraws each failing graph of a Bode pair for its own issues', () => {
-  const mag = (over = {}) => ({ verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }], xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB', ...over });
-  const phase = (over = {}) => ({ id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi', ...over });
+  const mag = (over = {}) => ({ verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }], xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB', ...over });
+  const phase = (over = {}) => ({ id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi', ...over });
   /** Both graphs of the pair fail: their y ranges are far from the curves. */
   const failingPair = async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
-    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ yDomain: [500, 600] }) }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
+    storeAnswer({ ...mag({ yDomain: [10, 20] }), pair: phase({ yDomain: [500, 600] }) });
     const rows = ctx.db.all<{ id: string; payload: string }>(`SELECT id, payload FROM enrichments ORDER BY rowid`).map((r) => ({ id: r.id, graphId: json<{ id: string }>(r.payload, { id: '' }).id }));
     const issues = ctx.db.all<{ id: string; quote: string }>(`SELECT id, quote FROM review_issues ORDER BY rowid`);
     return { magRow: rows[0]!.id, phaseRow: rows[1]!.id, magIssue: issues[0]!.id, phaseIssue: issues[1]!.id, issues, rows };
@@ -1455,9 +1561,8 @@ describe('Auto Fix redraws each failing graph of a Bode pair for its own issues'
 
   test('two failing graphs with the same title are not told apart by an issue, so neither issue is routed to the first of them', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
-    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
+    storeAnswer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) });
     const issues = ctx.db.all<{ id: string; quote: string }>('SELECT id, quote FROM review_issues ORDER BY rowid');
     assert.deepEqual(issues.map((i) => i.quote), ['Modulo', 'Modulo']);
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: issues.map((i) => i.id) })), { skipped: 'nothing requested' });

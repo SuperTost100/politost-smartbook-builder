@@ -477,8 +477,12 @@ export interface Enrichment {
   checks: QuestionCheck[];
   /** Graph lint findings the author accepted ("Accept anyway"), as "code:trace" keys. They no longer fail the lint check. */
   lintAccepted: string[];
-  /** The typed spec a graph was drawn from (GraphSpec in @smartbuilder/content), or null for a lab example and for graphs drawn before specs were kept. */
+  /** The typed spec a graph was drawn from (GraphSpec in @smartbuilder/content), or null for a lab example, a graph drawn before specs were kept and a graph the author edited. */
   spec: Record<string, unknown> | null;
+  /** The section revision the independent checker read when it last checked this graph, or null when it never did (or the author edited the graph since). */
+  checkedRevisionId: string | null;
+  /** Lint findings of this graph's payload the author has not accepted, as "code:trace" keys. Empty for a lab example. */
+  lintOpen: string[];
   createdAt: string;
 }
 

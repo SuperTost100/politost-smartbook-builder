@@ -1,4 +1,4 @@
-import { checkFunctionGraph, graphLintCheck, lintKey } from '@smartbuilder/content';
+import { checkFunctionGraph, graphLintCheck, lintGraph, lintKey } from '@smartbuilder/content';
 import type { Enrichment } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -6,7 +6,10 @@ import { notFound } from './errors.ts';
 import type { Rec } from './util.ts';
 
 export function mapEnrichment(r: Rec): Enrichment {
-  return { id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, payload: json(r.payload, {}), status: r.status, checks: json(r.checks, []), lintAccepted: json(r.lint_accepted, []), spec: r.spec ? json(r.spec, null) : null, createdAt: r.created_at };
+  const payload = json<Record<string, unknown>>(r.payload, {});
+  const lintAccepted = json<string[]>(r.lint_accepted, []);
+  const lintOpen = r.kind === 'graph' ? lintGraph(payload).map(lintKey).filter((k) => !lintAccepted.includes(k)) : [];
+  return { id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, payload, status: r.status, checks: json(r.checks, []), lintAccepted, spec: r.spec ? json(r.spec, null) : null, checkedRevisionId: r.checked_rev_id ?? null, lintOpen, createdAt: r.created_at };
 }
 
 export function listEnrichments(ctx: AppContext, projectId: string): Enrichment[] {
@@ -19,7 +22,7 @@ export function getEnrichment(ctx: AppContext, id: string): Enrichment {
   return mapEnrichment(r);
 }
 
-export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'createdAt' | 'status' | 'checks' | 'lintAccepted' | 'spec'> & Partial<Pick<Enrichment, 'status' | 'checks'>>): Enrichment {
+export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'createdAt' | 'status' | 'checks' | 'lintAccepted' | 'spec' | 'checkedRevisionId' | 'lintOpen'> & Partial<Pick<Enrichment, 'status' | 'checks'>>): Enrichment {
   const id = newId();
   ctx.db.insert('enrichments', { id, project_id: e.projectId, node_id: e.nodeId, kind: e.kind, payload: e.payload, status: e.status ?? 'draft', checks: e.checks ?? [], created_at: now() });
   ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: e.nodeId }, { projectId: e.projectId });
@@ -28,21 +31,26 @@ export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'cr
 
 /**
  * An edited graph goes through the numeric check and the graph lint again and becomes 'verified' or 'issue', like a
- * generated one. `acceptLint` accepts every blocking lint finding of this payload ("Accept anyway"): the acceptance is
- * kept with the graph, so later edits that keep the same finding on the same trace do not bring it back.
+ * generated one. `acceptLint` accepts every lint finding of this payload, warnings included ("Accept anyway"): the acceptance
+ * is kept with the graph, so later edits that keep the same finding on the same trace do not bring it back.
+ * An edit drops the spec, the section check and the independent check, which were about the graph as drawn. Saving the same
+ * payload (Accept anyway) keeps them, so accepting a lint finding never hides what the checker found.
  * A lab example is not run here (that needs the sandbox), so it goes back to 'draft'.
  * shortcut: an edited lab example ships unchecked, upgrade by running checkLabCode from the route.
  */
 export function updateEnrichmentPayload(ctx: AppContext, id: string, payload: Record<string, unknown>, opts: { acceptLint?: boolean } = {}): Enrichment {
   const cur = getEnrichment(ctx, id);
   if (cur.kind === 'graph') {
+    const edited = JSON.stringify(payload) !== JSON.stringify(cur.payload);
     const checked = checkFunctionGraph(payload);
-    const fresh = opts.acceptLint ? graphLintCheck(payload).findings.filter((f) => f.severity === 'block').map(lintKey) : [];
+    const fresh = opts.acceptLint ? lintGraph(payload).map(lintKey) : [];
     const accepted = [...new Set([...cur.lintAccepted, ...fresh])];
     const lint = graphLintCheck(payload, accepted);
+    const kept = edited ? [] : cur.checks.filter((c) => c.method !== 'numeric' && c.method !== 'lint');
+    const checks = [{ method: 'numeric', ok: checked.ok, detail: checked.detail }, { method: 'lint', ok: lint.ok, detail: lint.detail }, ...kept];
     ctx.db.update('enrichments', id, {
-      payload, status: checked.ok && lint.ok ? 'verified' : 'issue', lint_accepted: accepted,
-      checks: [{ method: 'numeric', ok: checked.ok, detail: checked.detail }, { method: 'lint', ok: lint.ok, detail: lint.detail }],
+      payload, status: checks.every((c) => c.ok) ? 'verified' : 'issue', lint_accepted: accepted, checks,
+      ...(edited ? { spec: null, checked_rev_id: null } : {}),
     });
   } else ctx.db.update('enrichments', id, { payload, status: 'draft', checks: [] });
   ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: cur.nodeId }, { projectId: cur.projectId });
