@@ -239,14 +239,15 @@ const short = (v: number) => String(Number(v.toPrecision(4)));
  * vertical lines. The spec, when there is one, adds each trace's section quote and tells a parametric curve apart.
  */
 export function checkedTraces(payload: Record<string, unknown>, spec?: GraphSpec | null): CheckedTrace[] {
-  const data = ((payload.config as { data?: unknown } | undefined)?.data ?? []) as Record<string, unknown>[];
+  const data = ((asPlotly(payload).config as { data?: unknown } | undefined)?.data ?? []) as Record<string, unknown>[];
   return (Array.isArray(data) ? data : []).map((d, k) => {
     const label = typeof d.name === 'string' && d.name.trim() ? d.name : `trace ${k + 1}`;
     const source = spec?.traces[k]?.source?.trim() || undefined;
     const base = { label, ...(source ? { source } : {}) };
-    const xs = Array.isArray(d.x) ? (d.x as unknown[]) : [];
-    const ys = Array.isArray(d.y) ? (d.y as unknown[]) : [];
     const finite = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+    const ys = Array.isArray(d.y) ? (d.y as unknown[]) : [];
+    // Without an x array Plotly counts up by 1 from x0, as the lint and the numeric check read it.
+    const xs = Array.isArray(d.x) ? (d.x as unknown[]) : ys.map((_, i) => (finite(d.x0) ? d.x0 : 0) + i);
     const symbols = (d.marker as { symbol?: unknown } | undefined)?.symbol;
     const pts = xs.map((x, i) => ({ x, y: ys[i], open: Array.isArray(symbols) && symbols[i] === 'circle-open' })).filter((p): p is { x: number; y: number; open: boolean } => finite(p.x) && finite(p.y));
     const list = (ps: typeof pts) => `${ps.slice(0, 40).map((p) => `(${short(p.x)}, ${short(p.y)})${p.open ? ' hole' : ''}`).join(', ')}${ps.length > 40 ? `, … (${ps.length} in all)` : ''}`;
@@ -258,6 +259,18 @@ export function checkedTraces(payload: Record<string, unknown>, spec?: GraphSpec
     if (pts.length <= 10) return { ...base, kind: 'polyline' as const, where: `straight segments through ${list(pts)}` };
     return { ...base, kind: 'function' as const, where: `a curve y = f(x) drawn for x from ${short(pts[0]!.x)} to ${short(pts.at(-1)!.x)}`, x: xs, y: ys };
   });
+}
+
+/** The reader's own "function" graphs hold formulas, not points: they are sampled here, so the checker reads them as any other graph. */
+function asPlotly(payload: Record<string, unknown>): Record<string, unknown> {
+  if (payload.type !== 'function') return payload;
+  const c = (payload.config ?? {}) as { functions?: { fn?: unknown; label?: unknown }[]; xDomain?: [number, number]; yDomain?: [number, number]; xLabel?: unknown; yLabel?: unknown };
+  const xDomain = c.xDomain ?? [-5, 5];
+  return sampleGraph({
+    id: String(payload.id ?? ''), title: String(payload.title ?? ''), xDomain, yDomain: c.yDomain ?? xDomain,
+    xLabel: typeof c.xLabel === 'string' ? c.xLabel : 'x', yLabel: typeof c.yLabel === 'string' ? c.yLabel : 'y',
+    traces: (c.functions ?? []).map((f) => ({ kind: 'function', fn: String(f.fn ?? ''), label: String(f.label ?? '') })),
+  }).payload;
 }
 
 /**
@@ -275,8 +288,10 @@ export async function independentGraphCheck(
   call: { projectId: string; runId?: string | null; taskId?: string | null; signal?: AbortSignal },
   p: { language: string; section: string; payload: Record<string, unknown>; spec?: GraphSpec | null },
 ): Promise<QuestionCheck> {
-  const layout = ((p.payload.config as { layout?: unknown } | undefined)?.layout ?? {}) as { xaxis?: unknown; yaxis?: { type?: unknown; range?: unknown } };
-  const traces = checkedTraces(p.payload, p.spec);
+  const payload = asPlotly(p.payload);
+  const layout = ((payload.config as { layout?: unknown } | undefined)?.layout ?? {}) as { xaxis?: unknown; yaxis?: { type?: unknown; range?: unknown } };
+  const traces = checkedTraces(payload, p.spec);
+  if (!traces.length) return { method: 'independent', ok: false, detail: 'The graph has no trace to check.' };
   const r = await runRole(ctx, {
     role: 'checker',
     ...graphCheckPrompt({ language: p.language, section: p.section, graph: { title: typeof p.payload.title === 'string' ? p.payload.title : '', xLabel: axisTitleOf(layout.xaxis), yLabel: axisTitleOf(layout.yaxis), traces } }),

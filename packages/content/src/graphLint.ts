@@ -131,13 +131,14 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
     if (lhs !== lhsSym && !circle && !ray) continue;
     for (const raw of parts.slice(1)) {
       // A trailing unit, bare ("… 2 V") or in parentheses ("… 50*x (N)"), is not part of the formula.
-      const rhs = normaliseLabelFormula(raw).replace(/\s*→.*$/, '').replace(/\s+\([^()=]*\)$/, '').replace(/\s+(g|kg|m|s|K|J|W|Pa|L|N|V|atm|mol)$/, '').trim();
+      const toRhs = (text: string) => normaliseLabelFormula(text).replace(/\s*→.*$/, '').replace(/\s+\([^()=]*\)$/, '').replace(/\s+(g|kg|m|s|K|J|W|Pa|L|N|V|atm|mol)$/, '').trim();
+      const rhs = toRhs(raw);
       if (!rhs || /[a-zA-Z]{4,}/.test(rhs.replace(/sqrt|log10|log|atan|exp|sin|cos|tan|abs|floor|ceil|cbrt/g, ''))) continue;
       const free = freeSymbols(rhs);
       if (!free) continue;
       const src = seg.trim();
-      // "ln" is natural; a "log" the label wrote itself may be either.
-      const ambiguousLog = /\blog\b(?!10)/.test(raw.replace(/[−–]/g, '-'));
+      // "ln" is natural; a "log" the label wrote itself may be either, so its decimal reading is built before "ln" becomes "log".
+      const decimal = raw.replace(/\blog\b(?![1₁])/g, 'log10');
       if (free.size === 0) {
         const c = compileExpr(rhs, []);
         if (!c.ok) continue;
@@ -155,7 +156,7 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
         const v = [...free][0]!;
         if (v !== xv && v !== 'x') continue;
         const c = compileExpr(rhs, [v]);
-        const d = ambiguousLog ? compileExpr(rhs.replace(/\blog\b(?!10)/g, 'log10'), [v]) : null;
+        const d = decimal !== raw ? compileExpr(toRhs(decimal), [v]) : null;
         if (c.ok) claims.push({ kind: 'fn', evaluate: (x) => c.evaluate({ [v]: x }), src, ...(d?.ok ? { alt: (x: number) => d.evaluate({ [v]: x }) } : {}) });
       }
     }

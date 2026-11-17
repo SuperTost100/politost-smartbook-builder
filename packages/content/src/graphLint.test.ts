@@ -106,6 +106,9 @@ test('a bare "log" in a label may be decimal; "ln" is natural', () => {
   assert.deepEqual(codes(ph('-log(x)', 'pH = −log(c)')), [], 'the natural reading fits too');
   assert.deepEqual(codes(ph('-2*log10(x)', 'pH = −log(c)')), ['label-mismatch'], 'neither reading fits');
   assert.deepEqual(codes(ph('-log10(x)', 'pH = −ln(c)')), ['label-mismatch'], 'ln is only natural');
+  const mixed = (expr: string) => codes(sampled([{ expr, label: 'y = ln(x) + log(x)' }], { x: [0.5, 5], y: [-3, 5] }));
+  assert.deepEqual(mixed('log(x) + log10(x)'), [], 'only the bare log is read as decimal');
+  assert.deepEqual(mixed('2*log10(x)'), ['label-mismatch'], 'the explicit ln stays natural');
 });
 
 test('a circle claim needs the centre the label states', () => {

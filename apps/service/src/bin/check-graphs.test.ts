@@ -80,3 +80,22 @@ test('--stale checks only graphs whose section changed since their last check', 
   const stale = await checkGraphs(ctx, P, { stale: true });
   assert.deepEqual(stale.map((r) => r.verdict), ['pass']);
 });
+
+test('a trace without x and a graph of the reader\'s own function type are read as the reader draws them', async () => {
+  const { graph } = seed();
+  // Plotly counts x up from x0: the points are (1, 3), (2, 6), ... on the line 3x, not 2x.
+  const implicit = { id: 'v', title: 'Velocità', type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', name: 'v = 2 t', x0: 1, y: Array.from({ length: 20 }, (_, k) => 3 * (k + 1)) }], layout: { xaxis: { title: 't' }, yaxis: { title: 'v', range: [0, 60] } } } };
+  ctx.db.run('UPDATE enrichments SET payload = ? WHERE id = ?', JSON.stringify(implicit), graph);
+  fake.next(verdict('2*x'));
+  const [r] = await checkGraphs(ctx, P);
+  assert.equal(r!.verdict, 'fail');
+  assert.match(r!.detail, /points differ from 2\*x/);
+  const fn = { id: 'v', title: 'Velocità', type: 'function', config: { functions: [{ fn: '2*x', label: 'v = 2 t' }], xDomain: [0, 5], yDomain: [0, 10], xLabel: 't', yLabel: 'v' } };
+  ctx.db.run('UPDATE enrichments SET payload = ? WHERE id = ?', JSON.stringify(fn), graph);
+  // An answer for no trace cannot vouch for a graph that has one.
+  fake.next(answer({ traces: [], fit: 'fits' }), verdict('2*x'));
+  assert.equal((await checkGraphs(ctx, P))[0]!.verdict, 'fail');
+  const [ok] = await checkGraphs(ctx, P);
+  assert.equal(ok!.verdict, 'pass', ok!.detail);
+  assert.match(fake.calls.at(-1)!.prompt, /x axis: t[\s\S]*1\. v = 2 t: a curve y = f\(x\) drawn for x from 0 to 5/);
+});

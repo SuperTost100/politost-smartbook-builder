@@ -297,3 +297,12 @@ describe('backportProject', () => {
     assert.throws(() => backportProject(ctx, 'p1', dir), /no ptsb\.json/);
   });
 });
+
+test('the simulation of a graph write keeps a failed independent check when the payload is the builder\'s own, as the write does', () => {
+  const input = book();
+  const g = input.enrichments[0]!;
+  Object.assign(g, { status: 'issue', checks: [{ method: 'numeric', ok: true, detail: 'ok' }, { method: 'independent', ok: false, detail: 'differs' }] });
+  assert.equal(applyChanges(input, [{ kind: 'graph', enrichmentId: 'g1', payload: PARABOLA }]).enrichments[0]!.status, 'issue');
+  const edited = { ...PARABOLA, title: 'Moto accelerato, corretto' };
+  assert.equal(applyChanges(input, [{ kind: 'graph', enrichmentId: 'g1', payload: edited }]).enrichments[0]!.status, 'verified', 'an edit drops the check that was about the old graph');
+});
