@@ -165,17 +165,27 @@ describe('planBackport', () => {
     assert.deepEqual(plan.changes, []);
   });
 
-  test('changes with no source are unmapped: an added exercise, a section title, a figure file', () => {
+  test('changes with no source are unmapped: an added exercise, a figure file', () => {
     const input = book();
     const plan = planBackport(input, published(input, {
       'esercizi.md': (s) => `${s}\n:::exercise{id="E1.9" chapter="1" difficulty="medio"}\n## Domanda\nNuovo.\n:::\n`,
-      [CH]: (s) => s.replace('## p2 | Esempi', '## p2 | Esempi svolti'),
       'assets/fig.svg': (s) => s.replace('<rect', '<circle'),
     }));
-    assert.deepEqual(plan.units.map((u) => [u.unit, u.status]), [
-      ['assets/fig.svg', 'unmapped'], [`${CH}#p2 title`, 'unmapped'], ['esercizi.md#E1.9', 'unmapped'],
-    ]);
+    assert.deepEqual(plan.units.map((u) => [u.unit, u.status]), [['assets/fig.svg', 'unmapped'], ['esercizi.md#E1.9', 'unmapped']]);
     assert.deepEqual(plan.changes, []);
+  });
+
+  test('a book whose outline differs from the export is refused before any section is mapped', () => {
+    const input = book();
+    const target = published(input, AUDIT_EDITS);
+    // Another outline revision approved since the export, with the two sections swapped.
+    input.chapters[0].sections.reverse();
+    const plan = planBackport(input, target);
+    assert.match(plan.bookRefusal ?? '', /outline differs .* at chapters\/01-moto\.md/);
+    assert.deepEqual(plan.units, []);
+    assert.deepEqual(plan.changes, []);
+    const retitled = planBackport(book(), published(book(), { [CH]: (s) => s.replace('## p2 | Esempi', '## p2 | Esempi svolti') }));
+    assert.match(retitled.bookRefusal ?? '', /outline differs/);
   });
 });
 
@@ -247,11 +257,6 @@ describe('backportProject', () => {
     assert.equal(r.written, false);
     assert.match(r.units[0].reason!, /changed in the builder on 2026-01-02/);
     assert.equal(currentHead(ctx, 'p1', 's1')!.origin, 'ai');
-  });
-
-  test('a book whose outline changed after the export is refused', () => {
-    seed('2025-12-31T00:00:00Z', AUDIT_EDITS);
-    assert.throws(() => backportProject(ctx, 'p1', dir), /outline changed on 2026-01-01/);
   });
 
   test('a folder without ptsb.json is refused', () => {

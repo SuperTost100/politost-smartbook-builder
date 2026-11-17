@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { captionToPlain, checkFunctionGraph, compileBook, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
-import { countUnresolvedBlockers, currentHeads, effectiveOutline, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
+import { countUnresolvedBlockers, currentHeads, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 import { closeGoneCompileNotes } from '../routes/review.ts';
 import { relint } from '../routes/views.ts';
 
@@ -242,7 +242,14 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   };
   const add = (u: BackportUnit) => { units.push(u); return u; };
 
-  const files = new Set([...Object.keys(base.files), ...Object.keys(target)]);
+  // Sections are numbered pN by their place in the outline. If the chapter files or their headings differ from the books,
+  // the outline is not the one the books were exported with (an older revision approved again keeps its date), so pN
+  // may be another section and nothing is mapped.
+  const outlineOf = (f: Record<string, string | Uint8Array>) => Object.keys(f).filter((x) => /^chapters\/.*\.md$/.test(x)).sort()
+    .map((x) => { const c = sectionsOf(text(f[x])!); return `${x}\n${c.front}${Object.entries(c.titles).map(([k, v]) => `${k} | ${v}`).join('\n')}`; });
+  const [outlineBase, outlineBooks] = [outlineOf(base.files), outlineOf(target)];
+  const outlineDiff = outlineBase.find((x, i) => x !== outlineBooks[i]) ?? (outlineBase.length !== outlineBooks.length ? 'the number of chapters' : undefined);
+  const files = outlineDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
   for (const file of [...files].sort()) {
     const was = base.files[file];
     const now = target[file];
@@ -265,11 +272,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     const b = sectionsOf(was);
     const t = sectionsOf(now);
     const number = Number(/^chapters\/(\d+)/.exec(file)![1]);
-    if (b.front !== t.front) add({ unit: `${file}#front`, kind: 'file', status: 'unmapped', reason: 'the chapter title comes from the outline' });
     for (const key of new Set([...Object.keys(b.bodies), ...Object.keys(t.bodies)])) {
       const unit = `${file}#${key}`;
       if (!(key in b.bodies) || !(key in t.bodies)) { add({ unit, kind: 'section', status: 'unmapped', reason: key in b.bodies ? 'section removed in the books' : 'section added in the books' }); continue; }
-      if (b.titles[key] !== t.titles[key]) add({ unit: `${unit} title`, kind: 'section', status: 'unmapped', reason: 'the section title comes from the outline' });
       if (b.bodies[key] === t.bodies[key]) { stable.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === t.bodies[key] }); continue; }
       if (foldImages(b.bodies[key]) === foldImages(t.bodies[key])) {
         add({ unit, kind: 'caption', status: 'compiler-owned', reason: 'the compiler now writes super- and subscripts in captions' });
@@ -381,7 +386,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   // and compile again without them, until every unit left passes.
   const baseSerious = serious(base.findings);
   let after = base;
-  let bookRefusal: string | null = null;
+  let bookRefusal: string | null = outlineDiff ? `the outline differs from the one the books were exported with, at ${outlineDiff.split('\n')[0]}` : null;
   for (;;) {
     const live = pending.filter((p) => p.unit.status === 'mapped');
     after = compileBook(applyChanges(input, live.flatMap((p) => p.changes)));
@@ -487,9 +492,6 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
   if (!existsSync(header)) throw new Error(`${fromDir} has no ptsb.json, so the export it came from is unknown.`);
   const exportedAt = String(JSON.parse(readFileSync(header, 'utf8')).createdAt ?? '');
   if (!exportedAt) throw new Error(`${header} has no createdAt.`);
-  // The books number sections by their place in the outline, so after a change of the outline pN may be another section.
-  const outlineAt = effectiveOutline(ctx, projectId)?.revision.createdAt ?? '';
-  if (outlineAt > exportedAt) throw new Error(`The outline changed on ${outlineAt}, after the export of ${exportedAt}, so the section numbers in the books may point at other sections.`);
   const input = loadBookInput(ctx, projectId, { approvedOnly: true });
   const heads = currentHeads(ctx, projectId);
   const questions = new Map(input.questions.map((q) => [q.id, q]));
