@@ -5,19 +5,17 @@
 // Exits 1 when any book has one. It reads only the checkout, not the builder's database.
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { RULES_VERSION } from '@smartbuilder/content/rules-version';
 import { MANIFEST, validatePublished, type PublishedCheck } from '../pipeline/publish.ts';
 
 export function formatChecks(checks: PublishedCheck[]): string {
-  const lines: string[] = [`Rules ${RULES_VERSION}.`];
+  const lines: string[] = [];
   for (const c of checks) {
     const count = (s: string) => c.fresh.filter((f) => f.severity === s).length;
-    const rules = c.rules === 'same' ? 'published with these rules' : c.rules === 'other' ? 'published with other rules' : `no ${MANIFEST}, so every finding is listed`;
-    lines.push('', `${c.slug}: ${count('blocker')} new blocker, ${count('major')} new major (${rules})`);
+    lines.push('', `${c.slug}: ${count('blocker')} new blocker, ${count('major')} new major${c.manifest ? '' : ` (no ${MANIFEST}, so every finding is listed)`}`);
     for (const f of c.fresh) lines.push(`  ${f.severity.padEnd(7)} ${f.rule.padEnd(20)} ${f.file}${f.line !== undefined ? `:${f.line}` : ''}  ${f.message}`);
   }
   if (!checks.length) lines.push('', 'No book of this checkout was published by the builder.');
-  return lines.join('\n');
+  return lines.join('\n').trimStart();
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {

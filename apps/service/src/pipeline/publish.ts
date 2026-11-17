@@ -1,15 +1,15 @@
-// Publish: writes a book's approved export into its folder of a politost-books checkout (`books/<slug>/`) with a manifest,
-// `.builder.json`, that holds the sha256 of every file. The next publish compares the folder with the manifest and stops if a
-// file was edited by hand, because writing the export over it would undo the edit: the edit has to be back-ported first. The
-// books repo's CI runs the same comparison on every pull request. Nothing here commits or pushes.
+// Publish: compiles a book through the same gate as "Approve and export", stores the export, and writes it into the book's
+// folder of a politost-books checkout (`books/<slug>/`) with a manifest, `.builder.json`, that names the export and holds the
+// sha256 of every file. The next publish compares the folder with that stored export and with the new one, and stops on a
+// file that matches neither: a hand edit, which writing over would undo, so it has to be back-ported first. The books repo's
+// CI checks the hashes on every pull request. Nothing here commits or pushes.
 import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { checkFunctionGraph, lintCompiled, unpackPtsb, type LintFinding } from '@smartbuilder/content';
-import { RULES_VERSION } from '@smartbuilder/content/rules-version';
 import type { AppContext } from '../context.ts';
-import { getExport, getProject, listExports } from '../repo/index.ts';
-import { exportBook } from '../routes/review.ts';
+import { getExport, getProject } from '../repo/index.ts';
+import { prepareExport, storeExport, type PreparedExport } from '../routes/review.ts';
 import { HttpError } from '../server.ts';
 
 export const MANIFEST = '.builder.json';
@@ -22,8 +22,6 @@ export interface BuilderManifest {
   /** When the export was made, as stored on its row. ptsb.json in the folder has the package's own createdAt. */
   exportedAt: string;
   builderVersion: string;
-  /** RULES_VERSION of the builder that made the export. */
-  rulesVersion: string;
   /** sha256 of every file of the folder but dotfiles and cover.svg, by path inside the folder. */
   files: Record<string, string>;
   /** The blocker and major findings of the published files when they were published (findingKey), so validate-all lists only new ones. */
@@ -125,19 +123,18 @@ export interface PublishPlan {
   /** smartbook.json version in the folder now, and the one the publish writes. */
   previousVersion: string | null;
   version: string;
-  /** The export the files come from: a stored one, or the one --export makes (no id in a dry run). */
-  exportLabel: string | null;
-  /** What the folder will hold, and how that differs from it now. Null when no export could be read. */
-  files: Record<string, Uint8Array> | null;
+  /** The export about to be stored, compiled with `version`; writePublish stores it. */
+  prepared: PreparedExport;
+  /** What the folder will hold, and how that differs from it now. */
+  files: Record<string, Uint8Array>;
   diff: { added: string[]; changed: string[]; removed: string[] };
-  /** The export holds the same book as the folder, apart from the package header and the version. */
+  /** The folder was published by publish-book and holds the same book, apart from the package header and the version. */
   upToDate: boolean;
-  /** Files changed by hand since the last publish. Any of them stops the publish. */
+  /** Files that differ from both the export the folder was published from and the new one: edits made outside the builder. */
   handEdited: string[];
   notices: string[];
   /** Why the publish cannot go ahead (hand edits included); empty when it can. */
   refusals: string[];
-  manifest: BuilderManifest | null;
   /** sha256 of the folder's book files when the plan was made: writePublish refuses a folder that changed since. */
   folderHashes: Record<string, string>;
 }
@@ -148,15 +145,34 @@ export interface PublishOptions {
   booksDir: string;
   /** The version to publish; by default the one after the folder's. */
   version?: string;
-  /** Make a new approved export, with the same gate as "Approve and export", instead of using the latest stored one. */
-  export?: boolean;
-  /** Write nothing: no export, no file. Every check still runs and is reported. */
-  dryRun?: boolean;
+}
+
+const same = (a: Uint8Array | undefined, b: Uint8Array | undefined) => a === undefined ? b === undefined : b !== undefined && Buffer.from(a).equals(Buffer.from(b));
+
+/**
+ * The files of the export a manifest names, as this builder stored it. The manifest's own hashes are not trusted: they live in
+ * the books repo, where anyone can rewrite them with the files.
+ */
+function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderManifest): Record<string, Uint8Array> | string {
+  if (manifest.projectId !== projectId) return `its ${MANIFEST} belongs to project ${manifest.projectId}, not ${projectId}`;
+  let row;
+  try {
+    row = getExport(ctx, manifest.exportId);
+  } catch (err) {
+    if (!(err instanceof HttpError)) throw err;
+    return `its ${MANIFEST} names export ${manifest.exportId}, which this builder does not have (a books checkout published from another data folder?)`;
+  }
+  if (row.projectId !== projectId) return `its ${MANIFEST} names export ${manifest.exportId} of another project`;
+  if (!existsSync(row.path)) return `the export it was published from, ${row.filename}, is no longer on disk`;
+  const bytes = readFileSync(row.path);
+  if (sha256(bytes) !== row.sha256) return `the export it was published from, ${row.filename}, does not match the checksum stored with it`;
+  return unpackPtsb(bytes);
 }
 
 /**
- * Everything a publish checks and would write, without writing it. A real run stops at the first refusal of the folder (hand
- * edits) before it exports; a dry run goes on, so it reports every problem and the files the export would change.
+ * Everything a publish checks and would write, without writing anything. It compiles the book through the gate of "Approve
+ * and export" first, then compares the folder with the export it was published from and with this new one. A file that
+ * matches neither was edited outside the builder; one that matches the new export (a fix already back-ported) is fine.
  */
 export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan {
   if (!existsSync(join(opts.booksDir, 'books'))) throw new Error(`${opts.booksDir} is not a politost-books checkout: it has no books folder.`);
@@ -166,101 +182,70 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
   const current = bookFiles(folder);
   const notices: string[] = [];
   const refusals: string[] = [];
-  const backport = backportCommand(opts.projectId, folder);
+  const previousVersion = versionOf(current);
+  const version = opts.version ?? nextVersion(previousVersion);
+
+  const prepared = prepareExport(ctx, opts.projectId, { approved: true, version });
+  if (prepared.blocked) refusals.push(`${prepared.blocked.message} ${prepared.blocked.action ?? ''}`.trim());
+  const files = unpackPtsb(prepared.bytes);
 
   const last = readManifest(folder);
-  const handEdited = last ? handEdits(current, last) : [];
-  if (handEdited.length) {
-    refusals.push(`books/${slug} was edited outside the builder since its last publish (${handEdited.join(', ')}). Publishing would undo those edits. Back-port them first, starting with the dry run:\n  ${backport}`);
-  } else if (!last && Object.keys(current).length) {
-    notices.push(`books/${slug} has no ${MANIFEST}, so edits made outside the builder cannot be detected: every difference listed below is overwritten. If the folder holds such fixes, back-port them first:\n  ${backport}`);
-  } else if (!last) {
+  let handEdited: string[] = [];
+  // The folder is exactly the export its manifest names: nothing was changed there since, back-ported or not.
+  let asPublished = false;
+  if (last) {
+    const base = publishedExport(ctx, opts.projectId, last);
+    if (typeof base === 'string') {
+      refusals.push(`books/${slug} cannot be checked for edits made outside the builder: ${base}.`);
+    } else {
+      const paths = [...new Set([...Object.keys(current), ...Object.keys(base)])].sort();
+      handEdited = paths.filter((p) => !same(current[p], base[p]) && !same(current[p], files[p]));
+      asPublished = paths.every((p) => same(current[p], base[p]));
+      if (handEdited.length) {
+        refusals.push(`books/${slug} was edited outside the builder since its last publish (${handEdited.join(', ')}). Publishing would undo those edits. Back-port them first, starting with the dry run:\n  ${backportCommand(opts.projectId, folder)}`);
+      }
+    }
+  } else if (Object.keys(current).length) {
+    notices.push(`books/${slug} has no ${MANIFEST}: this is its first publish through publish-book, so edits made outside the builder cannot be told apart. Every difference listed below is overwritten; read them before publishing.`);
+  } else {
     notices.push(`books/${slug} does not exist yet: this is the book's first publish.`);
   }
 
-  const previousVersion = versionOf(current);
-  const version = opts.version ?? nextVersion(previousVersion);
-  const plan: PublishPlan = {
-    projectId: opts.projectId, slug, folder, previousVersion, version, exportLabel: null, files: null,
-    diff: { added: [], changed: [], removed: [] }, upToDate: false, handEdited, notices, refusals, manifest: null,
-    folderHashes: Object.fromEntries(Object.entries(current).map(([p, b]) => [p, sha256(b)])),
-  };
-  if (refusals.length && !opts.dryRun) return plan;
-
-  let bytes: Uint8Array | null = null;
-  let source: { exportId: string; exportedAt: string } | null = null;
-  // A new export is checked with this builder's rules, also in a dry run, where it has no row.
-  let rulesVersion = RULES_VERSION;
-  if (opts.export) {
-    try {
-      const made = opts.dryRun
-        ? exportBook(ctx, opts.projectId, { approved: true, version, dryRun: true })
-        : exportBook(ctx, opts.projectId, { approved: true, version });
-      if (made.blocked) refusals.push(`${made.blocked.message} ${made.blocked.action ?? ''}`.trim());
-      bytes = made.bytes;
-      plan.exportLabel = made.row ? `${made.row.filename} (new)` : 'a new export (dry run, not stored)';
-      if (made.row) source = { exportId: made.row.id, exportedAt: made.row.createdAt };
-    } catch (err) {
-      if (!(err instanceof HttpError)) throw err;
-      refusals.push(`${err.message} ${err.action ?? ''}`.trim());
-    }
-  } else {
-    const latest = listExports(ctx, opts.projectId).find((e) => e.approved);
-    if (!latest) {
-      refusals.push('The book has no approved export. Use "Approve and export" in the builder, or add --export.');
-    } else {
-      const row = getExport(ctx, latest.id);
-      plan.exportLabel = `${row.filename} (${row.createdAt})`;
-      if (!existsSync(row.path)) refusals.push(`The export file ${row.path} is no longer on disk. Export the book again, or add --export.`);
-      else {
-        bytes = readFileSync(row.path);
-        if (sha256(bytes) !== row.sha256) {
-          refusals.push(`The export file ${row.path} does not match the checksum stored when it was made. Export the book again, or add --export.`);
-          bytes = null;
-        }
-      }
-      if (row.report.rulesVersion !== RULES_VERSION) {
-        refusals.push(`The latest approved export, ${row.filename}, was checked with other rules (${row.report.rulesVersion ?? 'made before rules were versioned'}; this builder has ${RULES_VERSION}), so a rule added since never read it. Run Validate and "Approve and export" again, or add --export.`);
-      }
-      source = { exportId: row.id, exportedAt: row.createdAt };
-      rulesVersion = row.report.rulesVersion ?? '';
-    }
-  }
-  if (!bytes) return plan;
-
-  const files = withVersion(unpackPtsb(bytes), version);
-  plan.files = files;
+  const diff = { added: [] as string[], changed: [] as string[], removed: [] as string[] };
   for (const path of Object.keys(files).sort()) {
-    if (!(path in current)) plan.diff.added.push(path);
-    else if (!Buffer.from(files[path]).equals(Buffer.from(current[path]))) plan.diff.changed.push(path);
+    if (!(path in current)) diff.added.push(path);
+    else if (!same(files[path], current[path])) diff.changed.push(path);
   }
-  plan.diff.removed = Object.keys(current).filter((p) => !(p in files)).sort();
-  // The same book again, already published with these rules: only the package header (its createdAt) and the version would
-  // change. A folder with no manifest, or one checked with other rules, still gets a new one, and an explicit --version is written.
+  diff.removed = Object.keys(current).filter((p) => !(p in files)).sort();
+  // The same book again, in a folder that is still what was published: only the package header (its createdAt) and the version
+  // would change. A folder with no manifest, or with a back-ported fix its manifest does not list, gets a new one, and an
+  // explicit --version is written.
   const book = (f: Record<string, Uint8Array>) => Object.entries(f).filter(([p]) => p !== 'ptsb.json');
   const asBefore = previousVersion === null ? null : book(withVersion(files, previousVersion));
-  plan.upToDate = !!asBefore && !!last && last.rulesVersion === rulesVersion
-    && (opts.version === undefined || opts.version === previousVersion)
-    && asBefore.length === book(current).length
-    && asBefore.every(([p, b]) => current[p] !== undefined && Buffer.from(b).equals(Buffer.from(current[p])));
+  const upToDate = !!asBefore && asPublished && (opts.version === undefined || opts.version === previousVersion)
+    && asBefore.length === book(current).length && asBefore.every(([p, b]) => same(b, current[p]));
 
-  if (source) {
-    const hashes: Record<string, string> = {};
-    for (const path of Object.keys(files).sort()) hashes[path] = sha256(files[path]);
-    plan.manifest = {
-      projectId: opts.projectId, exportId: source.exportId, exportedAt: source.exportedAt, builderVersion: ctx.config.version,
-      rulesVersion, files: hashes, findings: [...new Set(publishedFindings(files).map(findingKey))].sort(),
-    };
-  }
-  return plan;
+  return {
+    projectId: opts.projectId, slug, folder, previousVersion, version, prepared, files, diff, upToDate, handEdited, notices, refusals,
+    folderHashes: Object.fromEntries(Object.entries(current).map(([p, b]) => [p, sha256(b)])),
+  };
 }
 
-/** Writes the plan's files and manifest into the folder, and removes the book files the export no longer has. */
-export function writePublish(plan: PublishPlan): void {
-  if (plan.refusals.length || !plan.files || !plan.manifest) throw new Error('This publish was refused; nothing was written.');
+/**
+ * Stores the plan's export (as "Approve and export" does), writes its files and a manifest that names it into the folder, and
+ * removes the book files the export no longer has. Returns the manifest.
+ */
+export function writePublish(ctx: AppContext, plan: PublishPlan): BuilderManifest {
+  if (plan.refusals.length) throw new Error('This publish was refused; nothing was written.');
   // A file changed between the plan and now (an editor, a sync tool, another publish) would be overwritten without the plan's check.
   const edited = handEdits(bookFiles(plan.folder), { files: plan.folderHashes });
   if (edited.length) throw new Error(`books/${plan.slug} changed after the publish was planned (${edited.join(', ')}); nothing was written.`);
+  const row = storeExport(ctx, plan.projectId, plan.prepared);
+  const manifest: BuilderManifest = {
+    projectId: plan.projectId, exportId: row.id, exportedAt: row.createdAt, builderVersion: ctx.config.version,
+    files: Object.fromEntries(Object.keys(plan.files).sort().map((p) => [p, sha256(plan.files[p])])),
+    findings: [...new Set(publishedFindings(plan.files).map(findingKey))].sort(),
+  };
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));
     // A folder the removal emptied (an assets folder) goes too, as git does not keep it.
@@ -271,13 +256,14 @@ export function writePublish(plan: PublishPlan): void {
     mkdirSync(dirname(full), { recursive: true });
     writeFileSync(full, bytes);
   }
-  writeFileSync(join(plan.folder, MANIFEST), `${JSON.stringify(plan.manifest, null, 2)}\n`);
+  writeFileSync(join(plan.folder, MANIFEST), `${JSON.stringify(manifest, null, 2)}\n`);
+  return manifest;
 }
 
 export interface PublishedCheck {
   slug: string;
-  /** Whether the folder was published with this builder's rules: 'same', 'other', or 'unknown' without a manifest. */
-  rules: 'same' | 'other' | 'unknown';
+  /** Whether the folder has a manifest; without one every finding is new. */
+  manifest: boolean;
   /** Blocker and major findings that the manifest did not record at publish time; every one when there is no manifest. */
   fresh: LintFinding[];
 }
@@ -297,7 +283,7 @@ export function validatePublished(booksDir: string): PublishedCheck[] {
     const known = new Set(manifest?.findings ?? []);
     out.push({
       slug,
-      rules: !manifest ? 'unknown' : manifest.rulesVersion === RULES_VERSION ? 'same' : 'other',
+      manifest: !!manifest,
       fresh: publishedFindings(bookFiles(folder)).filter((f) => !known.has(findingKey(f))),
     });
   }

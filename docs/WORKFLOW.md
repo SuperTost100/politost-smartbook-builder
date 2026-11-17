@@ -124,6 +124,17 @@ Formatting problems that break the reader and that the formatter cannot fix then
 
 To format the books that already exist, run `npm run normalize-text -- --project <id> --dry-run` first. It lists what a real run would change and writes nothing. The same command without `--dry-run` writes one new revision for each section it changes, which History shows as a repair without a model. Sections whose current text the author wrote or edited by hand, and questions the author edited, are counted and left alone, and `--include-hand-edits` includes them. Add `--data-dir <dir>` for a data folder other than the default.
 
+A pull request on politost-books that edits a book the builder published fails its `builder-sync` check, because the folder no longer matches its `.builder.json`. A maintainer carries the fix into the builder and publishes it onto the same branch:
+
+1. Check out the pull request in a politost-books clone: `gh pr checkout <number>`.
+2. Stop the service: `systemctl --user stop smartbuilder.service`.
+3. Run `npm run backport -- --project <id> --from <clone>/books/<slug> --dry-run` and read what each difference maps to.
+4. Run it again without `--dry-run`.
+5. Run `npm run publish-book -- --project <id> --books <clone> --dry-run`. A file it still lists as edited outside the builder did not back-port; fix it in the builder by hand.
+6. Run it again without `--dry-run`.
+7. Start the service: `systemctl --user start smartbuilder.service`.
+8. Commit what `publish-book` wrote on the pull request's branch and push. `builder-sync` then passes, and the pull request is merged as usual.
+
 ### Exam guide
 
 Every chapter whose topics appear in past exams closes with an exam guide, "Come viene chiesto all'esame" in an Italian book and "How the exam asks it" in an English one, written from its classified exam questions. The builder computes the session counts in it ("N of M sessions"), not the model.
@@ -278,11 +289,22 @@ Removing a section writes a new outline revision, rewrites the links and formula
 
 **Approve and export** is available when no blocker is left. **Export draft** always works and is named `-draft`. Every export is reopened and compared with what was compiled before it is offered for download.
 
-An export stores the version of the rules it was checked with, a hash of the builder's lint rules and compiler (the sources of `packages/content`) and of content-core's version. `npm run publish-book -- --project <id> --books <politost-books checkout> --dry-run` shows what publishing the latest approved export would change in `books/<slug>/`, and without `--dry-run` it writes the files there with a `.builder.json` that lists the sha256 of each one. It does not commit or push. The book's version becomes the one after the version in the folder's `smartbook.json`, or the one given with `--version`. It refuses an export checked with other rules than the builder's, because a rule added since never read it: export again, or add `--export` to make a new approved export with the same checks as **Approve and export**. It also stops when a file of the folder differs from the last `.builder.json`, because writing over it would undo a fix made in the books repo, and prints the back-port dry run to run first. A folder with no `.builder.json` is published with a notice, since hand edits cannot be told apart there. `npm run validate-all -- --books <checkout>` lints every book the builder published there with the current rules and lists, for each book, the blocker and major findings it did not have when it was published.
+`npm run publish-book -- --project <id> --books <politost-books checkout>` publishes the book into `books/<slug>/` of that checkout. It compiles the book through the same checks as **Approve and export**, so a book with a failed check or an open review blocker is refused, stores the result as an approved export, and writes its files with a `.builder.json` that names the export and lists the sha256 of each file. It does not commit or push. The book's version becomes the one after the version in the folder's `smartbook.json`, or the one given with `--version`, and the export is compiled with it. Before it writes, it compares each file of the folder with the export named in its `.builder.json`, as the builder stored it, and with the new export: a file that matches neither was edited in the books repo, and writing over it would undo that fix, so the command stops and prints the back-port dry run to run first. A folder with no `.builder.json` is published with a notice, since edits made there cannot be told apart. `--dry-run` runs every check and lists the files that would change, and stores and writes nothing. A real run takes the data folder's lock, so stop the service first. `npm run validate-all -- --books <checkout>` lints every book the builder published there with the current rules and lists, for each book, the blocker and major findings it did not have when it was published. CI runs it against politost-books `main` as a job that does not block a merge.
 
 The export holds only chapters with text. Chapters keep their outline numbers, so formulas stay `6.x` as more chapters are written, and links into chapters not yet written become plain text with a minor warning.
 
 Fixes made by hand in a published book folder of politost-books come back into the builder with `npm run backport -- --project <id> --from <books checkout>/books/<slug> --dry-run`. It compiles the book, compares each section, exercise, graph and figure caption with the folder, and lists whether each difference maps to the section, question, graph or figure it comes from. What the compiler writes itself (the label above a generated exam question, super- and subscripts in captions, the version) is listed as compiler-owned and left alone. Without `--dry-run` the mapped units are written in one transaction as your own edits: sections as hand-edited revisions, questions marked as edited so no AI fix rewrites them, and graphs through the graph check. A unit is written only when the book compiled with it reproduces the folder's text, gains no blocker or major finding and leaves the rest of the book as the folder has it. The folder is matched to the builder by section, formula and exercise numbers, so a book is refused when any text or question changed in the builder after the export the folder came from (the `createdAt` of its `ptsb.json`), when its chapters or section headings differ from the folder, or when the folder holds other exercises: in each case a number may point at other text. Graphs and figure captions have no change date, so check in the dry run that none of the graphs or captions it lists was edited in the builder after the export. A real run takes the data folder's lock, so stop the service first. The command ends with the files that still differ from the folder and the reason for each. Add `--data-dir <dir>` for a data folder other than the default.
+
+A pull request on politost-books that edits a book the builder published fails its `builder-sync` check, because the folder no longer matches its `.builder.json`. A maintainer carries the fix into the builder and publishes it onto the same branch:
+
+1. Check out the pull request in a politost-books clone: `gh pr checkout <number>`.
+2. Stop the service: `systemctl --user stop smartbuilder.service`.
+3. Run `npm run backport -- --project <id> --from <clone>/books/<slug> --dry-run` and read what each difference maps to.
+4. Run it again without `--dry-run`.
+5. Run `npm run publish-book -- --project <id> --books <clone> --dry-run`. A file it still lists as edited outside the builder did not back-port; fix it in the builder by hand.
+6. Run it again without `--dry-run`.
+7. Start the service: `systemctl --user start smartbuilder.service`.
+8. Commit what `publish-book` wrote on the pull request's branch and push. `builder-sync` then passes, and the pull request is merged as usual.
 
 ## Editing as you go
 

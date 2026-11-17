@@ -5,7 +5,6 @@ import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { z } from 'zod';
 import { sameQuote, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
-import { RULES_VERSION } from '@smartbuilder/content/rules-version';
 import type { ExportRow, ReportFile, ValidationReport } from '@smartbuilder/domain';
 import { newId, now } from '../db/db.ts';
 import { loadOutline } from '../pipeline/util.ts';
@@ -109,37 +108,31 @@ function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`;
 }
 
-export interface BookExport {
+export interface PreparedExport {
+  input: BookInput;
   compiled: CompiledBook;
   bytes: Uint8Array;
   report: ValidationReport;
-  /** The stored export; null in a dry run. */
-  row: ExportRow | null;
-  /** Why an approved export is refused. Set only in a dry run: a real one throws it. */
+  approved: boolean;
+  /** Why an approved export is refused: Validate errors or an open review blocker. Null when it may be stored. */
   blocked: HttpError | null;
 }
 
 /**
- * Compiles the book, packs it and stores the export with its report and the RULES_VERSION it was checked with: the "Approve
- * and export" and "Export draft" buttons, and `npm run publish-book --export`. An approved export is refused while
- * Validate has errors or a review blocker is open. With dryRun nothing is written (no file, no row, no closed note) and the
- * refusal comes back in `blocked`, so a dry run can still show what the export would hold.
+ * Everything "Approve and export" (or "Export draft") does before it stores anything: compile, the approval gate, pack and
+ * read back. It writes nothing. The gate counts the open review blockers less the `compile:` notes this compile no longer
+ * finds, which storeExport closes. `npm run publish-book` runs it too, so a published book passes the same checks.
  */
-export function exportBook(ctx: AppContext, projectId: string, opts: { approved: boolean; version?: string; dryRun?: false }): BookExport & { row: ExportRow };
-export function exportBook(ctx: AppContext, projectId: string, opts: { approved: boolean; version?: string; dryRun: boolean }): BookExport;
-export function exportBook(ctx: AppContext, projectId: string, opts: { approved: boolean; version?: string; dryRun?: boolean }): BookExport {
-  const { approved, dryRun = false } = opts;
-  const project = getProject(ctx, projectId);
+export function prepareExport(ctx: AppContext, projectId: string, opts: { approved: boolean; version?: string }): PreparedExport {
+  const { approved } = opts;
   const input = loadBookInput(ctx, projectId, { approvedOnly: approved, version: opts.version });
   const compiled = deps.compileBook(input);
-  // An approval counts the open blockers below, so the notes this compile no longer finds are closed first (a dry run only counts them).
-  const gone = goneCompileNotes(ctx, projectId, input, compiled.findings);
-  if (!dryRun) closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
-  const report: ValidationReport = { ...buildReport(compiled), rulesVersion: RULES_VERSION };
+  const report = buildReport(compiled);
 
   let blocked: HttpError | null = null;
   if (approved) {
-    const openBlockers = countUnresolvedBlockers(ctx, projectId) - (dryRun ? gone.filter((i) => i.severity === 'blocker').length : 0);
+    const gone = goneCompileNotes(ctx, projectId, input, compiled.findings).filter((i) => i.severity === 'blocker').length;
+    const openBlockers = countUnresolvedBlockers(ctx, projectId) - gone;
     if (report.errors.length || openBlockers) {
       const parts = [
         report.errors.length ? plural(report.errors.length, 'check failed', 'checks failed') : '',
@@ -149,7 +142,6 @@ export function exportBook(ctx: AppContext, projectId: string, opts: { approved:
         409, 'export_blocked', `The book cannot be approved yet: ${parts.join(' and ')}.`,
         'Fix or dismiss them on the Review screen, or export a draft to look at the book as it is.',
       );
-      if (!dryRun) throw blocked;
     }
   }
 
@@ -159,12 +151,21 @@ export function exportBook(ctx: AppContext, projectId: string, opts: { approved:
     throw new HttpError(500, 'export_unreadable', `The exported file did not pass the read-back check: ${back.errors.slice(0, 3).join('; ')}.`, 'Run validation and fix the problems it lists, then export again.');
   }
   for (const w of back.warnings) report.warnings.push({ file: 'package', message: w });
-  if (dryRun) return { compiled, bytes, report, row: null, blocked };
+  return { input, compiled, bytes, report, approved, blocked };
+}
 
+/**
+ * Stores a prepared export: closes the notes its compile no longer finds (also when the approval is refused, as Validate
+ * does), then writes the .ptsb and its row, or throws the refusal.
+ */
+export function storeExport(ctx: AppContext, projectId: string, prepared: PreparedExport): ExportRow {
+  closeGoneCompileNotes(ctx, projectId, prepared.input, prepared.compiled.findings);
+  if (prepared.blocked) throw prepared.blocked;
+  const { approved, bytes, report } = prepared;
   const dir = paths.exports(ctx.config, projectId);
   mkdirSync(dir, { recursive: true });
   const suffix = approved ? '' : '-draft';
-  const base = `${project.slug}-${stamp()}`;
+  const base = `${getProject(ctx, projectId).slug}-${stamp()}`;
   let filename = `${base}${suffix}.ptsb`;
   for (let n = 2; existsSync(join(dir, filename)); n++) filename = `${base}-${n}${suffix}.ptsb`;
   const path = join(dir, filename);
@@ -180,7 +181,7 @@ export function exportBook(ctx: AppContext, projectId: string, opts: { approved:
   const row = insertExport(ctx, { projectId, filename, path, sha256, size: bytes.byteLength, approved, report });
   if (approved) setStage(ctx, projectId, 'export');
   ctx.events.emit('export.ready', { exportId: row.id, filename, approved }, { projectId });
-  return { compiled, bytes, report, row, blocked: null };
+  return row;
 }
 
 export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -254,7 +255,7 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/projects/:id/exports', async (req): Promise<ExportRow> => {
     const projectId = projectOf(ctx, req);
     const { approved } = parse(z.object({ approved: z.boolean() }), req.body);
-    const { row } = exportBook(ctx, projectId, { approved });
+    const row = storeExport(ctx, projectId, prepareExport(ctx, projectId, { approved }));
     return { ...row, report: withFiles(ctx, projectId, row.report) };
   });
 

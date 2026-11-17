@@ -72,8 +72,6 @@ export interface ValidationReport {
   warnings: { file: string; message: string }[];
   lint: { file: string; rule: string; message: string; line?: number }[];
   files?: Record<string, ReportFile>;
-  /** The rules the book was checked with (RULES_VERSION), stored with an export. Exports made before it existed have none. */
-  rulesVersion?: string;
 }
 
 export interface ExportRow { id: string; createdAt: string; approved: boolean; sha256: string; size: number; report: ValidationReport; filename: string }

@@ -6,8 +6,7 @@
   "license": "AGPL-3.0-or-later",
   "exports": {
     ".": "./src/index.ts",
-    "./blocks": "./src/blocks.ts",
-    "./rules-version": "./src/rulesVersion.ts"
+    "./blocks": "./src/blocks.ts"
   },
   "scripts": {
     "test": "tsx --test \"src/**/*.test.ts\""

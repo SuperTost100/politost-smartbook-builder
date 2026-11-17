@@ -37,3 +37,18 @@ jobs:
         with:
           name: playwright-report
           path: apps/web/test-results
+
+  # Not a required check. It lints the books published in politost-books with the rules of this commit and lists the
+  # blocker and major findings each book did not have when it was published, so a new rule shows what it finds there.
+  validate-books:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - run: git clone --depth 1 https://github.com/SuperTost100/politost-books.git "$RUNNER_TEMP/politost-books"
+      - run: npm run validate-all -- --books "$RUNNER_TEMP/politost-books"
