@@ -9,7 +9,7 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
+import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
 import { combineRecomputes, mismatchMessage, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
@@ -446,22 +446,34 @@ export function dataFailure(d: Pick<VerifyAnswer, 'wellPosed' | 'wellPosedReason
 }
 
 /**
- * The verdict of the exercise check. A question is verified only when the two solutions agree, no problem above minor is
- * listed, the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that agree on a
- * problem with impossible data (Chimica E17.5: both said "no solution") do not pass.
+ * The severity of a problem the exercise check found, from its kind alone: a wrong number or unit, a requested answer never
+ * stated, an impossible statement or a wrong step is major, so the question is not verified and the fix flow gets it; the rest
+ * are minor notes. The model rates nothing: Sonnet rated real defects minor however the prompt asked.
+ */
+export function problemSeverity(kind: ProblemKind): 'major' | 'minor' {
+  return kind === 'rigor' || kind === 'wording' || kind === 'other' ? 'minor' : 'major';
+}
+
+/**
+ * The verdict of the exercise check. A question is verified only when the two solutions agree, no listed problem is major
+ * (`problemSeverity`), the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that
+ * agree on a problem with impossible data (Chimica E17.5: both said "no solution") do not pass.
  *
  * The Python recompute settles the numbers: a mismatch it finds is a different result whatever the model says, and when it
- * compared every stated value without a mismatch the results agree, though the model may still list problems with their own
- * severity. Fisica E5.3 (339 against 339,7 N) was blocked on the model's word while the recompute matched all four values.
+ * compared every stated value without a mismatch the results agree and a wrong-value problem is dropped. Fisica E5.3 (339
+ * against 339,7 N) was blocked on the model's word while the recompute matched all four values. `problems` is what is left,
+ * each with its severity.
  */
 export function verifyVerdict(d: VerifyAnswer, numeric: NumericCheck | null, consistency: ConsistencyCheck | null) {
   const settled = !!numeric?.complete && !numeric.mismatches.length;
   const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
-  // The model's `agrees` includes its results: once the recompute settled those, the listed problems are what is left.
-  const agrees = d.agrees || (settled && !d.resultsAgree);
+  const problems = d.problems.filter((p) => !(settled && p.kind === 'wrong-value')).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
+  // The model's `agrees` covers its results and its reasoning: once the recompute settled the results, or the model named what
+  // it disagrees with as problems, the kinds of those problems decide.
+  const agrees = d.agrees || (settled && !d.resultsAgree) || d.problems.length > 0;
   const data = dataFailure(d, consistency);
-  const ok = agrees && resultsAgree && !d.problems.some((p) => p.severity !== 'minor') && !data;
-  return { ok, resultsAgree, data };
+  const ok = agrees && resultsAgree && !problems.some((p) => p.severity !== 'minor') && !data;
+  return { ok, resultsAgree, data, problems };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
@@ -485,7 +497,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   let consistency = await runConsistency(data.consistency);
   const suspicious = (d: typeof data, r: NumericCheck | null, c: ConsistencyCheck | null) => {
     const v = verifyVerdict(d, r, c);
-    return !v.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!v.data;
+    return !v.resultsAgree || v.problems.some((p) => p.severity !== 'minor') || !!v.data;
   };
   if (suspicious(data, recomputed, consistency) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
@@ -496,9 +508,9 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     consistency = (await runConsistency(data.consistency)) ?? consistency;
   }
   const mismatches = recomputed?.mismatches ?? [];
-  const { ok, resultsAgree, data: badData } = verifyVerdict(data, recomputed, consistency);
+  const { ok, resultsAgree, data: badData, problems } = verifyVerdict(data, recomputed, consistency);
   // A verified question gets no issue: its minor notes stay in the check's detail.
-  const notes = ok && data.problems.length ? ` Minor notes: ${truncate(data.problems.map((p) => p.message.trim()).join(' '), 1000)}` : '';
+  const notes = ok && problems.length ? ` Minor notes: ${truncate(problems.map((p) => p.message.trim()).join(' '), 1000)}` : '';
   const checks = [
     ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric' && c.method !== 'consistency'),
     { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}${notes}`, model: route.model },
@@ -506,7 +518,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     { method: 'consistency' as const, ok: !badData, detail: badData ?? consistency?.detail ?? 'No numeric data to check; the statement was judged well posed.' },
   ];
   if (!ok) {
-    const undone = undoFix(ctx, t, q, failureSummary(data, mismatches, resultsAgree, badData));
+    const undone = undoFix(ctx, t, q, failureSummary(data, problems, mismatches, resultsAgree, badData));
     if (undone) return undone;
   }
   return ctx.db.tx(() => {
@@ -517,10 +529,10 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     const stale = ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id).map((r) => r.id);
     ctx.db.run(`DELETE FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id);
     issuesChanged(ctx, q.projectId, stale);
-    if (!ok) for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
-    // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
-    // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
-    if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
+    if (!ok) for (const p of problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
+    // A known disagreement with the independent answer blocks export. Only a different result blocks approval; the listed
+    // problems are major at most.
+    if (!resultsAgree) {
       const found = mismatches.length
         ? mismatchMessage(mismatches)
         : `The independent solution reaches a different result: ${data.independentAnswer}`;
@@ -532,13 +544,13 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
         ? 'Correct the data of the statement so that they are consistent and determine one answer, and the solution with them. Accept the issue only if the check is wrong.'
         : 'The statement comes from a source or from the author, so the AI fix leaves it alone: check it against the source and correct it by hand, or accept the issue if the check is wrong.');
     }
-    return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}), ...(badData ? { data: badData } : {}) };
+    return { ok, problems: problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}), ...(badData ? { data: badData } : {}) };
   });
 }
 
 /** What made a check fail, in one line, for the issues an undone fix reopens. */
-function failureSummary(d: VerifyAnswer, mismatches: Comparison[], resultsAgree: boolean, badData: string | null): string {
-  const parts = d.problems.filter((p) => p.severity !== 'minor').map((p) => p.message.trim().replace(/\.$/, ''));
+function failureSummary(d: VerifyAnswer, problems: ReturnType<typeof verifyVerdict>['problems'], mismatches: Comparison[], resultsAgree: boolean, badData: string | null): string {
+  const parts = problems.filter((p) => p.severity !== 'minor').map((p) => p.message.trim().replace(/\.$/, ''));
   if (mismatches.length) parts.push(mismatchMessage(mismatches).replace(/\.$/, ''));
   else if (!resultsAgree) parts.push(`the independent solution reaches a different result: ${d.independentAnswer.trim().replace(/\.$/, '')}`);
   if (badData) parts.push(badData.replace(/\.$/, ''));
