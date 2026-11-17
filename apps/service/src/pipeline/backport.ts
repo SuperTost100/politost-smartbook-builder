@@ -446,9 +446,11 @@ export function applyChanges(input: BookInput, changes: BackportChange[]): BookI
       if (q) Object.assign(q, c.parts);
     } else {
       const e = next.enrichments.find((x) => x.id === c.enrichmentId);
-      // As updateEnrichmentPayload with acceptLint does: the lint's blocking findings are accepted, the numeric check decides.
-      const fresh = graphLintCheck(c.payload).findings.filter((f) => f.severity === 'block').map(lintKey);
-      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok ? 'verified' : 'issue', lintAccepted: [...new Set([...e.lintAccepted, ...fresh])] });
+      // As updateEnrichmentPayload with acceptLint does: the lint's findings are accepted and the numeric check decides, together
+      // with the graph's other checks when the payload is the one the builder has.
+      const fresh = graphLintCheck(c.payload).findings.map(lintKey);
+      const kept = e && JSON.stringify(c.payload) === JSON.stringify(e.payload) ? e.checks.filter((k) => k.method !== 'numeric' && k.method !== 'lint') : [];
+      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok && kept.every((k) => k.ok) ? 'verified' : 'issue', lintAccepted: [...new Set([...e.lintAccepted, ...fresh])] });
     }
   }
   return next;

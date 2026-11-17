@@ -467,7 +467,7 @@ function asksForFigure(i: { category: string; quote: string }, blocks: string[])
  * (the text fix goes first, so the figures pass reads the new text). Each task closes its issues when its result lands, or
  * leaves them open with the reason. A graph issue whose failing graph is gone, or passes now, closes here with no model call.
  */
-function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title: string; figures: { id: string; quote: string; message: string; suggestion: string }[]; graphs: { id: string; quote: string; message: string }[] }): ReviseResult['routed'] | undefined {
+function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title: string; figures: { id: string; quote: string; message: string; suggestion: string }[]; graphs: { id: string; quote: string; message: string; resolution: string }[] }): ReviseResult['routed'] | undefined {
   const { projectId } = t.task;
   const out: NonNullable<ReviseResult['routed']> = {};
   if (p.figures.length) {
@@ -500,7 +500,8 @@ function routeIssues(ctx: AppContext, t: TaskContext, p: { nodeId: string; title
     if (closed.length) setIssuesStatus(ctx, projectId, closed.map((g) => g.id), 'fixed', rows.length ? 'The graph passes its check now.' : 'The graph that failed its check is no longer in the book.');
     const specs: TaskSpec[] = [...byRow].map(([rowId, graphs]) => {
       const row = failing.find((r) => r.id === rowId)!;
-      const purpose = `Redraw the interactive graph "${row.title}" of this section. The old one failed its check, so choose expressions and domains that pass${row.graphId ? `, and give the graph the id "${row.graphId}"` : ''}. ${graphs.map((g) => g.message).join(' ')}`;
+      // The resolution says why an earlier redraw failed, which the next one must not repeat.
+      const purpose = `Redraw the interactive graph "${row.title}" of this section. The old one failed its check, so choose expressions and domains that pass${row.graphId ? `, and give the graph the id "${row.graphId}"` : ''}. ${graphs.map((g) => [g.message, g.resolution].filter((x) => x.trim()).join(' ')).join(' ')}`;
       return { kind: 'enrich.graph', key: `fixgraph:${t.task.id}:${rowId}`, label: `Redraw the graph "${row.title}" of "${p.title}"`, input: { nodeId: p.nodeId, purpose, force: true, replaceId: rowId, issueIds: graphs.map((g) => g.id) }, pool: 'editor', deps: [t.task.id] };
     });
     if (specs.length) t.enqueue(specs);
@@ -520,7 +521,7 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
   const project = loadProject(ctx, projectId);
   const outline = loadOutline(ctx, projectId);
   const issueIds = (t.task.input.issueIds as string[] | undefined) ?? [];
-  const selected = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string; source: string; status: string }>(`SELECT id, quote, message, suggestion, severity, category, source, status FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
+  const selected = issueIds.length ? ctx.db.all<{ id: string; quote: string; message: string; suggestion: string; severity: string; category: string; source: string; status: string; resolution: string }>(`SELECT id, quote, message, suggestion, severity, category, source, status, resolution FROM review_issues WHERE id IN (${issueIds.map(() => '?').join(',')}) AND node_id = ?`, ...issueIds, nodeId) : [];
   // Two kinds of issue the text writer cannot fix go elsewhere: a missing figure to the figures pass, a graph that failed its check to a redraw.
   const sectionBlocks = splitBlocks(head.markdown).map((b) => b.text);
   const kindOf = (i: (typeof selected)[number]) => (i.source === 'verification' && i.category === 'graph' ? 'graph' as const : asksForFigure(i, sectionBlocks) ? 'figure' as const : null);

@@ -398,11 +398,14 @@ export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
   };
 }
 
-/** The quote occurs in the section text, ignoring whitespace, `$` and LaTeX spacing and sizing commands. */
+/**
+ * The quote occurs in the section text, ignoring whitespace, `$` and LaTeX spacing and sizing commands. It must hold maths
+ * (a digit, `=`, `\`, `^` or `_`): a word such as "Nernst" or "la reazione" occurs in the section but states no formula.
+ */
 export function sourceQuoted(source: string, section: string): boolean {
   const norm = (s: string) => s.replace(/\\left|\\right/g, '').replace(/\\[,;:! ]|\s+|\$/g, '');
   const q = norm(source);
-  return q.length >= 3 && norm(section).includes(q);
+  return q.length >= 3 && /[\d=\\^_]/.test(q) && norm(section).includes(q);
 }
 
 /**
@@ -456,7 +459,7 @@ function solve(A: number[][], b: number[]): number[] | null {
  * 1% of the y window. Returns null when there is nothing to compare: no expression, one that does not compile or is not
  * affine in its constants, or fewer than 5 comparable points.
  */
-export function compareExpected(expected: string, xs: unknown[], ys: unknown[], yspan: number): { ok: boolean; detail: string } | null {
+export function compareExpected(expected: string, xs: unknown[], ys: unknown[], yspan: number): { ok: boolean; detail: string; constants: Record<string, number> } | null {
   if (!expected.trim()) return null;
   let names: string[];
   try {
@@ -479,7 +482,7 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
     if (Number.isFinite(at(x, names.map(() => 0)))) pts.push([x, y]);
     else { undefinedCount++; undefinedAt ??= x; }
   });
-  if (pts.length < 5) return undefinedCount >= 5 ? { ok: false, detail: `${expected} is undefined at ${undefinedCount} of the ${undefinedCount + pts.length} drawn points, from x=${undefinedAt}` } : null;
+  if (pts.length < 5) return undefinedCount >= 5 ? { ok: false, detail: `${expected} is undefined at ${undefinedCount} of the ${undefinedCount + pts.length} drawn points, from x=${undefinedAt}`, constants: {} } : null;
   // With constants, y = f0(x) + sum of c_i g_i(x). The basis is read off the expression and checked at c = 2 before fitting.
   let fitted = names.map(() => 0);
   if (names.length) {
@@ -509,7 +512,8 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
   }
   const constants = names.length ? ` with ${names.map((n, i) => `${n} = ${Number(fitted[i]!.toPrecision(6))}`).join(', ')}` : '';
   const n = pts.length + undefinedCount;
+  const values = Object.fromEntries(names.map((name, i) => [name, fitted[i]!]));
   return bad > 0.05 * n
-    ? { ok: false, detail: `${bad}/${n} points differ from ${expected}${constants}; ${worst}` }
-    : { ok: true, detail: `matches ${expected}${constants} at ${n - bad}/${n} points` };
+    ? { ok: false, detail: `${bad}/${n} points differ from ${expected}${constants}; ${worst}`, constants: values }
+    : { ok: true, detail: `matches ${expected}${constants} at ${n - bad}/${n} points`, constants: values };
 }

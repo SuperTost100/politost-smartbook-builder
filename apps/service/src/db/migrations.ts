@@ -367,4 +367,8 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE enrichments ADD COLUMN spec TEXT;
   `,
+  // 11: the section revision (content_revisions.id) the independent checker read when it last checked a graph. NULL when it never did.
+  `
+  ALTER TABLE enrichments ADD COLUMN checked_rev_id TEXT;
+  `,
 ];

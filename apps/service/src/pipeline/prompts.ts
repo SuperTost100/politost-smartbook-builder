@@ -858,15 +858,16 @@ Return JSON: verdict, reason, id (kebab-case), title and description in ${langua
 export const graphCheckSchema = z.object({
   traces: z.array(z.object({
     label: z.string(),
-    expected: codeString().describe('the curve this trace must show, as an expression in x (log = natural log, log10 decimal; C, C1, C2 for constants the section gives no value for); empty when the trace is not a curve y = f(x)'),
-    problem: z.string().describe('what in the label, the axes or the source contradicts the section; empty when nothing does'),
+    expected: codeString().describe('the curve this trace must show, as an expression in x (log = natural log, log10 decimal; C, C1, C2 for constants the section gives no value for, one value each in the whole graph); empty when the trace is not a curve y = f(x)'),
+    problem: z.string().describe('a contradiction between the section and this trace (its label, interval, values or source) or the axes; empty when there is none, never a remark'),
   })),
   fit: z.enum(['fits', 'not-a-function-graph']).describe('"not-a-function-graph" when the section states no relation that this plane graph can show'),
 });
 
-export function graphCheckPrompt(p: { language: string; section: string; graph: { title: string; xLabel: string; yLabel: string; traces: { label: string; source?: string }[] } }) {
+export function graphCheckPrompt(p: { language: string; section: string; graph: { title: string; xLabel: string; yLabel: string; traces: { label: string; source?: string; where: string }[] } }) {
   return {
-    system: `You check an interactive graph of a textbook in ${languageName(p.language)} against the section it illustrates. You are not shown the graph's data. From the section's own formulas and numbers, write for each trace the function y = f(x) it must show, with x the quantity on the x axis. Use x, numbers, + - * / ^, parentheses, e, pi and sin cos tan asin acos atan exp log log10 sqrt abs floor; log is the natural logarithm and log10 the decimal one. When the curve needs a constant the section gives no value for (an additive constant, a reference level), write it as C, or C1 and C2 for two, and the builder fits it to the data. Leave "expected" empty for a trace that is not a curve y = f(x) (points, a vertical line, bars, a parametric curve). Report anything in a label, an axis or a source that contradicts the section.`,
+    system: `You check an interactive graph of a textbook in ${languageName(p.language)} against the section it illustrates. You are not shown the formulas the graph was drawn with. From the section's own formulas and numbers, write for each trace the function y = f(x) it must show, with x the quantity on the x axis. Use x, numbers, + - * / ^, parentheses, e, pi and sin cos tan asin acos atan exp log log10 sqrt abs floor; log is the natural logarithm and log10 the decimal one. When the curve needs a constant the section gives no value for (an additive constant, a reference level), write it as C, or C1 and C2 for two, and the builder fits it to the data. C, C1 and C2 each have one value in the whole graph: when traces differ in a constant, write each trace's own value as a number. Leave "expected" empty for a trace that is not a curve y = f(x) (points, a vertical line, bars, a parametric curve).
+Each trace comes with its kind and where it is drawn: the x interval of a curve, the values of points, bars and vertical lines. Use "problem" only for a contradiction with the section: a label, sign, factor or formula the section does not state, a curve drawn on an interval where the section's law does not hold (a branch on the wrong side of the axis, a concentration below zero), a value that differs from the section's, an axis that names the wrong quantity. Otherwise leave "problem" empty: it is not for notes, and a trace that is not a curve y = f(x) is not a problem.`,
     prompt: `Section text:
 ${p.section}
 
@@ -874,7 +875,7 @@ Graph: "${p.graph.title}"
 x axis: ${p.graph.xLabel}
 y axis: ${p.graph.yLabel}
 Traces:
-${p.graph.traces.map((t, i) => `${i + 1}. ${t.label}${t.source ? `   (source: ${t.source})` : ''}`).join('\n')}
+${p.graph.traces.map((t, i) => `${i + 1}. ${t.label}: ${t.where}${t.source ? `   (source: ${t.source})` : ''}`).join('\n')}
 
 Return JSON: traces (label, expected, problem) in the same order, and fit.`,
   };
