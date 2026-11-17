@@ -65,10 +65,33 @@ test('publish writes the export with a manifest of every file, removes what the 
   assert.ok('ptsb.json' in m.files && 'smartbook.json' in m.files && Object.keys(m.files).some((p) => p.startsWith('chapters/')));
   assert.ok(!('cover.svg' in m.files));
   for (const [path, hash] of Object.entries(m.files)) assert.equal(sha256(readFileSync(join(folder, path))), hash, path);
-  // A second run with the same export changes nothing, not even the version.
+  // A second run with the same export changes nothing, not even the version, unless a version is asked for.
   const again = publish(projectId);
   assert.equal(again.upToDate, true);
   assert.equal(versionIn(folder), '1.0.0');
+  assert.equal(publish(projectId, { version: '1.1.0' }).upToDate, false);
+  assert.equal(versionIn(folder), '1.1.0');
+});
+
+test('a folder that already holds the export but has no manifest gets one', async () => {
+  const { projectId, folder } = await approvedBook();
+  publish(projectId);
+  rmSync(join(folder, MANIFEST));
+  const p = publish(projectId);
+  assert.equal(p.upToDate, false);
+  assert.ok(existsSync(join(folder, MANIFEST)));
+  assert.equal(versionIn(folder), '1.0.1', 'the books CI wants a higher version for any change to the folder');
+});
+
+test('writePublish refuses a folder edited after the plan was made', async () => {
+  const { projectId, folder } = await approvedBook();
+  publish(projectId);
+  write(projectId, 's1', 'Il limite di una funzione in un punto di accumulazione del dominio.');
+  const plan = planPublish(t.ctx, { projectId, booksDir: books, export: true });
+  assert.deepEqual(plan.refusals, []);
+  writeFileSync(join(folder, 'esercizi.md'), 'modificato nel frattempo');
+  assert.throws(() => writePublish(plan), /changed after the publish was planned \(added esercizi\.md\)/);
+  assert.equal(readFileSync(join(folder, 'esercizi.md'), 'utf8'), 'modificato nel frattempo');
 });
 
 test('publish stops on a hand edit and prints the back-port dry run, and goes ahead once the folder matches its manifest', async () => {

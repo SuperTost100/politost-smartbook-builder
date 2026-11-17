@@ -229,10 +229,13 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
     else if (!Buffer.from(files[path]).equals(Buffer.from(current[path]))) plan.diff.changed.push(path);
   }
   plan.diff.removed = Object.keys(current).filter((p) => !(p in files)).sort();
-  // The same book again: only the package header (its createdAt) and the version would change.
+  // The same book again, already published with these rules: only the package header (its createdAt) and the version would
+  // change. A folder with no manifest, or one checked with other rules, still gets a new one, and an explicit --version is written.
   const book = (f: Record<string, Uint8Array>) => Object.entries(f).filter(([p]) => p !== 'ptsb.json');
   const asBefore = previousVersion === null ? null : book(withVersion(files, previousVersion));
-  plan.upToDate = !!asBefore && asBefore.length === book(current).length
+  plan.upToDate = !!asBefore && !!last && last.rulesVersion === source?.rulesVersion
+    && (opts.version === undefined || opts.version === previousVersion)
+    && asBefore.length === book(current).length
     && asBefore.every(([p, b]) => current[p] !== undefined && Buffer.from(b).equals(Buffer.from(current[p])));
 
   if (source) {
@@ -249,6 +252,10 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
 /** Writes the plan's files and manifest into the folder, and removes the book files the export no longer has. */
 export function writePublish(plan: PublishPlan): void {
   if (plan.refusals.length || !plan.files || !plan.manifest) throw new Error('This publish was refused; nothing was written.');
+  // A file edited between the plan and now (an editor, a sync tool) would be overwritten without the plan's check.
+  const last = readManifest(plan.folder);
+  const edited = last ? handEdits(bookFiles(plan.folder), last) : [];
+  if (edited.length) throw new Error(`books/${plan.slug} changed after the publish was planned (${edited.join(', ')}); nothing was written.`);
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));
     // A folder the removal emptied (an assets folder) goes too, as git does not keep it.
