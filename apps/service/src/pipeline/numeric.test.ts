@@ -61,8 +61,12 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     const bad = { compared: [c], mismatches: [c], complete: true };
     const good = { compared: [c], mismatches: [], complete: true };
     assert.equal(combineRecomputes(bad, bad)!.mismatches.length, 1);
-    assert.equal(combineRecomputes(bad, good)!.mismatches.length, 0);
-    assert.equal(combineRecomputes(good, bad)!.mismatches.length, 0);
+    assert.equal(combineRecomputes(good, good)!.complete, true);
+    for (const [x, y] of [[bad, good], [good, bad]]) {
+      const r = combineRecomputes(x, y)!;
+      assert.equal(r.mismatches.length, 0, 'one program alone does not block');
+      assert.equal(r.complete, false, 'and two programs that disagree do not settle the results either');
+    }
     assert.equal(combineRecomputes(bad, null), bad);
     assert.equal(combineRecomputes(null, bad), bad);
     assert.equal(combineRecomputes(null, null), null);
@@ -70,14 +74,21 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     const a = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
     const b = { name: 'b', stated: '2.00 V', computed: '2.5 V' };
     assert.deepEqual(combineRecomputes({ compared: [a, b], mismatches: [a], complete: true }, { compared: [a, b], mismatches: [b], complete: true })!.mismatches, []);
-    // Two results stated with the same value are told apart by name.
+    // Two results stated with the same value, each compared by one program only, are told apart by name.
     const a1 = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
     const b1 = { name: 'b', stated: '1.00 V', computed: '1.5 V' };
-    assert.deepEqual(combineRecomputes({ compared: [a1, b1], mismatches: [a1], complete: true }, { compared: [a1, b1], mismatches: [b1], complete: true })!.mismatches, []);
-    // Programs that name one result differently still agree on it through its stated value.
+    assert.deepEqual(combineRecomputes({ compared: [a1], mismatches: [a1], complete: false }, { compared: [b1], mismatches: [b1], complete: false })!.mismatches, []);
+    // Programs that name one result differently do not confirm each other, and do not settle it: the model's verdict decides.
     const p = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
     const q = { name: 'pressione', stated: '140 kPa', computed: '170000 Pa' };
-    assert.equal(combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [q], mismatches: [q], complete: true })!.mismatches.length, 1);
+    const r = combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [q], mismatches: [q], complete: true })!;
+    assert.deepEqual([r.mismatches.length, r.complete], [0, false]);
+    assert.equal(combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [{ ...p, name: 'p_2' }], mismatches: [{ ...p, name: 'p_2' }], complete: true })!.mismatches.length, 1, 'p_2 and p2 are one name');
+    // The checker compared only a; the reviewer compared a and b and disputes b, which the checker never looked at.
+    const a2 = { name: 'a', stated: '1.00 V', computed: '1.00 V' };
+    const b2 = { name: 'b', stated: '2.00 V', computed: '2.50 V' };
+    const partial = combineRecomputes({ compared: [a2], mismatches: [], complete: false }, { compared: [a2, b2], mismatches: [b2], complete: true })!;
+    assert.deepEqual([partial.mismatches.length, partial.complete], [0, false], 'not a blocker, and not settled as agreeing either');
   });
 });
 

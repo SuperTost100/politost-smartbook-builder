@@ -741,7 +741,7 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     // The check queued after a fix that changed nothing makes no call.
     const verify = startTask('question.verify', { questionId: id });
     verify.deps = { [`qfix:${id}:1`]: r };
-    assert.deepEqual(await questionVerify(ctx, verify), { skipped: 'the fix changed nothing' });
+    assert.deepEqual(await questionVerify(ctx, verify), { skipped: 'the fix changed no words or numbers' });
     assert.equal(fake.calls.length, 1);
   });
 });

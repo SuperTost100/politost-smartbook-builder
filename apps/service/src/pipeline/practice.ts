@@ -469,8 +469,9 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   const q = rowToQuestion(r);
   if (!q.statement.trim() || !q.solution.trim()) return { skipped: 'missing statement or solution' };
-  // The check queued after a fix has nothing new to look at when the fix changed nothing.
-  if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r)) return { skipped: 'the fix changed nothing' };
+  // The check queued after a fix has nothing new to look at when the fix wrote no words or numbers: a skipped fix may have
+  // changed the layout through the formatter, which keeps the question's checks.
+  if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r)) return { skipped: 'the fix changed no words or numbers' };
   const project = loadProject(ctx, q.projectId);
   const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
     role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution, profile: subjectProfileOf(project) }), schema: verifySchema,
