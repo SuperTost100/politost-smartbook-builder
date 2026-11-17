@@ -232,6 +232,23 @@ describe('planBackport against the published export', () => {
     assert.deepEqual(plan.changes, []);
   });
 
+  test('two formulas with the same label swapped in the builder refuse the book when the manifest gives their keys', () => {
+    const A = ':::formula{key="vel-media" label="Velocità"}\n$$v = \\frac{s}{t}$$\n:::';
+    const B = ':::formula{key="vel-istantanea" label="Velocità"}\n$$v = \\frac{ds}{dt}$$\n:::';
+    const text = (first: string, second: string) => `Prima.\n\n${first}\n\nSeconda.\n\n${second}\n\nCon la {{formula:@vel-media}} si ottiene il risultato in un passo.`;
+    const input = book();
+    input.chapters[0].sections[0].markdown = text(A, B);
+    const pub = pubOf(input);
+    const publishedFormulas = compileBook(input).formulaNumbers;
+    const target = published(input, { [CH]: (s) => s.replace('si ottiene il risultato in un passo', 'si ottiene subito il risultato') });
+    input.chapters[0].sections[0].markdown = text(B, A);
+    // The labels cannot tell them apart; the keys can.
+    assert.equal(planBackport(input, target, { published: pub }).bookRefusal, null);
+    const plan = planBackport(input, target, { published: pub, publishedFormulas });
+    assert.match(plan.bookRefusal ?? '', /numbers its formulas differently/);
+    assert.deepEqual(plan.changes, []);
+  });
+
   test('an exercise added in the builder since the publish refuses the book even when the books did not touch the exercises', () => {
     const input = book();
     const pub = pubOf(input);
@@ -326,8 +343,9 @@ describe('backportProject', () => {
       mkdirSync(dirname(join(dir, file)), { recursive: true });
       writeFileSync(join(dir, file), b);
     }
-    const exercises = exerciseQuestions(loadBookInput(ctx, 'p1', { approvedOnly: true }));
-    writeFileSync(join(dir, '.builder.json'), JSON.stringify({ projectId: 'p1', exportId: row.id, exportedAt: row.createdAt, builderVersion: 'test', files: {}, findings: [], exercises }));
+    const stored = loadBookInput(ctx, 'p1', { approvedOnly: true });
+    const manifest = { projectId: 'p1', exportId: row.id, exportedAt: row.createdAt, builderVersion: 'test', files: {}, findings: [], exercises: exerciseQuestions(stored), formulas: compileBook(stored).formulaNumbers };
+    writeFileSync(join(dir, '.builder.json'), JSON.stringify(manifest));
   }
 
   /** Applies hand edits to the files of the folder. */

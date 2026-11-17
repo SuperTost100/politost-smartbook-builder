@@ -10,6 +10,7 @@ import { checkFunctionGraph, compileBook, lintCompiled, unpackPtsb, type BookInp
 import type { AppContext } from '../context.ts';
 import { getExport, getProject } from '../repo/index.ts';
 import { prepareExport, storeExport, type PreparedExport } from '../routes/review.ts';
+import { planBackport } from './backport.ts';
 import { HttpError } from '../server.ts';
 
 export const MANIFEST = '.builder.json';
@@ -31,6 +32,8 @@ export interface BuilderManifest {
    * back-port refuses a book whose builder now gives a number to another question.
    */
   exercises: Record<string, string>;
+  /** The number of each formula key ("vel-media" -> "1.1"): a book's formula references are numbers, checked the same way. */
+  formulas: Record<string, string>;
 }
 
 /** Exercise number -> question id, from a compile with every statement replaced by its question id. */
@@ -233,6 +236,13 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
       const paths = [...new Set([...Object.keys(current), ...Object.keys(base)])].sort();
       handEdited = paths.filter((p) => !sameBook(p, current[p], base[p]) && !sameBook(p, current[p], files[p]));
       asPublished = paths.every((p) => same(current[p], base[p]));
+      // A file can match neither and still hold nothing to back-port: one section came back from the books and the builder
+      // changed another since. The back-port's own unit comparison decides which edits are still outstanding.
+      if (handEdited.length) {
+        const left = planBackport(prepared.input, current, { published: base, publishedExercises: last.exercises, publishedFormulas: last.formulas });
+        const outstanding = left.units.filter((u) => u.status !== 'compiler-owned').map((u) => u.unit);
+        handEdited = left.bookRefusal ? [...handEdited, `(${left.bookRefusal})`] : outstanding;
+      }
       if (handEdited.length) {
         refusals.push(`books/${slug} was edited outside the builder since its last publish (${handEdited.join(', ')}). Publishing would undo those edits. Back-port them first, starting with the dry run:\n  ${backportCommand(opts.projectId, folder)}`);
       }
@@ -254,7 +264,8 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
   // explicit --version is written.
   const book = (f: Record<string, Uint8Array>) => Object.entries(f).filter(([p]) => p !== 'ptsb.json');
   const asBefore = previousVersion === null ? null : book(withVersion(files, previousVersion));
-  const upToDate = !!asBefore && asPublished && (opts.version === undefined || opts.version === previousVersion)
+  // A manifest written before it recorded exercise and formula numbers is rewritten, so the back-port can check them.
+  const upToDate = !!asBefore && asPublished && !!last?.exercises && !!last?.formulas && (opts.version === undefined || opts.version === previousVersion)
     && asBefore.length === book(current).length && asBefore.every(([p, b]) => same(b, current[p]));
 
   return {
@@ -278,6 +289,7 @@ export function writePublish(ctx: AppContext, plan: PublishPlan): BuilderManifes
     files: Object.fromEntries(Object.keys(plan.files).sort().map((p) => [p, sha256(plan.files[p])])),
     findings: [...new Set(publishedFindings(plan.files).map(findingKey))].sort(),
     exercises: exerciseQuestions(plan.prepared.input),
+    formulas: plan.prepared.compiled.formulaNumbers,
   };
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));

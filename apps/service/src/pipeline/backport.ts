@@ -233,6 +233,8 @@ export interface PlanOptions {
   published?: Record<string, string | Uint8Array>;
   /** The question each exercise number of the published export stood for (the manifest's `exercises`). */
   publishedExercises?: Record<string, string>;
+  /** The number of each formula key in the published export (the manifest's `formulas`). */
+  publishedFormulas?: Record<string, string>;
   /** Write a graph whose graph lint has blocking findings, accepting them as the author's "Accept anyway". */
   acceptGraphLint?: boolean;
 }
@@ -274,7 +276,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   // A formula is told apart by its label: two formulas swapped in the builder keep the sequence of numbers but not the labels.
   const formulaBindings = (md: string) => [...md.matchAll(/^:::formula\{([^}\n]*)\}/gm)].map((m) => `${attrOf(m[1], 'id') ?? ''}=${attrOf(m[1], 'label') ?? ''}`);
   const numbering = (f: Record<string, string | Uint8Array>) => Object.keys(f).filter((x) => /^chapters\/.*\.md$/.test(x)).sort().map((x) => `${x}: ${formulaBindings(text(f[x])!).join(' | ')}`).join('\n');
-  const formulaDiff = pub && numbering(pub) !== numbering(base.files);
+  // With the manifest's key-to-number binding the check is exact; without it, the labels tell most swaps apart.
+  const sameFormulas = (a: Record<string, string>, b: Record<string, string>) => Object.keys(a).length === Object.keys(b).length && Object.entries(a).every(([k, n]) => b[k] === n);
+  const formulaDiff = pub && (opts.publishedFormulas ? !sameFormulas(opts.publishedFormulas, base.formulaNumbers) : numbering(pub) !== numbering(base.files));
   const files = outlineDiff || formulaDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
   // Units the books left as published but the builder changed since: the back-port must leave them as the builder has them,
   // including through a figure caption that two sections share.
@@ -577,8 +581,8 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
   const input = loadBookInput(ctx, projectId, { approvedOnly: true });
   const heads = currentHeads(ctx, projectId);
   const questions = new Map(input.questions.map((q) => [q.id, q]));
-  if (!manifest.exercises) throw new Error(`${fromDir}/${MANIFEST} does not say which question each exercise number stood for (it was written by an earlier publish-book). Publish the book again first.`);
-  const plan = planBackport(input, bookFiles(fromDir), { published, publishedExercises: manifest.exercises, acceptGraphLint: opts.acceptGraphLint });
+  if (!manifest.exercises || !manifest.formulas) throw new Error(`${fromDir}/${MANIFEST} does not say which question or formula each number stood for (it was written by an earlier publish-book). Publish the book again first.`);
+  const plan = planBackport(input, bookFiles(fromDir), { published, publishedExercises: manifest.exercises, publishedFormulas: manifest.formulas, acceptGraphLint: opts.acceptGraphLint });
   const before = countUnresolvedBlockers(ctx, projectId);
   if (opts.dryRun || !plan.changes.length) return { ...plan, written: false, openBlockers: { before, after: before } };
 
