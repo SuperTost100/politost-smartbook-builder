@@ -25,7 +25,7 @@ Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost1
 
 | Tool | Sign in | Used by default for |
 |---|---|---|
-| Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the second opinion on every review finding (Sonnet), the outline once per book (Opus), outside research (Sonnet) |
+| Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the second opinion on every review finding (Sonnet), the cross review of each chapter next to GPT-6-Sol (Opus), the outline once per book (Opus), outside research (Sonnet) |
 | Codex | `codex login` | Everything routine on GPT-6-Luna: classification, page reading, exercises, introductions, non-blocker fixes, first solution checks. GPT-6-Sol reviews chapters, draws figures (the illustrator) and gives a second opinion when a solution check finds a problem |
 | Antigravity | `agy` | Fallback for classification and the local evidence reader (Gemini Flash) |
 | Cursor Agent | `cursor-agent login` | Nothing by default |

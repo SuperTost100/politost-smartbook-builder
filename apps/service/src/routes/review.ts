@@ -75,7 +75,7 @@ const FIX_HINTS: Record<string, string> = {
  * in a section under its chapter, so a chapter's note also stays while its rule finds something in a file that is neither a
  * section nor a question (a generated file, an asset), whatever passage that finding quotes. Nothing is deleted.
  */
-function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
+export function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
   const gone = goneCompileNotes(ctx, projectId, input, findings).map((i) => i.id);
   if (!gone.length) return;
   ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));

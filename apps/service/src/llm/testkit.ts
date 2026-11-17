@@ -24,9 +24,12 @@ export function makeCtx(): { ctx: AppContext; cleanup: () => void } {
   return { ctx, cleanup: () => { ctx.db.close(); rmSync(dataDir, { recursive: true, force: true }); } };
 }
 
-/** A book with the defaults, except that its writer does not check its own drafts: a test that wants that turn scripts it and turns the option on. */
+/**
+ * A book with the defaults, except that its writer does not check its own drafts and a whole-chapter review makes one reviewer
+ * call (plus the cross review): a test that wants the self-check turn or more samples scripts them and changes the option.
+ */
 export function seedProject(ctx: AppContext, id = 'p1', title = 'Analisi 1') {
-  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, options, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', '{"selfCheck":false}', 'now', 'now')`, id, id, title);
+  ctx.db.run(`INSERT INTO projects (id, slug, title, subject, language, options, created_at, updated_at) VALUES (?, ?, ?, 'Analisi', 'it', '{"selfCheck":false,"reviewSamples":1}', 'now', 'now')`, id, id, title);
 }
 
 export function seedResource(ctx: AppContext, o: { id: string; projectId?: string; kind?: string; filename?: string; sha256?: string; path?: string; role?: string; status?: string; included?: number }) {

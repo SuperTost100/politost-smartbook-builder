@@ -64,6 +64,11 @@ describe('projects', () => {
     assert.equal(unchecked.body.options.selfCheck, false);
     assert.equal(unchecked.body.options.noClaudeFallback, true);
     assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { selfCheck: true } })).body.options.selfCheck, true);
+    // Reviewer calls per whole-chapter read: 2 by default, 1 to 5 whole numbers.
+    assert.equal(created.body.options.reviewSamples, 2);
+    assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { reviewSamples: 3 } })).body.options.reviewSamples, 3);
+    for (const bad of [0, 6, 1.5, '2']) assert.equal((await t.req('PATCH', `/api/projects/${id}`, { options: { reviewSamples: bad } })).status, 400, `reviewSamples ${bad} is refused`);
+    assert.equal((await t.req('GET', `/api/projects/${id}`)).body.options.reviewSamples, 3);
     assert.equal(patched.body.language, 'it', 'untouched fields keep their value');
     assert.deepEqual(patched.body.authors, ['Ada']);
 

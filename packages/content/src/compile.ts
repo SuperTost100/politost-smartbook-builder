@@ -25,7 +25,7 @@ function introTitle(language: string): string {
   return langOf(language) === 'it' ? 'Introduzione' : 'Introduction';
 }
 
-const GENERATED_EXAM_PREFIX = { it: "**Esercizio in stile d'esame (generato)**", en: '**Exam-style exercise (generated)**' } as const;
+const GENERATED_EXAM_PREFIX = { it: "**Esercizio in stile d'esame**", en: '**Exam-style exercise**' } as const;
 
 // ---------------------------------------------------------------------------------------------
 // Findings helper
