@@ -80,8 +80,8 @@ test('every model field that carries code is marked, and the marker never reache
   const { graphSchema } = await import('../pipeline/prompts.ts');
   const { figureSchema } = await import('../figures/materialize.ts');
   const { sanitizeModelValue } = await import('@smartbuilder/content');
-  const graph = sanitizeModelValue({ functions: [{ fn: 'x\\Q', label: 'l' }] }, rawJsonSchema(graphSchema)) as { functions: { fn: string }[] };
-  assert.equal(graph.functions[0].fn, 'x\\Q');
+  const graph = sanitizeModelValue({ traces: [{ kind: 'parametric', fn: 'x\\Q', xt: 'x\\Q', yt: 'x\\Q', label: 'l' }] }, rawJsonSchema(graphSchema)) as { traces: { fn: string; xt: string; yt: string }[] };
+  assert.deepEqual([graph.traces[0].fn, graph.traces[0].xt, graph.traces[0].yt], ['x\\Q', 'x\\Q', 'x\\Q']);
   const fig = rawJsonSchema(figureSchema);
   const figOut = sanitizeModelValue({ structure: { smiles: 'C/C=C\\C' }, plot: { functions: [{ expr: 'x\\C' }] } }, fig) as { structure: { smiles: string }; plot: { functions: { expr: string }[] } };
   assert.equal(figOut.structure.smiles, 'C/C=C\\C');

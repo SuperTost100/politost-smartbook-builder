@@ -1,3 +1,4 @@
+import { parse } from 'mathjs';
 import { evalExprAtX } from './safeMathExpr.ts';
 import { compileExpr } from './expr.ts';
 import { axisSamples, type AxisScale } from './plot.ts';
@@ -197,11 +198,44 @@ export interface FunctionGraphSpec {
 }
 
 /**
- * The reader's "function" graphs only understand x, digits and + - * / ^, so curves with sin, exp or log would be
- * empty. We sample the functions here instead and ship a "plotly" graph with plain arrays, which the reader renders
- * after its sanitizer. Discontinuities become nulls so the line breaks instead of drawing a vertical jump.
+ * One trace of a graph spec. `source` is the formula or worked example of the section the trace comes from, copied as the
+ * section writes it. Each kind uses its own fields: `fn` and an optional `domain` (y = f(x), on part of the x axis),
+ * `xt`, `yt` and `tRange` (a parametric curve), `points` (single values, `open` for a hole), `value` (a vertical line at
+ * x = value), `bars` (a few values of distinct cases).
  */
-export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { payload: { id: string; title: string; type: 'plotly'; config: { data: unknown[]; layout: Record<string, unknown> } }; ok: boolean; detail: string } {
+export interface GraphTrace {
+  kind: 'function' | 'parametric' | 'points' | 'vline' | 'bars';
+  label: string;
+  source?: string;
+  fn?: string;
+  domain?: [number, number];
+  xt?: string;
+  yt?: string;
+  tRange?: [number, number];
+  points?: { x: number; y: number; open?: boolean }[];
+  value?: number;
+  bars?: { category: string; value: number }[];
+}
+
+export interface GraphSpec extends Omit<FunctionGraphSpec, 'functions'> {
+  traces: GraphTrace[];
+}
+
+export type SampledGraph = { payload: { id: string; title: string; type: 'plotly'; config: { data: unknown[]; layout: Record<string, unknown> } }; ok: boolean; detail: string };
+
+/** A graph of functions only: the spec the builder used before typed traces, still used by tests and plots. */
+export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): SampledGraph {
+  const { functions, ...rest } = spec;
+  return sampleGraph({ ...rest, traces: functions.map((f) => ({ kind: 'function', fn: f.expr, label: f.label })) }, samples);
+}
+
+/**
+ * The reader's "function" graphs only understand x, digits and + - * / ^, so curves with sin, exp or log would be
+ * empty. We sample the traces here instead and ship a "plotly" graph with plain arrays, which the reader renders
+ * after its sanitizer. Discontinuities become nulls so the line breaks instead of drawing a vertical jump. Every trace
+ * kind becomes a scatter (lines or markers) or a bar trace, the only parts of Plotly the reader keeps.
+ */
+export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
   const [x0, x1] = spec.xDomain;
   const [y0, y1] = spec.yDomain;
   const problems: string[] = [];
@@ -215,60 +249,259 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
   const xScale = logOk(spec.xScale, x0, x1, 'x');
   const yScale = logOk(spec.yScale, y0, y1, 'y');
   const ty = yScale === 'log' ? Math.log10 : (v: number) => v;
+  // A value Plotly can show: finite, and positive on a log axis.
+  const showable = (v: number, scale: AxisScale) => Number.isFinite(v) && (scale !== 'log' || v > 0);
+  const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
+  const r8 = (v: number) => Number(v.toPrecision(8));
   const colors = ['#C2410C', '#1D4ED8', '#15803D', '#7C3AED'];
-  const data = spec.functions.map((f, i) => {
-    const fn = compileExpr(f.expr);
-    if (!fn.ok) {
-      problems.push(`"${f.expr}" is not a valid expression: ${fn.error}`);
+  const data = spec.traces.map((t, i) => {
+    const color = colors[i % colors.length];
+    const line = { type: 'scatter', mode: 'lines', name: t.label };
+    if (t.kind === 'function') {
+      const fn = compileExpr(t.fn ?? '');
+      if (!fn.ok) {
+        problems.push(`"${t.fn ?? ''}" is not a valid expression: ${fn.error}`);
+        return null;
+      }
+      const lo = Math.max(x0, t.domain?.[0] ?? x0);
+      const hi = Math.min(x1, t.domain?.[1] ?? x1);
+      if (!(lo < hi)) {
+        problems.push(`"${t.fn}": its domain [${t.domain?.join(', ')}] lies outside the x axis [${x0}, ${x1}].`);
+        return null;
+      }
+      const xs: number[] = [];
+      const ys: (number | null)[] = [];
+      let finite = 0;
+      let visible = 0;
+      let prevX: number | null = null;
+      let prev: number | null = null;
+      const span = ty(y1) - ty(y0);
+      // The curve as drawn: on a log y axis the jump test reads the exponent, and a value the axis cannot show is undefined.
+      const drawn = (x: number) => {
+        const v = fn.evaluate({ x });
+        return showable(v, yScale) ? ty(v) : Number.NaN;
+      };
+      for (const x of axisSamples(lo, hi, samples, xScale)) {
+        let y: number | null = fn.evaluate({ x });
+        if (Number.isNaN(y) || !showable(y, yScale)) y = null;
+        else {
+          finite++;
+          if (y >= y0 && y <= y1) visible++;
+          // A visible step is a jump or a pole only when it survives bisection; a steep continuous curve stays whole.
+          if (prev !== null && prevX !== null && Math.abs(ty(y) - ty(prev)) > 0.02 * span && jumpsBetween(drawn, prevX, x, ty(prev), ty(y))) {
+            xs.push(r8((prevX + x) / 2));
+            ys.push(null);
+          }
+        }
+        prev = y;
+        prevX = x;
+        xs.push(r8(x));
+        ys.push(y === null ? null : r8(y));
+      }
+      if (finite < samples * 0.5) problems.push(`"${t.fn}" is undefined on most of [${lo}, ${hi}].`);
+      if (visible === 0) problems.push(`"${t.fn}" never enters the visible range [${y0}, ${y1}].`);
+      return { ...line, x: xs, y: ys, line: { color, width: 2.5 } };
+    }
+    if (t.kind === 'parametric') {
+      const cx = compileExpr(t.xt ?? '', ['t']);
+      const cy = compileExpr(t.yt ?? '', ['t']);
+      const bad = !cx.ok ? `x(t) "${t.xt ?? ''}": ${cx.error}` : !cy.ok ? `y(t) "${t.yt ?? ''}": ${cy.error}` : !t.tRange || !(t.tRange[0] < t.tRange[1]) ? 'tRange must be [min, max] with min < max' : '';
+      if (bad || !cx.ok || !cy.ok || !t.tRange) {
+        problems.push(`"${t.label}": ${bad}`);
+        return null;
+      }
+      const [a, b] = t.tRange;
+      const xs: (number | null)[] = [];
+      const ys: (number | null)[] = [];
+      let finite = 0;
+      let visible = 0;
+      // Each coordinate as drawn, in units of its window, so the jump test of function traces applies to both.
+      const tx = xScale === 'log' ? Math.log10 : (v: number) => v;
+      const coord = (c: typeof cx, scale: AxisScale, to: (v: number) => number, span: number) => (s: number) => {
+        const v = c.ok ? c.evaluate({ t: s }) : Number.NaN;
+        return showable(v, scale) ? to(v) / span : Number.NaN;
+      };
+      const fx = coord(cx, xScale, tx, tx(x1) - tx(x0));
+      const fy = coord(cy, yScale, ty, ty(y1) - ty(y0));
+      let prev: { s: number; X: number; Y: number } | null = null;
+      for (let k = 0; k <= samples; k++) {
+        const s = a + ((b - a) * k) / samples;
+        const X = cx.evaluate({ t: s });
+        const Y = cy.evaluate({ t: s });
+        const ok = showable(X, xScale) && showable(Y, yScale);
+        if (ok) {
+          finite++;
+          if (inView(X, Y)) visible++;
+          // A pole in t (y = 1/t) breaks the curve as it breaks a function trace.
+          const X1 = fx(s); const Y1 = fy(s);
+          if (prev && ((Math.abs(X1 - prev.X) > 0.02 && jumpsBetween(fx, prev.s, s, prev.X, X1)) || (Math.abs(Y1 - prev.Y) > 0.02 && jumpsBetween(fy, prev.s, s, prev.Y, Y1)))) {
+            xs.push(null);
+            ys.push(null);
+          }
+          prev = { s, X: X1, Y: Y1 };
+        } else prev = null;
+        xs.push(ok ? r8(X) : null);
+        ys.push(ok ? r8(Y) : null);
+      }
+      if (finite < samples * 0.5) problems.push(`"${t.label}" is undefined for most t in [${a}, ${b}].`);
+      else if (visible === 0) problems.push(`"${t.label}" never enters the visible window.`);
+      return { ...line, x: xs, y: ys, line: { color, width: 2.5 } };
+    }
+    if (t.kind === 'points') {
+      const pts = (t.points ?? []).filter((p) => showable(p.x, xScale) && showable(p.y, yScale));
+      if (!pts.length || pts.length < (t.points ?? []).length) {
+        problems.push(`"${t.label}": ${pts.length ? 'some points are not numbers the axes can show' : 'no points'}.`);
+        return null;
+      }
+      if (!pts.some((p) => inView(p.x, p.y))) problems.push(`"${t.label}": no point lies in the visible window.`);
+      return { type: 'scatter', mode: 'markers', name: t.label, x: pts.map((p) => p.x), y: pts.map((p) => p.y), marker: { color, size: 9, symbol: pts.map((p) => (p.open ? 'circle-open' : 'circle')) } };
+    }
+    if (t.kind === 'vline') {
+      if (typeof t.value !== 'number' || !showable(t.value, xScale) || t.value < x0 || t.value > x1) {
+        problems.push(`"${t.label}": the vertical line needs an x value inside [${x0}, ${x1}].`);
+        return null;
+      }
+      return { ...line, x: [t.value, t.value], y: [y0, y1], line: { color, width: 2.5 } };
+    }
+    const bars = (t.bars ?? []).filter((b) => b.category.trim() && showable(b.value, yScale));
+    if (!bars.length || bars.length < (t.bars ?? []).length) {
+      problems.push(`"${t.label}": ${bars.length ? 'some bars have no name or no value the y axis can show' : 'no bars'}.`);
       return null;
     }
-    const xs: number[] = [];
-    const ys: (number | null)[] = [];
-    let finite = 0;
-    let inView = 0;
-    let prevX: number | null = null;
-    let prev: number | null = null;
-    const span = ty(y1) - ty(y0);
-    // The curve as drawn: on a log y axis the jump test reads the exponent, and a value the axis cannot show is undefined.
-    const drawn = (x: number) => {
-      const v = fn.evaluate({ x });
-      return Number.isFinite(v) && (yScale !== 'log' || v > 0) ? ty(v) : Number.NaN;
-    };
-    for (const x of axisSamples(x0, x1, samples, xScale)) {
-      let y: number | null = fn.evaluate({ x });
-      if (Number.isNaN(y)) y = null;
-      // Plotly shows nothing at or below zero on a log axis.
-      if (y === null || !Number.isFinite(y) || (yScale === 'log' && y <= 0)) y = null;
-      else {
-        finite++;
-        if (y >= y0 && y <= y1) inView++;
-        // A visible step is a jump or a pole only when it survives bisection; a steep continuous curve stays whole.
-        if (prev !== null && prevX !== null && Math.abs(ty(y) - ty(prev)) > 0.02 * span && jumpsBetween(drawn, prevX, x, ty(prev), ty(y))) {
-          xs.push(Number(((prevX + x) / 2).toPrecision(8)));
-          ys.push(null);
-        }
-      }
-      prev = y;
-      prevX = x;
-      xs.push(Number(x.toPrecision(8)));
-      ys.push(y === null ? null : Number(y.toPrecision(8)));
-    }
-    if (finite < samples * 0.5) problems.push(`"${f.expr}" is undefined on most of [${x0}, ${x1}].`);
-    if (inView === 0) problems.push(`"${f.expr}" never enters the visible range [${y0}, ${y1}].`);
-    return { type: 'scatter', mode: 'lines', name: f.label, x: xs, y: ys, line: { color: colors[i % colors.length], width: 2.5 } };
+    return { type: 'bar', name: t.label, x: bars.map((b) => b.category), y: bars.map((b) => b.value), marker: { color } };
   }).filter(Boolean);
   if (x1 <= x0 || y1 <= y0) problems.push('The domain or range is empty.');
   // The reader keeps an axis "type" and "range" (its sanitiser lists both). Plotly reads the range of a log axis as exponents.
   const axis = (title: string, scale: AxisScale, lo: number, hi: number) => (scale === 'log' ? { title, type: 'log', range: [Math.log10(lo), Math.log10(hi)] } : { title, range: [lo, hi] });
+  // Bars sit on a category axis, where Plotly places them at 0, 1, 2, ...: a numeric range would clip them.
   const layout = {
     title: spec.title,
-    xaxis: axis(spec.xLabel, xScale, x0, x1),
+    xaxis: spec.traces.some((t) => t.kind === 'bars') ? { title: spec.xLabel } : axis(spec.xLabel, xScale, x0, x1),
     yaxis: axis(spec.yLabel, yScale, y0, y1),
-    showlegend: spec.functions.length > 1,
+    showlegend: spec.traces.length > 1,
   };
+  const onlyFunctions = spec.traces.every((t) => t.kind === 'function');
   return {
     payload: { id: spec.id, title: spec.title, type: 'plotly', config: { data, layout } },
     ok: problems.length === 0 && data.length > 0,
-    detail: problems.length ? problems.join(' ') : `Sampled ${data.length} function(s) at ${samples + 1} points each${xScale === 'log' ? ' (evenly in the exponent of x)' : ''}; all defined and visible.`,
+    detail: problems.length
+      ? problems.join(' ')
+      : `Sampled ${data.length} ${onlyFunctions ? 'function(s)' : 'trace(s)'}${onlyFunctions ? ` at ${samples + 1} points each` : ''}${xScale === 'log' ? ' (evenly in the exponent of x)' : ''}; all defined and visible.`,
   };
+}
+
+/** The quote occurs in the section text, ignoring whitespace, `$` and LaTeX spacing and sizing commands. */
+export function sourceQuoted(source: string, section: string): boolean {
+  const norm = (s: string) => s.replace(/\\left|\\right/g, '').replace(/\\[,;:! ]|\s+|\$/g, '');
+  const q = norm(source);
+  return q.length >= 3 && norm(section).includes(q);
+}
+
+/**
+ * Each trace must quote the formula or example of the section it draws, so a curve the section does not state cannot pass.
+ * Two traces quoting the same source with different expressions are reported too: one of them is not what the source says.
+ */
+export function graphSourceCheck(traces: GraphTrace[], section: string): { ok: boolean; detail: string } {
+  const problems: string[] = [];
+  const notes: string[] = [];
+  const seen = new Map<string, { label: string; expr: string }>();
+  for (const t of traces) {
+    const source = (t.source ?? '').trim();
+    if (!sourceQuoted(source, section)) {
+      problems.push(source ? `"${t.label}" quotes "${source}", which the section does not contain` : `"${t.label}" quotes no formula or example of the section`);
+      continue;
+    }
+    const expr = t.kind === 'function' ? t.fn ?? '' : t.kind === 'parametric' ? `${t.xt ?? ''}, ${t.yt ?? ''}` : '';
+    const key = source.replace(/\s+/g, '');
+    const other = seen.get(key);
+    if (other && expr && other.expr && other.expr !== expr) notes.push(`"${t.label}" and "${other.label}" quote the same source with different expressions (warning)`);
+    if (!other) seen.set(key, { label: t.label, expr });
+  }
+  if (problems.length) return { ok: false, detail: [...problems, ...notes].join('; ') };
+  return { ok: true, detail: [`Every trace quotes the section.`, ...notes].join(' ') };
+}
+
+const FREE_CONSTANTS = ['C', 'C1', 'C2'];
+
+/** Solves the small symmetric system A c = b by Gaussian elimination, or null when it is singular. */
+function solve(A: number[][], b: number[]): number[] | null {
+  const n = b.length;
+  const M = A.map((row, i) => [...row, b[i]!]);
+  for (let c = 0; c < n; c++) {
+    let p = c;
+    for (let r = c + 1; r < n; r++) if (Math.abs(M[r]![c]!) > Math.abs(M[p]![c]!)) p = r;
+    if (Math.abs(M[p]![c]!) < 1e-12) return null;
+    [M[c], M[p]] = [M[p]!, M[c]!];
+    for (let r = 0; r < n; r++) {
+      if (r === c) continue;
+      const f = M[r]![c]! / M[c]![c]!;
+      for (let k = c; k <= n; k++) M[r]![k]! -= f * M[c]![k]!;
+    }
+  }
+  return M.map((row, i) => row[n]! / row[i]!);
+}
+
+/**
+ * Compares the curve an independent checker expects (an expression in x) with a trace's stored points. The expression may
+ * use free constants C, C1 and C2 where the section gives no value (an additive constant, a reference level); they are
+ * fitted to the data by least squares when the expression is affine in them. A point differs when it is off by more than
+ * 1% of the y window. Returns null when there is nothing to compare: no expression, one that does not compile or is not
+ * affine in its constants, or fewer than 5 comparable points.
+ */
+export function compareExpected(expected: string, xs: unknown[], ys: unknown[], yspan: number): { ok: boolean; detail: string } | null {
+  if (!expected.trim()) return null;
+  let names: string[];
+  try {
+    const used = new Set<string>();
+    parse(expected).traverse((n) => { if (n.type === 'SymbolNode') used.add((n as unknown as { name: string }).name); });
+    names = FREE_CONSTANTS.filter((c) => used.has(c));
+  } catch {
+    return null;
+  }
+  const c = compileExpr(expected, ['x', ...names]);
+  if (!c.ok) return null;
+  const at = (x: number, values: number[]) => c.evaluate({ x, ...Object.fromEntries(names.map((n, i) => [n, values[i]!])) });
+  // A drawn point where the expected curve is undefined is a branch the section does not have: it counts as a difference.
+  const pts: [number, number][] = [];
+  let undefinedAt: number | null = null;
+  let undefinedCount = 0;
+  xs.forEach((x, k) => {
+    const y = ys[k];
+    if (typeof x !== 'number' || typeof y !== 'number' || !Number.isFinite(x) || !Number.isFinite(y)) return;
+    if (Number.isFinite(at(x, names.map(() => 0)))) pts.push([x, y]);
+    else { undefinedCount++; undefinedAt ??= x; }
+  });
+  if (pts.length < 5) return undefinedCount >= 5 ? { ok: false, detail: `${expected} is undefined at ${undefinedCount} of the ${undefinedCount + pts.length} drawn points, from x=${undefinedAt}` } : null;
+  // With constants, y = f0(x) + sum of c_i g_i(x). The basis is read off the expression and checked at c = 2 before fitting.
+  let fitted = names.map(() => 0);
+  if (names.length) {
+    const zero = names.map(() => 0);
+    const f0 = pts.map(([x]) => at(x, zero));
+    const g = names.map((_, i) => pts.map(([x], k) => at(x, names.map((__, j) => (j === i ? 1 : 0))) - f0[k]!));
+    const affine = pts.every(([x], k) => {
+      const v = at(x, names.map(() => 2));
+      const lin = f0[k]! + 2 * g.reduce((s, gi) => s + gi[k]!, 0);
+      return Math.abs(v - lin) <= 1e-6 * Math.max(1, Math.abs(v));
+    });
+    if (!affine) return null;
+    const A = g.map((gi) => g.map((gj) => gi.reduce((s, v, k) => s + v * gj[k]!, 0)));
+    const b = g.map((gi) => gi.reduce((s, v, k) => s + v * (pts[k]![1] - f0[k]!), 0));
+    const sol = solve(A, b);
+    if (!sol) return null;
+    fitted = sol;
+  }
+  let bad = undefinedCount;
+  let worst = undefinedAt === null ? '' : `at x=${undefinedAt} the data has a value and ${expected} is undefined`;
+  for (const [x, y] of pts) {
+    const e = at(x, fitted);
+    if (Math.abs(e - y) > 0.01 * yspan + 1e-6 * Math.abs(e)) {
+      bad++;
+      worst ||= `at x=${x} the data is ${y}, expected ${Number(e.toPrecision(6))}`;
+    }
+  }
+  const constants = names.length ? ` with ${names.map((n, i) => `${n} = ${Number(fitted[i]!.toPrecision(6))}`).join(', ')}` : '';
+  const n = pts.length + undefinedCount;
+  return bad > 0.05 * n
+    ? { ok: false, detail: `${bad}/${n} points differ from ${expected}${constants}; ${worst}` }
+    : { ok: true, detail: `matches ${expected}${constants} at ${n - bad}/${n} points` };
 }

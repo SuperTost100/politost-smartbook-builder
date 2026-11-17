@@ -1,5 +1,6 @@
 // Extras: the bulk model picks where graphs and lab examples (Python or MATLAB) help; the writer creates them; we check them.
-import { graphLintCheck, sampleFunctionGraph } from '@smartbuilder/content';
+import { compareExpected, graphLintCheck, graphSourceCheck, sampleGraph, type GraphSpec, type SampledGraph } from '@smartbuilder/content';
+import type { QuestionCheck } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
@@ -7,7 +8,7 @@ import { setIssuesStatus } from '../repo/issues.ts';
 import type { TaskContext, TaskSpec } from '../queue/queue.ts';
 import { runMatlab } from './matlab.ts';
 import { runPython } from './python.ts';
-import { enrichPickPrompt, enrichPickSchema, graphPrompt, graphSchema, idePrompt, ideParser } from './prompts.ts';
+import { enrichPickPrompt, enrichPickSchema, graphCheckPrompt, graphCheckSchema, graphPrompt, graphSchema, idePrompt, ideParser } from './prompts.ts';
 import { headRevision, loadOutline, loadProject, truncate } from './util.ts';
 
 const ENRICH_KINDS = ['enrich.graph', 'enrich.ide'];
@@ -109,35 +110,54 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   }
   const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), relation: typeof t.task.input.relation === 'string' ? t.task.input.relation : undefined, section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const main = g.data;
-  const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
-    id, title, xDomain: main.xDomain, yDomain, xScale: main.xScale, yScale, xLabel: main.xLabel, yLabel,
-    functions: functions.map((f) => ({ expr: f.fn, label: f.label })),
+  if (main.verdict === 'none') {
+    const reason = `The section states no relation a graph can show: ${main.reason}`;
+    if (issueIds.length) setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was not redrawn. ${reason} Delete the graph in Extras, or fix it there.`);
+    return { made: 0, skipped: reason };
+  }
+  const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, traces: GraphSpec['traces']): GraphSpec => ({
+    id, title, xDomain: main.xDomain, yDomain, xScale: main.xScale, yScale, xLabel: main.xLabel, yLabel, traces,
   });
-  const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.functions), description: main.description }];
+  const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.traces), description: main.description }];
   // A pair (the phase under a Bode magnitude) shares the first graph's x axis, so the two line up when read one after the other.
-  if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.functions), description: main.pair.description });
-  // A graph that draws can still be wrong in ways its data shows (a joined jump, two traces in one place): the lint reads it.
+  if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.traces), description: main.pair.description });
+  // A graph that draws can still be wrong in ways its data shows (a joined jump, two traces in one place), and each trace
+  // must quote what it draws from the section. These checks cost no model call.
   const built = graphs.map(({ spec, description }) => {
-    const sampled = sampleFunctionGraph(spec);
+    const sampled = sampleGraph(spec);
     const lint = graphLintCheck(sampled.payload, [], { sampled: true });
-    const checks = [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }, { method: 'lint', ok: lint.ok, detail: lint.detail }];
-    const failed = [sampled.ok ? '' : sampled.detail, lint.ok ? '' : lint.detail].filter(Boolean).join('; ');
-    return { sampled, checks, ok: !failed, failed };
+    const source = graphSourceCheck(spec.traces, head.markdown);
+    const checks: QuestionCheck[] = [
+      { method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` },
+      { method: 'lint', ok: lint.ok, detail: lint.detail },
+      { method: 'source', ok: source.ok, detail: source.detail },
+    ];
+    const failed = [sampled.ok ? '' : sampled.detail, lint.ok ? '' : lint.detail, source.ok ? '' : source.detail].filter(Boolean);
+    return { spec, sampled, checks, failed };
   });
+  // Then one independent call per graph that passed them, so a graph about to be redrawn anyway costs no checker call.
+  const checkIndependently = async (b: (typeof built)[number]) => {
+    if (b.failed.length) return;
+    const check = await independentGraphCheck(ctx, t, { language: project.language, section: head.markdown, spec: b.spec, sampled: b.sampled });
+    b.checks.push(check);
+    if (!check.ok) b.failed.push(check.detail);
+  };
   // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
   // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
   if (issueIds.length) {
     // A redraw answers the issues of one graph row. Its replacement is the graph of the answer with that row's id, or the only
     // graph of the answer when none has the id. A pair has two rows, and each gets its own redraw.
     const wanted = before ? json<{ id?: string }>(before.payload, {}).id : undefined;
-    const pick = built.find((_, k) => graphs[k]!.spec.id === wanted) ?? (built.length === 1 ? built[0] : undefined);
+    const pick = built.find((b) => b.spec.id === wanted) ?? (built.length === 1 ? built[0] : undefined);
     if (!pick) {
       const reason = `The redrawn answer has no graph with the id "${wanted ?? ''}" and holds ${built.length} graphs, so none of them is taken for this one.`;
       setIssuesStatus(ctx, projectId, issueIds, 'open', reason);
       return { made: 0, skipped: reason };
     }
-    const { sampled, checks, ok, failed } = pick;
-    if (!ok) {
+    await checkIndependently(pick);
+    const { spec, sampled, checks } = pick;
+    if (pick.failed.length) {
+      const failed = pick.failed.join('; ');
       setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${failed}`);
       return { made: 0, failed };
     }
@@ -145,7 +165,7 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
       // Work done while the author changed the same graph is never applied over it: the check and the write are one transaction.
       const stale = ctx.db.tx(() => {
         const reason = changedSince(before, enrichmentState(ctx, replaceId));
-        if (!reason) ctx.db.update('enrichments', replaceId, { payload: sampled.payload, status: 'verified', checks });
+        if (!reason) ctx.db.update('enrichments', replaceId, { payload: sampled.payload, status: 'verified', checks, spec });
         return reason;
       });
       if (stale) {
@@ -156,13 +176,51 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
       setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
       return { made: 1, replaced: true };
     }
-    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks);
+    saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks, spec);
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', 'The graph was redrawn and passes its check.');
     return { made: 1, replaced: false };
   }
+  for (const b of built) await checkIndependently(b);
   // One transaction: a pair is kept whole or not at all, because a retry without force returns `reused` as soon as one graph exists.
-  ctx.db.tx(() => { for (const { sampled, checks } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks); });
+  ctx.db.tx(() => { for (const { sampled, checks, spec } of built) saveEnrichment(ctx, projectId, nodeId, 'graph', sampled.payload, checks, spec); });
   return { made: built.length };
+}
+
+/**
+ * One call on the checker route: from the section alone, without the data, the checker writes the curve each trace must
+ * show, and the builder compares it with the sampled points. A mismatch, a contradiction the checker reports, or its verdict
+ * that the section states no relation for this graph fails the check, and the detail carries the expected curve for the redraw.
+ * shortcut: traces on a log y axis are not compared numerically (1% of a window spanning decades says little), upgrade by
+ * comparing in the exponent.
+ */
+export async function independentGraphCheck(ctx: AppContext, t: TaskContext, p: { language: string; section: string; spec: GraphSpec; sampled: SampledGraph }): Promise<QuestionCheck> {
+  const { spec } = p;
+  const r = await runRole(ctx, {
+    role: 'checker',
+    ...graphCheckPrompt({ language: p.language, section: truncate(p.section, 8000), graph: { title: spec.title, xLabel: spec.xLabel, yLabel: spec.yLabel, traces: spec.traces.map((tr) => ({ label: tr.label, source: tr.source })) } }),
+    schema: graphCheckSchema, projectId: t.task.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+  });
+  const data = p.sampled.payload.config.data as { x?: unknown[]; y?: unknown[] }[];
+  const yspan = spec.yDomain[1] - spec.yDomain[0];
+  const lines: string[] = [];
+  let ok = r.data.fit === 'fits';
+  if (!ok) lines.push('The checker finds no relation in the section that this graph can show.');
+  // An answer that skips traces checked only some of them, so it cannot vouch for the graph.
+  if (r.data.traces.length !== spec.traces.length) {
+    ok = false;
+    lines.push(`The checker answered for ${r.data.traces.length} of ${spec.traces.length} traces.`);
+  }
+  spec.traces.forEach((tr, k) => {
+    const answer = r.data.traces[k];
+    if (!answer) return;
+    const d = data[k];
+    const cmp = tr.kind === 'function' && spec.yScale !== 'log' && d?.x && d.y ? compareExpected(answer.expected, d.x, d.y, yspan) : null;
+    if (cmp && !cmp.ok) ok = false;
+    if (answer.problem.trim()) ok = false;
+    const parts = [cmp ? cmp.detail : answer.expected.trim() ? `expected ${answer.expected} (not compared)` : '', answer.problem.trim() ? `problem: ${answer.problem.trim()}` : ''].filter(Boolean);
+    if (parts.length) lines.push(`"${tr.label}": ${parts.join('; ')}`);
+  });
+  return { method: 'independent', ok, detail: lines.join('\n') || 'The checker found nothing to compare.', model: `${r.route.provider}:${r.route.model}` };
 }
 
 /** One lab example (Python or MATLAB) for one section, run in its sandbox. Idempotent: skipped when the section already has one. */
@@ -194,9 +252,9 @@ export async function checkLabCode(lab: 'python' | 'matlab', code: string): Prom
   return { method: 'numeric', ok, detail: ok ? `Ran in Pyodide ${run.version}. Output:\n${truncate(run.stdout, 800)}` : `Did not run: ${run.error ?? 'no output'}` };
 }
 
-function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind: 'ide' | 'graph', payload: Record<string, unknown>, checks: { method: string; ok: boolean; detail: string }[]) {
+function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind: 'ide' | 'graph', payload: Record<string, unknown>, checks: { method: string; ok: boolean; detail: string }[], spec: GraphSpec | null = null) {
   const ok = checks.every((c) => c.ok);
-  ctx.db.insert('enrichments', { id: newId(), project_id: projectId, node_id: nodeId, kind, payload, status: ok ? 'verified' : 'issue', checks, created_at: now() });
+  ctx.db.insert('enrichments', { id: newId(), project_id: projectId, node_id: nodeId, kind, payload, status: ok ? 'verified' : 'issue', checks, spec, created_at: now() });
   if (!ok) {
     ctx.db.insert('review_issues', {
       id: newId(), project_id: projectId, node_id: nodeId, question_id: null, rev_id: null, source: 'verification', severity: 'major',

@@ -584,6 +584,24 @@ test('an exported graph is linted, and a finding the author accepted is not repo
   assert.deepEqual(lint(['duplicate:Gay-Lussac']), []);
 });
 
+test('a graph whose section no longer states the formula it was drawn from is reported as stale; one without a spec is not', () => {
+  const payload = { id: 'v', title: 'Velocità', type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', name: 'v = a t', x: [0, 1, 2], y: [0, 2, 4] }], layout: {} } };
+  const stale = (spec: Record<string, unknown> | null, rewrite?: string) => {
+    const input = fixtureBook({ enrichments: [enrichment({ id: 'g', kind: 'graph', nodeId: 'sec-vel', payload, spec })] });
+    const sec = input.chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!;
+    if (rewrite !== undefined) sec.markdown = rewrite;
+    return compileBook(input).findings.filter((f) => f.rule === 'graph-stale');
+  };
+  const quoted = fixtureBook().chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!.markdown.match(/\$\$([^$]+)\$\$/)![1]!;
+  const spec = { traces: [{ kind: 'function', label: 'v', fn: '2*x', source: quoted }] };
+  assert.deepEqual(stale(spec), [], 'the section still states it');
+  const found = stale(spec, 'Il testo ora parla di altro.');
+  assert.equal(found.length, 1);
+  assert.equal(found[0]!.severity, 'minor');
+  assert.match(found[0]!.message, /"Velocità" was drawn from .* which its section no longer states/);
+  assert.deepEqual(stale(null, 'Il testo ora parla di altro.'), [], 'an old graph has no spec to compare');
+});
+
 test('a truth table and a matrix written as KaTeX arrays survive the compile and the reader parser', () => {
   const table = '$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\n0 & 0 & 0 \\\\\n1 & 1 & 1\n\\end{array}\n$$';
   const matrix = '$$\n\\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix}\n$$';
