@@ -12,7 +12,7 @@ import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
   outsideMaterial: false, ide: true, labLanguage: 'python', graphs: true, figures: true, firstChapterGate: true, outlineGate: true,
-  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete', noClaudeFallback: false, selfCheck: true, figurePolicy: 'helpful', circuitSymbols: 'american',
+  exercisesPerTopic: 3, exercisesPerHotTopic: 6, chapterScope: [], offProgram: 'delete', noClaudeFallback: false, selfCheck: true, reviewSamples: 2, figurePolicy: 'helpful', circuitSymbols: 'american',
 };
 
 type LangChoice = 'it' | 'en' | 'other';
@@ -265,6 +265,11 @@ export default function BookSetup() {
           </div>
           <p className="ui-field__hint">With this choice, the jobs that start on Claude never use their fallback for this book, whatever the fallbacks in Connections say. A usage limit pauses the run until it resets, and the Run panel says when. Any other failure, such as a timeout, is retried and then stops the task.</p>
         </fieldset>
+        <div className="ui-field">
+          <label className="ui-field__label" htmlFor="su-samples">Reviewer reads per chapter</label>
+          <input id="su-samples" type="number" min={1} max={5} className="ui-input su-narrow" value={opts.reviewSamples} onChange={(e) => set('reviewSamples', clamp(e.target.value, 1, 5))} />
+          <p className="ui-field__hint">How many independent reviewer calls read a whole chapter, in its first review and once more after the fixes of that review. Each call finds a different part of the errors: in a test on known errors, 2 calls found 6 to 9 of 9 and 3 calls found 8 or 9. The cross review adds one call on another model. Use 3 for a book that must be clean; each extra call costs about 95k input tokens of the reviewer's model per chapter.</p>
+        </div>
       </section>
 
       {error && <div className="ui-banner ui-banner--danger" role="alert"><div className="ui-banner__body"><span className="ui-banner__title">The book was not saved</span><span>{error}</span></div></div>}

@@ -8,7 +8,7 @@ export * from './subjects.ts';
 
 // ---------- Model routing ----------
 
-export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'editor', 'exercises', 'checker', 'reviewer', 'verifier', 'research', 'illustrator'] as const;
+export const ROLES = ['bulk', 'vision', 'evidence', 'planner', 'writer', 'editor', 'exercises', 'checker', 'reviewer', 'crossReviewer', 'verifier', 'research', 'illustrator'] as const;
 export type Role = (typeof ROLES)[number];
 
 export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
@@ -21,6 +21,7 @@ export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
   exercises: { label: 'Write exercises', help: 'Generated exercises and missing official solutions. Every one is checked afterwards.' },
   checker: { label: 'Check solutions', help: 'First, cheap check of every exercise solution. Disagreements go to the reviewer for a second opinion.' },
   reviewer: { label: 'Review', help: 'Independent check of drafts and solutions. Prefer a different vendor from the writer.' },
+  crossReviewer: { label: 'Cross review', help: 'One more read of a whole chapter next to the reviewer\'s, in the first review and in the sweep after its fixes. Prefer a different vendor from the reviewer: Opus finds broken sentences, blocks and references the reviewer misses, but few maths errors, so it adds to the reviewer and does not replace it.' },
   verifier: { label: 'Second opinion', help: 'Re-reads every review finding against the text and the sources before you see it, drops the ones that are not real and lowers overstated severities. Prefer a different vendor from the reviewer.' },
   illustrator: { label: 'Draw figures', help: 'Writes the drawing code for circuits, logic networks, timing diagrams, free-body diagrams and other figures the builder cannot draw from a spec, then looks at its own picture and corrects it. Needs a model that reads images; use your best one.' },
   research: { label: 'Outside research', help: 'Searches the web for material your sources lack. The only role allowed to use web search, and only with Claude.' },
@@ -47,6 +48,8 @@ export const DEFAULT_ROUTES: Record<Role, RoleRoute> = {
   exercises: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
   checker: { primary: { provider: 'codex', model: 'gpt-6-luna', effort: 'high' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   reviewer: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
+  // No GPT fallback: the reviewer already spends the GPT quota, and a chapter review goes on without this read when it fails.
+  crossReviewer: { primary: { provider: 'claude', model: 'claude-opus-5-5', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
   verifier: { primary: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' }, fallback: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' } },
   // Measured on 12 briefs: gpt-6-sol drew best, Sonnet was a reliable second, gpt-6-luna could not draw circuits at all.
   illustrator: { primary: { provider: 'codex', model: 'gpt-6-sol', effort: 'medium' }, fallback: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } },
@@ -91,6 +94,8 @@ export const bookOptionsSchema = z.object({
   offProgram: z.enum(['delete', 'mark']).default('delete'),
   /** A role that starts on Claude has no fallback for this book: when Claude usage runs out, its tasks wait for the reset instead of continuing on the replacement model. */
   noClaudeFallback: z.boolean().default(false),
+  /** Independent reviewer calls on a whole chapter, in its first review and in the one sweep after a fix round. Each call finds a different part of the errors, so more calls find more: 2 found 6 to 9 of 9 known errors, 3 found 8 or 9. Each costs about 95k input tokens. */
+  reviewSamples: z.number().int().min(1).max(5).default(2),
   /** After a section is drafted, its writer checks it once more in the same conversation (hypotheses, steps, computations, formula keys) and may correct it. No screen yet: set it through the project options API. */
   selfCheck: z.boolean().default(true),
 });

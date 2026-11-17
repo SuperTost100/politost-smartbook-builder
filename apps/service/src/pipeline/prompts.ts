@@ -872,7 +872,7 @@ A symbol that differs from the one the exam papers use for the same quantity is 
 
 A chapter's last section may be its exam guide ("Come viene chiesto all'esame" / "How the exam asks it"): it is written from past exam questions, not from the sources, so do not report its examples or session counts as unsupported; check its methods and its mathematics like any other section.
 
-Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Do not report those. Prefer fewer, solid issues to a long list of doubtful ones.
+Calibration: report each problem once, at the place where it is, not again in every section it touches. Do not report wording you would merely phrase differently, alternative presentations or matters of taste. A missing hypothesis is a blocker only when the statement is false without it; otherwise it is major. Cases the setting already excludes are not missing hypotheses: ${profile.excluded}. Do not report those. Report every error you find; there is no limit.
 
 Style is not your job. Do not report wording, tone, length, order of presentation, repetition or "could be clearer", at any severity.`,
     prompt: `Chapter: ${p.chapterTitle}
@@ -888,7 +888,7 @@ ${p.chapter}
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence}
 
-Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. Minor: only a wrong word, symbol, unit or reference that could mislead a student (a symbol that differs from the one in the statement, a wrong unit, a link to the wrong formula); anything that is only style or could be said better is not an issue. Return an empty list if the chapter is correct.`,
+Return JSON issues (message and suggestion in ${lang}). Blocker: wrong mathematics or a false statement in the setting the text describes, so a student who follows it gets a wrong result. Major: missing hypothesis, unsupported claim, uncovered objective, misleading explanation. A statement, formula, example, equivalence or caption that is false as written is category "correctness" and at least major, even when the final result is right. Minor: only a wrong word, symbol, unit or reference that could mislead a student (a symbol that differs from the one in the statement, a wrong unit, a link to the wrong formula); anything that is only style or could be said better is not an issue. Return an empty list if the chapter is correct.`,
   };
 }
 
@@ -900,6 +900,7 @@ export const secondOpinionSchema = z.object({
     verdict: z.enum(['real', 'not-real']),
     severity: z.enum(['blocker', 'major', 'minor']).describe('the severity it deserves; never higher than the one given'),
     reason: z.string().describe('one short sentence'),
+    sameAs: z.number().int().min(1).nullable().optional().describe('the number of an earlier finding in the list that reports the same problem in the same passage; null otherwise'),
   })),
 });
 
@@ -911,7 +912,9 @@ export function secondOpinionPrompt(p: { language: string; notation?: string; ex
 
 A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording. A finding that the text writes a symbol differently from the exam papers is real, and not a preference about wording, when the exam symbols below use another symbol for that quantity and the notation fixed for the whole book defines none for it. When the book's notation defines the symbol, the finding is not real.
 
-Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.`,
+Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.
+
+Several reviewers may have read the same text, so the list can report one problem more than once. When a finding reports the same problem in the same passage as an earlier finding in the list, set sameAs to the number of that earlier finding; otherwise set it to null. Still give every finding its own verdict and severity.`,
     prompt: `Notation fixed for the whole book:
 ${p.notation || '(standard)'}
 ${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
@@ -924,7 +927,7 @@ ${p.text}
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence || '(none)'}
 
-Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "..."}]} with one entry per finding.`,
+Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "...", "sameAs": <number>|null}]} with one entry per finding.`,
   };
 }
 
@@ -1034,7 +1037,7 @@ export function patchParser(figures: FigureSetup | null, limits: { blocks: numbe
 /** Asks only for the blocks that must change, so a fix costs a few paragraphs of output instead of the whole section. */
 export function patchPrompt(p: { language: string; blocks: string; requests: string; evidence: string; knownFormulas: string; sectionIds: string; minimal?: boolean; additive?: boolean; issues?: boolean; figures?: FigureSetup | null; guards?: { figures?: boolean; removals?: boolean } | null }) {
   // Fixes for review issues stay small: new explanatory sentences were what the next review found fault with.
-  const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem.' : '';
+  const minimal = p.minimal ? ' Make the smallest edit that fixes each problem: correct or narrow the sentence at fault. Do not add caveats, explanations or new claims the problem does not ask for; at most one new sentence per problem. When a formula is wrong, rewrite its body in the same block and keep its key: a fix that deletes the formula is not applied.' : '';
   // Program problems (thin coverage, a missing proof) ask for material the section lacks. They are the one case where a fix grows the text.
   const additive = p.additive ? ' Problems marked [add material] ask for content the section lacks: write it in full (definitions, statements with every hypothesis, worked steps, the complete proof), in the style of the section, from the evidence notes when there are any and otherwise the standard version. Put it in the text of the existing block it belongs after; there is no way to add a new block. The limit of one new sentence applies to the other problems only.' : '';
   return {

@@ -14,7 +14,7 @@ import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
-import { chapterReview, sectionRevise } from './review.ts';
+import { chapterReview, sectionRevise, sweepDue } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
 import { examReadParser, parseQuestionText, patchPrompt, reviewSchema } from './prompts.ts';
@@ -28,6 +28,8 @@ let kit: ReturnType<typeof makeCtx>;
 let ctx: AppContext;
 const P = 'project01';
 const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.stringify(obj), usage: usageOf(10, 10) });
+/** The cross review's answer when it finds nothing: a whole-chapter review makes this call after its reviewer calls. */
+const crossNone = answer({ issues: [] });
 /** The editor's answer to a formatting repair: the three parts as plain text. */
 const questionText = (statement: string, hint: string, solution: string) => () => ({ text: `@@@ statement\n${statement}\n@@@ hint\n${hint}\n@@@ solution\n${solution}`, usage: usageOf(10, 10) });
 /** The figure check's answer: keep the first n figures. */
@@ -2044,14 +2046,15 @@ describe('the review converges', () => {
     seedOutline([['c1', ['s1', 's2']]]);
     const r1 = seedRevision('s1', 'Una frase.');
     const r2 = seedRevision('s2', 'Altro testo.');
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     assert.equal(first.reviewed, [r1, r2].sort().join(','));
     assert.match(fake.calls[0].prompt, /full review: review all of the text/);
     assert.doesNotMatch(fake.calls[0].prompt, /ALREADY FIXED|DECIDED ARE FINE/);
 
-    const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: now() };
+    // Issues handled before the first review: a fix since then would make the next review a sweep.
+    const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: '2000-01-01T00:00:00.000Z' };
     ctx.db.insert('review_issues', { ...old, id: 'd1', node_id: 's1', quote: 'Frase scelta', message: 'Preferirei un altro ordine', status: 'dismissed' });
     ctx.db.insert('review_issues', { ...old, id: 'a1', node_id: 's2', quote: 'Altro', message: 'Ipotesi mancante', status: 'accepted' });
     ctx.db.insert('review_issues', { ...old, id: 'f1', node_id: 's1', quote: 'x'.repeat(300), message: 'm'.repeat(300), status: 'fixed' });
@@ -2060,14 +2063,14 @@ describe('the review converges', () => {
     seedRevision('s1', 'Una frase nuova.');
     fake.next(answer({ issues: [] }));
     await review();
-    const prompt = fake.calls[1].prompt;
+    const prompt = fake.calls[2].prompt;
     assert.match(prompt, /only the passages below are new or rewritten[\s\S]*--- \[s1\] ---\nUna frase nuova\./);
     assert.doesNotMatch(prompt, /--- \[s2\] ---/);
     assert.match(prompt, /DECIDED ARE FINE[\s\S]*"Frase scelta" Preferirei un altro ordine/);
     assert.match(prompt, /"Altro" Ipotesi mancante/);
     assert.match(prompt, /ALREADY FIXED[\s\S]*"x{120}" m{200}\n/);
     assert.doesNotMatch(prompt, /x{121}|m{201}/);
-    assert.match(fake.calls[1].system ?? '', /report each problem once/);
+    assert.match(fake.calls[2].system ?? '', /report each problem once/);
   });
 
   test('the reviewer gets the symbols the exam papers use on the chapter topics, and the rule for a symbol that differs', async () => {
@@ -2079,17 +2082,17 @@ describe('the review converges', () => {
     });
     exam('Calcolare la frequenza di taglio $f_c$ con $R_1 = 1\\,\\mathrm{k\\Omega}$.', 't-filtri');
     exam('Un altro argomento con $q_p$.', 't-altro');
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     await review();
     const { prompt, system } = fake.calls[0];
     assert.match(prompt, /\(standard\)\n\nSymbols used in the exam papers on this chapter's topics: f_c, R_1\.\n/);
     assert.doesNotMatch(prompt, /q_p/);
     assert.match(system ?? '', /A symbol that differs from the one the exam papers use for the same quantity is a major notation finding, reported once per symbol with the places where it occurs, unless the notation fixed for the whole book defines another symbol for that quantity\. The book's notation wins over the exam papers, as it does for the writer\./);
     ctx.db.run(`DELETE FROM questions`);
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', force: true }));
-    assert.doesNotMatch(fake.calls[1].prompt, /Symbols used in the exam papers/);
-    assert.equal(fake.calls[1].system, system, 'the static part does not depend on the exams');
+    assert.doesNotMatch(fake.calls[2].prompt, /Symbols used in the exam papers/);
+    assert.equal(fake.calls[2].system, system, 'the static part does not depend on the exams');
   });
 
   test('an issue whose quote matches one the author dismissed or accepted is not stored again; stale proposed issues are cleaned, live ones stay', async () => {
@@ -2115,7 +2118,7 @@ describe('the review converges', () => {
       finding({ sectionId: 's1', quote: 'Primo blocco.', message: 'Resta' }),
       finding({ sectionId: 's1', quote: 'Secondo blocco.', message: 'Riletto' }),
       finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro testo.', message: 'Errato' }),
-    ] }), answer({ findings: [] }));
+    ] }), crossNone, answer({ findings: [] }));
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     assert.equal(first.issues, 3);
@@ -2128,7 +2131,7 @@ describe('the review converges', () => {
       finding({ sectionId: 's2', severity: 'blocker', quote: 'Altro testo.', message: 'Altro blocker' }),
     ] }), answer({ findings: [] }));
     const second = await review();
-    assert.match(fake.calls[2].prompt, /--- \[s1\] ---\nSecondo blocco riscritto\.\n/);
+    assert.match(fake.calls[3].prompt, /--- \[s1\] ---\nSecondo blocco riscritto\.\n/);
     assert.equal(second.issues, 1);
     assert.equal(second.outOfScope, 2);
     // "Riletto" pointed at a passage that no longer exists; the open issues on unchanged passages stay.
@@ -2138,21 +2141,21 @@ describe('the review converges', () => {
   test('a re-review with no new passages does not call the reviewer', async () => {
     seedOutline([['c1', ['s1']]]);
     const r1 = seedRevision('s1', 'Primo blocco.\n\nSecondo blocco.');
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     // A new revision that only drops a block: nothing new to read.
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
     seedRevision('s1', 'Primo blocco.');
     const second = await review();
-    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls.length, 2);
     assert.equal(second.issues, 0);
   });
 
   test('the first review reports minors, a review of changed text asks for blockers and majors and drops any minor before the second opinion', async () => {
     seedOutline([['c1', ['s1']]]);
     const r1 = seedRevision('s1', 'Una frase.\n\nSimbolo sbagliato.');
-    fake.next(answer({ issues: [finding({ quote: 'Simbolo sbagliato.', severity: 'minor', message: 'Simbolo diverso dall\'enunciato' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'minor', reason: '' }] }));
+    fake.next(answer({ issues: [finding({ quote: 'Simbolo sbagliato.', severity: 'minor', message: 'Simbolo diverso dall\'enunciato' })] }), crossNone, answer({ findings: [{ index: 1, verdict: 'real', severity: 'minor', reason: '' }] }));
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     assert.equal(first.issues, 1, 'the first review reports a minor');
@@ -2166,10 +2169,10 @@ describe('the review converges', () => {
       finding({ quote: 'Nuovo passo.', severity: 'major', message: 'Maggiore' }),
     ] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] }));
     const second = await review();
-    assert.match(fake.calls[2].prompt, /Report only blockers and majors/);
+    assert.match(fake.calls[3].prompt, /Report only blockers and majors/);
     assert.deepEqual([second.issues, second.minorsDropped], [1, 1]);
-    assert.match(fake.calls[3].prompt, /\[major\] "Nuovo passo\." Maggiore/);
-    assert.doesNotMatch(fake.calls[3].prompt, /Minore/);
+    assert.match(fake.calls[4].prompt, /\[major\] "Nuovo passo\." Maggiore/);
+    assert.doesNotMatch(fake.calls[4].prompt, /Minore/);
     // A full review keeps reporting everything.
     fake.next(answer({ issues: [finding({ quote: 'Nuovo passo.', severity: 'minor', message: 'Minore ancora' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'minor', reason: '' }] }));
     const full = await chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', mode: 'full' }));
@@ -2190,15 +2193,15 @@ describe('the review converges', () => {
       ctx.db.insert('evidence_packets', { id: newId(), project_id: P, node_id: id, provider: 'local', query: 'q', answer: '', notes: Array.from({ length: 8 }, (_, k) => ({ id: `n${k}`, quote: `Citazione ${id} ${k} ${'fonte '.repeat(60)}`, resourceId: null, page: null, url: 'https://x.example', verified: true, claim: '' })), created_at: now() });
       ctx.db.insert('tasks', { id: newId(), run_id: runId, project_id: P, kind: 'section.draft', label: 'd', key: `draft:${id}`, input: { nodeId: id }, state: 'succeeded', result: { summary: `Riassunto di ${id}.` }, pool: 'writer', attempts: 1, max_attempts: 3, created_at: now(), finished_at: now() });
     }
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, heads.get('s2')!);
     seedRevision('s2', bodies.get('s2')!.replace('Paragrafo 3', 'Paragrafo tre'));
     fake.next(answer({ issues: [] }));
     await review();
-    const [a, b] = [fake.calls[0], fake.calls[1]].map((c) => (c.system ?? '').length + c.prompt.length);
-    const prompt = fake.calls[1].prompt;
+    const [a, b] = [fake.calls[0], fake.calls[2]].map((c) => (c.system ?? '').length + c.prompt.length);
+    const prompt = fake.calls[2].prompt;
     assert.match(prompt, /=== \[s1\] Sezione 1\.1 \(reviewed before, summary only\) ===\nRiassunto di s1\./);
     assert.doesNotMatch(prompt, /Paragrafo 5 della sezione s1/);
     assert.match(prompt, /Paragrafo 5 della sezione s2/);
@@ -2211,19 +2214,19 @@ describe('the review converges', () => {
     seedOutline([['c1', ['s1']]]);
     const r1 = seedRevision('s1', 'Una frase.\n\nAltro blocco.');
     assert.equal(getProjectSummary(ctx, P).review, null, 'nothing reviewed yet');
-    fake.next(answer({ issues: [finding({ severity: 'major' })] }), answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] }));
+    fake.next(answer({ issues: [finding({ severity: 'major' })] }), crossNone, answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] }));
     const first = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review'`, now(), JSON.stringify(first));
     assert.deepEqual([first.clean, first.openSerious], [false, 1]);
     assert.equal(getProjectSummary(ctx, P).review!.clean, false);
     assert.equal(getProjectSummary(ctx, P).review!.openSerious, 1);
 
-    // The author fixes the issue by hand. The next review reads the new text and finds nothing.
+    // The author fixes the issue by hand. The next review (the sweep after the fix) reads the chapter again and finds nothing.
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review'`);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
     seedRevision('s1', 'Una frase corretta.\n\nAltro blocco.');
     assert.equal(getProjectSummary(ctx, P).review!.clean, false, 'changed text has not been reviewed');
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     const second = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(second));
     assert.deepEqual([second.clean, second.openSerious], [true, 0]);
@@ -2254,12 +2257,12 @@ describe('the review converges', () => {
     const run = startRun(ctx, P, 'review');
     const tasks = ctx.db.all<{ input: string }>('SELECT input FROM tasks WHERE run_id = ?', run.id);
     assert.deepEqual(tasks.map((x) => json(x.input, {})), [{ chapterId: 'c1' }]);
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify({ reviewed: h }));
     const again = await review();
     assert.equal(again.reused, true);
-    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls.length, 2);
   });
 });
 
@@ -2274,12 +2277,13 @@ describe('second opinion, full review and recheck', () => {
     seedRevision('s1', 'Una frase.\n\nUn altro passo.\n\nTerzo passo.');
     fake.next(
       answer({ issues: [finding(), finding({ quote: 'Un altro passo.', message: 'Pedante' }), finding({ quote: 'Terzo passo.', severity: 'minor', message: 'Piccolo' })] }),
+      crossNone,
       opinion(['real', 'blocker'], ['not-real', 'minor'], ['real', 'blocker']),
     );
     const r = await review();
     assert.deepEqual([r.issues, r.dropped, r.lowered, r.checked], [2, 1, 0, true]);
-    assert.match(fake.calls[1].system ?? '', /also invent problems/);
-    assert.match(fake.calls[1].prompt, /1\. \[s1\] \[blocker\] "Una frase\." Errore/);
+    assert.match(fake.calls[2].system ?? '', /also invent problems/);
+    assert.match(fake.calls[2].prompt, /1\. \[s1\] \[blocker\] "Una frase\." Errore/);
     assert.deepEqual(issues(`source = 'review'`).map((i) => [i.message, i.severity, i.status]), [
       ['Errore', 'blocker', 'open'], ['Piccolo', 'minor', 'open'], ['Pedante', 'blocker', 'dismissed'],
     ]);
@@ -2289,10 +2293,10 @@ describe('second opinion, full review and recheck', () => {
   test('a lowered severity is stored; a failed second opinion keeps every finding', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.');
-    fake.next(answer({ issues: [finding()] }), opinion(['real', 'minor']));
+    fake.next(answer({ issues: [finding({ category: 'notation' })] }), crossNone, opinion(['real', 'minor']));
     assert.equal((await review({ force: true })).lowered, 1);
     assert.equal(issues(`status = 'open'`)[0].severity, 'minor');
-    fake.next(answer({ issues: [finding()] }), () => new Error('boom'));
+    fake.next(answer({ issues: [finding()] }), crossNone, () => new Error('boom'));
     const r = await review({ force: true });
     assert.deepEqual([r.issues, r.checked], [1, false]);
     assert.equal(issues(`status = 'open'`)[0].severity, 'blocker');
@@ -2302,12 +2306,12 @@ describe('second opinion, full review and recheck', () => {
     seedOutline([['c1', ['s1', 's2']]]);
     const r1 = seedRevision('s1', 'Prima sezione.');
     const r2 = seedRevision('s2', 'Seconda sezione.');
-    fake.next(answer({ issues: [] }));
+    fake.next(answer({ issues: [] }), crossNone);
     done(await review());
     fake.next(answer({ issues: [finding({ sectionId: 'c1', quote: 'Prima sezione.' })] }), answer({ issues: [] }), opinion(['real', 'blocker']));
     const r = await review({ mode: 'full' });
     assert.equal(r.reviewed, [r1, r2].sort().join(','));
-    const [one, two] = [fake.calls[1].prompt, fake.calls[2].prompt];
+    const [one, two] = [fake.calls[2].prompt, fake.calls[3].prompt];
     assert.match(one, /Prima sezione\./); assert.doesNotMatch(one, /Seconda sezione\./);
     assert.match(two, /Seconda sezione\./); assert.doesNotMatch(two, /Prima sezione\./);
     assert.match(one, /full review of one section/);
@@ -2319,10 +2323,10 @@ describe('second opinion, full review and recheck', () => {
     seedOutline([['c1', ['s1', 's2']]]);
     seedRevision('s1', 'Prima sezione.');
     seedRevision('s2', 'Seconda sezione.');
-    fake.next(answer({ issues: [finding({ sectionId: 'inventato', quote: 'Seconda sezione.' })] }), opinion(['real', 'blocker']));
+    fake.next(answer({ issues: [finding({ sectionId: 'inventato', quote: 'Seconda sezione.' })] }), crossNone, opinion(['real', 'blocker']));
     await review();
-    assert.match(fake.calls[1].prompt, /Seconda sezione\./);
-    assert.doesNotMatch(fake.calls[1].prompt, /Prima sezione\./);
+    assert.match(fake.calls[2].prompt, /Seconda sezione\./);
+    assert.doesNotMatch(fake.calls[2].prompt, /Prima sezione\./);
   });
 
   test('the second opinion gets the exam symbols and the rule that the book notation wins, on the first call and on a recheck', async () => {
@@ -2332,26 +2336,26 @@ describe('second opinion, full review and recheck', () => {
       id: newId(), project_id: P, kind: 'exam', origin: 'authentic', resource_id: null, exam_group: 'Appello del 12 febbraio 2024', exam_date: '2024-02-12', number: '1',
       statement: 'Calcolare la frequenza di taglio $f_c$.', hint: '', solution: '', difficulty: 'medio', topic_ids: ['t-filtri'], status: 'draft', checks: [], rev: 1, created_at: now(), updated_at: now(),
     });
-    fake.next(answer({ issues: [finding({ quote: 'La frequenza di taglio è $f_t$.', category: 'notation', severity: 'major', message: 'Nei temi d\'esame è f_c' })] }), opinion(['real', 'major']));
+    fake.next(answer({ issues: [finding({ quote: 'La frequenza di taglio è $f_t$.', category: 'notation', severity: 'major', message: 'Nei temi d\'esame è f_c' })] }), crossNone, opinion(['real', 'major']));
     await review();
-    assert.match(fake.calls[1].system ?? '', /also invent problems/);
-    assert.match(fake.calls[1].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
-    assert.match(fake.calls[1].system ?? '', /the notation fixed for the whole book defines none for it/);
-    assert.match(fake.calls[1].system ?? '', /not a preference about wording/);
-    assert.match(fake.calls[1].system ?? '', /a symbol that differs from the exam papers in the way described above; minor for everything else/, 'the severity rule keeps such a finding major');
+    assert.match(fake.calls[2].system ?? '', /also invent problems/);
+    assert.match(fake.calls[2].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    assert.match(fake.calls[2].system ?? '', /the notation fixed for the whole book defines none for it/);
+    assert.match(fake.calls[2].system ?? '', /not a preference about wording/);
+    assert.match(fake.calls[2].system ?? '', /a symbol that differs from the exam papers in the way described above; minor for everything else/, 'the severity rule keeps such a finding major');
     fake.next(opinion(['real', 'major']));
     await review({ mode: 'recheck' });
-    assert.match(fake.calls[2].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
+    assert.match(fake.calls[3].prompt, /Symbols used in the exam papers on this chapter's topics: f_c\./);
     ctx.db.run(`DELETE FROM questions`);
     fake.next(opinion(['real', 'major']));
     await review({ mode: 'recheck' });
-    assert.doesNotMatch(fake.calls[3].prompt, /Symbols used in the exam papers/);
+    assert.doesNotMatch(fake.calls[4].prompt, /Symbols used in the exam papers/);
   });
 
   test('recheck gives open issues a second opinion without a new review, and the next review still compares with the last one', async () => {
     seedOutline([['c1', ['s1']]]);
     const r1 = seedRevision('s1', 'Una frase.\n\nUn altro passo.');
-    fake.next(answer({ issues: [finding(), finding({ quote: 'Un altro passo.', message: 'Pedante' })] }), answer({ findings: [] }));
+    fake.next(answer({ issues: [finding(), finding({ quote: 'Un altro passo.', message: 'Pedante' })] }), crossNone, answer({ findings: [] }));
     done(await review());
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
     seedRevision('s1', 'Una frase.\n\nUn altro passo.\n\nNuovo passo.');
@@ -2359,12 +2363,12 @@ describe('second opinion, full review and recheck', () => {
     const r = await review({ mode: 'recheck' });
     done(r);
     assert.deepEqual([r.rechecked, r.dropped, r.lowered, r.reviewed], [2, 1, 1, r1]);
-    assert.equal(fake.calls.length, 3, 'one call, no reviewer call');
-    assert.match(fake.calls[2].system ?? '', /also invent problems/);
+    assert.equal(fake.calls.length, 4, 'one call, no reviewer call');
+    assert.match(fake.calls[3].system ?? '', /also invent problems/);
     assert.deepEqual(issues(`source = 'review'`).map((i) => [i.message, i.severity, i.status]), [['Errore', 'major', 'open'], ['Pedante', 'blocker', 'dismissed']]);
     fake.next(answer({ issues: [] }));
     await review();
-    assert.match(fake.calls[3].prompt, /--- \[s1\] ---\nNuovo passo\./);
+    assert.match(fake.calls[4].prompt, /--- \[s1\] ---\nNuovo passo\./);
   });
 
   test('a review run can ask for a full review or a recheck', () => {
@@ -2486,6 +2490,140 @@ describe('r8. excluded sources stop counting', () => {
   });
 });
 
+describe('independent samples, the sweep after a fix round and the severity floor', () => {
+  const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'correctness', quote: 'Una frase.', message: 'Errore', suggestion: 'Correggi', ...o });
+  const verdicts = (...v: { verdict?: string; severity: string; sameAs?: number | null }[]) => answer({ findings: v.map((x, k) => ({ index: k + 1, verdict: x.verdict ?? 'real', severity: x.severity, reason: '', sameAs: x.sameAs ?? null })) });
+  const review = (input: Record<string, unknown> = {}) => chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', ...input }));
+  const done = (r: unknown) => ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(r));
+  const samples = (n: number) => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ selfCheck: false, reviewSamples: n }), P);
+  /** A fix of the first review's issue: the issue is closed and the section gets a new revision. */
+  const fix = (nodeId: string, from: string, to: string) => {
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review' AND status = 'open' AND node_id = ?`, nodeId);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, nodeId);
+    seedRevision(nodeId, to);
+    return from;
+  };
+
+  test('the first review keeps the union of the reviewer calls and the cross review, and the second opinion merges repeats of one problem', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Una frase.\n\nUn esempio.');
+    seedRevision('s2', 'Una didascalia.');
+    fake.next(
+      answer({ issues: [finding({ sectionId: 's2', quote: 'Una didascalia.', message: 'La didascalia è falsa' }), finding({ message: 'Equivalenza falsa', severity: 'minor' })] }),
+      answer({ issues: [finding({ message: 'Equivalenza asintotica sbagliata', severity: 'blocker' }), finding({ quote: 'Un esempio.', message: 'Esempio sbagliato' })] }),
+      answer({ issues: [finding({ quote: 'Un esempio.', category: 'language', severity: 'minor', message: 'Frase troncata' })] }),
+      // In section order: s1 "Equivalenza falsa", s1 "Equivalenza asintotica sbagliata", s1 "Esempio sbagliato", s1 "Frase troncata", s2.
+      verdicts({ severity: 'minor' }, { severity: 'major', sameAs: 1 }, { severity: 'major' }, { severity: 'minor' }, { severity: 'major' }),
+    );
+    const r = await review();
+    assert.deepEqual([r.samples, r.crossModel, r.model, r.merged, r.issues], [2, 'claude-opus-5-5', 'gpt-6-sol', 1, 4]);
+    assert.deepEqual(fake.calls.slice(0, 3).map((c) => c.selection.model), ['gpt-6-sol', 'gpt-6-sol', 'claude-opus-5-5']);
+    assert.equal(fake.calls[0].prompt, fake.calls[1].prompt, 'every sample reads the same prompt');
+    assert.match(fake.calls[0].system ?? '', /Report every error you find; there is no limit\./);
+    assert.doesNotMatch(fake.calls[0].system ?? '', /fewer, solid issues/);
+    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[minor\] "Una frase\." Equivalenza falsa Suggested fix: Correggi\n2\. \[s1\] \[blocker\] "Una frase\." Equivalenza asintotica[\s\S]*5\. \[s2\]/);
+    assert.match(fake.calls[3].system ?? '', /set sameAs to the number of that earlier finding/);
+    // The merged problem is stored once, with the higher severity a reviewer gave it, and the floor keeps it major.
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [
+      ['Equivalenza falsa', 'major'], ['Esempio sbagliato', 'major'], ['Frase troncata', 'minor'], ['La didascalia è falsa', 'major'],
+    ]);
+  });
+
+  test('a cross review that fails leaves the reviewer findings; a reviewer call that fails fails the task', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    fake.next(answer({ issues: [finding()] }), () => new Error('boom'), verdicts({ severity: 'major' }));
+    const r = await review();
+    assert.deepEqual([r.samples, r.crossModel, r.issues], [1, false, 1]);
+    fake.next(() => new Error('boom'));
+    await assert.rejects(review({ force: true }), TaskError);
+  });
+
+  test('the second opinion cannot lower a false statement below major, on a review and on a recheck; other categories still go down', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.\n\nUn simbolo.\n\nUna nota.');
+    fake.next(
+      answer({ issues: [finding({ severity: 'blocker' }), finding({ quote: 'Un simbolo.', category: 'notation', message: 'Simbolo' }), finding({ quote: 'Una nota.', severity: 'minor', message: 'Svista minore' })] }),
+      crossNone,
+      verdicts({ severity: 'minor' }, { severity: 'minor' }, { severity: 'minor' }),
+    );
+    const r = await review();
+    assert.equal(r.lowered, 2);
+    assert.deepEqual(issues(`status = 'open'`).map((i) => [i.message, i.severity]), [['Errore', 'major'], ['Simbolo', 'minor'], ['Svista minore', 'minor']]);
+    done(r);
+    fake.next(verdicts({ severity: 'minor' }, { severity: 'minor' }, { severity: 'minor' }));
+    await review({ mode: 'recheck' });
+    assert.equal(issues(`message = 'Errore'`)[0].severity, 'major', 'a recheck keeps the floor too');
+  });
+
+  test('after a fix round one sweep reads the whole chapter with the fixed and open issues; later reviews read changed text only', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1', 's2']], ['c2', ['s3']]]);
+    seedRevision('s1', 'Una frase.\n\nAltro.');
+    seedRevision('s2', 'Seconda sezione intatta.');
+    seedRevision('s3', 'Altro capitolo.');
+    ctx.db.insert('review_issues', { id: 'elsewhere', project_id: P, node_id: 's3', source: 'review', severity: 'major', category: 'correctness', quote: 'Un estremo interno', message: 'Un estremo interno non richiede la derivabilità', suggestion: '', status: 'fixed', resolution: '', created_at: now() });
+    fake.next(answer({ issues: [finding({ message: 'Ipotesi mancante' }), finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', message: 'Resta aperto' })] }), answer({ issues: [] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    const first = await review();
+    done(first);
+    assert.deepEqual([first.full, first.sweep, first.samples], [true, undefined, 2]);
+
+    // Fix round: the s1 issue is fixed. The next review is the sweep: three calls on the whole chapter, minors kept.
+    fix('s1', 'Una frase.', 'Una frase corretta.\n\nAltro.');
+    fake.next(
+      answer({ issues: [finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', severity: 'minor', message: 'Stesso errore altrove' })] }),
+      answer({ issues: [] }), crossNone, verdicts({ severity: 'minor' }),
+    );
+    const sweep = await review();
+    done(sweep);
+    assert.deepEqual([sweep.sweep, sweep.mode, sweep.samples, sweep.issues, sweep.minorsDropped], [true, 'sweep', 2, 1, undefined]);
+    const prompt = fake.calls[4].prompt;
+    assert.match(prompt, /This is a sweep after a round of fixes/);
+    assert.match(prompt, /=== \[s2\] Sezione 1\.2 ===\nSeconda sezione intatta\./, 'unchanged sections are read in full');
+    assert.doesNotMatch(prompt, /summary only|SINCE THE LAST REVIEW/);
+    assert.match(prompt, /ISSUES ALREADY FIXED[\s\S]*Ipotesi mancante/);
+    assert.match(prompt, /ISSUES STILL OPEN[\s\S]*Resta aperto/);
+    assert.match(prompt, /MISTAKES FIXED IN OTHER CHAPTERS[\s\S]*Un estremo interno non richiede la derivabilità/);
+    assert.equal(fake.calls[6].selection.model, 'claude-opus-5-5');
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message).sort(), ['Resta aperto', 'Stesso errore altrove']);
+
+    // The sweep's finding is fixed: the next review reads only the changed text, with one call, and no second sweep follows.
+    fix('s2', 'Seconda sezione intatta.', 'Seconda sezione corretta.');
+    fake.next(answer({ issues: [] }));
+    const after = await review();
+    done(after);
+    assert.equal(after.sweep, undefined);
+    assert.equal(after.samples, 1);
+    assert.match(fake.calls[8].prompt, /SINCE THE LAST REVIEW/);
+    assert.equal(fake.calls.length, 9);
+  });
+
+  test('the sweep is not due without a fix since the last whole-chapter review, and a Full review starts a new round', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const nodes = ['c1', 's1'];
+    seedRevision('s1', 'Una frase.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'never reviewed');
+    fake.next(answer({ issues: [finding()] }), crossNone, verdicts({ severity: 'major' }));
+    done(await review());
+    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'nothing fixed yet');
+    fix('s1', 'Una frase.', 'Una frase corretta.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes), true);
+    fake.next(answer({ issues: [] }), crossNone);
+    done(await review());
+    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'one sweep per round');
+    fake.next(answer({ issues: [finding({ quote: 'Una frase corretta.' })] }), verdicts({ severity: 'major' }));
+    done(await review({ mode: 'full' }));
+    fix('s1', 'Una frase corretta.', 'Una frase giusta.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes), true, 'a Full review and its fixes get their own sweep');
+  });
+
+  test('a fix of a wrong formula rewrites its body under the same key', () => {
+    const base = { language: 'it', blocks: '[B0]\nx', requests: '1. y', evidence: '', knownFormulas: '', sectionIds: '' };
+    assert.match(patchPrompt({ ...base, minimal: true }).system, /When a formula is wrong, rewrite its body in the same block and keep its key/);
+  });
+});
+
 describe('r11. chapter-level review findings do not accumulate', () => {
   test('a second review replaces the open chapter-level finding; resolved history stays; a clean review leaves none open', async () => {
     seedOutline([['c1', ['s1']]]);
@@ -2493,7 +2631,7 @@ describe('r11. chapter-level review findings do not accumulate', () => {
     const finding = { sectionId: 'unknown', severity: 'major', category: 'coverage', quote: '', message: 'Manca un obiettivo', suggestion: 'Aggiungilo' };
     const task = () => startTask('chapter.review', { chapterId: 'c1', force: true });
     const real = answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '' }] });
-    fake.next(answer({ issues: [finding] }), real, answer({ issues: [finding] }), real, answer({ issues: [] }));
+    fake.next(answer({ issues: [finding] }), crossNone, real, answer({ issues: [finding] }), crossNone, real, answer({ issues: [] }), crossNone);
     await chapterReview(ctx, task());
     assert.equal(issues(`source = 'review' AND node_id = 'c1'`).length, 1);
     // Resolved history stays across reviews.
