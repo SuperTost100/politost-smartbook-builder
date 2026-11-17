@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 24;
+export const PROMPT_VERSION = 25;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -792,26 +792,42 @@ Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no gra
 }
 
 const graphScale = z.enum(['linear', 'log']).optional().describe('"log" for a logarithmic axis (its domain must be positive); default linear');
-const graphFunctions = z.array(z.object({ fn: codeString(), label: z.string() }));
+const num = z.number();
+/** One trace of a graph: what it draws and the formula or example of the section it comes from (`GraphTrace` in @smartbuilder/content). */
+const graphTrace = z.object({
+  kind: z.enum(['function', 'parametric', 'points', 'vline', 'bars']),
+  label: z.string().describe('legend text; for a function or parametric curve it states the formula in plain text, e.g. "E = (0.0592/2)·log10(r)"'),
+  source: z.string().describe('the formula or worked example of the section this trace comes from, copied exactly as the section writes it (LaTeX included)'),
+  fn: codeString().optional().describe('kind function: y as an expression in x'),
+  domain: z.tuple([num, num]).optional().describe('kind function: the part of the x axis where the law holds, if narrower than xDomain'),
+  xt: codeString().optional().describe('kind parametric: x as an expression in t'),
+  yt: codeString().optional().describe('kind parametric: y as an expression in t'),
+  tRange: z.tuple([num, num]).optional().describe('kind parametric: the range of t'),
+  points: z.array(z.object({ x: num, y: num, open: z.boolean().optional().describe('true for a hole: a point that does not belong to the graph') })).optional().describe('kind points'),
+  value: num.optional().describe('kind vline: the x of the vertical line'),
+  bars: z.array(z.object({ category: z.string(), value: num })).optional().describe('kind bars'),
+});
 
 /** The second graph of a pair, such as the phase under a Bode magnitude. It shares the first graph's x axis. */
 export const graphPairSchema = z.object({
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  functions: graphFunctions,
-  yDomain: z.tuple([z.number(), z.number()]),
+  traces: z.array(graphTrace),
+  yDomain: z.tuple([num, num]),
   yScale: graphScale,
   yLabel: z.string(),
 });
 
 export const graphSchema = z.object({
+  verdict: z.enum(['graph', 'none']).describe('"none" when the section states no relation between two quantities that a plane graph can show'),
+  reason: z.string().describe('one sentence: which stated relation the graph shows, or why there is none'),
   id: z.string(),
   title: z.string(),
   description: z.string(),
-  functions: graphFunctions,
-  xDomain: z.tuple([z.number(), z.number()]),
-  yDomain: z.tuple([z.number(), z.number()]),
+  traces: z.array(graphTrace),
+  xDomain: z.tuple([num, num]),
+  yDomain: z.tuple([num, num]),
   xScale: graphScale,
   yScale: graphScale,
   xLabel: z.string(),
@@ -821,12 +837,46 @@ export const graphSchema = z.object({
 
 export function graphPrompt(p: { language: string; purpose: string; relation?: string; section: string }) {
   return {
-    system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
+    system: `You design an interactive graph for a textbook in ${languageName(p.language)}. The graph shows a relation the section states, with the section's own formulas and numbers. Rules:
+- Every trace comes from one formula or worked example of the section. Copy that formula or example into "source" exactly as the section writes it. Do not invent laws, "schematic" or "qualitative" curves, or numbers the section does not give; pick parameter values the section uses.
+- The label of a curve states its formula in plain text, and "fn" is that same formula. Check the formula against the section once more before answering: signs, factors, which logarithm.
+- Expressions use the variable x (t for parametric curves), numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). log is the natural logarithm and log10 the decimal one (in chemistry and physics texts "\\log" usually means log10). The builder samples the curves, so the graph shows exactly these expressions.
+- One x axis is one quantity and one y axis is one quantity in one unit. Do not put different quantities or units on one axis; make a smaller graph instead.
+- Trace kinds: "function" for y = f(x); give "domain" when the law holds only on part of the axis (one branch, a phase of a process, until a concentration reaches zero). "parametric" for circles, ellipses, rays, closed or vertical curves. "points" for values at single points, isolated points and holes ("open": true). "vline" for a vertical line such as an isochore. "bars" for a few values of distinct cases (before and after, classes, compounds). Leave the fields of the other kinds null.
+- No two traces may coincide. A step function or a function with a pole is one "function" trace; the builder breaks the line at jumps and poles.
+- Answer verdict "none" when the section has no relation between two quantities worth exploring on a plane: classifications, structures and names, three-dimensional shapes, a single computed value. A wrong or made-up graph is worse than none.
+Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
     prompt: `Purpose: ${p.purpose}
 ${p.relation ? `Relation to plot, as the section states it: ${p.relation}\n` : ''}Section text:
 ${p.section}
 
-Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,
+Return JSON: verdict, reason, id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), traces, xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,
+  };
+}
+
+/** The independent check of one graph: the curve each trace must show, written from the section without seeing the data. */
+export const graphCheckSchema = z.object({
+  traces: z.array(z.object({
+    label: z.string(),
+    expected: codeString().describe('the curve this trace must show, as an expression in x (log = natural log, log10 decimal; C, C1, C2 for constants the section gives no value for); empty when the trace is not a curve y = f(x)'),
+    problem: z.string().describe('what in the label, the axes or the source contradicts the section; empty when nothing does'),
+  })),
+  fit: z.enum(['fits', 'not-a-function-graph']).describe('"not-a-function-graph" when the section states no relation that this plane graph can show'),
+});
+
+export function graphCheckPrompt(p: { language: string; section: string; graph: { title: string; xLabel: string; yLabel: string; traces: { label: string; source?: string }[] } }) {
+  return {
+    system: `You check an interactive graph of a textbook in ${languageName(p.language)} against the section it illustrates. You are not shown the graph's data. From the section's own formulas and numbers, write for each trace the function y = f(x) it must show, with x the quantity on the x axis. Use x, numbers, + - * / ^, parentheses, e, pi and sin cos tan asin acos atan exp log log10 sqrt abs floor; log is the natural logarithm and log10 the decimal one. When the curve needs a constant the section gives no value for (an additive constant, a reference level), write it as C, or C1 and C2 for two, and the builder fits it to the data. Leave "expected" empty for a trace that is not a curve y = f(x) (points, a vertical line, bars, a parametric curve). Report anything in a label, an axis or a source that contradicts the section.`,
+    prompt: `Section text:
+${p.section}
+
+Graph: "${p.graph.title}"
+x axis: ${p.graph.xLabel}
+y axis: ${p.graph.yLabel}
+Traces:
+${p.graph.traces.map((t, i) => `${i + 1}. ${t.label}${t.source ? `   (source: ${t.source})` : ''}`).join('\n')}
+
+Return JSON: traces (label, expected, problem) in the same order, and fit.`,
   };
 }
 

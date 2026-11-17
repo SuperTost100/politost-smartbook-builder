@@ -89,7 +89,7 @@ describe('figure rules per subject', () => {
     const { system, prompt } = graphPrompt({ language: 'it', purpose: 'Bode', section: 'testo' });
     assert.match(system, /"xScale" or "yScale" set to "log"/);
     assert.match(system, /A Bode plot is two graphs that share one log frequency axis/);
-    assert.match(prompt, /xScale, yScale, xLabel, yLabel, pair/);
+    assert.match(prompt, /traces, xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair/);
   });
 
   test('a chemistry book gets every chemistry kind, and photos only when they can be searched', () => {

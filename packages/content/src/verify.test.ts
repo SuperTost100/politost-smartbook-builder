@@ -310,3 +310,80 @@ test('jumpsBetween tells a jump from a steep slope', async () => {
   const pole = (x: number) => 1 / (x - 1);
   assert.equal(jumpsBetween(pole, 0.99, 1.02, pole(0.99), pole(1.02)), true);
 });
+
+test('sampleGraph draws every trace kind with the Plotly parts the reader keeps', async () => {
+  const { sampleGraph } = await import('./verify.ts');
+  const r = sampleGraph({
+    id: 'k', title: 'K', xDomain: [-3, 3], yDomain: [-3, 3], xLabel: 'x', yLabel: 'y',
+    traces: [
+      { kind: 'function', label: 'y = x per x ≥ 0', fn: 'x', domain: [0, 5] },
+      { kind: 'parametric', label: 'Circonferenza r = 1', xt: 'cos(t)', yt: 'sin(t)', tRange: [0, 6.2832] },
+      { kind: 'points', label: 'Buco e punto', points: [{ x: 1, y: 2, open: true }, { x: 1, y: 1 }] },
+      { kind: 'vline', label: 'Isocora V = 2', value: 2 },
+    ],
+  });
+  assert.equal(r.ok, true, r.detail);
+  const [fn, circle, pts, vline] = r.payload.config.data as { type: string; mode: string; x: number[]; y: (number | null)[]; marker?: { symbol: string[] } }[];
+  assert.equal(fn!.x[0], 0, 'a function trace starts at its own domain');
+  assert.equal(fn!.x.at(-1), 3, 'and stops at the x axis');
+  assert.ok(Math.abs(circle!.x[100]! - Math.cos(6.2832 / 4)) < 1e-6, 'a parametric curve is sampled in t');
+  assert.deepEqual([pts!.mode, pts!.marker!.symbol], ['markers', ['circle-open', 'circle']]);
+  assert.deepEqual([vline!.x, vline!.y], [[2, 2], [-3, 3]]);
+  const bars = sampleGraph({ id: 'b', title: 'B', xDomain: [0, 1], yDomain: [0, 10], xLabel: 'Composto', yLabel: 'n', traces: [{ kind: 'bars', label: 'Atomi di H', bars: [{ category: 'Etano', value: 6 }, { category: 'Etene', value: 4 }] }] });
+  assert.equal(bars.ok, true, bars.detail);
+  // Everything the sampler writes survives the reader's sanitiser, symbols of open points included.
+  for (const p of [r.payload, bars.payload]) {
+    const shown = readerSanitize(p.config.data, p.config.layout);
+    assert.ok(shown, 'the reader accepts the graph');
+    assert.deepEqual(shown.data, JSON.parse(JSON.stringify(p.config.data)));
+  }
+});
+
+test('sampleGraph reports traces it cannot draw', async () => {
+  const { sampleGraph } = await import('./verify.ts');
+  const base = { id: 'e', title: 'E', xDomain: [0, 2] as [number, number], yDomain: [0, 2] as [number, number], xLabel: 'x', yLabel: 'y' };
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'function', label: 'f', fn: 'x', domain: [5, 6] }] }).detail, /lies outside the x axis/);
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'parametric', label: 'c', xt: 'cos(t)', yt: 'sin(t)' }] }).detail, /tRange/);
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'points', label: 'p', points: [] }] }).detail, /no points/);
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'points', label: 'p', points: [{ x: 9, y: 9 }] }] }).detail, /no point lies in the visible window/);
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'vline', label: 'v', value: 7 }] }).detail, /needs an x value inside \[0, 2\]/);
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'bars', label: 'b', bars: [{ category: 'A', value: 1 }, { category: '', value: 2 }] }] }).detail, /no name or no value/);
+});
+
+test('graphSourceCheck wants every trace to quote the section, and warns about one source drawn two ways', async () => {
+  const { graphSourceCheck, sourceQuoted } = await import('./verify.ts');
+  const section = 'La soluzione è $$y(t) = \\frac{2}{2 - t^2}$$ per $|t| < \\sqrt{2}$.';
+  assert.equal(sourceQuoted('y(t)=\\frac{2}{2-t^2}', section), true, 'spaces and $ do not matter');
+  assert.equal(sourceQuoted('y(t) = \\frac{1}{1 - t^2/4}', section), false);
+  assert.equal(sourceQuoted('y', section), false, 'a quote of one or two characters proves nothing');
+  const ok = graphSourceCheck([{ kind: 'function', label: 'y', fn: '2/(2-x^2)', source: 'y(t) = \\frac{2}{2 - t^2}' }], section);
+  assert.equal(ok.ok, true, ok.detail);
+  const invented = graphSourceCheck([{ kind: 'function', label: 'y2', fn: '1/(1-x^2/4)', source: 'y(t) = \\frac{1}{1 - t^2/4}' }], section);
+  assert.equal(invented.ok, false);
+  assert.match(invented.detail, /which the section does not contain/);
+  const twice = graphSourceCheck([
+    { kind: 'function', label: 'a', fn: '2/(2-x^2)', source: 'y(t) = \\frac{2}{2 - t^2}' },
+    { kind: 'function', label: 'b', fn: '1/(1-x^2/4)', source: 'y(t) = \\frac{2}{2 - t^2}' },
+  ], section);
+  assert.equal(twice.ok, true);
+  assert.match(twice.detail, /"b" and "a" quote the same source with different expressions \(warning\)/);
+});
+
+test('compareExpected checks the data against the expected curve and fits free constants', async () => {
+  const { compareExpected } = await import('./verify.ts');
+  const xs = Array.from({ length: 21 }, (_, k) => k / 2);
+  const ys = xs.map((x) => 101325 - 500 * x * x);
+  assert.equal(compareExpected('101325 - 500*x^2', xs, ys, 60000)!.ok, true);
+  const wrong = compareExpected('101325 + 500*x^2', xs, ys, 60000)!;
+  assert.equal(wrong.ok, false);
+  assert.match(wrong.detail, /points differ from 101325 \+ 500\*x\^2/);
+  // The section gives no reference pressure: a constant C is fitted, but the shape must still match.
+  const fit = compareExpected('C - 500*x^2', xs, ys, 60000)!;
+  assert.equal(fit.ok, true, fit.detail);
+  assert.match(fit.detail, /C = 101325/);
+  assert.equal(compareExpected('C - 400*x^2', xs, ys, 60000)!.ok, false);
+  assert.equal(compareExpected('C1 + C2*x^2', xs, ys, 60000)!.ok, true, 'two constants');
+  assert.equal(compareExpected('exp(C*x)', xs, ys, 60000), null, 'not affine in its constant: no verdict');
+  assert.equal(compareExpected('', xs, ys, 60000), null);
+  assert.equal(compareExpected('x', [1, 2], [1, 2], 1), null, 'too few points');
+});
