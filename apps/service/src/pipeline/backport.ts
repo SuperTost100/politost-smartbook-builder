@@ -5,7 +5,7 @@
 // the new compile reproduces it exactly and adds no blocker or major finding.
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
-import { captionToPlain, checkFunctionGraph, compileBook, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
+import { captionToPlain, checkFunctionGraph, compileBook, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { countUnresolvedBlockers, currentHeads, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 import { closeGoneCompileNotes } from '../routes/review.ts';
@@ -367,7 +367,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       if (!payload || !e) { add({ unit, kind: 'graph', status: 'unmapped', reason: payload ? 'graph added in the books' : 'graph removed in the books' }); continue; }
       const check = checkFunctionGraph(payload);
       if (!check.ok) { add({ unit, kind: 'graph', status: 'refused', reason: `the builder's graph check fails on the books version: ${check.detail}`, target: e.id }); continue; }
-      const u = add({ unit, kind: 'graph', status: 'mapped', target: e.id });
+      // The books' graphs were checked by hand, so the graph lint's blocking findings are accepted as an author would.
+      const accepted = graphLintCheck(payload, e.lintAccepted).findings.filter((f) => f.severity === 'block' && !e.lintAccepted.includes(lintKey(f)));
+      const u = add({ unit, kind: 'graph', status: 'mapped', target: e.id, ...(accepted.length ? { reason: `graph lint accepted: ${accepted.map(lintKey).join(', ')}` } : {}) });
       const title = typeof payload.title === 'string' ? payload.title : e.id;
       pending.push({
         unit: u, changes: [{ kind: 'graph', enrichmentId: e.id, payload }],
@@ -451,8 +453,9 @@ export function applyChanges(input: BookInput, changes: BackportChange[]): BookI
       if (q) Object.assign(q, c.parts);
     } else {
       const e = next.enrichments.find((x) => x.id === c.enrichmentId);
-      // As updateEnrichmentPayload does: the graph check decides whether the graph ships.
-      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok ? 'verified' : 'issue' });
+      // As updateEnrichmentPayload with acceptLint does: the lint's blocking findings are accepted, the numeric check decides.
+      const fresh = graphLintCheck(c.payload).findings.filter((f) => f.severity === 'block').map(lintKey);
+      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok ? 'verified' : 'issue', lintAccepted: [...new Set([...e.lintAccepted, ...fresh])] });
     }
   }
   return next;
@@ -512,7 +515,7 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
       } else if (c.kind === 'question') {
         updateQuestion(ctx, c.questionId, questions.get(c.questionId)!.rev, c.parts);
       } else if (c.kind === 'graph') {
-        updateEnrichmentPayload(ctx, c.enrichmentId, c.payload);
+        updateEnrichmentPayload(ctx, c.enrichmentId, c.payload, { acceptLint: true });
       } else {
         // In place, not on a copy as the figure editor does: a copy gets a new file name, and the books name the old one.
         const rows = ctx.db.all<{ id: string; node_id: string | null }>('SELECT id, node_id FROM assets WHERE project_id = ? AND filename = ?', projectId, c.filename);

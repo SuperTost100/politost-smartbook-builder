@@ -42,7 +42,7 @@ function book(): BookInput {
       q({ id: 'q1', kind: 'exercise', chapterId: 'c1', statement: 'Calcola $v$ per $s = 10$ e $t = 2$.', solution: 'Con la {{formula:@vel-media}} vale $v = 4$.' }),
       q({ id: 'x1', kind: 'exam', chapterId: 'c1', origin: 'generated', statement: 'Un treno percorre 120 km in 2 ore.', solution: 'La velocità vale 60 km/h.' }),
     ],
-    enrichments: [{ id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', payload: PARABOLA, status: 'verified', checks: [], createdAt: '2026-01-01T00:00:00Z' }],
+    enrichments: [{ id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', payload: PARABOLA, status: 'verified', checks: [], lintAccepted: [], createdAt: '2026-01-01T00:00:00Z' }],
     assets: [{ filename: 'fig.svg', bytes: SVG, caption: 'Moto con a_x costante', alt: 'Spazio e tempo' }],
     sections: { esercizi: true, esami: true, ide: false, grafici: true },
   };
@@ -132,6 +132,17 @@ describe('planBackport', () => {
     assert.equal(statusOf(plan, 'esercizi.md#E1.1'), 'mapped');
     assert.deepEqual(plan.changes.map((c) => c.kind), ['question']);
     assert.equal(plan.after.findings.filter((f) => f.severity === 'blocker').length, 0);
+  });
+
+  test("a hand-fixed graph that trips the graph lint is written with the lint accepted, as an author's Accept anyway", () => {
+    const input = book();
+    const trace = (name: string) => ({ x: [0, 1, 2], y: [0, 1, 4], name, mode: 'lines' });
+    input.enrichments[0].payload = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [trace('a')], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
+    const plan = planBackport(input, published(input, { 'grafici.json': (s) => JSON.stringify(JSON.parse(s).map((g: { config: { data: unknown[] } }) => ({ ...g, config: { ...g.config, data: [trace('a'), trace('b')] } })), null, 2) + '\n' }));
+    const unit = plan.units.find((u) => u.unit === 'grafici.json#parabola')!;
+    assert.equal(unit.status, 'mapped');
+    assert.equal(unit.reason, 'graph lint accepted: duplicate:b');
+    assert.deepEqual(applyChanges(input, plan.changes).enrichments[0].lintAccepted, ['duplicate:b']);
   });
 
   test('a unit the new compile does not reproduce is refused', () => {
