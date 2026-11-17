@@ -24,6 +24,8 @@
     "normalize-text": "node --import tsx apps/service/src/bin/normalize-text.ts",
     "backport": "node --import tsx apps/service/src/bin/backport.ts",
     "check-graphs": "node --import tsx apps/service/src/bin/check-graphs.ts",
+    "publish-book": "node --import tsx apps/service/src/bin/publish-book.ts",
+    "validate-all": "node --import tsx apps/service/src/bin/validate-all.ts",
     "figure-packages": "node scripts/fetch-figure-packages.mjs"
   },
   "devDependencies": {

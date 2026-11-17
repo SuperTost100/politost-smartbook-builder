@@ -1,4 +1,4 @@
-import { strToU8, zipSync } from 'fflate';
+import { strToU8, unzipSync, zipSync } from 'fflate';
 import { readPtsb } from '@politost/content-core';
 import type { CompiledBook } from './types.ts';
 
@@ -23,6 +23,13 @@ export function packPtsb(book: CompiledBook, opts: { createdAt?: string } = {}):
   const t = Date.parse(createdAt);
   const mtime = Number.isFinite(t) && t >= Date.UTC(1980, 0, 1) ? new Date(t) : new Date(Date.UTC(2000, 0, 1));
   return zipSync(entries, { level: 6, mtime });
+}
+
+/** The files of a .ptsb by path, ptsb.json included. Folder entries are left out. */
+export function unpackPtsb(bytes: Uint8Array): Record<string, Uint8Array> {
+  const out: Record<string, Uint8Array> = {};
+  for (const [path, data] of Object.entries(unzipSync(bytes))) if (!path.endsWith('/')) out[path] = data;
+  return out;
 }
 
 function sameBytes(a: Uint8Array, b: Uint8Array): boolean {

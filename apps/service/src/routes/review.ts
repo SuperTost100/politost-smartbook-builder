@@ -75,23 +75,28 @@ const FIX_HINTS: Record<string, string> = {
  * section nor a question (a generated file, an asset), whatever passage that finding quotes. Nothing is deleted.
  */
 export function closeGoneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): void {
+  const gone = goneCompileNotes(ctx, projectId, input, findings).map((i) => i.id);
+  if (!gone.length) return;
+  ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));
+  issuesChanged(ctx, projectId, gone);
+}
+
+/** The open `compile:<rule>` notes that closeGoneCompileNotes closes, read without writing. */
+function goneCompileNotes(ctx: AppContext, projectId: string, input: BookInput, findings: LintFinding[]): { id: string; severity: string }[] {
   const sections = new Set(input.chapters.flatMap((c) => c.sections.map((s) => s.id)));
   const read = new Set([...input.chapters.map((c) => c.id), ...sections]);
   for (const q of input.questions) read.add(`question:${q.id}`);
   const placed = (file: string) => sections.has(file) || file.startsWith('question:');
-  const open = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string; quote: string }>(
-    `SELECT id, node_id, question_id, category, quote FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND category LIKE 'compile:%'`, projectId);
-  const gone = open.filter((i) => {
+  const open = ctx.db.all<{ id: string; node_id: string | null; question_id: string | null; category: string; quote: string; severity: string }>(
+    `SELECT id, node_id, question_id, category, quote, severity FROM review_issues WHERE project_id = ? AND source = 'lint' AND status = 'open' AND category LIKE 'compile:%'`, projectId);
+  return open.filter((i) => {
     const file = i.question_id ? `question:${i.question_id}` : i.node_id;
     const rule = i.category.slice('compile:'.length);
     const chapterNote = !!file && !placed(file);
     // The passage is compared only on the note's own file: a chapter note about a generated file quotes an earlier finding, and the same problem there may now sit in another passage.
     return !!file && read.has(file) && !findings.some((f) => f.rule === rule
       && ((f.file === file && (!f.quote || !i.quote || sameQuote(i.quote, f.quote))) || (chapterNote && !placed(f.file))));
-  }).map((i) => i.id);
-  if (!gone.length) return;
-  ctx.db.tx(() => ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'Validate no longer finds this, so it was closed.' WHERE status = 'open' AND id IN (${gone.map(() => '?').join(',')})`, ...gone));
-  issuesChanged(ctx, projectId, gone);
+  }).map((i) => ({ id: i.id, severity: i.severity }));
 }
 
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -101,6 +106,83 @@ function stamp(d = new Date()) {
 
 function plural(n: number, one: string, many: string) {
   return `${n} ${n === 1 ? one : many}`;
+}
+
+export interface PreparedExport {
+  input: BookInput;
+  compiled: CompiledBook;
+  bytes: Uint8Array;
+  report: ValidationReport;
+  approved: boolean;
+  /** Why an approved export is refused: Validate errors or an open review blocker. Null when it may be stored. */
+  blocked: HttpError | null;
+}
+
+/**
+ * Everything "Approve and export" (or "Export draft") does before it stores anything: compile, the approval gate, pack and
+ * read back. It writes nothing. The gate counts the open review blockers less the `compile:` notes this compile no longer
+ * finds, which storeExport closes. `npm run publish-book` runs it too, so a published book passes the same checks.
+ */
+export function prepareExport(ctx: AppContext, projectId: string, opts: { approved: boolean; version?: string }): PreparedExport {
+  const { approved } = opts;
+  const input = loadBookInput(ctx, projectId, { approvedOnly: approved, version: opts.version });
+  const compiled = deps.compileBook(input);
+  const report = buildReport(compiled);
+
+  let blocked: HttpError | null = null;
+  if (approved) {
+    const gone = goneCompileNotes(ctx, projectId, input, compiled.findings).filter((i) => i.severity === 'blocker').length;
+    const openBlockers = countUnresolvedBlockers(ctx, projectId) - gone;
+    if (report.errors.length || openBlockers) {
+      const parts = [
+        report.errors.length ? plural(report.errors.length, 'check failed', 'checks failed') : '',
+        openBlockers ? plural(openBlockers, 'review problem is still open', 'review problems are still open') : '',
+      ].filter(Boolean);
+      blocked = new HttpError(
+        409, 'export_blocked', `The book cannot be approved yet: ${parts.join(' and ')}.`,
+        'Fix or dismiss them on the Review screen, or export a draft to look at the book as it is.',
+      );
+    }
+  }
+
+  const bytes = deps.packPtsb(compiled);
+  const back = deps.readBackPtsb(bytes, compiled);
+  // A book the approval already refuses keeps that refusal: its errors are usually why the package does not read back.
+  if (!back.ok && !blocked) {
+    throw new HttpError(500, 'export_unreadable', `The exported file did not pass the read-back check: ${back.errors.slice(0, 3).join('; ')}.`, 'Run validation and fix the problems it lists, then export again.');
+  }
+  for (const w of back.warnings) report.warnings.push({ file: 'package', message: w });
+  return { input, compiled, bytes, report, approved, blocked };
+}
+
+/**
+ * Stores a prepared export: closes the notes its compile no longer finds (also when the approval is refused, as Validate
+ * does), then writes the .ptsb and its row, or throws the refusal.
+ */
+export function storeExport(ctx: AppContext, projectId: string, prepared: PreparedExport): ExportRow {
+  closeGoneCompileNotes(ctx, projectId, prepared.input, prepared.compiled.findings);
+  if (prepared.blocked) throw prepared.blocked;
+  const { approved, bytes, report } = prepared;
+  const dir = paths.exports(ctx.config, projectId);
+  mkdirSync(dir, { recursive: true });
+  const suffix = approved ? '' : '-draft';
+  const base = `${getProject(ctx, projectId).slug}-${stamp()}`;
+  let filename = `${base}${suffix}.ptsb`;
+  for (let n = 2; existsSync(join(dir, filename)); n++) filename = `${base}-${n}${suffix}.ptsb`;
+  const path = join(dir, filename);
+  const tmp = `${path}.tmp`;
+  try {
+    writeFileSync(tmp, bytes);
+    renameSync(tmp, path);
+  } catch (err) {
+    rmSync(tmp, { force: true });
+    throw err;
+  }
+  const sha256 = createHash('sha256').update(bytes).digest('hex');
+  const row = insertExport(ctx, { projectId, filename, path, sha256, size: bytes.byteLength, approved, report });
+  if (approved) setStage(ctx, projectId, 'export');
+  ctx.events.emit('export.ready', { exportId: row.id, filename, approved }, { projectId });
+  return row;
 }
 
 export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
@@ -174,54 +256,7 @@ export function registerReviewRoutes(app: FastifyInstance, ctx: AppContext) {
   app.post('/api/projects/:id/exports', async (req): Promise<ExportRow> => {
     const projectId = projectOf(ctx, req);
     const { approved } = parse(z.object({ approved: z.boolean() }), req.body);
-    const project = getProject(ctx, projectId);
-
-    const input = loadBookInput(ctx, projectId, { approvedOnly: approved });
-    const compiled = deps.compileBook(input);
-    // An approval counts the open blockers below, so the notes this compile no longer finds are closed first.
-    closeGoneCompileNotes(ctx, projectId, input, compiled.findings);
-    const report = buildReport(compiled);
-
-    if (approved) {
-      const openBlockers = countUnresolvedBlockers(ctx, projectId);
-      if (report.errors.length || openBlockers) {
-        const parts = [
-          report.errors.length ? plural(report.errors.length, 'check failed', 'checks failed') : '',
-          openBlockers ? plural(openBlockers, 'review problem is still open', 'review problems are still open') : '',
-        ].filter(Boolean);
-        throw new HttpError(
-          409, 'export_blocked', `The book cannot be approved yet: ${parts.join(' and ')}.`,
-          'Fix or dismiss them on the Review screen, or export a draft to look at the book as it is.',
-        );
-      }
-    }
-
-    const bytes = deps.packPtsb(compiled);
-    const back = deps.readBackPtsb(bytes, compiled);
-    if (!back.ok) {
-      throw new HttpError(500, 'export_unreadable', `The exported file did not pass the read-back check: ${back.errors.slice(0, 3).join('; ')}.`, 'Run validation and fix the problems it lists, then export again.');
-    }
-    for (const w of back.warnings) report.warnings.push({ file: 'package', message: w });
-
-    const dir = paths.exports(ctx.config, projectId);
-    mkdirSync(dir, { recursive: true });
-    const suffix = approved ? '' : '-draft';
-    const base = `${project.slug}-${stamp()}`;
-    let filename = `${base}${suffix}.ptsb`;
-    for (let n = 2; existsSync(join(dir, filename)); n++) filename = `${base}-${n}${suffix}.ptsb`;
-    const path = join(dir, filename);
-    const tmp = `${path}.tmp`;
-    try {
-      writeFileSync(tmp, bytes);
-      renameSync(tmp, path);
-    } catch (err) {
-      rmSync(tmp, { force: true });
-      throw err;
-    }
-    const sha256 = createHash('sha256').update(bytes).digest('hex');
-    const row = insertExport(ctx, { projectId, filename, path, sha256, size: bytes.byteLength, approved, report });
-    if (approved) setStage(ctx, projectId, 'export');
-    ctx.events.emit('export.ready', { exportId: row.id, filename, approved }, { projectId });
+    const row = storeExport(ctx, projectId, prepareExport(ctx, projectId, { approved }));
     return { ...row, report: withFiles(ctx, projectId, row.report) };
   });
 
