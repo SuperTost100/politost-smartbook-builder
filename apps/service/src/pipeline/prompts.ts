@@ -964,7 +964,6 @@ export const secondOpinionSchema = z.object({
     verdict: z.enum(['real', 'not-real']),
     severity: z.enum(['blocker', 'major', 'minor']).describe('the severity it deserves; never higher than the one given'),
     reason: z.string().describe('one short sentence'),
-    sameAs: z.number().int().min(1).nullable().optional().describe('the number of an earlier finding in the list that reports the same problem in the same passage; null otherwise'),
   })),
 });
 
@@ -976,9 +975,7 @@ export function secondOpinionPrompt(p: { language: string; notation?: string; ex
 
 A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording. A finding that the text writes a symbol differently from the exam papers is real, and not a preference about wording, when the exam symbols below use another symbol for that quantity and the notation fixed for the whole book defines none for it. When the book's notation defines the symbol, the finding is not real.
 
-Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.
-
-Several reviewers may have read the same text, so the list can report one problem more than once. When a finding reports the same problem in the same passage as an earlier finding in the list, set sameAs to the number of that earlier finding; otherwise set it to null. Still give every finding its own verdict and severity.`,
+Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.`,
     prompt: `Notation fixed for the whole book:
 ${p.notation || '(standard)'}
 ${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
@@ -991,7 +988,7 @@ ${p.text}
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence || '(none)'}
 
-Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "...", "sameAs": <number>|null}]} with one entry per finding.`,
+Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "..."}]} with one entry per finding.`,
   };
 }
 

@@ -248,7 +248,7 @@ describe('syncNotebook', () => {
 function fakeRunRole(out: unknown, spy?: { calls: unknown[] }): EvidenceDeps['runRole'] {
   return (async (_ctx: unknown, opts: unknown) => {
     spy?.calls.push(opts);
-    return { text: JSON.stringify(out), data: out, route: { provider: 'codex', model: 'gpt-6-luna' }, usage: { inputTokens: 1, outputTokens: 1 } };
+    return { text: JSON.stringify(out), data: out, route: { provider: 'codex', model: 'gpt-6-luna' }, fallback: false, usage: { inputTokens: 1, outputTokens: 1 } };
   }) as EvidenceDeps['runRole'];
 }
 
@@ -398,7 +398,7 @@ describe('transcribePage', () => {
       renderPageImage: (async (_c: unknown, rid: string, idx: number, o: unknown) => { renders.push([rid, idx, o]); return png; }) as EvidenceDeps['renderPageImage'],
       runRole: (async (_c: unknown, opts: { role: string; images?: Buffer[]; system: string; projectId?: string | null }) => {
         roles.push(opts);
-        return { text: '```markdown\nSia $f(x) = x^2$ definita su $\\mathbb{R}$.\n```', data: '', route: { provider: 'codex', model: 'gpt-6-luna' }, usage: { inputTokens: 1, outputTokens: 1 } };
+        return { text: '```markdown\nSia $f(x) = x^2$ definita su $\\mathbb{R}$.\n```', data: '', route: { provider: 'codex', model: 'gpt-6-luna' }, fallback: false, usage: { inputTokens: 1, outputTokens: 1 } };
       }) as EvidenceDeps['runRole'],
     });
     const page = await transcribePage(kit.ctx, 'ra', 0);

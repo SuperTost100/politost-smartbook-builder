@@ -70,6 +70,10 @@ export default function ReviewPage() {
   // The service says whether every chapter was reviewed at its current text with nothing serious open (`review` in the project summary).
   // Never "ready to export" before the issues and that standing are known, or while a review is running.
   const reviewedClear = !!issuesQ.data && !runActive && project.data?.review?.clean === true;
+  // A sweep re-reads whole chapters with several calls each, so "Run review" asks first when any chapter is due for one.
+  const sweepsDue = project.data?.review?.sweepsDue ?? 0;
+  const reviewSamples = project.data?.options.reviewSamples ?? 2;
+  const runReview = () => (sweepsDue > 0 ? setConfirmSweep(true) : review.mutate({}));
 
   const refresh = () => { void qc.invalidateQueries({ queryKey: qk.issues(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.manuscript(pid) }); void qc.invalidateQueries({ queryKey: ['section', pid] }); };
   const fixMany = useMutation({
@@ -78,9 +82,10 @@ export default function ReviewPage() {
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const [confirmFull, setConfirmFull] = useState(false);
+  const [confirmSweep, setConfirmSweep] = useState(false);
   const review = useMutation({
-    mutationFn: (mode?: 'full') => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'review', ...(mode ? { scope: { reviewMode: mode } } : {}) } }),
-    onSuccess: (_r, mode) => { toast(mode ? 'Full review started' : 'Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.runs(pid) }); },
+    mutationFn: (scope: { reviewMode?: 'full'; sweep?: boolean }) => api('POST /api/projects/:id/runs', { params: { id: pid }, body: { kind: 'review', scope } }),
+    onSuccess: (_r, scope) => { toast(scope.reviewMode ? 'Full review started' : scope.sweep ? 'Review and sweep started' : 'Review started', { action: { label: 'Open run', to: `/books/${pid}/run` } }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); void qc.invalidateQueries({ queryKey: qk.runs(pid) }); },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
   });
   const setIssue = useMutation({
@@ -169,7 +174,7 @@ export default function ReviewPage() {
         </div>
         <div className="ui-page__actions">
           <button type="button" className="ui-btn" onClick={() => setConfirmFull(true)} disabled={review.isPending || runActive}>Full review</button>
-          <button type="button" className="ui-btn" onClick={() => review.mutate(undefined)} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>
+          <button type="button" className="ui-btn" onClick={runReview} disabled={review.isPending || runActive}>{runActive ? <><span className="ui-spinner" />Reviewing…</> : 'Run review'}</button>
         </div>
       </div>
 
@@ -186,7 +191,7 @@ export default function ReviewPage() {
 
       {issuesQ.isLoading && <div className="ui-skeleton" style={{ height: 160 }} />}
       {issuesQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(issuesQ.error)}</div>}
-      {issuesQ.data && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={() => review.mutate(undefined)} disabled={review.isPending}>Run review</button></div>}
+      {issuesQ.data && all.length === 0 && <div className="ui-empty"><p className="ui-empty__text">Nothing to review yet. Run a review after drafting and the issues land here.</p><button type="button" className="ui-btn ui-btn--accent" onClick={runReview} disabled={review.isPending}>Run review</button></div>}
       {all.length > 0 && shown.length === 0 && <p className="ui-muted">No issues match these filters.</p>}
 
       {main.length > 0 && <ul className="rv-list" aria-label="Blockers and major issues">{main.map((i) => card(i))}</ul>}
@@ -215,10 +220,24 @@ export default function ReviewPage() {
       <ConfirmDialog
         open={confirmFull}
         title="Full review"
-        message="Every section is reviewed on its own call instead of the whole chapter at once, and every finding gets a second opinion. It costs about as much as 3 to 5 normal reviews, so use it once, before the final export. Open review issues are replaced by what it finds."
+        message="Every section with text is read once, on a call of its own, with no repeated samples. Then each chapter's findings get one second opinion, and they replace the chapter's open review issues. A full review does not count as a sweep."
         confirmLabel="Start full review"
         onClose={() => setConfirmFull(false)}
-        onConfirm={() => { setConfirmFull(false); review.mutate('full'); }}
+        onConfirm={() => { setConfirmFull(false); review.mutate({ reviewMode: 'full' }); }}
+      />
+
+      <ConfirmDialog
+        open={confirmSweep}
+        title="Run review"
+        message={<div className="ui-stack">
+          <p>{plural(sweepsDue, 'chapter')} {sweepsDue === 1 ? 'is' : 'are'} due for a sweep: the text changed since the reviewers last read {sweepsDue === 1 ? 'it' : 'them'} whole, or they never did, and no blocker or major issue is open. A sweep reads {sweepsDue === 1 ? 'that chapter' : 'each of them'} again in full and keeps minor notes.</p>
+          <p>Each chapter takes {plural(reviewSamples, 'reviewer call')}, 1 cross review and 1 second opinion: {(reviewSamples + 2) * sweepsDue} model calls in all.</p>
+          <p>With Review only, the review reads just the text that changed.</p>
+        </div>}
+        confirmLabel="Review and sweep"
+        alternative={{ label: 'Review only', onClick: () => { setConfirmSweep(false); review.mutate({}); } }}
+        onClose={() => setConfirmSweep(false)}
+        onConfirm={() => { setConfirmSweep(false); review.mutate({ sweep: true }); }}
       />
     </div>
   );

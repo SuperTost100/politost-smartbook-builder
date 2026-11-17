@@ -137,6 +137,8 @@ export interface ReviewState {
   openSerious: number;
   /** When the latest chapter review finished. */
   reviewedAt: string;
+  /** Chapters a review run would sweep if the author asks for it (see sweepDue in the service). */
+  sweepsDue: number;
 }
 
 export interface ProjectSummary extends Project {
