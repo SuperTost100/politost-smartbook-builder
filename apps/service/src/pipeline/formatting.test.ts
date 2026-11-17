@@ -342,7 +342,7 @@ describe('a question fix settles formatting findings in code too', () => {
     ctx.db.run('DELETE FROM review_issues WHERE id = ?', iss);
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iss] }));
     assert.equal(fake.calls.length, 0);
-    assert.deepEqual(r, { skipped: 'the requested issues are gone' });
+    assert.equal((r as { skipped?: string }).skipped, 'the requested issues are gone');
     const row = ctx.db.get<{ statement: string; status: string; rev: number }>('SELECT statement, status, rev FROM questions WHERE id = ?', id)!;
     assert.deepEqual([row.statement, row.status, row.rev], ['Sia $f$ con $$ g(x) = x $$ vera.', 'verified', 1]);
   });

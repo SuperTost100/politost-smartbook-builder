@@ -248,7 +248,7 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
     const iid = lintIssue(id);
     fake.next(answer({ statement: 'Calcola.', hint: '', solution: `${clean} acu` }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
-    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal((r as { skipped?: string }).skipped, 'the repair changed words or numbers');
     assert.equal(row(id).solution, broken);
     assert.equal(row(id).origin, 'authentic');
     const [issue] = issues(`id = '${iid}'`);
@@ -261,7 +261,7 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
     const iid = lintIssue(id);
     fake.next(answer({ statement: 'Calcola.', hint: '', solution: '' }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
-    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal((r as { skipped?: string }).skipped, 'the repair changed words or numbers');
     assert.equal(row(id).solution, broken);
     const [issue] = issues(`id = '${iid}'`);
     assert.equal(issue.status, 'open');
@@ -750,7 +750,7 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '1', status: 'issue', statement: 'Un fluido scorre con v = 2 m/s.', solution: 'p2 = 140 kPa' });
     const data = blocker(id, 'data', 'Manca l\'ipotesi di moto stazionario.');
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [data] }));
-    assert.deepEqual(r, { skipped: 'a data issue on this statement stays with the author' });
+    assert.deepEqual(r, { skipped: 'a data issue on this statement stays with the author', rev: row(id).rev });
     assert.equal(fake.calls.length, 0);
     assert.equal(row(id).statement, 'Un fluido scorre con v = 2 m/s.');
     const [i] = issues(`id = '${data}'`);
@@ -767,11 +767,18 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     assert.equal(row(id).statement, 'Un fluido scorre con v = 2 m/s.', 'the editor added the hypothesis, and it is not saved');
     assert.equal(row(id).solution, 'p2 = 170 kPa');
 
-    // The check queued after a fix that changed nothing makes no call.
-    const verify = startTask('question.verify', { questionId: id });
-    verify.deps = { [`qfix:${id}:1`]: r };
+    // The check queued after a fix that changed nothing makes no call, unless the author edited the question since.
+    const e = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', status: 'issue', statement: 'Un gas ideale.', solution: 'p = 2 atm' });
+    const skipped = await questionRevise(ctx, startTask('question.revise', { questionId: e, issueIds: [blocker(e, 'data', 'Manca la temperatura.')] }));
+    const verify = startTask('question.verify', { questionId: e });
+    verify.deps = { [`qfix:${e}:1`]: skipped };
     assert.deepEqual(await questionVerify(ctx, verify), { skipped: 'the fix changed no words or numbers' });
     assert.equal(fake.calls.length, 1);
+    updateQuestion(ctx, e, row(e).rev, { statement: 'Un gas ideale a 300 K.' });
+    fake.next(answer({ ...posed, independentAnswer: '2 atm', resultsAgree: true, agrees: true, problems: [] }));
+    await questionVerify(ctx, verify);
+    assert.equal(fake.calls.length, 2, 'the edited text is checked');
+    assert.equal(row(e).status, 'verified');
   });
 });
 

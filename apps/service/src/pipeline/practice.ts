@@ -469,9 +469,9 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   const q = rowToQuestion(r);
   if (!q.statement.trim() || !q.solution.trim()) return { skipped: 'missing statement or solution' };
-  // The check queued after a fix has nothing new to look at when the fix wrote no words or numbers: a skipped fix may have
-  // changed the layout through the formatter, which keeps the question's checks.
-  if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r)) return { skipped: 'the fix changed no words or numbers' };
+  // The check queued after a fix has nothing new to look at when the fix wrote no words or numbers and nobody edited the
+  // question since: a skipped fix records the rev it left (the formatter may have changed the layout, which keeps the checks).
+  if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r && (r as { rev?: number }).rev === q.rev)) return { skipped: 'the fix changed no words or numbers' };
   const project = loadProject(ctx, q.projectId);
   const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
     role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution, profile: subjectProfileOf(project) }), schema: verifySchema,
@@ -600,7 +600,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const ids = (t.task.input.issueIds as string[]) ?? [];
   const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string }>(`SELECT id, message, suggestion, source, category, severity, status FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
   // The issues may be gone (a relint of the chapter deletes open lint rows): with nothing left to fix the editor must not run and save its answer as a draft.
-  if (ids.length && !selected.length) return { skipped: 'the requested issues are gone' };
+  if (ids.length && !selected.length) return { skipped: 'the requested issues are gone', rev: q.rev };
   const project = loadProject(ctx, q.projectId);
   // Formatting findings are settled by code and never listed in a prompt. A fix made of them alone makes no model call.
   const formatIssues = selected.filter((i) => isFormatIssue(i, 'question'));
@@ -613,7 +613,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       if (open.length) ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, 'The AI fix does not change the data of a statement that was not generated: correct it by hand, or accept the issue.', ...open);
       issuesChanged(ctx, q.projectId, open);
     });
-    if (!issues.length && !formatIssues.length) return { skipped: 'a data issue on this statement stays with the author' };
+    if (!issues.length && !formatIssues.length) return { skipped: 'a data issue on this statement stays with the author', rev: q.rev };
   }
   const settled = settleQuestionFormatting(ctx, { projectId: q.projectId, questionId: q.id, language: project.language, issues: formatIssues });
   if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing' };
@@ -641,7 +641,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       if (open.length) ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, `The AI fix was not applied: ${why}`, ...open);
       issuesChanged(ctx, q.projectId, open);
     });
-    return { skipped: 'the repair changed words or numbers' };
+    return { skipped: 'the repair changed words or numbers', rev: q.rev };
   }
   // The author must be able to see that the paper's printed solution was changed, and how. The question turns "adapted" (below), which the Practice screen shows.
   const corrected = q.origin === 'authentic' && changedWords(q.solution, data.solution) !== null;
