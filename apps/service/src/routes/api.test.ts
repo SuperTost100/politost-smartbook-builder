@@ -433,6 +433,24 @@ describe('assets', () => {
 });
 
 describe('exports', () => {
+  it('refuses a blocked approval with 409 even when the package would not read back', async () => {
+    const { projectId } = await projectWithOutline(t, 'exports-unreadable');
+    const fake = installFakes({
+      compileBook: () => ({ files: {}, formulaNumbers: {}, sectionNumbers: {}, findings: [{ rule: 'katex', severity: 'blocker', message: 'Formula non valida', file: 's1' }] }),
+      readBackPtsb: () => ({ ok: false, errors: ['chapters/01.md: content differs after round trip'], warnings: [] }),
+    });
+    try {
+      const refused = await t.req('POST', `/api/projects/${projectId}/exports`, { approved: true });
+      assert.equal(refused.status, 409);
+      assert.match(refused.body.error.message, /1 check failed/);
+      // A draft has no approval to refuse, so the read-back error is what it gets.
+      assert.equal((await t.req('POST', `/api/projects/${projectId}/exports`, { approved: false })).status, 500);
+    } finally {
+      fake.restore();
+      fakes = installFakes();
+    }
+  });
+
   it('refuses an approved export while a blocker finding exists and allows a draft', async () => {
     const { projectId } = await projectWithOutline(t, 'exports');
     const blocker = installFakes({
