@@ -276,8 +276,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     const was = base.files[file];
     const now = target[file];
     if (same(was, now)) { stable.push({ name: file, check: (after) => same(after.files[file], now) }); continue; }
-    // The folder left this file as published: what differs was changed in the builder since, and stays.
-    if (pub && (same(pub[file], now) || (pub[file] === undefined && now === undefined))) continue;
+    // The folder left this file as published: what differs was changed in the builder since, and stays. The package header
+    // and smartbook.json are still listed below, as the compiler's.
+    if (pub && file !== 'ptsb.json' && file !== 'smartbook.json' && (same(pub[file], now) || (pub[file] === undefined && now === undefined))) continue;
     if (file === 'ptsb.json') { add({ unit: file, kind: 'file', status: 'compiler-owned', reason: 'package header, written at export' }); continue; }
     if (was === undefined || now === undefined) { add({ unit: file, kind: 'file', status: 'unmapped', reason: was === undefined ? 'only in the books folder' : 'missing from the books folder' }); continue; }
     if (file === 'smartbook.json') {

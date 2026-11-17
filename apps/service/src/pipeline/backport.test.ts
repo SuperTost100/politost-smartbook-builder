@@ -280,7 +280,7 @@ describe('backportProject', () => {
     const dry = backportProject(ctx, 'p1', dir, { dryRun: true });
     assert.equal(dry.written, false);
     assert.deepEqual(dry.units.map((u) => [u.unit, u.status]), [
-      [`${CH}#p1`, 'mapped'], ['esercizi.md#E1.1', 'mapped'], ['grafici.json#parabola', 'mapped'],
+      [`${CH}#p1`, 'mapped'], ['esercizi.md#E1.1', 'mapped'], ['grafici.json#parabola', 'mapped'], ['ptsb.json', 'compiler-owned'],
     ]);
     assert.deepEqual(counts(), rows);
 
@@ -301,8 +301,9 @@ describe('backportProject', () => {
     assert.equal(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE type = 'asset.updated' AND data LIKE ?`, `%${asset.id}%`)!.n, 2);
 
     const again = backportProject(ctx, 'p1', dir);
-    assert.deepEqual(again.units.map((u) => u.status), []);
+    assert.deepEqual(again.units.map((u) => u.status), ['compiler-owned']);
     assert.equal(again.written, false);
+    assert.deepEqual(again.residual.map((r) => r.file), ['ptsb.json']);
   });
 
   test('a folder with no .builder.json is refused: publish first', () => {
@@ -315,7 +316,7 @@ describe('backportProject', () => {
     seed({ [CH]: (s) => s.replace('si ottiene il risultato in un passo', 'si ottiene il risultato in un solo passo') });
     updateEnrichmentPayload(ctx, 'g1', { ...PARABOLA, title: 'Moto uniformemente accelerato' });
     const r = backportProject(ctx, 'p1', dir);
-    assert.deepEqual(r.units.map((u) => [u.unit, u.status]), [[`${CH}#p1`, 'mapped']]);
+    assert.deepEqual(r.units.filter((u) => u.status !== 'compiler-owned').map((u) => [u.unit, u.status]), [[`${CH}#p1`, 'mapped']]);
     assert.equal(r.written, true);
     assert.match(graphPayload(), /Moto uniformemente accelerato/);
     assert.match(currentHead(ctx, 'p1', 's1')!.markdown, /in un solo passo/);
@@ -366,7 +367,7 @@ describe('backportProject', () => {
       publishNow();
       // B's folder still has A's sentence as it was, which is not B's edit: only B's exercise is written.
       const r = backportProject(ctx, 'p1', branchB);
-      assert.deepEqual(r.units.map((u) => [u.unit, u.status]), [['esercizi.md#E1.1', 'mapped']]);
+      assert.deepEqual(r.units.filter((u) => u.status !== 'compiler-owned').map((u) => [u.unit, u.status]), [['esercizi.md#E1.1', 'mapped']]);
       assert.equal(r.written, true);
       assert.match(currentHead(ctx, 'p1', 's1')!.markdown, /si ottiene subito il risultato/);
       assert.equal(getQuestion(ctx, 'q1').solution, 'Con la {{formula:@vel-media}} vale $v = 5$.');
@@ -380,7 +381,7 @@ describe('backportProject', () => {
     ctx.db.run(`UPDATE questions SET updated_at = '2030-01-01T00:00:00Z', status = 'verified' WHERE id = 'q1'`);
     const r = backportProject(ctx, 'p1', dir);
     assert.equal(r.written, true);
-    assert.deepEqual(r.units.map((u) => [u.unit, u.status]), [[`${CH}#p1`, 'mapped']]);
+    assert.deepEqual(r.units.filter((u) => u.status !== 'compiler-owned').map((u) => [u.unit, u.status]), [[`${CH}#p1`, 'mapped']]);
   });
 
   test('a unit edited both in the builder since the publish and in the books is refused, and the builder keeps its text', () => {
