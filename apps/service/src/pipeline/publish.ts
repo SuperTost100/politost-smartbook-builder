@@ -6,10 +6,11 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
-import { checkFunctionGraph, lintCompiled, unpackPtsb, type LintFinding } from '@smartbuilder/content';
+import { checkFunctionGraph, compileBook, lintCompiled, unpackPtsb, type BookInput, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { getExport, getProject } from '../repo/index.ts';
 import { prepareExport, storeExport, type PreparedExport } from '../routes/review.ts';
+import { planBackport } from './backport.ts';
 import { HttpError } from '../server.ts';
 
 export const MANIFEST = '.builder.json';
@@ -26,6 +27,25 @@ export interface BuilderManifest {
   files: Record<string, string>;
   /** The blocker and major findings of the published files when they were published (findingKey), so validate-all lists only new ones. */
   findings: string[];
+  /**
+   * The question each exercise number stands for ("esercizi.md#E1.2" -> question id). Exercise numbers are positions, so the
+   * back-port refuses a book whose builder now gives a number to another question.
+   */
+  exercises: Record<string, string>;
+  /** The number of each formula key ("vel-media" -> "1.1"): a book's formula references are numbers, checked the same way. */
+  formulas: Record<string, string>;
+}
+
+/** Exercise number -> question id, from a compile with every statement replaced by its question id. */
+export function exerciseQuestions(input: BookInput): Record<string, string> {
+  const marked = compileBook({ ...input, questions: input.questions.map((q) => ({ ...q, statement: `QID${q.id}`, hint: '', solution: '' })) });
+  const out: Record<string, string> = {};
+  for (const file of ['esercizi.md', 'esami.md']) {
+    const md = marked.files[file];
+    if (typeof md !== 'string') continue;
+    for (const m of md.matchAll(/:::exercise\{id="([^"]+)"[\s\S]*?QID(\S+)/g)) out[`${file}#${m[1]}`] = m[2];
+  }
+  return out;
 }
 
 export const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
@@ -165,7 +185,7 @@ const sameBook = (path: string, a: Uint8Array | undefined, b: Uint8Array | undef
  * The files of the export a manifest names, as this builder stored it. The manifest's own hashes are not trusted: they live in
  * the books repo, where anyone can rewrite them with the files.
  */
-function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderManifest): Record<string, Uint8Array> | string {
+export function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderManifest): Record<string, Uint8Array> | string {
   if (manifest.projectId !== projectId) return `its ${MANIFEST} belongs to project ${manifest.projectId}, not ${projectId}`;
   let row;
   try {
@@ -216,6 +236,13 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
       const paths = [...new Set([...Object.keys(current), ...Object.keys(base)])].sort();
       handEdited = paths.filter((p) => !sameBook(p, current[p], base[p]) && !sameBook(p, current[p], files[p]));
       asPublished = paths.every((p) => same(current[p], base[p]));
+      // A file can match neither and still hold nothing to back-port: one section came back from the books and the builder
+      // changed another since. The back-port's own unit comparison decides which edits are still outstanding.
+      if (handEdited.length) {
+        const left = planBackport(prepared.input, current, { published: base, publishedExercises: last.exercises, publishedFormulas: last.formulas });
+        const outstanding = left.units.filter((u) => u.status !== 'compiler-owned').map((u) => u.unit);
+        handEdited = left.bookRefusal ? [...handEdited, `(${left.bookRefusal})`] : outstanding;
+      }
       if (handEdited.length) {
         refusals.push(`books/${slug} was edited outside the builder since its last publish (${handEdited.join(', ')}). Publishing would undo those edits. Back-port them first, starting with the dry run:\n  ${backportCommand(opts.projectId, folder)}`);
       }
@@ -237,7 +264,8 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
   // explicit --version is written.
   const book = (f: Record<string, Uint8Array>) => Object.entries(f).filter(([p]) => p !== 'ptsb.json');
   const asBefore = previousVersion === null ? null : book(withVersion(files, previousVersion));
-  const upToDate = !!asBefore && asPublished && (opts.version === undefined || opts.version === previousVersion)
+  // A manifest written before it recorded exercise and formula numbers is rewritten, so the back-port can check them.
+  const upToDate = !!asBefore && asPublished && !!last?.exercises && !!last?.formulas && (opts.version === undefined || opts.version === previousVersion)
     && asBefore.length === book(current).length && asBefore.every(([p, b]) => same(b, current[p]));
 
   return {
@@ -260,6 +288,8 @@ export function writePublish(ctx: AppContext, plan: PublishPlan): BuilderManifes
     projectId: plan.projectId, exportId: row.id, exportedAt: row.createdAt, builderVersion: ctx.config.version,
     files: Object.fromEntries(Object.keys(plan.files).sort().map((p) => [p, sha256(plan.files[p])])),
     findings: [...new Set(publishedFindings(plan.files).map(findingKey))].sort(),
+    exercises: exerciseQuestions(plan.prepared.input),
+    formulas: plan.prepared.compiled.formulaNumbers,
   };
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));

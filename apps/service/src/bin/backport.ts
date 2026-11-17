@@ -1,8 +1,10 @@
 // Back-port hand edits from a published book folder into the builder:
-//   npm run backport -- --project <id> --from <books checkout>/books/<slug> [--dry-run] [--data-dir <dir>]
-// Each unit that differs (a section, an exercise, a graph, a figure caption) is mapped to its source and written as an author
-// edit, in one transaction for the book, but only if compiling the book again reproduces the books text and adds no blocker
-// or major finding (see pipeline/backport.ts). --dry-run prints the same table and writes nothing.
+//   npm run backport -- --project <id> --from <books checkout>/books/<slug> [--dry-run] [--accept-graph-lint] [--data-dir <dir>]
+// The folder must have been published with npm run publish-book: its .builder.json names the export it came from. Each unit
+// the folder changed against that export (a section, an exercise, a graph, a figure caption) is mapped to its source and
+// written as an author edit, in one transaction for the book, but only if the builder did not change the same unit since,
+// compiling the book again reproduces the books text, and no blocker or major finding is added (see pipeline/backport.ts).
+// A graph the graph lint blocks is refused unless --accept-graph-lint is given. --dry-run prints the same table and writes nothing.
 // A real run takes the data directory's service lock, so stop the service first (systemctl --user stop smartbuilder.service):
 // the transaction holds the database while the book compiles again, and a save the service made meanwhile would wait or fail.
 import { existsSync } from 'node:fs';
@@ -45,7 +47,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const projectId = value('project');
   const from = value('from');
   if (!projectId || !from) {
-    console.log('Usage: npm run backport -- --project <id> --from <books checkout>/books/<slug> [--dry-run] [--data-dir dir]');
+    console.log('Usage: npm run backport -- --project <id> --from <books checkout>/books/<slug> [--dry-run] [--accept-graph-lint] [--data-dir dir]');
     process.exit(1);
   }
   const config = parseArgs(args);
@@ -61,7 +63,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   }
   const ctx = createContext(config);
   try {
-    const r = backportProject(ctx, projectId, resolve(from), { dryRun });
+    const r = backportProject(ctx, projectId, resolve(from), { dryRun, acceptGraphLint: args.includes('--accept-graph-lint') });
     console.log(formatResult(r, dryRun));
     if (r.bookRefusal) process.exitCode = 2;
   } catch (err) {
