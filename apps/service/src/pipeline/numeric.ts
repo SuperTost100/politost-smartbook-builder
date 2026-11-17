@@ -11,7 +11,7 @@ interface Quantity { base: number; asWritten: number; factor: number; unit: stri
 interface Printed { name: string; value: number; unit: string | null; text: string }
 
 export interface Comparison { name: string; stated: string; computed: string }
-/** `complete` is true when every stated value that parses as a number was compared with a printed one. */
+/** `complete` is true when every stated value was compared with a printed one: none was left out for a unit this file cannot read. */
 export interface NumericCheck { compared: Comparison[]; mismatches: Comparison[]; complete: boolean }
 
 const MISMATCH_PREFIX = 'Recomputing the final values in Python gives a different result: ';
@@ -37,8 +37,9 @@ const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u0
 // Units whose value in the solution is the SI value once the prefix is applied. min, h, L, bar, deg, km/h and mol/L are not: an unmarked printed value cannot be read against them.
 const SI_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'mol', 'K', 'C', 'S', 'T', 'rad', 'kg']);
 const MAX_PRINTED_VALUES = 50;
-// What a stated count is a count of ("9,02 × 10^23 atomi di ossigeno"): the value is a plain number.
-const COUNT_NOUN = /^(?:atom[io]|molecol[ae]|ion[ei]|elettron[ei]|proton[ei]|neutron[ei]|foton[ei]|particell[ae]|nucle[io]|atoms?|molecules?|ions?|electrons?|protons?|neutrons?|photons?|particles?|nuclei|nucleus)\b/iu;
+// What a stated count is a count of ("9,02 × 10^23 atomi di ossigeno"): the value is a plain number. A count per unit (ioni/L) is a
+// density, so only "di …" or "of …" may follow the noun.
+const COUNT_NOUN = /^(?:atom[io]|molecol[ae]|ion[ei]|elettron[ei]|proton[ei]|neutron[ei]|foton[ei]|particell[ae]|nucle[io]|atoms?|molecules?|ions?|electrons?|protons?|neutrons?|photons?|particles?|nuclei|nucleus)(?:\s+(?:di|del|della|dello|dei|degli|delle|of)\s+[^/^]*)?$/iu;
 
 /** Strips LaTeX the model may leave in a value and unifies the symbols that differ between sources. */
 function plain(text: string): string {
@@ -169,7 +170,7 @@ export function compareValues(stated: StatedValue[], stdout: string): NumericChe
     compared.push(c);
     if (verdict === 'mismatch') mismatches.push(c);
   }
-  return compared.length ? { compared, mismatches, complete: compared.length === parsed.length } : null;
+  return compared.length ? { compared, mismatches, complete: compared.length === stated.length } : null;
 }
 
 /**
@@ -193,11 +194,13 @@ export async function recomputeFinalValues(computation: string | undefined, stat
 
 /**
  * The recompute that decides, when the checker and the reviewer may each have run one. With both, a mismatch counts only when
- * both programs show one: two programs that disagree prove nothing about the solution. With one, that one decides.
+ * both programs dispute the same value (same name, or the same stated value): two programs that disagree prove nothing about
+ * the solution. With one, that one decides.
  */
 export function combineRecomputes(checker: NumericCheck | null, reviewer: NumericCheck | null): NumericCheck | null {
   if (!checker || !reviewer) return reviewer ?? checker;
-  return { ...reviewer, mismatches: checker.mismatches.length ? reviewer.mismatches : [] };
+  const same = (a: Comparison, b: Comparison) => key(a.name) === key(b.name) || a.stated === b.stated;
+  return { ...reviewer, mismatches: reviewer.mismatches.filter((m) => checker.mismatches.some((c) => same(c, m))) };
 }
 
 /**

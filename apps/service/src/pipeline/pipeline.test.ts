@@ -723,6 +723,8 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     assert.doesNotMatch(String(fake.calls[0]!.prompt), /stazionario/);
     assert.match(String(fake.calls[0]!.prompt), /p2 vale 170 kPa/);
     assert.equal(issues(`id = '${data}'`)[0]!.status, 'open');
+    assert.equal(row(id).statement, 'Un fluido scorre con v = 2 m/s.', 'the editor added the hypothesis, and it is not saved');
+    assert.equal(row(id).solution, 'p2 = 170 kPa');
 
     // The check queued after a fix that changed nothing makes no call.
     const verify = startTask('question.verify', { questionId: id });

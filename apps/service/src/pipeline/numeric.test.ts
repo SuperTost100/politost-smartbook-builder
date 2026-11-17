@@ -33,6 +33,8 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
       assert.ok(Math.abs(q.base - 9.02e23) < 1e18, text);
     }
     assert.equal(parseQuantity('3 atomic units'), null, 'a word that only starts like a count noun is not one');
+    assert.equal(parseQuantity('2,00 × 10^20 ions/L'), null, 'a count per litre is a density, not a plain number');
+    assert.equal(parseQuantity('2,00 × 10^23 ioni/m^3'), null);
     // Chimica 2a682723: the solution's 9,02 is right; the model claimed 9,03 and no recompute ran.
     assert.equal(compareValues([{ name: 'N_atomi', value: '9,02 × 10^23 atomi' }], 'N_atomi = 9.02497780e23')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'N_atomi', value: '9,10 × 10^23 atomi' }], 'N_atomi = 9.02497780e23 atomi')!.mismatches.length, 1);
@@ -49,7 +51,7 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
   test('complete only when every stated number was compared', () => {
     assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V\nb = 2 V')!.complete, true);
     assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V')!.complete, false);
-    assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'x', value: '2\\pi' }], 'a = 1 V')!.complete, true, 'a symbolic value is not a number to compare');
+    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }, { name: 'p', value: '2.00 atm' }], 'a = 1 V\np = 3 atm')!.complete, false, 'a unit it cannot read leaves that value unchecked');
   });
 
   test('with two programs a mismatch needs both; with one, that one decides', () => {
@@ -62,6 +64,10 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     assert.equal(combineRecomputes(bad, null), bad);
     assert.equal(combineRecomputes(null, bad), bad);
     assert.equal(combineRecomputes(null, null), null);
+    // Each program disputes a different value: neither dispute is confirmed.
+    const a = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
+    const b = { name: 'b', stated: '2.00 V', computed: '2.5 V' };
+    assert.deepEqual(combineRecomputes({ compared: [a, b], mismatches: [a], complete: true }, { compared: [a, b], mismatches: [b], complete: true })!.mismatches, []);
   });
 });
 

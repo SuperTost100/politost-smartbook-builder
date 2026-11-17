@@ -650,7 +650,8 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     // The author may have closed the issues while the editor ran. A rewrite made for issues that are all closed now is not applied over that decision.
     const open = stillOpen(ctx, issues.map((i) => i.id));
     if (issues.length && !open.length) return { stale: true };
-    const after = { statement: layout(data.statement), hint: layout(data.hint), solution: layout(data.solution) };
+    // The data of a statement that stays with the author are not changed by a fix made for the other issues selected with it.
+    const after = { statement: authorOnly.length ? q.statement : layout(data.statement), hint: layout(data.hint), solution: layout(data.solution) };
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
       after.statement, after.hint, after.solution, q.origin === 'authentic' ? 'adapted' : q.origin, 'draft', now(), q.id, q.rev).changes;
     if (!changed) {
