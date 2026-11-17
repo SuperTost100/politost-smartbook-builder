@@ -291,13 +291,16 @@ export function katexError(tex: string, display: boolean): string | null {
 /** Letters of scripts a book is not written in. Greek and Latin are left out: Greek is maths and has its own rule. */
 const FOREIGN_SCRIPT = /[\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Thai}\p{Script=Devanagari}\p{Script=Armenian}\p{Script=Georgian}]/u;
 
+/** Language codes of books written in a script FOREIGN_SCRIPT lists. */
+const NON_LATIN_LANGUAGE = /^\s*(?:ru|uk|bg|sr|zh|ja|ko|ar|fa|he|iw|th|hi|hy|ka|russ|ukrain|bulgar|serb|chin|japan|korea|arab|persian|hebrew|thai|hindi|armen|georg)/i;
+
 /** Inline math that opens and closes with the same digit around a symbol: $4\mathrm{C_4H_{10}}4$, $4sp^24$. */
 const STRAY_DIGIT_WRAP = /(?<!\$)\$(\d)((?:\\[A-Za-z]+|[A-Za-z])[^$]*?)\1\$(?!\$)/g;
 function isStrayDigitWrap(body: string): boolean {
   // The closing digit follows a brace, a letter or a one-digit exponent: "}4", "a4", "^24".
   if (!/(?:\}|[A-Za-z]|\^\d)$/.test(body)) return false;
   // "$2\times2$", "$2\sqrt2$", "$1\cdot1$": an operator before the last digit is maths.
-  if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty|(?:arc)?(?:sin|cos|tan|cot|sec|csc)h?|log|ln|lg|exp)$/.test(body)) return false;
+  if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty|(?:arc)?(?:sin|cos|tan|cot|sec|csc)h?|log|ln|lg|exp)(?:[_^](?:\{[^{}]*\}|\w))*$/.test(body)) return false;
   // A relation inside the formula (outside a unit in \mathrm) makes it an equation: "$1x=1$".
   return !/=|\\le|\\ge|<|>/.test(body.replace(/\\mathrm\{(?:[^{}]|\{[^{}]*\})*\}/g, ''));
 }
@@ -453,7 +456,8 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     const noCode = l.kind === 'math' || l.kind === 'formula-body' ? t : t.replace(/`[^`]*`/g, '');
     for (const _ of noCode.matchAll(/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/g)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
     // Letters of a script the book is not written in (a Cyrillic "н" after a formula), also inside math. Greek is math: unicode-math has it.
-    const foreign = FOREIGN_SCRIPT.exec(noCode);
+    // shortcut: lintCompiled does not know the book's language, so a book in a non-Latin script fails this rule there; read smartbook.json when such a book is exported.
+    const foreign = NON_LATIN_LANGUAGE.test(o.language ?? '') ? null : FOREIGN_SCRIPT.exec(noCode);
     if (foreign) add(mk('foreign-script', file, `Letter "${foreign[0]}" of a script that does not belong in the book (Cyrillic, Chinese, Arabic, Hebrew and similar).`, l.n, t));
     // A blank line is only of kind 'math' inside an open $$: the reader may end the formula there.
     if (l.kind === 'math' && !l.raw.trim() && lines[l.n - 2]?.raw.trim()) add(mk('math-blank-line', file, 'Blank line inside a display formula ($$ ... $$); remove it.', l.n, lines.slice(Math.max(0, l.n - 3), l.n + 1).map((x) => x.raw).join(' ')));
@@ -846,7 +850,7 @@ function duplicateExercises(files: Record<string, string | Uint8Array>): LintFin
     if (!md) continue;
     for (const m of md.matchAll(/^:::exercise\{id="([^"]+)"[^\n]*\n## Domanda\n([\s\S]*?)(?=^:::(?:hint|solution)|^:::\s*$)/gm)) {
       const here = `${p}#${m[1]}`;
-      const text = m[2].replace(/\*\*[^*]*\*\*/g, '').replace(/[\s$\\{}]/g, '').toLowerCase();
+      const text = m[2].replace(/^(?:\s*\*\*[^*]*\*\*)+/, '').replace(/\*\*/g, '').replace(/[\s$\\{}]/g, '').toLowerCase();
       if (text.length < 40) continue;
       const same = byText.get(text);
       if (same) out.push(mk('duplicate-exercise', p, `Exercise ${m[1]} has the same statement as ${same}.`, undefined, m[2]));

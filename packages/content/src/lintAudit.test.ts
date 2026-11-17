@@ -15,7 +15,7 @@ test('stray-digit-wrap: a digit copied around an inline formula is a blocker', (
   assert.equal(sev('Si ottengono $4\\mathrm{C_4H_{10}}4$ molecole.', 'stray-digit-wrap'), 'blocker');
   assert.equal(hits('Gli orbitali $4sp^24$ sono ibridi.', 'stray-digit-wrap').length, 1);
   // near misses: arithmetic that starts and ends with the same digit
-  for (const ok of ['Vale $2\\times2$.', 'Vale $2\\sqrt2$.', 'Vale $1\\cdot1$.', 'Vale $2\\sin2$ e $3\\ln3$.', 'Il testo `$4\\mathrm{C}4$` è codice.', 'Tende a $1x=1$.', 'Il limite $\\dots\\to0$ e $3 + 3$.']) {
+  for (const ok of ['Vale $2\\times2$.', 'Vale $2\\sqrt2$.', 'Vale $1\\cdot1$.', 'Vale $2\\sin2$ e $3\\ln3$.', 'Vale $2\\log_{2}2$ e $2\\sin^{2}2$.', 'Il testo `$4\\mathrm{C}4$` è codice.', 'Tende a $1x=1$.', 'Il limite $\\dots\\to0$ e $3 + 3$.']) {
     assert.deepEqual(hits(ok, 'stray-digit-wrap'), [], ok);
   }
   // a display formula and an exercise line are not inline text
@@ -34,6 +34,7 @@ test('foreign-script: Cyrillic or CJK letters are a major finding; Greek, accent
   assert.equal(sev('Il carbonio, $40{,}00\\,\\mathrm{g}$ di н e il resto.', 'foreign-script'), 'major');
   assert.equal(hits('Questo vale $x = \\text{н}$.', 'foreign-script').length, 1, 'also inside math');
   assert.equal(hits('Il termine 水 non va qui.', 'foreign-script').length, 1);
+  assert.deepEqual(lintSection('Это определение предела функции.', { sectionId: 's', language: 'ru' }).filter((f) => f.rule === 'foreign-script'), [], 'a Russian book');
   for (const ok of ['Una città è più bella, e vale α e Ω.', 'Il comando `привет` è codice.', 'Vale $\\alpha + \\beta$.']) assert.deepEqual(hits(ok, 'foreign-script'), [], ok);
 });
 
@@ -135,6 +136,9 @@ test('duplicate-exercise: the same statement twice is minor; same-data-exercise:
   const data = found.filter((f) => f.rule === 'same-data-exercise');
   assert.equal(data.length, 1);
   assert.match(data[0].message, /E1\.3.*E1\.1/);
+  // bold content in the statement counts, only the leading exam label does not
+  const bold = lintCompiled({ 'chapters/01-uno.md': CH, 'esercizi.md': exercise('E3.1', same + ' Calcolare **3 mol** di acqua.') + exercise('E3.2', same + ' Calcolare **5 mol** di acqua.') }, { integrity: false, content: false });
+  assert.deepEqual(bold.filter((f) => f.rule === 'duplicate-exercise'), []);
   // near misses: different statements, different numbers, fewer than four numbers
   const none = lintCompiled({
     'chapters/01-uno.md': CH,
