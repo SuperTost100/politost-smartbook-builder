@@ -4,7 +4,7 @@
 // file that matches neither: a hand edit, which writing over would undo, so it has to be back-ported first. The books repo's
 // CI checks the hashes on every pull request. Nothing here commits or pushes.
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
 import { checkFunctionGraph, lintCompiled, unpackPtsb, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
@@ -30,17 +30,23 @@ export interface BuilderManifest {
 
 export const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
 
-/** The book's files in a folder, by path inside it, without dotfiles and the cover. A missing folder has none. */
+/**
+ * The book's files in a folder, by path inside it, without dotfiles and the cover. A missing folder has none. A symbolic link
+ * is refused: the folder can come from a pull request, and a publish would otherwise read and write the file it points at.
+ */
 export function bookFiles(dir: string): Record<string, Uint8Array> {
   const out: Record<string, Uint8Array> = {};
   if (!existsSync(dir)) return out;
   const walk = (d: string) => {
+    if (lstatSync(d).isSymbolicLink()) throw new Error(`${d} is a symbolic link; a book folder holds only plain files and folders.`);
     for (const name of readdirSync(d)) {
       if (name.startsWith('.')) continue;
       const full = join(d, name);
       const rel = relative(dir, full).split(sep).join('/');
       if (rel === COVER) continue;
-      if (statSync(full).isDirectory()) walk(full);
+      const st = lstatSync(full);
+      if (st.isSymbolicLink()) throw new Error(`${full} is a symbolic link; a book folder holds only plain files and folders.`);
+      if (st.isDirectory()) walk(full);
       else out[rel] = readFileSync(full);
     }
   };
@@ -148,6 +154,9 @@ export interface PublishOptions {
 }
 
 const same = (a: Uint8Array | undefined, b: Uint8Array | undefined) => a === undefined ? b === undefined : b !== undefined && Buffer.from(a).equals(Buffer.from(b));
+/** For the hand-edit check: smartbook.json without its version, which the publish sets and a contributor raises as the repo asks. */
+const sameBook = (path: string, a: Uint8Array | undefined, b: Uint8Array | undefined) =>
+  path === 'smartbook.json' && a && b ? same(withVersion({ [path]: a }, '')[path], withVersion({ [path]: b }, '')[path]) : same(a, b);
 
 /**
  * The files of the export a manifest names, as this builder stored it. The manifest's own hashes are not trusted: they live in
@@ -199,7 +208,7 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
       refusals.push(`books/${slug} cannot be checked for edits made outside the builder: ${base}.`);
     } else {
       const paths = [...new Set([...Object.keys(current), ...Object.keys(base)])].sort();
-      handEdited = paths.filter((p) => !same(current[p], base[p]) && !same(current[p], files[p]));
+      handEdited = paths.filter((p) => !sameBook(p, current[p], base[p]) && !sameBook(p, current[p], files[p]));
       asPublished = paths.every((p) => same(current[p], base[p]));
       if (handEdited.length) {
         refusals.push(`books/${slug} was edited outside the builder since its last publish (${handEdited.join(', ')}). Publishing would undo those edits. Back-port them first, starting with the dry run:\n  ${backportCommand(opts.projectId, folder)}`);
