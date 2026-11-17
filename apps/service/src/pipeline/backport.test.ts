@@ -225,7 +225,7 @@ describe('backportProject', () => {
     .map((t) => ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM ${t}`)!.n);
 
   test('a dry run writes nothing; the real run writes author edits; a second run finds nothing to do', () => {
-    seed('2026-02-01T00:00:00Z', AUDIT_EDITS);
+    seed('2026-02-01T00:00:00Z', { ...AUDIT_EDITS, [CH]: (s) => AUDIT_EDITS[CH](s).replace('Moto con aₓ costante', 'Moto con aₓ costante nel tempo') });
     const rows = counts();
     const dry = backportProject(ctx, 'p1', dir, { dryRun: true });
     assert.equal(dry.written, false);
@@ -244,6 +244,10 @@ describe('backportProject', () => {
     assert.equal(q.solution, 'Con la {{formula:@vel-media}} vale $v = 5$.');
     assert.notEqual(ctx.db.get<{ edited_at: string | null }>('SELECT edited_at FROM questions WHERE id = ?', 'q1')!.edited_at, null);
     assert.match(ctx.db.get<{ payload: string }>("SELECT payload FROM enrichments WHERE id = 'g1'")!.payload, /0\.5\*x\^2/);
+    const asset = ctx.db.get<{ id: string; caption: string }>("SELECT id, caption FROM assets WHERE filename = 'fig.svg'")!;
+    assert.equal(asset.caption, 'Moto con aₓ costante nel tempo');
+    // One event when the figure was stored, one for the caption: announced like any figure edit.
+    assert.equal(ctx.db.get<{ n: number }>(`SELECT COUNT(*) AS n FROM events WHERE type = 'asset.updated' AND data LIKE ?`, `%${asset.id}%`)!.n, 2);
 
     const again = backportProject(ctx, 'p1', dir);
     assert.deepEqual(again.units.map((u) => u.status), ['compiler-owned']);

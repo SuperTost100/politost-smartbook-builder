@@ -515,9 +515,10 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
         updateEnrichmentPayload(ctx, c.enrichmentId, c.payload);
       } else {
         // In place, not on a copy as the figure editor does: a copy gets a new file name, and the books name the old one.
-        const rows = ctx.db.all<{ id: string }>('SELECT id FROM assets WHERE project_id = ? AND filename = ?', projectId, c.filename);
+        const rows = ctx.db.all<{ id: string; node_id: string | null }>('SELECT id, node_id FROM assets WHERE project_id = ? AND filename = ?', projectId, c.filename);
         if (rows.length !== 1) throw new Error(`Figure ${c.filename} is stored ${rows.length} times; its caption was not changed.`);
         ctx.db.update('assets', rows[0].id, { caption: c.caption, alt: c.alt });
+        ctx.events.emit('asset.updated', { assetId: rows[0].id, nodeId: rows[0].node_id }, { projectId });
       }
     }
     const stored = loadBookInput(ctx, projectId, { approvedOnly: true });
