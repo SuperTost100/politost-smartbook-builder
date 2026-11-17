@@ -380,7 +380,7 @@ describe('formula blocks in a question', () => {
     const ref = note(id, 'formula-ref-unknown', '{{formula:@laplace-seno}}');
     fake.next(() => ({ structured: { statement: 'Calcola il lavoro.', hint: '', solution: '$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-trasformata}} si ha $L=2$.' } as never, text: '{}', usage: usageOf(1, 1) }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [block, ref] }));
-    assert.deepEqual(r, { revised: true });
+    assert.equal((r as { revised?: boolean }).revised, true);
     assert.equal(fake.calls.length, 1, 'only the reference note went to the editor');
     const prompt = String(fake.calls[0].prompt);
     assert.match(prompt, /unknown|exists in the book/);

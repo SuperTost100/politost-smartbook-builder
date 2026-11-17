@@ -750,14 +750,16 @@ export const verifySchema = z.object({
 export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
   const profile = p.profile ?? SUBJECT_PROFILES.other;
   return {
-    system: `You are an independent examiner checking a textbook problem. First solve it yourself from the statement alone, then compare with the given solution. Be strict about wrong results, missing hypotheses (${profile.hypotheses}), unjustified steps and statements that lack information. Do not complain about style.`,
+    system: `You are an independent examiner checking a textbook problem. First solve it yourself from the statement alone, then compare with the given solution. Report only what a student would get wrong or be confused by: a wrong number or unit, an answer the statement asks for that the solution never states, a step that does not follow, a missing hypothesis (${profile.hypotheses}) that changes the answer, a statement that lacks information. Do not report rigor or wording you would merely put differently, and do not complain about style.`,
     prompt: `STATEMENT:
 ${p.statement}
 
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right.
+Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right. A wrong number or unit in a result, or an answer the statement asks for that the solution never states, is at least major.
+
+The text may contain {{formula:@key}} or {{formula:key}}, which point to a numbered formula of the book, and links whose target starts with ref: (for example [Serie di funzioni](ref:section/...)), which point to another part of the book. The reader shows them as links: they are cross-references, not placeholders, and not problems.
 
 Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.
 

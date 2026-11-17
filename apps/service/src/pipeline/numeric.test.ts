@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
+import { combineRecomputes, compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
 import type { PythonResult } from './python.ts';
 
 const ran = (stdout: string, ok = true): (() => Promise<PythonResult>) => async () => ({ ok, stdout, version: 'test' });
@@ -24,10 +24,51 @@ describe('parsing a stated value', () => {
   });
 });
 
+describe('counts and last digits (the exercise re-check of 17 November)', () => {
+  test('a count of atoms, molecules or ions is a plain number, also with what it counts after it', () => {
+    for (const text of ['9,02 × 10^23 atomi', '9,02 \\times 10^{23} atomi di ossigeno', '9.02e23 atoms', '9,02 · 10^23 molecole']) {
+      const q = parseQuantity(text);
+      assert.ok(q, text);
+      assert.equal(q.unit, '', text);
+      assert.ok(Math.abs(q.base - 9.02e23) < 1e18, text);
+    }
+    assert.equal(parseQuantity('3 atomic units'), null, 'a word that only starts like a count noun is not one');
+    // Chimica 2a682723: the solution's 9,02 is right; the model claimed 9,03 and no recompute ran.
+    assert.equal(compareValues([{ name: 'N_atomi', value: '9,02 × 10^23 atomi' }], 'N_atomi = 9.02497780e23')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'N_atomi', value: '9,10 × 10^23 atomi' }], 'N_atomi = 9.02497780e23 atomi')!.mismatches.length, 1);
+  });
+
+  test('a last digit that rounding explains matches, a wrong value does not', () => {
+    // Fisica 785e1c65, Chimica 4d3131a0 and fd4d6c96 were blocked on these; Fisica 6e84f71e had a real error.
+    assert.equal(compareValues([{ name: 'R', value: '339 N' }], 'R = 339.702 N')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'resa', value: '79,9 %' }], 'resa = 79.9578 %')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'resa', value: '79,7 %' }], 'resa = 79.7585 %')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'p2', value: '140 kPa' }], 'p2 = 170000.0 Pa')!.mismatches.length, 1);
+  });
+
+  test('complete only when every stated number was compared', () => {
+    assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V\nb = 2 V')!.complete, true);
+    assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V')!.complete, false);
+    assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'x', value: '2\\pi' }], 'a = 1 V')!.complete, true, 'a symbolic value is not a number to compare');
+  });
+
+  test('with two programs a mismatch needs both; with one, that one decides', () => {
+    const c = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
+    const bad = { compared: [c], mismatches: [c], complete: true };
+    const good = { compared: [c], mismatches: [], complete: true };
+    assert.equal(combineRecomputes(bad, bad)!.mismatches.length, 1);
+    assert.equal(combineRecomputes(bad, good)!.mismatches.length, 0);
+    assert.equal(combineRecomputes(good, bad)!.mismatches.length, 0);
+    assert.equal(combineRecomputes(bad, null), bad);
+    assert.equal(combineRecomputes(null, bad), bad);
+    assert.equal(combineRecomputes(null, null), null);
+  });
+});
+
 describe('comparing recomputed values with the stated ones', () => {
   test('a matching answer, whatever the prefix', () => {
     const r = compareValues([{ name: 'R_eq', value: '4.7 kΩ' }], 'R_eq = 4700.0 ohm\n');
-    assert.deepEqual(r, { compared: [{ name: 'R_eq', stated: '4.7 kΩ', computed: '4700.0 ohm' }], mismatches: [] });
+    assert.deepEqual(r, { compared: [{ name: 'R_eq', stated: '4.7 kΩ', computed: '4700.0 ohm' }], mismatches: [], complete: true });
     assert.equal(compareValues([{ name: 'R_eq', value: '4.7 kΩ' }], 'R_eq = 4.7 kohm')!.mismatches.length, 0, 'the program may print a prefixed unit too');
     assert.equal(compareValues([{ name: 'I', value: '3,2 mA' }], 'I = 0.0032 A')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'm', value: '2.5 g' }], 'm = 0.0025 kg')!.mismatches.length, 0);

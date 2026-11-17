@@ -12,7 +12,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { mismatchMessage, readMismatches, recomputeFinalValues, runConsistency, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { combineRecomputes, mismatchMessage, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
@@ -449,11 +449,18 @@ export function dataFailure(d: Pick<VerifyAnswer, 'wellPosed' | 'wellPosedReason
  * The verdict of the exercise check. A question is verified only when the two solutions agree, no problem above minor is
  * listed, the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that agree on a
  * problem with impossible data (Chimica E17.5: both said "no solution") do not pass.
+ *
+ * The Python recompute settles the numbers: a mismatch it finds is a different result whatever the model says, and when it
+ * compared every stated value without a mismatch the results agree, though the model may still list problems with their own
+ * severity. Fisica E5.3 (339 against 339,7 N) was blocked on the model's word while the recompute matched all four values.
  */
-export function verifyVerdict(d: VerifyAnswer, mismatches: number, consistency: ConsistencyCheck | null) {
-  const resultsAgree = d.resultsAgree && !mismatches;
+export function verifyVerdict(d: VerifyAnswer, numeric: NumericCheck | null, consistency: ConsistencyCheck | null) {
+  const settled = !!numeric?.complete && !numeric.mismatches.length;
+  const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
+  // The model's `agrees` includes its results: once the recompute settled those, the listed problems are what is left.
+  const agrees = d.agrees || (settled && !d.resultsAgree);
   const data = dataFailure(d, consistency);
-  const ok = d.agrees && resultsAgree && !d.problems.some((p) => p.severity !== 'minor') && !data;
+  const ok = agrees && resultsAgree && !d.problems.some((p) => p.severity !== 'minor') && !data;
   return { ok, resultsAgree, data };
 }
 
@@ -462,6 +469,8 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   const q = rowToQuestion(r);
   if (!q.statement.trim() || !q.solution.trim()) return { skipped: 'missing statement or solution' };
+  // The check queued after a fix has nothing new to look at when the fix changed nothing.
+  if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r)) return { skipped: 'the fix changed nothing' };
   const project = loadProject(ctx, q.projectId);
   const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
     role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution, profile: subjectProfileOf(project) }), schema: verifySchema,
@@ -473,23 +482,32 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   let { data, route } = await check('checker');
   let recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   let consistency = await runConsistency(data.consistency);
-  const suspicious = (d: typeof data, r: NumericCheck | null, c: ConsistencyCheck | null) => !d.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!r?.mismatches.length || !!dataFailure(d, c);
+  const suspicious = (d: typeof data, r: NumericCheck | null, c: ConsistencyCheck | null) => {
+    const v = verifyVerdict(d, r, c);
+    return !v.resultsAgree || d.problems.some((p) => p.severity !== 'minor') || !!v.data;
+  };
   if (suspicious(data, recomputed, consistency) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
     t.progress('Asking the reviewer for a second opinion');
     ({ data, route } = await check('reviewer'));
-    // The reviewer's recomputation replaces the checker's only when it ran: a reviewer that gave no usable program does not erase a mismatch.
-    recomputed = (await recomputeFinalValues(data.computation, data.statedValues)) ?? recomputed;
+    // A reviewer that gave no usable program does not erase the checker's mismatch; with both programs, a mismatch needs both.
+    recomputed = combineRecomputes(recomputed, await recomputeFinalValues(data.computation, data.statedValues));
     // Its consistency program is its verdict on the data; with no program, the checker's result stands.
     consistency = (await runConsistency(data.consistency)) ?? consistency;
   }
   const mismatches = recomputed?.mismatches ?? [];
-  const { ok, resultsAgree, data: badData } = verifyVerdict(data, mismatches.length, consistency);
+  const { ok, resultsAgree, data: badData } = verifyVerdict(data, recomputed, consistency);
+  // A verified question gets no issue: its minor notes stay in the check's detail.
+  const notes = ok && data.problems.length ? ` Minor notes: ${truncate(data.problems.map((p) => p.message.trim()).join(' '), 1000)}` : '';
   const checks = [
     ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric' && c.method !== 'consistency'),
-    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}`, model: route.model },
+    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}${notes}`, model: route.model },
     ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
     { method: 'consistency' as const, ok: !badData, detail: badData ?? consistency?.detail ?? 'No numeric data to check; the statement was judged well posed.' },
   ];
+  if (!ok) {
+    const undone = undoFix(ctx, t, q, failureSummary(data, mismatches, resultsAgree, badData));
+    if (undone) return undone;
+  }
   return ctx.db.tx(() => {
     // The check was made on the text as of q.rev; if the author edited since, it says nothing about the new text.
     const changed = ctx.db.run('UPDATE questions SET status = ?, checks = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?', ok ? 'verified' : 'issue', JSON.stringify(checks), now(), q.id, q.rev).changes;
@@ -498,7 +516,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     const stale = ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id).map((r) => r.id);
     ctx.db.run(`DELETE FROM review_issues WHERE question_id = ? AND source = 'verification' AND status = 'open'`, q.id);
     issuesChanged(ctx, q.projectId, stale);
-    for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
+    if (!ok) for (const p of data.problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export, unless a listed problem is already a blocker.
     // Only a different result blocks approval; gaps in the reasoning keep the severity the reviewer gave them.
     if (!resultsAgree && !data.problems.some((p) => p.severity === 'blocker')) {
@@ -508,8 +526,51 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
       addIssue(ctx, q, 'blocker', 'solution', found, 'Compare both results and correct the solution, or accept the issue if the independent answer is wrong.');
     }
     // Data that are inconsistent, impossible or not shown consistent always block, whatever the solutions say.
-    if (badData) addIssue(ctx, q, 'blocker', 'data', badData, 'Correct the data of the statement so that they are consistent and determine one answer, and the solution with them. Accept the issue only if the check is wrong.');
+    if (badData) {
+      addIssue(ctx, q, 'blocker', 'data', badData, q.origin === 'generated'
+        ? 'Correct the data of the statement so that they are consistent and determine one answer, and the solution with them. Accept the issue only if the check is wrong.'
+        : 'The statement comes from a source or from the author, so the AI fix leaves it alone: check it against the source and correct it by hand, or accept the issue if the check is wrong.');
+    }
     return { ok, problems: data.problems.length, ...(recomputed ? { recomputed: recomputed.compared.length, mismatches: mismatches.length } : {}), ...(badData ? { data: badData } : {}) };
+  });
+}
+
+/** What made a check fail, in one line, for the issues an undone fix reopens. */
+function failureSummary(d: VerifyAnswer, mismatches: Comparison[], resultsAgree: boolean, badData: string | null): string {
+  const parts = d.problems.filter((p) => p.severity !== 'minor').map((p) => p.message.trim().replace(/\.$/, ''));
+  if (mismatches.length) parts.push(mismatchMessage(mismatches).replace(/\.$/, ''));
+  else if (!resultsAgree) parts.push(`the independent solution reaches a different result: ${d.independentAnswer.trim().replace(/\.$/, '')}`);
+  if (badData) parts.push(badData.replace(/\.$/, ''));
+  return truncate(parts.length ? parts.join('; ') : 'the independent check does not agree with the solution', 800);
+}
+
+/** What `questionRevise` returns when it saved a rewrite: the issues it closed and the question's origin and status before. */
+interface FixResult { revised: true; fixed: string[]; origin: Question['origin']; status: Question['status'] }
+
+/**
+ * Undoes the AI fix this check was queued after, when the check fails: the text goes back to what it was before the fix
+ * (from `question_revisions`), and the issues the fix closed open again with the reason. Only the fix's own rewrite is undone:
+ * when the text changed after it (an author edit), or the check was not queued after a fix, this returns null and the failed
+ * check files its issues as usual. The reopened issues wait for the author, so a failed fix is never retried on its own.
+ */
+function undoFix(ctx: AppContext, t: TaskContext, q: Question, reason: string) {
+  const fix = Object.entries(t.deps).find(([key]) => key.startsWith('qfix:'))?.[1] as FixResult | null | undefined;
+  if (!fix?.revised) return null;
+  const rev = ctx.db.get<{ old_statement: string | null; old_hint: string | null; old_solution: string | null; statement: string; hint: string; solution: string }>(
+    `SELECT r.* FROM question_revisions r JOIN task_deps d ON d.dep_id = r.task_id WHERE d.task_id = ? AND r.question_id = ? AND r.origin = 'revised' ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1`,
+    t.task.id, q.id);
+  if (!rev || rev.old_statement === null || rev.statement !== q.statement || rev.hint !== q.hint || rev.solution !== q.solution) return null;
+  const before = { statement: rev.old_statement, hint: rev.old_hint ?? '', solution: rev.old_solution ?? '' };
+  return ctx.db.tx(() => {
+    const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
+      before.statement, before.hint, before.solution, fix.origin, fix.status, now(), q.id, q.rev).changes;
+    if (!changed) return { stale: true };
+    recordQuestionRevision(ctx, q.id, q, before, { origin: 'restored', taskId: t.task.id });
+    const reopened = fix.fixed.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'fixed' AND id IN (${fix.fixed.map(() => '?').join(',')})`, ...fix.fixed).map((r) => r.id) : [];
+    if (reopened.length) ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${reopened.map(() => '?').join(',')})`, `The AI fix was undone because the check after it failed: ${reason}`, ...reopened);
+    questionsChanged(ctx, q.projectId, [q.id]);
+    issuesChanged(ctx, q.projectId, reopened);
+    return { ok: false, restored: true, reopened: reopened.length };
   });
 }
 
@@ -540,7 +601,17 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const project = loadProject(ctx, q.projectId);
   // Formatting findings are settled by code and never listed in a prompt. A fix made of them alone makes no model call.
   const formatIssues = selected.filter((i) => isFormatIssue(i, 'question'));
-  const issues = selected.filter((i) => !isFormatIssue(i, 'question'));
+  // A statement that was not generated comes from an exam paper, a collection or the author: a data issue on it stays with the author.
+  const authorOnly = q.origin === 'generated' ? [] : selected.filter((i) => i.category === 'data' && !isFormatIssue(i, 'question'));
+  const issues = selected.filter((i) => !isFormatIssue(i, 'question') && !authorOnly.includes(i));
+  if (authorOnly.length) {
+    ctx.db.tx(() => {
+      const open = stillOpen(ctx, authorOnly.map((i) => i.id));
+      if (open.length) ctx.db.run(`UPDATE review_issues SET resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, 'The AI fix does not change the data of a statement that was not generated: correct it by hand, or accept the issue.', ...open);
+      issuesChanged(ctx, q.projectId, open);
+    });
+    if (!issues.length && !formatIssues.length) return { skipped: 'a data issue on this statement stays with the author' };
+  }
   const settled = settleQuestionFormatting(ctx, { projectId: q.projectId, questionId: q.id, language: project.language, issues: formatIssues });
   if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing' };
   // The model works on the text the formatter left.
@@ -590,6 +661,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, open);
-    return { revised: true };
+    const result: FixResult = { revised: true, fixed: open, origin: q.origin, status: q.status };
+    return result;
   });
 }

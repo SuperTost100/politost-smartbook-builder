@@ -148,7 +148,7 @@ test('duplicate-exercise: the same statement twice is minor; same-data-exercise:
   assert.deepEqual(none.filter((f) => /exercise/.test(f.rule)), []);
 });
 
-test('katexError renders as the reader does: undefined commands and missing braces fail, decimal commas and valid math do not', () => {
+test('katexError: undefined commands and missing braces fail, decimal commas and valid math do not', () => {
   assert.match(katexError('\\foo', false) ?? '', /Undefined control sequence/);
   assert.match(katexError('\\frac{a}', true) ?? '', /parse error/i);
   assert.equal(katexError('a_', false) !== null, true);

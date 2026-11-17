@@ -1,5 +1,5 @@
 import katex from 'katex';
-import { isValidAssetPath, parseChapterMarkdown, renderDisplayTex, renderLatexInText } from '@politost/content-core';
+import { isValidAssetPath, parseChapterMarkdown } from '@politost/content-core';
 import { digitCommas } from './decimalComma.ts';
 import type { LintFinding } from './types.ts';
 import { splitBlocks } from './blocks.ts';
@@ -254,13 +254,7 @@ function stopRatios(text: string): { words: number; en: number; it: number } {
 // -- katex -------------------------------------------------------------------------------------
 
 const katexCache = new Map<string, string | null>();
-const KATEX_ERROR_COLOR = /#cc0000/;
-/**
- * Whether the reader would show this formula as an error. It renders through content-core, as the reader does (decimal commas
- * first, then KaTeX, and the formula as written when the rewrite fails), and reads KaTeX's error colour off the HTML: with
- * throwOnError off, an undefined command or a missing brace is drawn in red instead of thrown. The message comes from KaTeX
- * run on the formula as written.
- */
+/** Same call content-core's validateChapter makes, minus the console noise of strict "warn". */
 export function katexError(tex: string, display: boolean): string | null {
   const key = `${display ? 'D' : 'I'}:${tex}`;
   const hit = katexCache.get(key);
@@ -269,15 +263,9 @@ export function katexError(tex: string, display: boolean): string | null {
   const warn = console.warn;
   console.warn = () => {}; // KaTeX warns about glyphs without metrics even when it does not throw
   try {
-    // shortcut: a formula that sets #cc0000 itself is not checked, since its red cannot be told from the error red; upgrade when KaTeX exposes the error.
-    if (!/cc0000/i.test(tex) && KATEX_ERROR_COLOR.test(display ? renderDisplayTex(tex) : renderLatexInText(`$${tex}$`))) {
-      try {
-        katex.renderToString(tex, { throwOnError: true, displayMode: display, strict: 'ignore' });
-        err = 'the formula does not render';
-      } catch (e) {
-        err = (e as Error).message;
-      }
-    }
+    katex.renderToString(tex, { throwOnError: true, displayMode: display, strict: 'ignore' });
+  } catch (e) {
+    err = (e as Error).message;
   } finally {
     console.warn = warn;
   }

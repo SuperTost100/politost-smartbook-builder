@@ -34,8 +34,8 @@ export function getQuestion(ctx: AppContext, id: string): Question {
 /** The text of a question that a revision records. */
 export type QuestionText = { statement: string; hint: string; solution: string };
 
-/** What wrote a question's text: the step, and the model when one did. See migration 8. */
-export interface QuestionWriter { origin: 'generated' | 'imported' | 'revised' | 'author' | 'backport' | 'format' | 'reference-dropped'; model?: string | null; taskId?: string | null }
+/** What wrote a question's text: the step, and the model when one did. See migration 8; `restored` is an AI fix undone because the check after it failed. */
+export interface QuestionWriter { origin: 'generated' | 'imported' | 'revised' | 'author' | 'backport' | 'format' | 'reference-dropped' | 'restored'; model?: string | null; taskId?: string | null }
 
 /**
  * Records one write of a question's text in `question_revisions`, inside the caller's transaction. `before` is null for the
