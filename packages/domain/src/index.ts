@@ -223,7 +223,7 @@ export type QuestionStatus = 'draft' | 'verified' | 'issue';
 export type Difficulty = 'facile' | 'medio' | 'difficile';
 
 export interface QuestionCheck {
-  method: 'independent-solve' | 'numeric' | 'consistency' | 'symbolic' | 'lint';
+  method: 'independent-solve' | 'numeric' | 'consistency' | 'symbolic' | 'lint' | 'source' | 'independent';
   ok: boolean;
   detail: string;
   model?: string;
@@ -477,6 +477,8 @@ export interface Enrichment {
   checks: QuestionCheck[];
   /** Graph lint findings the author accepted ("Accept anyway"), as "code:trace" keys. They no longer fail the lint check. */
   lintAccepted: string[];
+  /** The typed spec a graph was drawn from (GraphSpec in @smartbuilder/content), or null for a lab example and for graphs drawn before specs were kept. */
+  spec: Record<string, unknown> | null;
   createdAt: string;
 }
 

@@ -234,14 +234,14 @@ test('exams: ids from the exam date, session line for authentic, marker for gene
   const authentic = ex[0].question.split('\n');
   assert.equal(authentic[0], '**Esame del 25 gennaio 2023 - turno 1**');
   assert.equal(ex[0].solution, 'Vedi la {{formula:2.1}}.');
-  assert.equal(ex[1].question.split('\n')[0], "**Esercizio in stile d'esame (generato)**");
-  assert.ok(!ex[0].question.includes('generato'));
+  assert.equal(ex[1].question.split('\n')[0], "**Esercizio in stile d'esame**");
+  assert.ok(!ex[0].question.includes("stile d'esame"));
   // Exams have no hints, even when the question carries one.
   assert.ok(ex.every((e) => !e.hint), 'exam hints are not compiled');
   assert.ok(text(book, 'esercizi.md').includes(':::hint'));
 
   const en = compileBook(fixtureBook({ meta: { ...fixtureBook().meta, language: 'en' } }));
-  assert.ok(text(en, 'esami.md').includes('**Exam-style exercise (generated)**'));
+  assert.ok(text(en, 'esami.md').includes('**Exam-style exercise**\n'));
 });
 
 test('exam ids count per year', () => {
@@ -582,6 +582,24 @@ test('an exported graph is linted, and a finding the author accepted is not repo
   assert.equal(found[0]!.severity, 'minor');
   assert.match(found[0]!.message, /"Leggi dei gas": duplicate on "Gay-Lussac"/);
   assert.deepEqual(lint(['duplicate:Gay-Lussac']), []);
+});
+
+test('a graph whose section no longer states the formula it was drawn from is reported as stale; one without a spec is not', () => {
+  const payload = { id: 'v', title: 'Velocità', type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', name: 'v = a t', x: [0, 1, 2], y: [0, 2, 4] }], layout: {} } };
+  const stale = (spec: Record<string, unknown> | null, rewrite?: string) => {
+    const input = fixtureBook({ enrichments: [enrichment({ id: 'g', kind: 'graph', nodeId: 'sec-vel', payload, spec })] });
+    const sec = input.chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!;
+    if (rewrite !== undefined) sec.markdown = rewrite;
+    return compileBook(input).findings.filter((f) => f.rule === 'graph-stale');
+  };
+  const quoted = fixtureBook().chapters.flatMap((c) => c.sections).find((s) => s.id === 'sec-vel')!.markdown.match(/\$\$([^$]+)\$\$/)![1]!;
+  const spec = { traces: [{ kind: 'function', label: 'v', fn: '2*x', source: quoted }] };
+  assert.deepEqual(stale(spec), [], 'the section still states it');
+  const found = stale(spec, 'Il testo ora parla di altro.');
+  assert.equal(found.length, 1);
+  assert.equal(found[0]!.severity, 'minor');
+  assert.match(found[0]!.message, /"Velocità" was drawn from .* which its section no longer states/);
+  assert.deepEqual(stale(null, 'Il testo ora parla di altro.'), [], 'an old graph has no spec to compare');
 });
 
 test('a truth table and a matrix written as KaTeX arrays survive the compile and the reader parser', () => {

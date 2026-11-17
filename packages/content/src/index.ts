@@ -15,3 +15,4 @@ export * from './patch.ts';
 export * from './displayMath.ts';
 export * from './format.ts';
 export { ALLOWED_FUNCTIONS } from './expr.ts';
+export { captionToPlain } from './plaintext.ts';

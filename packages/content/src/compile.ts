@@ -5,6 +5,7 @@ import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types
 import { lintCompiled, lintQuestionText, lintSection, langOf } from './lint.ts';
 import { proseLines } from './blocks.ts';
 import { lintGraph, lintKey } from './graphLint.ts';
+import { sourceQuoted, type GraphTrace } from './verify.ts';
 import { dropUnclosedDisplay, maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -24,7 +25,7 @@ function introTitle(language: string): string {
   return langOf(language) === 'it' ? 'Introduzione' : 'Introduction';
 }
 
-const GENERATED_EXAM_PREFIX = { it: "**Esercizio in stile d'esame (generato)**", en: '**Exam-style exercise (generated)**' } as const;
+const GENERATED_EXAM_PREFIX = { it: "**Esercizio in stile d'esame**", en: '**Exam-style exercise**' } as const;
 
 // ---------------------------------------------------------------------------------------------
 // Findings helper
@@ -693,6 +694,8 @@ export function compileBook(input: BookInput): CompiledBook {
     findings.push(finding('extra-excluded', 'major', e.kind === 'ide' ? 'ide.json' : 'grafici.json', `The ${e.kind === 'ide' ? 'lab example' : 'graph'} "${title}" failed its check and is left out of the export. Fix it in Extras or delete it.`, undefined, title));
   }
   // A graph drawn before the graph lint existed ships with what the lint finds now, reported here. A finding the author accepted is not.
+  // A graph drawn from a typed spec is stale when its section no longer states a formula one of its traces quotes.
+  const sectionText = new Map(input.chapters.flatMap((c) => c.sections.map((s) => [s.id, s.markdown] as const)));
   for (const e of input.enrichments) {
     if (e.kind !== 'graph' || e.status === 'issue') continue;
     const title = typeof e.payload.title === 'string' ? e.payload.title : e.id;
@@ -700,6 +703,10 @@ export function compileBook(input: BookInput): CompiledBook {
       if (e.lintAccepted.includes(lintKey(f))) continue;
       findings.push(finding('graph-lint', 'minor', 'grafici.json', `The graph "${title}": ${f.code}${f.trace ? ` on "${f.trace}"` : ''}, ${f.detail}. Redraw it or fix it in Extras.`, undefined, title));
     }
+    const text = sectionText.get(e.nodeId);
+    const traces = (Array.isArray(e.spec?.traces) ? e.spec.traces : []) as GraphTrace[];
+    const gone = text === undefined ? [] : traces.filter((t) => typeof t.source === 'string' && t.source.trim() && !sourceQuoted(t.source, text));
+    if (gone.length) findings.push(finding('graph-stale', 'minor', 'grafici.json', `The graph "${title}" was drawn from ${gone.map((t) => `"${t.source}"`).join(', ')}, which its section no longer states. Redraw it or check it in Extras.`, undefined, title));
   }
   const payloads = (kind: 'ide' | 'graph') =>
     input.enrichments
