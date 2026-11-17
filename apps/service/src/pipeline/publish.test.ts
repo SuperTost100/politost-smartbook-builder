@@ -249,7 +249,7 @@ test('validate-all lists only the findings a book did not have when it was publi
   assert.equal(check.manifest, false);
   assert.deepEqual(check.fresh.map((f) => f.rule), ['literal-escape']);
 
-  const manifest: BuilderManifest = { projectId: 'p', exportId: 'e', exportedAt: '', builderVersion: 'test', files: {}, findings: publishedFindings({ 'chapters/01-moto.md': readFileSync(join(folder, 'chapters', '01-moto.md')) }).map(findingKey) };
+  const manifest: BuilderManifest = { projectId: 'p', exportId: 'e', exportedAt: '', builderVersion: 'test', files: {}, exercises: {}, findings: publishedFindings({ 'chapters/01-moto.md': readFileSync(join(folder, 'chapters', '01-moto.md')) }).map(findingKey) };
   writeFileSync(join(folder, MANIFEST), JSON.stringify(manifest));
   assert.deepEqual(validatePublished(books), [{ slug: 'fisica-1', manifest: true, fresh: [] }]);
 });

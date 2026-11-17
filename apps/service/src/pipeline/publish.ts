@@ -6,7 +6,7 @@
 import { createHash } from 'node:crypto';
 import { existsSync, lstatSync, mkdirSync, readdirSync, readFileSync, rmdirSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, join, relative, sep } from 'node:path';
-import { checkFunctionGraph, lintCompiled, unpackPtsb, type LintFinding } from '@smartbuilder/content';
+import { checkFunctionGraph, compileBook, lintCompiled, unpackPtsb, type BookInput, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { getExport, getProject } from '../repo/index.ts';
 import { prepareExport, storeExport, type PreparedExport } from '../routes/review.ts';
@@ -26,6 +26,23 @@ export interface BuilderManifest {
   files: Record<string, string>;
   /** The blocker and major findings of the published files when they were published (findingKey), so validate-all lists only new ones. */
   findings: string[];
+  /**
+   * The question each exercise number stands for ("esercizi.md#E1.2" -> question id). Exercise numbers are positions, so the
+   * back-port refuses a book whose builder now gives a number to another question.
+   */
+  exercises: Record<string, string>;
+}
+
+/** Exercise number -> question id, from a compile with every statement replaced by its question id. */
+export function exerciseQuestions(input: BookInput): Record<string, string> {
+  const marked = compileBook({ ...input, questions: input.questions.map((q) => ({ ...q, statement: `QID${q.id}`, hint: '', solution: '' })) });
+  const out: Record<string, string> = {};
+  for (const file of ['esercizi.md', 'esami.md']) {
+    const md = marked.files[file];
+    if (typeof md !== 'string') continue;
+    for (const m of md.matchAll(/:::exercise\{id="([^"]+)"[\s\S]*?QID(\S+)/g)) out[`${file}#${m[1]}`] = m[2];
+  }
+  return out;
 }
 
 export const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex');
@@ -260,6 +277,7 @@ export function writePublish(ctx: AppContext, plan: PublishPlan): BuilderManifes
     projectId: plan.projectId, exportId: row.id, exportedAt: row.createdAt, builderVersion: ctx.config.version,
     files: Object.fromEntries(Object.keys(plan.files).sort().map((p) => [p, sha256(plan.files[p])])),
     findings: [...new Set(publishedFindings(plan.files).map(findingKey))].sort(),
+    exercises: exerciseQuestions(plan.prepared.input),
   };
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));

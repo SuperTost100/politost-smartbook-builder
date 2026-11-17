@@ -12,6 +12,7 @@ import { makeCtx, seedProject } from '../llm/testkit.ts';
 import { paths } from '../config.ts';
 import { currentHead, getQuestion, insertExport, listRevisions, loadBookInput, rewriteHead, storeAsset, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 import { applyChanges, backportProject, planBackport } from './backport.ts';
+import { exerciseQuestions } from './publish.ts';
 
 const SVG = new TextEncoder().encode('<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>');
 const PARABOLA = { id: 'parabola', title: 'Moto accelerato', type: 'function', config: { functions: [{ fn: 'x^2', label: 's(t)' }], xDomain: [0, 3], yDomain: [0, 10] } };
@@ -241,6 +242,36 @@ describe('planBackport against the published export', () => {
     assert.deepEqual(plan.changes, []);
   });
 
+  test('an exercise deleted and another added in the builder since the publish refuse the book, though the numbers are the same', () => {
+    const input = book();
+    const second = { ...input.questions[0], id: 'q2', statement: 'Calcola $s$ per $v = 3$ e $t = 2$.', solution: 'Vale $s = 6$.' };
+    input.questions.splice(1, 0, second);
+    const pub = pubOf(input);
+    const publishedExercises = exerciseQuestions(input);
+    const target = published(input, { [CH]: (s) => s.replace('si ottiene il risultato in un passo', 'si ottiene subito il risultato') });
+    // q1 is deleted and q3 added: still E1.1 and E1.2, but E1.1 is now q2.
+    input.questions.splice(0, 1);
+    input.questions.splice(1, 0, { ...second, id: 'q3', statement: 'Un esercizio nuovo, scritto dopo la pubblicazione.' });
+    const plan = planBackport(input, target, { published: pub, publishedExercises });
+    assert.match(plan.bookRefusal ?? '', /esercizi\.md does not hold the same exercises as the books/);
+    assert.deepEqual(plan.changes, []);
+    // The same binding passes.
+    assert.equal(planBackport(book(), published(book(), { [CH]: (s) => s.replace('in un passo', 'in un solo passo') }), { published: pubOf(book()), publishedExercises: exerciseQuestions(book()) }).bookRefusal, null);
+  });
+
+  test('a section refused for edits on both sides keeps its builder text even when a shared caption changes', () => {
+    const input = book();
+    input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
+    const pub = pubOf(input);
+    // The books change the caption in p1 and a word of p2; the builder changes another word of p2.
+    const target = published(input, { [CH]: (s) => s.replace('Moto con aₓ costante"', 'Moto con aₓ costante nel tempo"').replace('la [sezione precedente]', 'la [sezione sopra]') });
+    input.chapters[0].sections[1].markdown = input.chapters[0].sections[1].markdown.replace('Per la velocità', 'Per la velocità media');
+    const plan = planBackport(input, target, { published: pub });
+    assert.equal(plan.units.find((u) => u.unit === `${CH}#p2`)?.status, 'refused');
+    assert.match(plan.bookRefusal ?? '', /#p2 was changed in the builder since the publish, and the back-port would change it too/);
+    assert.deepEqual(plan.changes, []);
+  });
+
   test('a caption fixed in the books is refused when it would change a section the builder edited since the publish', () => {
     const input = book();
     input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
@@ -295,7 +326,8 @@ describe('backportProject', () => {
       mkdirSync(dirname(join(dir, file)), { recursive: true });
       writeFileSync(join(dir, file), b);
     }
-    writeFileSync(join(dir, '.builder.json'), JSON.stringify({ projectId: 'p1', exportId: row.id, exportedAt: row.createdAt, builderVersion: 'test', files: {}, findings: [] }));
+    const exercises = exerciseQuestions(loadBookInput(ctx, 'p1', { approvedOnly: true }));
+    writeFileSync(join(dir, '.builder.json'), JSON.stringify({ projectId: 'p1', exportId: row.id, exportedAt: row.createdAt, builderVersion: 'test', files: {}, findings: [], exercises }));
   }
 
   /** Applies hand edits to the files of the folder. */
