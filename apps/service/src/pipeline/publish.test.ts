@@ -157,6 +157,15 @@ test('a symbolic link in the book folder is refused before anything is read or w
   symlinkSync(join(books, 'altrove'), folder);
   assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /is a symbolic link/);
   assert.ok(!existsSync(join(books, 'altrove')));
+  // And a books folder that leads elsewhere.
+  const elsewhere = mkdtempSync(join(tmpdir(), 'smartbuilder-elsewhere-'));
+  try {
+    rmSync(join(books, 'books'), { recursive: true });
+    symlinkSync(elsewhere, join(books, 'books'));
+    assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /books is a symbolic link/);
+  } finally {
+    rmSync(elsewhere, { recursive: true, force: true });
+  }
 });
 
 test('a change made in the builder since the last publish is not a hand edit', async () => {
