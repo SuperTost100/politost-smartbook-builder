@@ -7,7 +7,7 @@ import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative, sep } from 'node:path';
 import { captionToPlain, checkFunctionGraph, compileBook, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
-import { countUnresolvedBlockers, currentHeads, getQuestion, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
+import { countUnresolvedBlockers, currentHeads, effectiveOutline, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 import { closeGoneCompileNotes } from '../routes/review.ts';
 import { relint } from '../routes/views.ts';
 
@@ -227,6 +227,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const inv = inverseOf(base);
   const units: BackportUnit[] = [];
   const pending: { unit: BackportUnit; changes: BackportChange[]; check: (after: CompiledBook) => boolean; owns: (file: string, quote?: string) => boolean }[] = [];
+  // What already matches the books must still match after the changes: a caption on a figure two sections share, or a
+  // renumbered formula, changes text no unit is about.
+  const stable: { name: string; check: (after: CompiledBook) => boolean }[] = [];
+  const same = (a: string | Uint8Array | undefined, b: string | Uint8Array | undefined) => a !== undefined && b !== undefined && Buffer.from(a as Uint8Array).equals(Buffer.from(b as Uint8Array));
   const nodeOfParagraph = new Map(Object.entries(base.sectionNumbers).map(([id, s]) => [`${s.chapter}#p${s.paragraph}`, id]));
   const sourceOf = (nodeId: string) => {
     for (const ch of input.chapters) {
@@ -242,7 +246,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   for (const file of [...files].sort()) {
     const was = base.files[file];
     const now = target[file];
-    if (was !== undefined && now !== undefined && Buffer.from(was as Uint8Array).equals(Buffer.from(now as Uint8Array))) continue;
+    if (same(was, now)) { stable.push({ name: file, check: (after) => same(after.files[file], now) }); continue; }
     if (file === 'ptsb.json') { add({ unit: file, kind: 'file', status: 'compiler-owned', reason: 'package header, written at export' }); continue; }
     if (was === undefined || now === undefined) { add({ unit: file, kind: 'file', status: 'unmapped', reason: was === undefined ? 'only in the books folder' : 'missing from the books folder' }); continue; }
     if (file === 'smartbook.json') {
@@ -266,7 +270,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       const unit = `${file}#${key}`;
       if (!(key in b.bodies) || !(key in t.bodies)) { add({ unit, kind: 'section', status: 'unmapped', reason: key in b.bodies ? 'section removed in the books' : 'section added in the books' }); continue; }
       if (b.titles[key] !== t.titles[key]) add({ unit: `${unit} title`, kind: 'section', status: 'unmapped', reason: 'the section title comes from the outline' });
-      if (b.bodies[key] === t.bodies[key]) continue;
+      if (b.bodies[key] === t.bodies[key]) { stable.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === t.bodies[key] }); continue; }
       if (foldImages(b.bodies[key]) === foldImages(t.bodies[key])) {
         add({ unit, kind: 'caption', status: 'compiler-owned', reason: 'the compiler now writes super- and subscripts in captions' });
         continue;
@@ -312,7 +316,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     for (const id of new Set([...Object.keys(b), ...Object.keys(t)])) {
       const unit = `${file}#${id}`;
       if (!b[id] || !t[id]) { add({ unit, kind: 'question', status: 'unmapped', reason: b[id] ? 'exercise removed in the books' : 'exercise added in the books' }); continue; }
-      if (JSON.stringify(b[id]) === JSON.stringify(t[id])) continue;
+      if (JSON.stringify(b[id]) === JSON.stringify(t[id])) { stable.push({ name: unit, check: (after) => JSON.stringify(exercisesOf(text(after.files[file]) ?? '')[id]) === JSON.stringify(t[id]) }); continue; }
       const q = input.questions.find((x) => x.id === questionOf.get(id));
       if (!q) { add({ unit, kind: 'question', status: 'unmapped', reason: 'no question compiles to this exercise' }); continue; }
       if (b[id].attrs !== t[id].attrs) add({ unit: `${unit} attributes`, kind: 'question', status: 'unmapped', reason: 'difficulty or chapter changed', target: q.id });
@@ -351,7 +355,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     const [b, t] = [byId(was), byId(now)];
     for (const id of new Set([...b.keys(), ...t.keys()])) {
       const unit = `grafici.json#${id}`;
-      if (JSON.stringify(b.get(id)) === JSON.stringify(t.get(id))) continue;
+      if (JSON.stringify(b.get(id)) === JSON.stringify(t.get(id))) { stable.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(t.get(id)) }); continue; }
       const payload = t.get(id);
       // A graph whose check failed is held out of the export, so it can be in the books folder and missing from `b`.
       const e = input.enrichments.find((x) => x.kind === 'graph' && String(x.payload.id) === id);
@@ -393,6 +397,8 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     }
     if (bookRefusal || !refusedNow) break;
   }
+  const broken = stable.find((x) => !x.check(after));
+  if (broken) bookRefusal ??= `${broken.name} matches the books now and would no longer match`;
   if (bookRefusal) {
     for (const p of pending) if (p.unit.status === 'mapped') Object.assign(p.unit, { status: 'refused', reason: 'the book was refused as a whole' });
     after = base;
@@ -481,6 +487,9 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
   if (!existsSync(header)) throw new Error(`${fromDir} has no ptsb.json, so the export it came from is unknown.`);
   const exportedAt = String(JSON.parse(readFileSync(header, 'utf8')).createdAt ?? '');
   if (!exportedAt) throw new Error(`${header} has no createdAt.`);
+  // The books number sections by their place in the outline, so after a change of the outline pN may be another section.
+  const outlineAt = effectiveOutline(ctx, projectId)?.revision.createdAt ?? '';
+  if (outlineAt > exportedAt) throw new Error(`The outline changed on ${outlineAt}, after the export of ${exportedAt}, so the section numbers in the books may point at other sections.`);
   const input = loadBookInput(ctx, projectId, { approvedOnly: true });
   const heads = currentHeads(ctx, projectId);
   const questions = new Map(input.questions.map((q) => [q.id, q]));

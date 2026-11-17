@@ -154,6 +154,17 @@ describe('planBackport', () => {
     assert.deepEqual(plan.changes, []);
   });
 
+  test('a caption change that also changes another section using the same figure refuses the book', () => {
+    const input = book();
+    input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
+    const target = published(input);
+    // Only the first occurrence is edited in the books; the asset row would change the second one too.
+    target[CH] = str(target[CH]).replace('Moto con aₓ costante', 'Moto con aₓ costante nel tempo');
+    const plan = planBackport(input, target);
+    assert.match(plan.bookRefusal ?? '', /#p2 matches the books now and would no longer match/);
+    assert.deepEqual(plan.changes, []);
+  });
+
   test('changes with no source are unmapped: an added exercise, a section title, a figure file', () => {
     const input = book();
     const plan = planBackport(input, published(input, {
@@ -236,6 +247,11 @@ describe('backportProject', () => {
     assert.equal(r.written, false);
     assert.match(r.units[0].reason!, /changed in the builder on 2026-01-02/);
     assert.equal(currentHead(ctx, 'p1', 's1')!.origin, 'ai');
+  });
+
+  test('a book whose outline changed after the export is refused', () => {
+    seed('2025-12-31T00:00:00Z', AUDIT_EDITS);
+    assert.throws(() => backportProject(ctx, 'p1', dir), /outline changed on 2026-01-01/);
   });
 
   test('a folder without ptsb.json is refused', () => {
