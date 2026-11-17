@@ -545,18 +545,20 @@ function failureSummary(d: VerifyAnswer, mismatches: Comparison[], resultsAgree:
   return truncate(parts.length ? parts.join('; ') : 'the independent check does not agree with the solution', 800);
 }
 
-/** What `questionRevise` returns when it saved a rewrite: the issues it closed and the question's origin and status before. */
-interface FixResult { revised: true; fixed: string[]; origin: Question['origin']; status: Question['status'] }
+/** What `questionRevise` returns when it saved a rewrite: the issues it closed, the question's origin and status before, and its rev after. */
+interface FixResult { revised: true; fixed: string[]; origin: Question['origin']; status: Question['status']; rev: number }
 
 /**
  * Undoes the AI fix this check was queued after, when the check fails: the text goes back to what it was before the fix
  * (from `question_revisions`), and the issues the fix closed open again with the reason. Only the fix's own rewrite is undone:
- * when the text changed after it (an author edit), or the check was not queued after a fix, this returns null and the failed
- * check files its issues as usual. The reopened issues wait for the author, so a failed fix is never retried on its own.
+ * when the question changed after it (any edit bumps its rev), the check was not queued after a fix, or the fix's result is
+ * of an older shape, this returns null and the failed check files its issues as usual. The reopened issues wait for the
+ * author, so a failed fix is never retried on its own.
  */
 function undoFix(ctx: AppContext, t: TaskContext, q: Question, reason: string) {
-  const fix = Object.entries(t.deps).find(([key]) => key.startsWith('qfix:'))?.[1] as FixResult | null | undefined;
-  if (!fix?.revised) return null;
+  const fix = Object.entries(t.deps).find(([key]) => key.startsWith('qfix:'))?.[1] as Partial<FixResult> | null | undefined;
+  if (!fix?.revised || !Array.isArray(fix.fixed) || typeof fix.origin !== 'string' || typeof fix.status !== 'string' || fix.rev !== q.rev) return null;
+  const { fixed, origin, status } = fix;
   const rev = ctx.db.get<{ old_statement: string | null; old_hint: string | null; old_solution: string | null; statement: string; hint: string; solution: string }>(
     `SELECT r.* FROM question_revisions r JOIN task_deps d ON d.dep_id = r.task_id WHERE d.task_id = ? AND r.question_id = ? AND r.origin = 'revised' ORDER BY r.created_at DESC, r.rowid DESC LIMIT 1`,
     t.task.id, q.id);
@@ -564,10 +566,10 @@ function undoFix(ctx: AppContext, t: TaskContext, q: Question, reason: string) {
   const before = { statement: rev.old_statement, hint: rev.old_hint ?? '', solution: rev.old_solution ?? '' };
   return ctx.db.tx(() => {
     const changed = ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, origin = ?, status = ?, rev = rev + 1, updated_at = ? WHERE id = ? AND rev = ?',
-      before.statement, before.hint, before.solution, fix.origin, fix.status, now(), q.id, q.rev).changes;
+      before.statement, before.hint, before.solution, origin, status, now(), q.id, q.rev).changes;
     if (!changed) return { stale: true };
     recordQuestionRevision(ctx, q.id, q, before, { origin: 'restored', taskId: t.task.id });
-    const reopened = fix.fixed.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'fixed' AND id IN (${fix.fixed.map(() => '?').join(',')})`, ...fix.fixed).map((r) => r.id) : [];
+    const reopened = fixed.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'fixed' AND id IN (${fixed.map(() => '?').join(',')})`, ...fixed).map((r) => r.id) : [];
     if (reopened.length) ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${reopened.map(() => '?').join(',')})`, `The AI fix was undone because the check after it failed: ${reason}`, ...reopened);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, reopened);
@@ -663,7 +665,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, open);
-    const result: FixResult = { revised: true, fixed: open, origin: q.origin, status: q.status };
+    const result: FixResult = { revised: true, fixed: open, origin: q.origin, status: q.status, rev: q.rev + 1 };
     return result;
   });
 }

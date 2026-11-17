@@ -717,6 +717,35 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     assert.equal(row(b).status, 'issue');
   });
 
+  test('an author edit of the origin after the fix, or a fix result of the older shape, is never undone', async () => {
+    const c = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const runId = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix = startTask('question.revise', { questionId: c, issueIds: [blocker(c)] }, { runId, key: `qfix:${c}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    updateQuestion(ctx, c, row(c).rev, { origin: 'adapted' });
+    const verify = startTask('question.verify', { questionId: c }, { runId, key: `qverify:${c}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify.task.id, fix.task.id);
+    verify.deps = { [fix.task.key]: fixed };
+    fake.next(fails, fails);
+    await questionVerify(ctx, verify);
+    assert.deepEqual([row(c).origin, row(c).solution], ['adapted', 'Sono 9,03 atomi.']);
+
+    // A fix that finished before this version returned { revised: true } alone.
+    const d = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const run2 = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix2 = startTask('question.revise', { questionId: d, issueIds: [blocker(d)] }, { runId: run2, key: `qfix:${d}:1` });
+    await questionRevise(ctx, fix2);
+    const verify2 = startTask('question.verify', { questionId: d }, { runId: run2, key: `qverify:${d}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify2.task.id, fix2.task.id);
+    verify2.deps = { [fix2.task.key]: { revised: true } };
+    fake.next(fails, fails);
+    const r = await questionVerify(ctx, verify2);
+    assert.equal((r as { ok: boolean }).ok, false);
+    assert.equal(row(d).solution, 'Sono 9,03 atomi.', 'the check files its issues as usual');
+  });
+
   test('an authentic exam question: the editor never sees a data issue, and the statement stays', async () => {
     const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '1', status: 'issue', statement: 'Un fluido scorre con v = 2 m/s.', solution: 'p2 = 140 kPa' });
     const data = blocker(id, 'data', 'Manca l\'ipotesi di moto stazionario.');
