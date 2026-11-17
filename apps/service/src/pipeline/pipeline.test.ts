@@ -14,14 +14,14 @@ import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, verifyVerdict } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
-import { chapterReview, sectionRevise, sweepDue } from './review.ts';
+import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
 import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifySchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, repairQuestionText, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, repairQuestionText, saveHuman, sweepDue, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -2328,7 +2328,7 @@ describe('the review converges', () => {
     assert.match(fake.calls[0].prompt, /full review: review all of the text/);
     assert.doesNotMatch(fake.calls[0].prompt, /ALREADY FIXED|DECIDED ARE FINE/);
 
-    // Issues handled before the first review: a fix since then would make the next review a sweep.
+    // Issues handled before the first review.
     const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: '2000-01-01T00:00:00.000Z' };
     ctx.db.insert('review_issues', { ...old, id: 'd1', node_id: 's1', quote: 'Frase scelta', message: 'Preferirei un altro ordine', status: 'dismissed' });
     ctx.db.insert('review_issues', { ...old, id: 'a1', node_id: 's2', quote: 'Altro', message: 'Ipotesi mancante', status: 'accepted' });
@@ -2496,16 +2496,17 @@ describe('the review converges', () => {
     assert.equal(getProjectSummary(ctx, P).review!.clean, false);
     assert.equal(getProjectSummary(ctx, P).review!.openSerious, 1);
 
-    // The author fixes the issue by hand. The next review (the sweep after the fix) reads the chapter again and finds nothing.
+    // The author fixes the issue by hand. The next review reads the changed text and finds nothing.
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review'`);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
     seedRevision('s1', 'Una frase corretta.\n\nAltro blocco.');
     assert.equal(getProjectSummary(ctx, P).review!.clean, false, 'changed text has not been reviewed');
-    fake.next(answer({ issues: [] }), crossNone);
+    fake.next(answer({ issues: [] }));
     const second = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(second));
     assert.deepEqual([second.clean, second.openSerious], [true, 0]);
-    assert.deepEqual(getProjectSummary(ctx, P).review, { clean: true, openSerious: 0, reviewedAt: getProjectSummary(ctx, P).review!.reviewedAt });
+    // The text changed since the first review read the whole chapter, so a sweep is on offer.
+    assert.deepEqual(getProjectSummary(ctx, P).review, { clean: true, openSerious: 0, reviewedAt: getProjectSummary(ctx, P).review!.reviewedAt, sweepsDue: 1 });
 
     // A blocker from another source, or text written after the review, ends it.
     ctx.db.insert('review_issues', { id: 'lint1', project_id: P, node_id: 's1', source: 'lint', severity: 'blocker', category: 'katex', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
@@ -2765,73 +2766,71 @@ describe('r8. excluded sources stop counting', () => {
   });
 });
 
-describe('independent samples, the sweep after a fix round and the severity floor', () => {
+describe('independent samples, the sweep the author asks for, repeats merged in code and the severity floor', () => {
   const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'correctness', quote: 'Una frase.', message: 'Errore', suggestion: 'Correggi', ...o });
-  const verdicts = (...v: { verdict?: string; severity: string; sameAs?: number | null }[]) => answer({ findings: v.map((x, k) => ({ index: k + 1, verdict: x.verdict ?? 'real', severity: x.severity, reason: '', sameAs: x.sameAs ?? null })) });
+  const verdicts = (...v: { verdict?: string; severity: string }[]) => answer({ findings: v.map((x, k) => ({ index: k + 1, verdict: x.verdict ?? 'real', severity: x.severity, reason: '' })) });
   const review = (input: Record<string, unknown> = {}) => chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', ...input }));
   const done = (r: unknown) => ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(r));
   const samples = (n: number) => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ selfCheck: false, reviewSamples: n }), P);
-  /** A fix of the first review's issue: the issue is closed and the section gets a new revision. */
-  const fix = (nodeId: string, from: string, to: string) => {
+  /** A fix of the open review issues of a section: they are closed and the section gets a new revision. */
+  const fix = (nodeId: string, to: string) => {
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review' AND status = 'open' AND node_id = ?`, nodeId);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, nodeId);
-    seedRevision(nodeId, to);
-    return from;
+    return seedRevision(nodeId, to);
   };
+  const heads = (...ids: string[]) => ids.sort().join(',');
+  const quota = () => () => Object.assign(new Error("You've hit your usage limit. Try again in 2 hours."), { code: 'cli-failed' });
 
-  test('the first review keeps the union of the reviewer calls and the cross review, and the second opinion merges repeats of one problem', async () => {
+  test('repeats are merged by section and block of at least 20 characters, keep the highest severity and take correctness from any member', () => {
+    const long = 'Un blocco abbastanza lungo da contare come passaggio';
+    const blocks: Record<string, string[]> = { s1: [long, 'Sia x = 1.', '.'], s2: [long] };
+    const f = (o: Partial<{ sectionId: string; severity: 'blocker' | 'major' | 'minor'; category: string; quote: string; message: string }>) => ({ sectionId: 's1', severity: 'major' as const, category: 'correctness', quote: 'abbastanza lungo', message: 'm', suggestion: '', ...o });
+    const { findings, merged } = mergeRepeats([
+      f({ severity: 'minor', message: 'primo' }),
+      f({ quote: 'Sia x = 1.', message: 'breve 1' }),
+      f({ quote: 'Sia x', message: 'breve 2' }),
+      f({ quote: '.', message: 'punto 1' }),
+      f({ quote: '.', message: 'punto 2' }),
+      f({ severity: 'blocker', category: 'unsupported', quote: 'Un blocco', message: 'secondo' }),
+      f({ sectionId: 's2', message: 'altra sezione' }),
+      f({ quote: 'in nessun blocco', message: 'fuori 1' }),
+      f({ quote: 'in nessun blocco', message: 'fuori 2' }),
+      f({ quote: '', message: 'senza citazione 1' }),
+      f({ quote: '', message: 'senza citazione 2' }),
+    ], (id) => blocks[id] ?? []);
+    assert.equal(merged, 1);
+    assert.deepEqual(findings.map((x) => [x.message, x.severity, x.category]), [
+      ['secondo', 'blocker', 'correctness'], ['breve 1', 'major', 'correctness'], ['breve 2', 'major', 'correctness'], ['punto 1', 'major', 'correctness'], ['punto 2', 'major', 'correctness'],
+      ['altra sezione', 'major', 'correctness'], ['fuori 1', 'major', 'correctness'], ['fuori 2', 'major', 'correctness'], ['senza citazione 1', 'major', 'correctness'], ['senza citazione 2', 'major', 'correctness'],
+    ]);
+    assert.equal(mergeRepeats([f({ category: 'language' }), f({ category: 'notation', severity: 'minor' })], (id) => blocks[id] ?? []).findings[0].category, 'language', 'no correctness member, no correctness');
+  });
+
+  test('the first review keeps the union of the reviewer calls and the cross review, and merges repeats before the second opinion', async () => {
     samples(2);
     seedOutline([['c1', ['s1', 's2']]]);
-    seedRevision('s1', 'Una frase.\n\nUn esempio.');
-    seedRevision('s2', 'Una didascalia.');
+    seedRevision('s1', 'Una frase che afferma una equivalenza.\n\nUn esempio con un conto sbagliato.\n\nUna frase troncata a metà del');
+    seedRevision('s2', 'Una didascalia della figura.');
     fake.next(
-      answer({ issues: [finding({ sectionId: 's2', quote: 'Una didascalia.', message: 'La didascalia è falsa' }), finding({ message: 'Equivalenza falsa', severity: 'minor' })] }),
-      answer({ issues: [finding({ message: 'Equivalenza asintotica sbagliata', severity: 'blocker' }), finding({ quote: 'Un esempio.', message: 'Esempio sbagliato' })] }),
-      answer({ issues: [finding({ quote: 'Un esempio.', category: 'language', severity: 'minor', message: 'Frase troncata' })] }),
-      // In section order: s1 "Equivalenza falsa", s1 "Equivalenza asintotica sbagliata", s1 "Esempio sbagliato", s1 "Frase troncata", s2.
-      verdicts({ severity: 'minor' }, { severity: 'major', sameAs: 1 }, { severity: 'major' }, { severity: 'minor' }, { severity: 'major' }),
+      answer({ issues: [finding({ sectionId: 's2', quote: 'Una didascalia', message: 'La didascalia è falsa' }), finding({ quote: 'afferma una equivalenza', message: 'Equivalenza falsa', severity: 'minor' })] }),
+      answer({ issues: [finding({ quote: 'Una frase che afferma', category: 'unsupported', message: 'Equivalenza non supportata', severity: 'blocker' }), finding({ quote: 'un conto sbagliato', message: 'Esempio sbagliato' })] }),
+      answer({ issues: [finding({ quote: 'troncata a metà', category: 'language', severity: 'minor', message: 'Frase troncata' })] }),
+      verdicts({ severity: 'minor' }, { severity: 'major' }, { severity: 'minor' }, { severity: 'major' }),
     );
     const r = await review();
-    assert.deepEqual([r.samples, r.crossModel, r.model, r.merged, r.issues], [2, 'claude-opus-5-5', 'gpt-6-sol', 1, 4]);
+    assert.deepEqual([r.samples, r.sampleModels, r.chapterRead, r.crossModel, r.model, r.merged, r.issues, r.lowered], [2, ['gpt-6-sol', 'gpt-6-sol'], true, 'claude-opus-5-5', 'gpt-6-sol', 1, 4, 1]);
     assert.deepEqual(fake.calls.slice(0, 3).map((c) => c.selection.model), ['gpt-6-sol', 'gpt-6-sol', 'claude-opus-5-5']);
     assert.equal(fake.calls[0].prompt, fake.calls[1].prompt, 'every sample reads the same prompt');
     assert.match(fake.calls[0].system ?? '', /Report every error you find; there is no limit\./);
     assert.doesNotMatch(fake.calls[0].system ?? '', /fewer, solid issues/);
-    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[minor\] "Una frase\." Equivalenza falsa Suggested fix: Correggi\n2\. \[s1\] \[blocker\] "Una frase\." Equivalenza asintotica[\s\S]*5\. \[s2\]/);
-    assert.match(fake.calls[3].system ?? '', /set sameAs to the number of that earlier finding/);
-    // The merged problem is stored once, with the higher severity a reviewer gave it, and the floor keeps it major.
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [
-      ['Equivalenza falsa', 'major'], ['Esempio sbagliato', 'major'], ['Frase troncata', 'minor'], ['La didascalia è falsa', 'major'],
+    // The two findings on the first block reach the second opinion as one: the blocker, which takes correctness from its repeat.
+    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[blocker\] "Una frase che afferma" Equivalenza non supportata Suggested fix: Correggi\n2\. \[s1\] \[major\] "un conto sbagliato"[\s\S]*4\. \[s2\]/);
+    assert.doesNotMatch(fake.calls[3].prompt, /Equivalenza falsa|sameAs/);
+    assert.doesNotMatch(fake.calls[3].system ?? '', /sameAs/);
+    // The floor keeps the merged false statement major although the second opinion said minor.
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity, i.category]), [
+      ['Equivalenza non supportata', 'major', 'correctness'], ['Esempio sbagliato', 'major', 'correctness'], ['Frase troncata', 'minor', 'language'], ['La didascalia è falsa', 'major', 'correctness'],
     ]);
-  });
-
-  test('a merged group stays when any member is real, takes the floor from any correctness member, and a recheck merges nothing', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.\n\nUn passo.');
-    fake.next(
-      answer({ issues: [finding({ category: 'unsupported', message: 'Non supportato' }), finding({ severity: 'blocker', message: 'Falso' })] }),
-      answer({ issues: [finding({ quote: 'Un passo.', message: 'Passo' }), finding({ quote: 'Un passo.', message: 'Passo ripetuto' })] }),
-      // In order: "Non supportato", "Falso" (same as 1), "Passo", "Passo ripetuto" (same as 3).
-      verdicts({ verdict: 'not-real', severity: 'minor' }, { severity: 'minor', sameAs: 1 }, { severity: 'major' }, { severity: 'major', sameAs: 3 }),
-    );
-    const r = await review();
-    assert.deepEqual([r.merged, r.issues, r.dropped], [2, 2, 0]);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity, i.category]), [['Non supportato', 'major', 'correctness'], ['Passo', 'major', 'correctness']]);
-    // Two open rows of one problem (a failed second opinion stored both): a recheck judges each on its own verdict.
-    done(r);
-    fake.next(verdicts({ severity: 'major' }, { verdict: 'not-real', severity: 'major', sameAs: 1 }));
-    const again = await review({ mode: 'recheck' });
-    assert.deepEqual([again.dropped, again.rechecked], [1, 2]);
-    assert.deepEqual(issues(`source = 'review' AND status = 'dismissed'`).map((i) => i.message), ['Passo']);
-  });
-
-  test('a merged group keeps the most severe verdict that calls a member real', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.');
-    fake.next(answer({ issues: [finding({ severity: 'minor', message: 'Svista' })] }), answer({ issues: [finding({ severity: 'blocker', message: 'Somma sbagliata' })] }), verdicts({ severity: 'minor' }, { severity: 'blocker', sameAs: 1 }));
-    const r = await review();
-    assert.equal(r.merged, 1);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [['Svista', 'blocker']]);
   });
 
   test('a cross review that fails leaves the reviewer findings; a reviewer call that fails fails the task', async () => {
@@ -2861,27 +2860,27 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(issues(`message = 'Errore'`)[0].severity, 'major', 'a recheck keeps the floor too');
   });
 
-  test('after a fix round one sweep reads the whole chapter with the fixed and open issues; later reviews read changed text only', async () => {
+  test('an asked sweep reads the whole chapter with the fixed and open issues; a review without the ask reads changed text only', async () => {
     samples(2);
     seedOutline([['c1', ['s1', 's2']], ['c2', ['s3']]]);
     seedRevision('s1', 'Una frase.\n\nAltro.');
     seedRevision('s2', 'Seconda sezione intatta.');
     seedRevision('s3', 'Altro capitolo.');
     ctx.db.insert('review_issues', { id: 'elsewhere', project_id: P, node_id: 's3', source: 'review', severity: 'major', category: 'correctness', quote: 'Un estremo interno', message: 'Un estremo interno non richiede la derivabilità', suggestion: '', status: 'fixed', resolution: '', created_at: now() });
-    fake.next(answer({ issues: [finding({ message: 'Ipotesi mancante' }), finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', message: 'Resta aperto' })] }), answer({ issues: [] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
-    const first = await review();
+    fake.next(answer({ issues: [finding({ message: 'Ipotesi mancante' }), finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', category: 'language', severity: 'minor', message: 'Resta aperto' })] }), answer({ issues: [] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
+    const first = await review({ sweep: true });
     done(first);
-    assert.deepEqual([first.full, first.sweep, first.samples], [true, undefined, 2]);
+    assert.deepEqual([first.full, first.sweep, first.samples, first.chapterRead], [true, undefined, 2, true], 'the first review is a whole-chapter read, not a sweep');
 
-    // Fix round: the s1 issue is fixed. The next review is the sweep: three calls on the whole chapter, minors kept.
-    fix('s1', 'Una frase.', 'Una frase corretta.\n\nAltro.');
+    // Fix round: the s1 issue is fixed. The asked review is the sweep: two calls on the whole chapter and the cross review, minors kept.
+    fix('s1', 'Una frase corretta.\n\nAltro.');
     fake.next(
       answer({ issues: [finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', severity: 'minor', message: 'Stesso errore altrove' })] }),
       answer({ issues: [] }), crossNone, verdicts({ severity: 'minor' }),
     );
-    const sweep = await review();
+    const sweep = await review({ sweep: true });
     done(sweep);
-    assert.deepEqual([sweep.sweep, sweep.mode, sweep.samples, sweep.issues, sweep.minorsDropped], [true, 'sweep', 2, 1, undefined]);
+    assert.deepEqual([sweep.sweep, sweep.mode, sweep.samples, sweep.chapterRead, sweep.issues, sweep.minorsDropped], [true, 'sweep', 2, true, 1, undefined]);
     const prompt = fake.calls[4].prompt;
     assert.match(prompt, /This is a sweep after a round of fixes/);
     assert.match(prompt, /=== \[s2\] Sezione 1\.2 ===\nSeconda sezione intatta\./, 'unchanged sections are read in full');
@@ -2892,30 +2891,27 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(fake.calls[6].selection.model, 'claude-opus-5-5');
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message).sort(), ['Resta aperto', 'Stesso errore altrove']);
 
-    // The sweep's finding is fixed: the next review reads only the changed text, with one call, and no second sweep follows.
-    fix('s2', 'Seconda sezione intatta.', 'Seconda sezione corretta.');
+    // The next fix makes the chapter due again, but the review queued at the end of a generate run does not ask: one call on the changed text.
+    fix('s2', 'Seconda sezione corretta.');
     fake.next(answer({ issues: [] }));
     const after = await review();
     done(after);
-    assert.equal(after.sweep, undefined);
-    assert.equal(after.samples, 1);
+    assert.deepEqual([after.sweep, after.samples, after.chapterRead], [undefined, 1, undefined]);
     assert.match(fake.calls[8].prompt, /SINCE THE LAST REVIEW/);
     assert.equal(fake.calls.length, 9);
   });
 
-  test('the sweep keeps an open issue whose passage is still there, also in a rewritten block, and runs after a fix that changed no text', async () => {
+  test('a sweep keeps an open issue whose passage is still there, and does not delete one in a rewritten block that still holds its quote', async () => {
     seedOutline([['c1', ['s1']]]);
-    const r1 = seedRevision('s1', 'Una frase.\n\nUn passo.');
-    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    seedRevision('s1', 'Una frase.\n\nUn passo. Ancora.');
+    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', severity: 'minor', category: 'language', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
     done(await review());
-    // The first issue is closed as already resolved: no new text, yet the round had a fix, so the sweep runs.
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
+    seedRevision('s1', 'Una frase corretta.\n\nUn passo. Ancora riscritto.');
     fake.next(answer({ issues: [] }), crossNone);
-    const sweep = await review();
-    done(sweep);
-    assert.deepEqual([sweep.reused, sweep.sweep], [undefined, true]);
-    assert.equal(r1, sweep.reviewed);
-    // A later review of a rewrite that keeps the open issue's passage would replace it; the sweep did not.
+    const sweep = await review({ sweep: true });
+    assert.equal(sweep.sweep, true);
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
     assert.match(fake.calls[3].prompt, /ISSUES STILL OPEN[^\n]*\n- \[s1\] "Un passo\." Resta aperto/);
   });
@@ -2923,47 +2919,85 @@ describe('independent samples, the sweep after a fix round and the severity floo
   test('the sweep is not told to skip an open issue whose quote a rewrite removed, since that issue is replaced', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.\n\n2 + 2 = 5.');
-    fake.next(answer({ issues: [finding(), finding({ quote: '2 + 2 = 5.', message: 'Somma sbagliata' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    fake.next(answer({ issues: [finding(), finding({ quote: '2 + 2 = 5.', severity: 'minor', category: 'language', message: 'Somma sbagliata' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
     done(await review());
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
     seedRevision('s1', 'Una frase corretta.\n\nLa somma di 2 e 2 è 5.');
     fake.next(answer({ issues: [] }), crossNone);
-    assert.equal((await review()).sweep, true);
+    assert.equal((await review({ sweep: true })).sweep, true);
     assert.doesNotMatch(fake.calls[3].prompt, /ISSUES STILL OPEN|Somma sbagliata/);
   });
 
-  test('a sweep does not delete an open issue in a rewritten block that still holds its quote', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.\n\nUn passo. Ancora.');
-    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
-    done(await review());
-    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
-    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
-    seedRevision('s1', 'Una frase corretta.\n\nUn passo. Ancora riscritto.');
-    fake.next(answer({ issues: [] }), crossNone);
-    const sweep = await review();
-    assert.equal(sweep.sweep, true);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
-  });
-
-  test('the sweep is not due without a fix since the last whole-chapter review, and a Full review starts a new round', async () => {
+  test('a chapter is due for a sweep when its text changed since its last whole-chapter read and no blocker or major from review is open', async () => {
     seedOutline([['c1', ['s1']]]);
     const nodes = ['c1', 's1'];
-    seedRevision('s1', 'Una frase.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'never reviewed');
+    const r1 = seedRevision('s1', 'Una frase.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r1)), false, 'never reviewed: the first review reads the whole chapter anyway');
     fake.next(answer({ issues: [finding()] }), crossNone, verdicts({ severity: 'major' }));
     done(await review());
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'nothing fixed yet');
-    fix('s1', 'Una frase.', 'Una frase corretta.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), true);
-    fake.next(answer({ issues: [] }), crossNone);
-    done(await review());
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'one sweep per round');
-    fake.next(answer({ issues: [finding({ quote: 'Una frase corretta.' })] }), verdicts({ severity: 'major' }));
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r1)), false, 'an open major from review, and the text was just read');
+    const r2 = fix('s1', 'Una frase corretta.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true, 'the text changed since the read and nothing serious is open');
+    assert.equal(getProjectSummary(ctx, P).review!.sweepsDue, 1);
+    // An open major from review blocks it; one from the exercise check or lint does not.
+    ctx.db.insert('review_issues', { id: 'open1', project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'correctness', quote: 'Una frase', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), false);
+    ctx.db.run(`UPDATE review_issues SET source = 'lint' WHERE id = 'open1'`);
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true);
+    ctx.db.run(`DELETE FROM review_issues WHERE id = 'open1'`);
+    // A Full review reads section by section with one call each: it is not the read a sweep counts from.
+    fake.next(answer({ issues: [] }));
     done(await review({ mode: 'full' }));
-    fix('s1', 'Una frase corretta.', 'Una frase giusta.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), true, 'a Full review and its fixes get their own sweep');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true);
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review({ sweep: true });
+    done(sweep);
+    assert.equal(sweep.sweep, true);
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), false, 'one sweep per change of the text');
+    assert.equal(getProjectSummary(ctx, P).review!.sweepsDue, 0);
+  });
+
+  test('reviews stored before the whole-chapter reads counted do not count: an old book is due, and the asked sweep runs on unchanged text', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    // What a review stored before #133 looks like: one call, no chapterRead.
+    startTask('chapter.review', { chapterId: 'c1' });
+    done({ reviewed: r1, full: true, issues: 0 });
+    assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true);
+    // Without the ask, unchanged text is not read again.
+    assert.equal((await review()).reused, true);
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review({ sweep: true });
+    assert.deepEqual([sweep.reused, sweep.sweep, sweep.chapterRead], [undefined, true, true]);
+  });
+
+  test('a whole-chapter read with a reviewer call on the fallback model records the models and does not count as the read', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    // The first reviewer call hits the Codex limit: both samples run on the fallback (Sonnet).
+    fake.next(quota(), answer({ issues: [] }), answer({ issues: [] }), crossNone);
+    const first = await review();
+    done(first);
+    assert.deepEqual([first.samples, first.sampleModels, first.chapterRead], [2, ['claude-sonnet-5-5', 'claude-sonnet-5-5'], undefined]);
+    assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true, 'the chapter still needs a read on the reviewer model');
+  });
+
+  test('only a review run started with the sweep asks for it; the review at the end of a generate run never does', () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    // startRun wakes the queue; the test only looks at the planned tasks.
+    (ctx.queue as unknown as { wake(): void }).wake = () => undefined;
+    const inputs = (scope: Record<string, unknown>) => {
+      const run = startRun(ctx, P, 'review', scope);
+      return ctx.db.all<{ input: string }>(`SELECT input FROM tasks WHERE run_id = ? AND kind = 'chapter.review'`, run.id).map((t) => JSON.parse(t.input));
+    };
+    assert.deepEqual(inputs({ sweep: true }), [{ chapterId: 'c1', sweep: true }]);
+    assert.deepEqual(inputs({}), [{ chapterId: 'c1' }]);
+    assert.deepEqual(inputs({ sweep: true, reviewMode: 'full' }), [{ chapterId: 'c1', mode: 'full' }]);
+    assert.ok(generateSpecs(ctx, P).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
+    assert.ok(generateSpecs(ctx, P, undefined, ['s1']).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
   });
 
   test('a fix of a wrong formula rewrites its body under the same key', () => {
