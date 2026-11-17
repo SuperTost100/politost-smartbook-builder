@@ -39,8 +39,8 @@ export function severityAfterOpinion(f: { severity: Severity; category?: string 
  * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
  * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. It also gets the findings
  * of several reviewer calls together and names the ones that repeat an earlier finding: with `merge`, those are merged into that
- * finding. The group keeps the highest severity, the floor when any member is a correctness finding, and stays when any member
- * is real. When the check cannot run, the findings stay as they are.
+ * finding. The group keeps the highest severity, the floor when any member is a correctness finding, and the most severe
+ * verdict that calls a member real. When the check cannot run, the findings stay as they are.
  */
 async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string; merge?: boolean }) {
   const kept: F[] = [];
@@ -70,8 +70,9 @@ async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext,
       const f = p.findings[n];
       if (RANK[f.severity] > RANK[g.severity]) g.severity = f.severity;
       if ((f.category ?? 'correctness') === 'correctness') g.category = 'correctness';
+      // The group takes the most severe verdict that calls a member real, so a confirmed blocker is not lowered by a minor repeat.
       const v = verdicts.get(n);
-      if (g.verdict?.verdict === 'not-real' && v?.verdict !== 'not-real') g.verdict = v;
+      if (v && v.verdict !== 'not-real' && (!g.verdict || g.verdict.verdict === 'not-real' || RANK[v.severity] > RANK[g.verdict.severity])) g.verdict = v;
     }
     p.findings.forEach((found, n) => {
       if (into.has(n)) { merged++; return; }
@@ -223,8 +224,10 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   // The sweep also learns what is still open, so it does not report it twice, and the mistakes fixed in other chapters, because
   // the same wrong claim can stand in two chapters (Analisi 2: fixed in 1.4, left in 2.5).
   const sweepContext = () => {
+    // Only the issues the sweep keeps: one whose quote is gone from its section is deleted below, so it must be reported again.
     const open = ctx.db.all<{ node_id: string; quote: string; message: string }>(
-      `SELECT node_id, quote, message FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('open', 'proposed') AND node_id IN (${inNodes}) ORDER BY rowid DESC LIMIT 60`, projectId, ...reviewNodes);
+      `SELECT node_id, quote, message FROM review_issues WHERE project_id = ? AND source = 'review' AND status IN ('open', 'proposed') AND node_id IN (${inNodes}) ORDER BY rowid DESC LIMIT 60`, projectId, ...reviewNodes)
+      .filter((r) => { const head = sections.find((x) => x.s.id === r.node_id)?.head; return !head || !r.quote.trim() || quoteInBlock(r.quote, head.markdown); });
     const elsewhere = ctx.db.all<{ node_id: string; quote: string; message: string }>(
       `SELECT node_id, quote, message FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'fixed' AND category IN ('correctness', 'missing-hypothesis') AND (node_id IS NULL OR node_id NOT IN (${inNodes})) ORDER BY rowid DESC LIMIT 30`, projectId, ...reviewNodes);
     return [

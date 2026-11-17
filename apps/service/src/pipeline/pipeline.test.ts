@@ -2825,6 +2825,15 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.deepEqual(issues(`source = 'review' AND status = 'dismissed'`).map((i) => i.message), ['Passo']);
   });
 
+  test('a merged group keeps the most severe verdict that calls a member real', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    fake.next(answer({ issues: [finding({ severity: 'minor', message: 'Svista' })] }), answer({ issues: [finding({ severity: 'blocker', message: 'Somma sbagliata' })] }), verdicts({ severity: 'minor' }, { severity: 'blocker', sameAs: 1 }));
+    const r = await review();
+    assert.equal(r.merged, 1);
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [['Svista', 'blocker']]);
+  });
+
   test('a cross review that fails leaves the reviewer findings; a reviewer call that fails fails the task', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.');
@@ -2908,6 +2917,20 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(r1, sweep.reviewed);
     // A later review of a rewrite that keeps the open issue's passage would replace it; the sweep did not.
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
+    assert.match(fake.calls[3].prompt, /ISSUES STILL OPEN[^\n]*\n- \[s1\] "Un passo\." Resta aperto/);
+  });
+
+  test('the sweep is not told to skip an open issue whose quote a rewrite removed, since that issue is replaced', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.\n\n2 + 2 = 5.');
+    fake.next(answer({ issues: [finding(), finding({ quote: '2 + 2 = 5.', message: 'Somma sbagliata' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    done(await review());
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
+    seedRevision('s1', 'Una frase corretta.\n\nLa somma di 2 e 2 è 5.');
+    fake.next(answer({ issues: [] }), crossNone);
+    assert.equal((await review()).sweep, true);
+    assert.doesNotMatch(fake.calls[3].prompt, /ISSUES STILL OPEN|Somma sbagliata/);
   });
 
   test('a sweep does not delete an open issue in a rewritten block that still holds its quote', async () => {
