@@ -2,7 +2,7 @@
 import { applyGuardedChanges, compileChapter, dropReferences, formatModelText, lintSection, MIN_KEPT_SHARE, quoteInBlock, sameQuote, splitBlocks } from '@smartbuilder/content';
 import { outlineSchema, subjectProfileOf, type EvidenceNote } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
-import { countOpenSerious, issuesChanged, setIssuesStatus } from '../repo/issues.ts';
+import { countOpenSerious, issuesChanged, setIssuesStatus, sweepDue } from '../repo/issues.ts';
 import { questionsChanged, recordQuestionRevision } from '../repo/questions.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
@@ -36,18 +36,43 @@ export function severityAfterOpinion(f: { severity: Severity; category?: string 
 }
 
 /**
- * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
- * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. It also gets the findings
- * of several reviewer calls together and names the ones that repeat an earlier finding: with `merge`, those are merged into that
- * finding. The group keeps the highest severity, the floor when any member is a correctness finding, and the most severe
- * verdict that calls a member real. When the check cannot run, the findings stay as they are.
+ * Findings of several reviewer calls that report one problem, merged before the second opinion: same section, and quotes in
+ * the same block of at least 20 characters (a shorter block, such as one that is only ".", says nothing about the problem).
+ * The most severe member stands for the group, with category `correctness` when any member has it, so the floor of
+ * severityAfterOpinion still applies. On the 47 stored findings of three runs it made 11 groups, all true repeats, and merged 15.
  */
-async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string; merge?: boolean }) {
+export function mergeRepeats<F extends Finding>(findings: F[], blocksOf: (sectionId: string) => string[]): { findings: F[]; merged: number } {
+  const groups = new Map<string, F[]>();
+  const order: (string | F)[] = [];
+  for (const f of findings) {
+    const blocks = f.quote.trim() ? blocksOf(f.sectionId) : [];
+    const n = blocks.findIndex((b) => quoteInBlock(f.quote, b));
+    if (n < 0 || blocks[n].trim().length < 20) { order.push(f); continue; }
+    const key = `${f.sectionId}\n${n}`;
+    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
+    groups.get(key)!.push(f);
+  }
+  let merged = 0;
+  const out = order.map((x) => {
+    if (typeof x !== 'string') return x;
+    const g = groups.get(x)!;
+    merged += g.length - 1;
+    const top = g.reduce((a, b) => (RANK[b.severity] > RANK[a.severity] ? b : a));
+    return g.some((f) => (f.category ?? 'correctness') === 'correctness') ? { ...top, category: 'correctness' } : top;
+  });
+  return { findings: out, merged };
+}
+
+/**
+ * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
+ * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. When the check cannot run,
+ * the findings stay as they are.
+ */
+async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string }) {
   const kept: F[] = [];
   const dropped: { finding: F; reason: string }[] = [];
   let lowered = 0;
-  let merged = 0;
-  if (!p.findings.length) return { kept, dropped, lowered, merged, checked: undefined as boolean | undefined, model: undefined as string | undefined };
+  if (!p.findings.length) return { kept, dropped, lowered, checked: undefined as boolean | undefined, model: undefined as string | undefined };
   const list = p.findings.map((f, n) => `${n + 1}. [${f.sectionId}] [${f.severity}] ${f.quote ? `"${f.quote}" ` : ''}${f.message}${f.suggestion ? ` Suggested fix: ${f.suggestion}` : ''}`).join('\n');
   try {
     const { data, route } = await runRole(ctx, {
@@ -55,38 +80,17 @@ async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext,
       schema: secondOpinionSchema, projectId: p.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
     });
     const verdicts = new Map(data.findings.map((v) => [v.index - 1, v]));
-    // A repeat points at an earlier finding only, so a chain always ends at a finding that is kept or dropped on its own verdict.
-    const into = new Map<number, number>();
-    if (p.merge) {
-      p.findings.forEach((_, n) => {
-        const same = verdicts.get(n)?.sameAs;
-        if (same == null || same - 1 >= n || same < 1) return;
-        into.set(n, into.get(same - 1) ?? same - 1);
-      });
-    }
-    const group = p.findings.map((f, n) => ({ severity: f.severity, category: f.category, verdict: verdicts.get(n) }));
-    for (const [n, first] of into) {
-      const g = group[first];
-      const f = p.findings[n];
-      if (RANK[f.severity] > RANK[g.severity]) g.severity = f.severity;
-      if ((f.category ?? 'correctness') === 'correctness') g.category = 'correctness';
-      // The group takes the most severe verdict that calls a member real, so a confirmed blocker is not lowered by a minor repeat.
+    p.findings.forEach((f, n) => {
       const v = verdicts.get(n);
-      if (v && v.verdict !== 'not-real' && (!g.verdict || g.verdict.verdict === 'not-real' || RANK[v.severity] > RANK[g.verdict.severity])) g.verdict = v;
-    }
-    p.findings.forEach((found, n) => {
-      if (into.has(n)) { merged++; return; }
-      const f = { ...found, severity: group[n].severity, category: group[n].category };
-      const v = group[n].verdict;
       if (v?.verdict === 'not-real') { dropped.push({ finding: f, reason: v.reason.trim() }); return; }
       const severity = v ? severityAfterOpinion(f, v.severity) : f.severity;
       if (RANK[severity] < RANK[f.severity]) lowered++;
       kept.push({ ...f, severity });
     });
-    return { kept, dropped, lowered, merged, checked: true as boolean | undefined, model: route.model as string | undefined };
+    return { kept, dropped, lowered, checked: true as boolean | undefined, model: route.model as string | undefined };
   } catch (err) {
     if (!(err instanceof TaskError) || t.signal.aborted) throw err;
-    return { kept: [...p.findings], dropped, lowered, merged, checked: false as boolean | undefined, model: undefined as string | undefined };
+    return { kept: [...p.findings], dropped, lowered, checked: false as boolean | undefined, model: undefined as string | undefined };
   }
 }
 
@@ -94,7 +98,7 @@ const notRealResolution = (reason: string) => `Second opinion: not a real proble
 
 /**
  * Chapter review. Modes: "changed" (the default) reads the whole chapter the first time and afterwards only the blocks written
- * since the last review, except for the one sweep after a fix round (see sweepDue); "full" reviews every section on its own
+ * since the last review, except for a sweep the author asked for (`input.sweep`, see sweepDue); "full" reviews every section on its own
  * call; "recheck" asks for a second opinion on the issues already open, without a new review. A read of the whole chapter
  * (the first review and the sweep) is made by several independent calls, because each call finds a different part of the
  * errors. Every finding gets the second opinion before it is stored.
@@ -103,29 +107,15 @@ export interface ReviewResult {
   /** The round left no open blocker or major in the chapter (any source), and how many there are. See ReviewState for the book as a whole. */
   clean?: boolean; openSerious?: number;
   skipped?: boolean | string; reused?: boolean; reviewed?: string; mode?: string; full?: boolean; model?: string; verifier?: string;
-  /** The whole chapter was read again after a fix round. At most one sweep follows each whole-chapter review. */
+  /** The whole chapter was read again after a fix round, because the author asked for it. */
   sweep?: boolean;
   /** Reviewer calls that read the chapter, and the cross review next to them (its model, or false when it could not run). */
   samples?: number; crossModel?: string | false;
+  /** The model of each reviewer call, in order. */
+  sampleModels?: string[];
+  /** A whole-chapter read (the first review or a sweep) whose reviewer calls all ran on the primary route: the read sweepDue counts from. */
+  chapterRead?: boolean;
   issues?: number; dropped?: number; lowered?: number; merged?: number; checked?: boolean; rechecked?: number; skippedSettled?: number; outOfScope?: number; minorsDropped?: number; compileIssues?: number;
-}
-
-/**
- * The sweep is due when issues were fixed since the chapter's latest whole-chapter review (its first review or a Full review)
- * and no sweep ran after that review. So each round of fixes gets one sweep, and the issues a sweep finds are then read again
- * only in `changed` reviews: re-reading whole chapters after every fix is what kept the October fix loop going.
- */
-export function sweepDue(ctx: AppContext, projectId: string, chapterId: string, nodeIds: string[]): boolean {
-  const reviews = ctx.db.all<{ since: string; result: string }>(
-    `SELECT COALESCE(started_at, created_at) AS since, result FROM tasks WHERE project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? AND json_extract(result, '$.reviewed') IS NOT NULL ORDER BY finished_at DESC, rowid DESC`,
-    projectId, chapterId);
-  for (const r of reviews) {
-    const result = json<ReviewResult>(r.result, {});
-    if (result.sweep) return false;
-    if (!result.full) continue;
-    return !!ctx.db.get(`SELECT 1 FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'fixed' AND created_at >= ? AND node_id IN (${nodeIds.map(() => '?').join(',')}) LIMIT 1`, projectId, r.since, ...nodeIds);
-  }
-  return false;
 }
 
 export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<ReviewResult> {
@@ -146,8 +136,10 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
   // What the round left: blockers and majors still open (or waiting as a proposal) in the chapter, from every source.
   const standing = () => { const openSerious = countOpenSerious(ctx, projectId, reviewNodes); return { clean: openSerious === 0, openSerious }; };
-  // Unless the sweep is due: a fix round can close issues without changing the text (an issue the text already resolves).
-  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force && !sweepDue(ctx, projectId, chapterId, reviewNodes)) return { reused: true, reviewed, ...standing() };
+  // Only a review run the author started with the sweep sweeps; the review at the end of a generate run never does. A sweep
+  // can run on unchanged text: a chapter whose reviews were all made before whole-chapter reads were recorded is due for one.
+  const sweepAsked = mode === 'changed' && !!priorReviewed && !!t.task.input.sweep && sweepDue(ctx, projectId, chapterId, reviewNodes, reviewed);
+  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force && !sweepAsked) return { reused: true, reviewed, ...standing() };
   const inNodes = reviewNodes.map(() => '?').join(',');
   const notation = outline!.outline.notation;
   // The reviewer learns what the exam covers, so it flags extra material as minor instead of inventing scope.
@@ -196,7 +188,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   // made every pass report a different handful of old passages, so the issues never ran out.
   const full = !priorReviewed || mode === 'full';
   // The sweep reads the whole chapter and keeps minors as the first review does, but replaces open issues as a `changed` review does.
-  const sweep = !full && sweepDue(ctx, projectId, chapterId, reviewNodes);
+  const sweep = !full && sweepAsked;
   const before = new Map<string, string>();
   if (!full) {
     const ids = priorReviewed!.split(',').filter(Boolean);
@@ -244,6 +236,8 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const raw: Finding[] = [];
   let model: string | undefined;
   let samples = 0;
+  const sampleModels: string[] = [];
+  let onFallback = false;
   let crossModel: string | false | undefined;
   if (mode === 'full') {
     // One call per section: a whole chapter in one call got a different handful of problems each time.
@@ -271,6 +265,8 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
       const call = await review(input);
       model = call.route.model;
       samples++;
+      sampleModels.push(call.route.model);
+      onFallback ||= call.fallback;
       raw.push(...call.data.issues);
     }
     try {
@@ -311,10 +307,13 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     if (settled.some((x) => x.node_id === nodeId && sameQuote(x.quote, i.quote))) { skippedSettled++; continue; }
     candidates.push({ ...i, sectionId: nodeId });
   }
-  // Findings in the order of the text, so the second opinion sees repeats of one problem next to each other.
+  // Findings in the order of the text, and one per problem: the reviewer calls of a whole-chapter read report the same problem
+  // more than once.
   const order = new Map(sections.map((x, n) => [x.s.id, n]));
   candidates.sort((a, b) => (order.get(a.sectionId) ?? -1) - (order.get(b.sectionId) ?? -1));
-  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: candidates, merge: true, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
+  const blocks = new Map(sections.map((x) => [x.s.id, splitBlocks(x.head!.markdown).map((b) => b.text)]));
+  const { findings: distinct, merged } = mergeRepeats(candidates, (id) => blocks.get(id) ?? []);
+  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: distinct, ...contextFor(new Set(distinct.map((c) => c.sectionId)), distinct.map((c) => c.quote)) });
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
   const compileIssues: { nodeId: string; severity: string; rule: string; quote: string; message: string }[] = [];
@@ -364,8 +363,9 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   });
   ctx.events.emit('issue.created', { chapterId, count: opinion.kept.length }, { projectId, runId: t.task.runId });
   return {
-    issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, ...(opinion.merged ? { merged: opinion.merged } : {}), checked: opinion.checked,
-    skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode: sweep ? 'sweep' : mode, full, ...(sweep ? { sweep } : {}), samples, ...(crossModel !== undefined ? { crossModel } : {}), compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model, ...standing(),
+    issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, ...(merged ? { merged } : {}), checked: opinion.checked,
+    skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode: sweep ? 'sweep' : mode, full, ...(sweep ? { sweep } : {}), samples,
+    ...(sampleModels.length ? { sampleModels } : {}), ...(sampleModels.length && !onFallback ? { chapterRead: true } : {}), ...(crossModel !== undefined ? { crossModel } : {}), compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model, ...standing(),
   };
 }
 
