@@ -36,7 +36,8 @@ export const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('
  */
 export function bookFiles(dir: string): Record<string, Uint8Array> {
   const out: Record<string, Uint8Array> = {};
-  if (!existsSync(dir)) return out;
+  // lstat, not existsSync: a dangling link reads as missing to existsSync, and a publish would then write through it.
+  if (!lstatSync(dir, { throwIfNoEntry: false })) return out;
   const walk = (d: string) => {
     if (lstatSync(d).isSymbolicLink()) throw new Error(`${d} is a symbolic link; a book folder holds only plain files and folders.`);
     for (const name of readdirSync(d)) {
@@ -56,7 +57,9 @@ export function bookFiles(dir: string): Record<string, Uint8Array> {
 
 export function readManifest(dir: string): BuilderManifest | null {
   const path = join(dir, MANIFEST);
-  if (!existsSync(path)) return null;
+  const st = lstatSync(path, { throwIfNoEntry: false });
+  if (!st) return null;
+  if (st.isSymbolicLink()) throw new Error(`${path} is a symbolic link; a book folder holds only plain files and folders.`);
   const m = JSON.parse(readFileSync(path, 'utf8')) as BuilderManifest;
   if (!m || typeof m.files !== 'object' || !m.files) throw new Error(`${path} has no "files" map.`);
   return m;
