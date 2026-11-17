@@ -1,5 +1,6 @@
 import katex from 'katex';
-import { isValidAssetPath, parseChapterMarkdown } from '@politost/content-core';
+import { isValidAssetPath, parseChapterMarkdown, renderDisplayTex, renderLatexInText } from '@politost/content-core';
+import { digitCommas } from './decimalComma.ts';
 import type { LintFinding } from './types.ts';
 import { splitBlocks } from './blocks.ts';
 import { GENERATOR_MARKUP } from './sanitize.ts';
@@ -32,6 +33,15 @@ export const LINT_RULES = [
   'placeholder',
   'difficulty-decoration',
   'literal-escape',
+  'stray-digit-wrap',
+  'ref-scheme',
+  'foreign-script',
+  'prose-tilde',
+  'list-start',
+  'decimal-comma',
+  'double-period',
+  'duplicate-exercise',
+  'same-data-exercise',
 ] as const;
 export type LintRule = (typeof LINT_RULES)[number];
 
@@ -115,6 +125,12 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   'exercise-fence': 'blocker',
   placeholder: 'blocker',
   'literal-escape': 'blocker',
+  'stray-digit-wrap': 'blocker',
+  'ref-scheme': 'blocker',
+  'foreign-script': 'major',
+  'prose-tilde': 'major',
+  'list-start': 'major',
+  'decimal-comma': 'major',
   'colon-dangling': 'major',
   'unicode-math': 'major',
   'bold-unpaired': 'major',
@@ -127,6 +143,9 @@ const SEVERITY: Record<string, LintFinding['severity']> = {
   'math-blank-line': 'minor',
   table: 'minor',
   'empty-section': 'minor',
+  'double-period': 'minor',
+  'duplicate-exercise': 'minor',
+  'same-data-exercise': 'minor',
 };
 
 function quoteOf(s: string, max = 200): string {
@@ -235,7 +254,13 @@ function stopRatios(text: string): { words: number; en: number; it: number } {
 // -- katex -------------------------------------------------------------------------------------
 
 const katexCache = new Map<string, string | null>();
-/** Same call content-core's validateChapter makes, minus the console noise of strict "warn". */
+const KATEX_ERROR_COLOR = /#cc0000/;
+/**
+ * Whether the reader would show this formula as an error. It renders through content-core, as the reader does (decimal commas
+ * first, then KaTeX, and the formula as written when the rewrite fails), and reads KaTeX's error colour off the HTML: with
+ * throwOnError off, an undefined command or a missing brace is drawn in red instead of thrown. The message comes from KaTeX
+ * run on the formula as written.
+ */
 export function katexError(tex: string, display: boolean): string | null {
   const key = `${display ? 'D' : 'I'}:${tex}`;
   const hit = katexCache.get(key);
@@ -244,15 +269,119 @@ export function katexError(tex: string, display: boolean): string | null {
   const warn = console.warn;
   console.warn = () => {}; // KaTeX warns about glyphs without metrics even when it does not throw
   try {
-    katex.renderToString(tex, { throwOnError: true, displayMode: display, strict: 'ignore' });
-  } catch (e) {
-    err = (e as Error).message;
+    // shortcut: a formula that sets #cc0000 itself is not checked, since its red cannot be told from the error red; upgrade when KaTeX exposes the error.
+    if (!/cc0000/i.test(tex) && KATEX_ERROR_COLOR.test(display ? renderDisplayTex(tex) : renderLatexInText(`$${tex}$`))) {
+      try {
+        katex.renderToString(tex, { throwOnError: true, displayMode: display, strict: 'ignore' });
+        err = 'the formula does not render';
+      } catch (e) {
+        err = (e as Error).message;
+      }
+    }
   } finally {
     console.warn = warn;
   }
   if (katexCache.size > 5000) katexCache.clear();
   katexCache.set(key, err);
   return err;
+}
+
+// -- rules from the November audit ---------------------------------------------------------------
+
+/** Letters of scripts a book is not written in. Greek and Latin are left out: Greek is maths and has its own rule. */
+const FOREIGN_SCRIPT = /[\p{Script=Cyrillic}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Arabic}\p{Script=Hebrew}\p{Script=Thai}\p{Script=Devanagari}\p{Script=Armenian}\p{Script=Georgian}]/u;
+
+/** Language codes of books written in a script FOREIGN_SCRIPT lists. */
+const NON_LATIN_LANGUAGE = /^\s*(?:ru|uk|bg|sr|zh|ja|ko|ar|fa|he|iw|th|hi|hy|ka|russ|ukrain|bulgar|serb|chin|japan|korea|arab|persian|hebrew|thai|hindi|armen|georg)/i;
+
+/** Inline math that opens and closes with the same digit around a symbol: $4\mathrm{C_4H_{10}}4$, $4sp^24$. */
+const STRAY_DIGIT_WRAP = /(?<!\$)\$(\d)((?:\\[A-Za-z]+|[A-Za-z])[^$]*?)\1\$(?!\$)/g;
+function isStrayDigitWrap(body: string): boolean {
+  // The closing digit follows a brace, a letter or a one-digit exponent: "}4", "a4", "^24".
+  if (!/(?:\}|[A-Za-z]|\^\d)$/.test(body)) return false;
+  // "$2\times2$", "$2\sqrt2$", "$1\cdot1$": an operator before the last digit is maths.
+  if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty|(?:arc)?(?:sin|cos|tan|cot|sec|csc)h?|log|ln|lg|exp)(?:[_^](?:\{[^{}]*\}|\w))*$/.test(body)) return false;
+  // A relation inside the formula (outside a unit in \mathrm) makes it an equation: "$1x=1$".
+  return !/=|\\le|\\ge|<|>/.test(body.replace(/\\mathrm\{(?:[^{}]|\{[^{}]*\})*\}/g, ''));
+}
+
+/** The link forms the compiler and the reader resolve. */
+const REF_SCHEME = /^ref:(?:formula\/(?:@[A-Za-z0-9][\w-]*|\d+\.\d+)|section\/[\w-]+|chapter\/\d+#p\d+)$/;
+
+/**
+ * Commas that content-core 0.6.0 reads differently from what the formula most likely means. Two shapes, found on the four books:
+ *  - a decimal where the numbers are small integers in a list context: the whole formula "1,2", "i=1,2", "0,1\in A",
+ *    fractions "1/2,1/4", and "-1,1)" after a ";". It renders as "1,2" with no space, where a list wants "1, 2".
+ *  - a pair where the brackets hold a factor of an arithmetic expression: "(273,15)", "(0,20)^2", ")(", "\cdot(". Only when the
+ *    formula plainly computes with decimals (another decimal comma, or a unit). It renders as "(0, 20)".
+ * Write "{,}" for a decimal and "1, 2" (with a space) for a list: both read the same in every version.
+ */
+function decimalCommaMismatch(tex: string): string | null {
+  for (const { index, kind } of digitCommas(tex)) {
+    const left = /(-?\d+(?:\/\d+)?)$/.exec(tex.slice(0, index))?.[1] ?? '';
+    const right = /^(\d+(?:\/\d+)?)/.exec(tex.slice(index + 1))?.[1] ?? '';
+    const before = tex.slice(0, index - left.length);
+    const after = tex.slice(index + 1 + right.length);
+    if (kind === 'decimal') {
+      if (/^0/.test(right)) continue; // "0,05": a leading zero is a decimal
+      const whole = /^\s*$/.test(before) && /^\s*$/.test(after) && /^[1-9]$/.test(left) && /^[1-9]$/.test(right) && Number(right) > Number(left); // "$1,2$" locants
+      const member = /^\s*\\in\b/.test(after); // "0,1\in A"
+      const free = !/[,_^A-Za-z0-9.]$/.test(before); // the left number is not part of a decimal, a script or a name
+      const ends = /^\s*(?:$|[,;.)}\]]|\\in\b|\\quad|\\qquad|\\text\{\s*(?:e|o|and|or)\b)/.test(after);
+      const indexList = /(?:^|[\s,({])[ijkn]\s*=\s*$/.test(before) && /^[1-9]$/.test(left) && /^[1-9]$/.test(right) && Number(right) > Number(left) && ends; // "i=1,2"
+      const fractions = free && /^-?\d{1,2}\/\d{1,2}$/.test(left) && /^\d{1,2}(?:\/\d{1,2})?$/.test(right) && !/^\d/.test(after); // "-4/3,4/3,0"
+      const semicolon = /;\s*$/.test(before) && /^-?\d$/.test(left) && /^[1-9]$/.test(right) && /^\s*\)/.test(after); // "m(f;-1,1)"
+      if (whole || member || indexList || fractions || semicolon) return `The comma in "${left},${right}" reads as a decimal in the reader, but these look like a list. Write "${left}, ${right}" with a space, or "{,}" if it is a decimal.`;
+    } else if (kind === 'pair') {
+      // the brackets around "a,b": what comes before the opening one and after the closing one
+      const open = /(\(|\[|\\lbrack\s*|\\left\s*\()\s*-?$/.exec(before);
+      const close = /^\s*(\)|\]|\\rbrack|\\right\s*\))/.exec(after);
+      if (!open || !close) continue;
+      const pre = before.slice(0, open.index).replace(/\s+$/, '');
+      const post = after.slice(close[0].length).replace(/^\s+/, '');
+      const arith = /^(?:\^|\(|\\cdot|\\times|\/)/.test(post) || /(?:\)|\\cdot|\\times|\/|\\sqrt\{|\{)$/.test(pre);
+      const decimals = digitCommas(tex).some((d) => d.kind === 'decimal') || /\\(?:mathrm|text)\{\s*(?:[a-zA-Zµ°]{1,3}(?:\/[a-zA-Z]+)?|[a-z]+\s*\/\s*[a-z]+)\s*\}/.test(tex);
+      if (arith && decimals) return `The comma in "(${left},${right})" reads as a pair in the reader, but this formula computes with decimals. Write "{,}" for the decimal comma.`;
+    }
+  }
+  return null;
+}
+
+/**
+ * An ordered list that starts at a number other than 1 with no earlier item n-1 in the same section or exercise, and is not
+ * the continuation of a list across a formula, a figure or a block. It is how a fix that rewrote a list and kept one item looks.
+ */
+function listStarts(lines: ScannedLine[]): { line: number; first: number; text: string }[] {
+  const out: { line: number; first: number; text: string }[] = [];
+  const item = (l: ScannedLine) => l.kind === 'list' && /^\d+[.)]\s/.test(l.raw);
+  let i = 0;
+  while (i < lines.length) {
+    if (!item(lines[i])) { i++; continue; }
+    // The run of top-level items: blank lines, indented lines and lazy continuations stay in it.
+    let j = i;
+    let lastItem = i;
+    while (j < lines.length) {
+      if (item(lines[j])) { lastItem = j; j++; continue; }
+      if (/^(?:#{1,6}\s|:::)/.test(lines[j].raw)) break;
+      if (lines[j].raw.trim() && lines[j - 1].raw.trim()) { j++; continue; }
+      if (!lines[j].raw.trim() || /^\s{2,}\S/.test(lines[j].raw)) { j++; continue; }
+      break;
+    }
+    const first = Number(/^(\d+)/.exec(lines[i].raw)![1]);
+    let p = i - 1;
+    while (p >= 0 && !lines[p].raw.trim()) p--;
+    const prev = p >= 0 ? lines[p] : null;
+    // A list continued after display math, a figure or a block keeps counting.
+    const continued = prev && (prev.kind === 'math' || prev.kind === 'image-close' || prev.kind === 'formula-close' || prev.kind === 'fence-close' || /\$\$\s*$/.test(prev.raw));
+    // A list a formula or a paragraph interrupted and that resumes: item n-1 is earlier in the same section or exercise.
+    let resumed = false;
+    for (let k = i - 1; k >= 0 && !/^(?:#{1,6}\s|:::exercise)/.test(lines[k].raw); k--) {
+      if (new RegExp(`^${first - 1}[.)]\\s`).test(lines[k].raw)) { resumed = true; break; }
+    }
+    if (first !== 1 && !continued && !resumed) out.push({ line: lines[i].n, first, text: lines[i].raw });
+    i = Math.max(j, lastItem + 1);
+  }
+  return out;
 }
 
 // -- main text linter --------------------------------------------------------------------------
@@ -326,6 +455,10 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     // Inline code is left out (an old MATLAB error starts with ???); math is not, so masked text cannot be used here.
     const noCode = l.kind === 'math' || l.kind === 'formula-body' ? t : t.replace(/`[^`]*`/g, '');
     for (const _ of noCode.matchAll(/\[\?\]|\\lbrack\s*\?\s*\\rbrack|\?\?\?/g)) add(mk('placeholder', file, 'Placeholder left in the content instead of a symbol or a value.', l.n, t));
+    // Letters of a script the book is not written in (a Cyrillic "н" after a formula), also inside math. Greek is math: unicode-math has it.
+    // shortcut: lintCompiled does not know the book's language, so a book in a non-Latin script fails this rule there; read smartbook.json when such a book is exported.
+    const foreign = NON_LATIN_LANGUAGE.test(o.language ?? '') ? null : FOREIGN_SCRIPT.exec(noCode);
+    if (foreign) add(mk('foreign-script', file, `Letter "${foreign[0]}" of a script that does not belong in the book (Cyrillic, Chinese, Arabic, Hebrew and similar).`, l.n, t));
     // A blank line is only of kind 'math' inside an open $$: the reader may end the formula there.
     if (l.kind === 'math' && !l.raw.trim() && lines[l.n - 2]?.raw.trim()) add(mk('math-blank-line', file, 'Blank line inside a display formula ($$ ... $$); remove it.', l.n, lines.slice(Math.max(0, l.n - 3), l.n + 1).map((x) => x.raw).join(' ')));
     if (l.kind === 'math' || l.kind === 'formula-body') continue;
@@ -361,6 +494,22 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       // The two characters backslash and n (or t) where a line break or a tab was meant: a model wrote them inside a JSON string and they were never decoded.
       // Math and inline code are masked, so \nu in a formula and `printf("\n")` are not caught. A LaTeX command written outside math (\text, \tau) is another mistake and is left out.
       if ([...l.masked.matchAll(/(?<!\\)\\[nt]/g)].some((m) => !LATEX_COMMAND_N_T.test(l.masked.slice(m.index)))) add(mk('literal-escape', file, 'A literal backslash followed by n or t in the text, where a line break or a tab was meant. Write the line break itself.', l.n, t));
+
+      // A digit copied in front of an inline formula and again after it: $4\mathrm{C_4H_{10}}4$. It renders, so KaTeX never complains.
+      for (const m of noCode.matchAll(STRAY_DIGIT_WRAP)) {
+        if (isStrayDigitWrap(m[2])) add(mk('stray-digit-wrap', file, `The formula ${m[0]} starts and ends with the digit ${m[1]}: a stray digit copied around it.`, l.n, t));
+      }
+
+      // "~" is a non-breaking space in LaTeX; outside math the reader prints it. "~~strike~~" is not it.
+      if (/~/.test(l.masked.replace(/~~[^~]+~~/g, ''))) add(mk('prose-tilde', file, 'A "~" in the text outside math: the reader prints it. Remove it, or write "circa".', l.n, t));
+
+      // "..": a sentence ending twice. Three dots are an ellipsis.
+      if (/(?<![.])\.\s?\.(?![.])/.test(l.masked)) add(mk('double-period', file, 'Two periods in a row.', l.n, t));
+
+      // A link scheme the compiler and the reader do not resolve, such as ref:formula:@key.
+      for (const m of noCode.matchAll(/\]\((ref:[^)\s]*)\)/g)) {
+        if (!REF_SCHEME.test(m[1])) add(mk('ref-scheme', file, `Link "${m[1]}" is not a form the reader resolves: use ref:formula/@key, ref:formula/N.M, ref:section/id or ref:chapter/N#pK.`, l.n, t));
+      }
 
       // markdown images
       if (/!\[[^\]]*\]\([^)]*\)/.test(l.masked)) add(mk('image', file, 'Markdown images are not allowed; use a :::image block with an asset.', l.n, t));
@@ -461,6 +610,17 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
     // A single "$" left after masking means an unclosed inline math (or a currency sign).
     const stray = /\$/.test(l.masked.replace(/\$\$/g, ''));
     if (stray) add(mk('katex', file, 'Unbalanced "$": inline math must open and close on the same line.', l.n, l.raw, 'major'));
+  }
+
+  // decimal-comma: a comma between digits that content-core reads differently from what the formula most likely means.
+  for (const span of extractMath(body.text)) {
+    const why = decimalCommaMismatch(span.tex);
+    if (why) add(mk('decimal-comma', file, why, body.map[span.line - 1], span.tex));
+  }
+
+  // list-start: an ordered list that starts at 2 or more with nothing before it
+  for (const ls of listStarts(lines)) {
+    add(mk('list-start', file, `The numbered list starts at ${ls.first}, with no item ${ls.first - 1} before it: an item was lost, or the list was cut.`, ls.line, ls.text));
   }
 
   // math-mixed: display $$ and inline $ in the same block
@@ -671,6 +831,36 @@ export function lintCompiled(files: Record<string, string | Uint8Array>, opts: L
       const ids = new Map<string, number>();
       for (const g of gr) ids.set(String((g as { id?: unknown }).id), (ids.get(String((g as { id?: unknown }).id)) ?? 0) + 1);
       for (const [id, n] of ids) if (n > 1) out.push(mk('duplicate-graph', 'grafici.json', `Graph id "${id}" used ${n} times.`, undefined, id));
+    }
+  }
+  if (doDup) out.push(...duplicateExercises(files));
+  return out;
+}
+
+/**
+ * Two exercises with the same statement (duplicate-exercise), or with the same four or more numbers in the same order, which
+ * is the same exercise reworded (same-data-exercise). Compared across esercizi.md and esami.md.
+ */
+function duplicateExercises(files: Record<string, string | Uint8Array>): LintFinding[] {
+  const out: LintFinding[] = [];
+  const byText = new Map<string, string>();
+  const byNumbers = new Map<string, string>();
+  for (const p of ['esercizi.md', 'esami.md']) {
+    const md = asText(files[p]);
+    if (!md) continue;
+    for (const m of md.matchAll(/^:::exercise\{id="([^"]+)"[^\n]*\n## Domanda\n([\s\S]*?)(?=^:::(?:hint|solution)|^:::\s*$)/gm)) {
+      const here = `${p}#${m[1]}`;
+      const text = m[2].replace(/^(?:\s*\*\*[^*]*\*\*)+/, '').replace(/\*\*/g, '').replace(/[\s$\\{}]/g, '').toLowerCase();
+      if (text.length < 40) continue;
+      const same = byText.get(text);
+      if (same) out.push(mk('duplicate-exercise', p, `Exercise ${m[1]} has the same statement as ${same}.`, undefined, m[2]));
+      else byText.set(text, here);
+      const numbers = (m[2].replace(/\{,\}/g, ',').match(/\d+(?:[.,]\d+)?/g) ?? []);
+      if (numbers.length < 4) continue;
+      const key = numbers.join(' ');
+      const alike = byNumbers.get(key);
+      if (alike && !same) out.push(mk('same-data-exercise', p, `Exercise ${m[1]} uses the same numbers in the same order as ${alike}: it may be the same exercise reworded.`, undefined, m[2]));
+      else if (!alike) byNumbers.set(key, here);
     }
   }
   return out;

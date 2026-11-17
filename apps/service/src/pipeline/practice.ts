@@ -48,8 +48,8 @@ function wordsChanged(before: QuestionText, after: QuestionText): string | null 
   }
   return null;
 }
-/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language, a reference to a formula the book lacks). Every other rule is formatting. */
-const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift', 'formula-ref-unknown']);
+/** Lint rules whose fix is about words (a leaked comment, a placeholder, a figure in an exercise, difficulty marks, drifted language, a reference to a formula the book lacks, a stray digit or letter, a list that lost an item). Every other rule is formatting. */
+const WORD_RULES = new Set(['meta-leak', 'placeholder', 'exercise-fence', 'difficulty-decoration', 'language-drift', 'formula-ref-unknown', 'stray-digit-wrap', 'foreign-script', 'list-start', 'decimal-comma']);
 
 /**
  * One formatting repair for question text that would not render or reads broken (unbalanced $, LaTeX KaTeX rejects,
