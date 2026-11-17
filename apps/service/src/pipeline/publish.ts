@@ -187,7 +187,10 @@ function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderMa
  * matches neither was edited outside the builder; one that matches the new export (a fix already back-ported) is fine.
  */
 export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan {
-  if (!existsSync(join(opts.booksDir, 'books'))) throw new Error(`${opts.booksDir} is not a politost-books checkout: it has no books folder.`);
+  const booksFolder = lstatSync(join(opts.booksDir, 'books'), { throwIfNoEntry: false });
+  if (!booksFolder) throw new Error(`${opts.booksDir} is not a politost-books checkout: it has no books folder.`);
+  // The checkout can hold a pull request: its books folder must not lead outside it (the book folder is checked in bookFiles).
+  if (booksFolder.isSymbolicLink()) throw new Error(`${join(opts.booksDir, 'books')} is a symbolic link; a book folder holds only plain files and folders.`);
   if (opts.version !== undefined && !isSemver(opts.version)) throw new Error(`--version ${opts.version} is not semver, e.g. 1.2.3.`);
   const { slug } = getProject(ctx, opts.projectId);
   const folder = join(opts.booksDir, 'books', slug);
