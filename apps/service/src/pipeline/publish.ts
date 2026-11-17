@@ -138,6 +138,8 @@ export interface PublishPlan {
   /** Why the publish cannot go ahead (hand edits included); empty when it can. */
   refusals: string[];
   manifest: BuilderManifest | null;
+  /** sha256 of the folder's book files when the plan was made: writePublish refuses a folder that changed since. */
+  folderHashes: Record<string, string>;
 }
 
 export interface PublishOptions {
@@ -181,11 +183,14 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
   const plan: PublishPlan = {
     projectId: opts.projectId, slug, folder, previousVersion, version, exportLabel: null, files: null,
     diff: { added: [], changed: [], removed: [] }, upToDate: false, handEdited, notices, refusals, manifest: null,
+    folderHashes: Object.fromEntries(Object.entries(current).map(([p, b]) => [p, sha256(b)])),
   };
   if (refusals.length && !opts.dryRun) return plan;
 
   let bytes: Uint8Array | null = null;
-  let source: { exportId: string; exportedAt: string; rulesVersion: string } | null = null;
+  let source: { exportId: string; exportedAt: string } | null = null;
+  // A new export is checked with this builder's rules, also in a dry run, where it has no row.
+  let rulesVersion = RULES_VERSION;
   if (opts.export) {
     try {
       const made = opts.dryRun
@@ -194,7 +199,7 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
       if (made.blocked) refusals.push(`${made.blocked.message} ${made.blocked.action ?? ''}`.trim());
       bytes = made.bytes;
       plan.exportLabel = made.row ? `${made.row.filename} (new)` : 'a new export (dry run, not stored)';
-      if (made.row) source = { exportId: made.row.id, exportedAt: made.row.createdAt, rulesVersion: RULES_VERSION };
+      if (made.row) source = { exportId: made.row.id, exportedAt: made.row.createdAt };
     } catch (err) {
       if (!(err instanceof HttpError)) throw err;
       refusals.push(`${err.message} ${err.action ?? ''}`.trim());
@@ -217,7 +222,8 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
       if (row.report.rulesVersion !== RULES_VERSION) {
         refusals.push(`The latest approved export, ${row.filename}, was checked with other rules (${row.report.rulesVersion ?? 'made before rules were versioned'}; this builder has ${RULES_VERSION}), so a rule added since never read it. Run Validate and "Approve and export" again, or add --export.`);
       }
-      source = { exportId: row.id, exportedAt: row.createdAt, rulesVersion: row.report.rulesVersion ?? '' };
+      source = { exportId: row.id, exportedAt: row.createdAt };
+      rulesVersion = row.report.rulesVersion ?? '';
     }
   }
   if (!bytes) return plan;
@@ -233,7 +239,7 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
   // change. A folder with no manifest, or one checked with other rules, still gets a new one, and an explicit --version is written.
   const book = (f: Record<string, Uint8Array>) => Object.entries(f).filter(([p]) => p !== 'ptsb.json');
   const asBefore = previousVersion === null ? null : book(withVersion(files, previousVersion));
-  plan.upToDate = !!asBefore && !!last && last.rulesVersion === source?.rulesVersion
+  plan.upToDate = !!asBefore && !!last && last.rulesVersion === rulesVersion
     && (opts.version === undefined || opts.version === previousVersion)
     && asBefore.length === book(current).length
     && asBefore.every(([p, b]) => current[p] !== undefined && Buffer.from(b).equals(Buffer.from(current[p])));
@@ -243,7 +249,7 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
     for (const path of Object.keys(files).sort()) hashes[path] = sha256(files[path]);
     plan.manifest = {
       projectId: opts.projectId, exportId: source.exportId, exportedAt: source.exportedAt, builderVersion: ctx.config.version,
-      rulesVersion: source.rulesVersion, files: hashes, findings: [...new Set(publishedFindings(files).map(findingKey))].sort(),
+      rulesVersion, files: hashes, findings: [...new Set(publishedFindings(files).map(findingKey))].sort(),
     };
   }
   return plan;
@@ -252,9 +258,8 @@ export function planPublish(ctx: AppContext, opts: PublishOptions): PublishPlan 
 /** Writes the plan's files and manifest into the folder, and removes the book files the export no longer has. */
 export function writePublish(plan: PublishPlan): void {
   if (plan.refusals.length || !plan.files || !plan.manifest) throw new Error('This publish was refused; nothing was written.');
-  // A file edited between the plan and now (an editor, a sync tool) would be overwritten without the plan's check.
-  const last = readManifest(plan.folder);
-  const edited = last ? handEdits(bookFiles(plan.folder), last) : [];
+  // A file changed between the plan and now (an editor, a sync tool, another publish) would be overwritten without the plan's check.
+  const edited = handEdits(bookFiles(plan.folder), { files: plan.folderHashes });
   if (edited.length) throw new Error(`books/${plan.slug} changed after the publish was planned (${edited.join(', ')}); nothing was written.`);
   for (const path of plan.diff.removed) {
     rmSync(join(plan.folder, path));

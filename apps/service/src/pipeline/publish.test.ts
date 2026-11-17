@@ -69,6 +69,8 @@ test('publish writes the export with a manifest of every file, removes what the 
   const again = publish(projectId);
   assert.equal(again.upToDate, true);
   assert.equal(versionIn(folder), '1.0.0');
+  assert.equal(publish(projectId, { export: true, dryRun: true }).upToDate, true, 'a dry run with --export agrees with the real run');
+  assert.equal(publish(projectId, { export: true }).upToDate, true);
   assert.equal(publish(projectId, { version: '1.1.0' }).upToDate, false);
   assert.equal(versionIn(folder), '1.1.0');
 });
@@ -92,6 +94,12 @@ test('writePublish refuses a folder edited after the plan was made', async () =>
   writeFileSync(join(folder, 'esercizi.md'), 'modificato nel frattempo');
   assert.throws(() => writePublish(plan), /changed after the publish was planned \(added esercizi\.md\)/);
   assert.equal(readFileSync(join(folder, 'esercizi.md'), 'utf8'), 'modificato nel frattempo');
+  // Another publish that wrote the folder in between, with its own manifest, makes this plan stale too.
+  rmSync(join(folder, 'esercizi.md'));
+  const first = planPublish(t.ctx, { projectId, booksDir: books, export: true });
+  write(projectId, 's2', 'Il teorema della permanenza del segno, nella sua forma per i limiti.');
+  writePublish(planPublish(t.ctx, { projectId, booksDir: books, export: true }));
+  assert.throws(() => writePublish(first), /changed after the publish was planned/);
 });
 
 test('publish stops on a hand edit and prints the back-port dry run, and goes ahead once the folder matches its manifest', async () => {
