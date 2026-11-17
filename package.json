@@ -22,6 +22,8 @@
     "backup": "node --import tsx apps/service/src/bin/backup.ts backup",
     "restore": "node --import tsx apps/service/src/bin/backup.ts restore",
     "normalize-text": "node --import tsx apps/service/src/bin/normalize-text.ts",
+    "publish-book": "node --import tsx apps/service/src/bin/publish-book.ts",
+    "validate-all": "node --import tsx apps/service/src/bin/validate-all.ts",
     "figure-packages": "node scripts/fetch-figure-packages.mjs"
   },
   "devDependencies": {

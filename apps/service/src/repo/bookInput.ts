@@ -11,9 +11,10 @@ import { listQuestions } from './questions.ts';
 /**
  * Builds the compiler input from the project's outline, the current text of every node, questions, enrichments and assets.
  * With approvedOnly the outline must have been approved; otherwise the latest outline is used. Every question is included:
- * the export gate decides what blocks, not this function.
+ * the export gate decides what blocks, not this function. The version goes into smartbook.json: `npm run publish-book` passes
+ * the one after the books repo's, and the screens, which do not know it, use 1.0.0.
  */
-export function loadBookInput(ctx: AppContext, projectId: string, opts: { approvedOnly?: boolean } = {}): BookInput {
+export function loadBookInput(ctx: AppContext, projectId: string, opts: { approvedOnly?: boolean; version?: string } = {}): BookInput {
   const project = getProject(ctx, projectId);
   const found = effectiveOutline(ctx, projectId);
   if (!found) throw new HttpError(409, 'no_outline', 'There is no outline yet.', 'Build and approve the outline first.');
@@ -38,7 +39,7 @@ export function loadBookInput(ctx: AppContext, projectId: string, opts: { approv
   const used = JSON.stringify([chapters, questions, enrichments]);
   const assets = readAssetBytes(ctx, projectId).filter((a) => used.includes(`assets/${a.filename}`));
   return {
-    meta: { slug: project.slug, title: project.title, subject: project.subject, authors: project.authors, language: project.language, version: '1.0.0' },
+    meta: { slug: project.slug, title: project.title, subject: project.subject, authors: project.authors, language: project.language, version: opts.version ?? '1.0.0' },
     chapters,
     omittedSectionIds,
     questions,
