@@ -114,7 +114,7 @@ test('publish stops on a hand edit and prints the back-port dry run, even when t
   const exportsBefore = listExports(t.ctx, projectId).length;
 
   const refused = publish(projectId);
-  assert.deepEqual(refused.handEdited, [chapter, 'note.txt']);
+  assert.deepEqual(refused.handEdited, [`${chapter}#p2`, 'note.txt'], 'listed by section, as the back-port sees them');
   assert.match(refused.refusals.join('\n'), new RegExp(`npm run backport -- --project ${projectId} --from ${folder} --dry-run`));
   assert.equal(listExports(t.ctx, projectId).length, exportsBefore, 'nothing stored');
   assert.equal(readFileSync(join(folder, chapter)).toString(), edited.toString(), 'nothing written');
@@ -124,7 +124,7 @@ test('publish stops on a hand edit and prints the back-port dry run, even when t
   forged.files[chapter] = sha256(edited);
   forged.files['note.txt'] = sha256(Buffer.from('aggiunto a mano'));
   writeFileSync(join(folder, MANIFEST), JSON.stringify(forged));
-  assert.deepEqual(publish(projectId).handEdited, [chapter, 'note.txt']);
+  assert.deepEqual(publish(projectId).handEdited, [`${chapter}#p2`, 'note.txt']);
 
   // An export id this builder does not have cannot be checked, so it is refused too.
   writeFileSync(join(folder, MANIFEST), JSON.stringify({ ...forged, exportId: 'sconosciuto' }));
@@ -186,7 +186,7 @@ test('the CONTRIBUTING sequence: a fix made in the books folder, back-ported, th
   writeFileSync(join(folder, chapter), fixed);
   // The contributor also raises the version, as CONTRIBUTING asks of every change.
   writeFileSync(join(folder, 'smartbook.json'), readFileSync(join(folder, 'smartbook.json'), 'utf8').replace('"version": "1.0.0"', '"version": "1.0.1"'));
-  assert.deepEqual(publish(projectId, { dryRun: true }).handEdited, [chapter], 'before the back-port the fix is a hand edit, the version is not');
+  assert.deepEqual(publish(projectId, { dryRun: true }).handEdited, [`${chapter}#p1`], 'before the back-port the fix is a hand edit, the version is not');
 
   const back = backportProject(t.ctx, projectId, folder);
   assert.equal(back.written, true, JSON.stringify(back.units));
@@ -196,6 +196,33 @@ test('the CONTRIBUTING sequence: a fix made in the books folder, back-ported, th
   assert.equal(readFileSync(join(folder, chapter), 'utf8'), fixed, 'the published text is the contributor\'s');
   assert.equal(versionIn(folder), '1.0.2');
   assert.equal(manifestOf(folder).exportId, listExports(t.ctx, projectId)[0].id);
+});
+
+test('a fix back-ported next to a section the builder changed since can be published onto the same folder', async () => {
+  const { projectId, folder } = await book();
+  publish(projectId);
+  const chapter = chapterOf(folder);
+  // The builder edits s2 after the publish; the books fix s1 in the same chapter file.
+  write(projectId, 's2', 'Il teorema della permanenza del segno vale per ogni limite finito e non nullo.');
+  writeFileSync(join(folder, chapter), readFileSync(join(folder, chapter), 'utf8').replace('vicino a un punto', 'in prossimità di un punto'));
+  assert.deepEqual(publish(projectId, { dryRun: true }).handEdited, [`${chapter}#p1`]);
+  assert.equal(backportProject(t.ctx, projectId, folder).written, true);
+  const p = publish(projectId);
+  assert.deepEqual(p.refusals, []);
+  const text = readFileSync(join(folder, chapter), 'utf8');
+  assert.match(text, /in prossimità di un punto/);
+  assert.match(text, /finito e non nullo/);
+});
+
+test('a manifest from before exercise and formula numbers were recorded is rewritten, even for the same book', async () => {
+  const { projectId, folder } = await book();
+  publish(projectId);
+  const { exercises: _e, formulas: _f, ...legacy } = manifestOf(folder);
+  writeFileSync(join(folder, MANIFEST), JSON.stringify(legacy));
+  assert.throws(() => backportProject(t.ctx, projectId, folder, { dryRun: true }), /Publish the book again first/);
+  assert.equal(publish(projectId).upToDate, false);
+  assert.ok(manifestOf(folder).exercises && manifestOf(folder).formulas);
+  assert.doesNotThrow(() => backportProject(t.ctx, projectId, folder, { dryRun: true }));
 });
 
 test('the version is the one after the books folder, or --version', async () => {
@@ -249,7 +276,7 @@ test('validate-all lists only the findings a book did not have when it was publi
   assert.equal(check.manifest, false);
   assert.deepEqual(check.fresh.map((f) => f.rule), ['literal-escape']);
 
-  const manifest: BuilderManifest = { projectId: 'p', exportId: 'e', exportedAt: '', builderVersion: 'test', files: {}, findings: publishedFindings({ 'chapters/01-moto.md': readFileSync(join(folder, 'chapters', '01-moto.md')) }).map(findingKey) };
+  const manifest: BuilderManifest = { projectId: 'p', exportId: 'e', exportedAt: '', builderVersion: 'test', files: {}, exercises: {}, formulas: {}, findings: publishedFindings({ 'chapters/01-moto.md': readFileSync(join(folder, 'chapters', '01-moto.md')) }).map(findingKey) };
   writeFileSync(join(folder, MANIFEST), JSON.stringify(manifest));
   assert.deepEqual(validatePublished(books), [{ slug: 'fisica-1', manifest: true, fresh: [] }]);
 });
