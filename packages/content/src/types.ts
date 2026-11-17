@@ -15,6 +15,8 @@ export interface SectionInput {
   title: string;
   /** Source dialect Markdown (see @smartbuilder/domain ContentRevision docs). */
   markdown: string;
+  /** The id of the revision `markdown` comes from, so a graph checked against an earlier revision is reported as stale. */
+  revisionId?: string;
 }
 
 export interface ChapterInput {

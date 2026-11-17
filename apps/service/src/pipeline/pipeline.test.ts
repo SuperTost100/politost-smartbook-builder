@@ -2,7 +2,7 @@
 import assert from 'node:assert/strict';
 import { existsSync, readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { lintQuestionText, MAX_DELETED_BLOCKS } from '@smartbuilder/content';
+import { compileBook, lintQuestionText, MAX_DELETED_BLOCKS, sampleGraph, type GraphSpec } from '@smartbuilder/content';
 import { DEFAULT_ROUTES } from '@smartbuilder/domain';
 import { json, newId, now } from '../db/db.ts';
 import { resetConnectionsCache, resetLlmState, setFunnel } from '../llm/index.ts';
@@ -11,17 +11,17 @@ import { TaskError, type TaskContext } from '../queue/queue.ts';
 import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
-import { chapterEnrich, enrichGraph, enrichIde } from './enrich.ts';
+import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
 import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, verifyVerdict } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
-import { chapterReview, sectionRevise, sweepDue } from './review.ts';
+import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
 import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
-import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listIssues, repairQuestionText, saveHuman, updateQuestion } from '../repo/index.ts';
+import { acceptProposal, getProjectSummary, rejectProposal, insertProposal, listEnrichments, listIssues, loadBookInput, repairQuestionText, saveHuman, sweepDue, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 
 let fake: FakeFunnel;
 let kit: ReturnType<typeof makeCtx>;
@@ -32,6 +32,18 @@ const answer = (obj: unknown) => () => ({ structured: obj as never, text: JSON.s
 const crossNone = answer({ issues: [] });
 /** The independent graph checker's answer when it finds nothing wrong. */
 const checkerFits = answer({ traces: [{ label: 'f', expected: '', problem: '' }], fit: 'fits' });
+/**
+ * Stores the graphs of a writer's answer for section s1 as drawn, with their sampling check and an issue when it fails. Generation
+ * no longer saves a failing graph, but an edited or re-checked one can fail, and Fix redraws it.
+ */
+function storeAnswer(a: Record<string, any>) {
+  const spec = (id: string, title: string, yDomain: [number, number], yScale: 'log' | null | undefined, yLabel: string, traces: GraphSpec['traces']): GraphSpec => ({ id, title, xDomain: a.xDomain, yDomain, xScale: a.xScale ?? undefined, yScale: yScale ?? undefined, xLabel: a.xLabel, yLabel, traces });
+  const specs = [spec(a.id, a.title, a.yDomain, a.yScale, a.yLabel, a.traces), ...(a.pair ? [spec(a.pair.id === a.id ? `${a.pair.id}-2` : a.pair.id, a.pair.title, a.pair.yDomain, a.pair.yScale, a.pair.yLabel, a.pair.traces)] : [])];
+  for (const s of specs) {
+    const g = sampleGraph(s);
+    saveEnrichment(ctx, P, 's1', 'graph', g.payload, [{ method: 'numeric', ok: g.ok, detail: g.detail }], { spec: s });
+  }
+}
 /** The data part of an exercise check that finds nothing wrong with the statement. No program: nothing to run in the sandbox. */
 const posed = { wellPosed: true, wellPosedReason: 'I dati determinano una sola risposta.', dataProblems: [] as string[], consistency: '' };
 /** The editor's answer to a formatting repair: the three parts as plain text. */
@@ -1285,7 +1297,7 @@ describe('14. practice-done barrier and the first-chapter gate', () => {
 });
 
 describe('5. enrichment: pick once, one child task per extra', () => {
-  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'Testo' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
+  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'y = x^2' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
 
   test('chapter.enrich only picks and enqueues; a retry reuses the children instead of picking again', async () => {
     seedOutline([['c1', ['s1', 's2']]]);
@@ -1347,9 +1359,9 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await chapterEnrich(ctx, t), { picked: 1 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s2']);
     assert.match(fake.calls.at(-1)!.prompt, /s2 \| .* \| formulas: F = k\\,x/, 'the picker sees the display formulas');
-    fake.next(answer(graph));
+    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'F', source: 'F = k\\,x' }] }), checkerFits);
     await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's2', purpose: 'Hooke', relation: 'F = k x' }));
-    assert.match(fake.calls.at(-1)!.prompt, /Relation to plot, as the section states it: F = k x/);
+    assert.match(fake.calls.at(-2)!.prompt, /Relation to plot, as the section states it: F = k x/);
   });
 
   test('MATLAB code with A\\b and a string holding \\n is stored exactly as written', async () => {
@@ -1380,28 +1392,35 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 
   test('a child is idempotent: it saves one graph and skips when the section already has one', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Testo uno.');
+    const rev = seedRevision('s1', 'Testo uno: $$y = x^2$$');
     const t = startTask('enrich.graph', { nodeId: 's1', purpose: 'p' });
     fake.next(answer(graph), checkerFits);
     assert.deepEqual(await enrichGraph(ctx, t), { made: 1 });
     assert.deepEqual(await enrichGraph(ctx, t), { reused: true });
     assert.equal(fake.calls.length, 2, 'the drawing and its independent check');
     assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 1);
+    assert.equal(ctx.db.get<{ checked_rev_id: string }>(`SELECT checked_rev_id FROM enrichments`)!.checked_rev_id, rev, 'the graph remembers the section revision its checker read');
   });
-
-  test('a graph that draws but fails the graph lint is stored as an issue, so Auto Fix redraws it', async () => {
+  test('a graph that fails its checks is drawn once more with what failed, and a second failure saves nothing', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Le leggi di Charles e di Gay-Lussac.');
-    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'Charles' }, { kind: 'function', fn: 'x', label: 'Gay-Lussac', source: 'Gay-Lussac' }], yDomain: [-2, 2] }));
+    seedRevision('s1', 'Le leggi di Charles, $V = k_1 T$, e di Gay-Lussac, $P = k_2 T$.');
+    const twins = answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'V = k_1 T' }, { kind: 'function', fn: 'x', label: 'Gay-Lussac', source: 'P = k_2 T' }], yDomain: [-2, 2] });
+    fake.next(twins, twins);
+    const r = await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' }));
+    assert.equal(r.made, 0);
+    assert.match(String(r.skipped), /failed its checks twice and was not saved: duplicate \("Gay-Lussac"\): same data as "Charles"/);
+    assert.equal(fake.calls.length, 2, 'two drawings, and no checker call for a graph that failed the checks that cost nothing');
+    assert.match(fake.calls[1]!.prompt, /A first draft failed its checks: duplicate \("Gay-Lussac"\)/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
+    assert.equal(ctx.db.all('SELECT 1 FROM review_issues').length, 0, 'nothing for the author to clean up');
+    // A second drawing that passes is saved, with every check.
+    fake.next(twins, answer({ ...graph, traces: [{ kind: 'function', fn: 'x', label: 'Charles', source: 'V = k_1 T' }, { kind: 'function', fn: '2*x', label: 'Gay-Lussac', source: 'P = k_2 T' }], yDomain: [-5, 5] }),
+      answer({ traces: [{ label: 'Charles', expected: '', problem: '' }, { label: 'Gay-Lussac', expected: '', problem: '' }], fit: 'fits' }));
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' })), { made: 1 });
     const row = ctx.db.get<{ status: string; checks: string }>(`SELECT status, checks FROM enrichments`)!;
-    assert.equal(row.status, 'issue');
-    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', false], ['source', true]]);
-    const issue = ctx.db.get<{ message: string }>(`SELECT message FROM review_issues WHERE source = 'verification'`)!;
-    assert.match(issue.message, /failed its check: duplicate \("Gay-Lussac"\): same data as "Charles"/);
-    assert.doesNotMatch(issue.message, /Sampled/, 'the issue names what failed, not the checks that passed');
+    assert.equal(row.status, 'verified');
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', true], ['source', true], ['independent', true]]);
   });
-
   test('a "none" verdict saves no graph: the section states no relation to plot', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Le classi di idrocarburi: alcani, alcheni, alchini.');
@@ -1411,66 +1430,150 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.equal(fake.calls.length, 1, 'no checker call');
   });
 
-  test('a trace that quotes nothing the section states is an issue, and no checker is asked', async () => {
+  test('a trace must quote a formula of the section: an invented one or a word of prose fails, and no checker is asked', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'La soluzione è $$y = \\frac{2}{2 - t^2}$$');
-    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'y = \\frac{1}{1 - t^2/4}' }], yDomain: [0, 4] }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Cauchy' }));
-    const row = ctx.db.get<{ status: string; checks: string }>('SELECT status, checks FROM enrichments')!;
-    assert.equal(row.status, 'issue');
-    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', true], ['source', false]]);
-    assert.match(ctx.db.get<{ message: string }>('SELECT message FROM review_issues')!.message, /quotes "y = \\frac\{1\}\{1 - t\^2\/4\}", which the section does not contain/);
-    assert.equal(fake.calls.length, 1);
+    const invented = answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'y = \\frac{1}{1 - t^2/4}' }], yDomain: [0, 4] });
+    const prose = answer({ ...graph, traces: [{ kind: 'function', fn: '1/(1-x^2/4)', label: 'y', source: 'La soluzione' }], yDomain: [0, 4] });
+    fake.next(invented, prose);
+    const r = await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Cauchy' }));
+    assert.match(String(r.skipped), /quotes "La soluzione", which the section does not contain/);
+    assert.match(fake.calls[1]!.prompt, /quotes "y = \\frac\{1\}\{1 - t\^2\/4\}", which the section does not contain/);
+    assert.equal(fake.calls.length, 2);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
   });
-
-  test('the independent checker writes the expected curve; a trace whose data differs makes the graph an issue that names it', async () => {
+  test('the independent checker writes the expected curve; a trace whose data differs is drawn again with the expected curve', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo: la parabola $$y = x^2$$');
     // The label states no formula, so the lint cannot see that the curve is shifted up by one.
     fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2 + 1', label: 'parabola', source: 'y = x^2' }], yDomain: [0, 6] }),
+      answer({ traces: [{ label: 'parabola', expected: 'x^2', problem: '' }], fit: 'fits' }),
+      answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'parabola', source: 'y = x^2' }], yDomain: [0, 6] }),
       answer({ traces: [{ label: 'parabola', expected: 'x^2', problem: '' }], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
-    assert.match(fake.calls[1]!.prompt, /1\. parabola   \(source: y = x\^2\)/, 'the checker sees labels and sources, not the data');
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' })), { made: 1 });
+    assert.match(fake.calls[1]!.prompt, /1\. parabola: a curve y = f\(x\) drawn for x from -2 to 2   \(source: y = x\^2\)/, 'the checker sees labels, intervals and sources, not the formulas');
     assert.doesNotMatch(fake.calls[1]!.prompt, /x\^2 \+ 1/);
+    assert.match(fake.calls[2]!.prompt, /A first draft failed its checks: "parabola": \d+\/\d+ points differ from x\^2/, 'the second drawing is told the expected curve');
     const row = ctx.db.get<{ status: string; checks: string; spec: string }>('SELECT status, checks, spec FROM enrichments')!;
-    assert.equal(row.status, 'issue');
+    assert.equal(row.status, 'verified');
     const independent = json<{ method: string; ok: boolean; detail: string; model?: string }[]>(row.checks, []).find((c) => c.method === 'independent')!;
-    assert.equal(independent.ok, false);
-    assert.match(independent.detail, /points differ from x\^2/);
+    assert.match(independent.detail, /matches x\^2/);
     assert.ok(independent.model, 'the check names the model that wrote the expected curve');
-    assert.match(ctx.db.get<{ message: string }>('SELECT message FROM review_issues')!.message, /points differ from x\^2/);
-    assert.deepEqual(json<{ traces: { fn: string; source: string }[] }>(row.spec, { traces: [] }).traces.map((t) => [t.fn, t.source]), [['x^2 + 1', 'y = x^2']], 'the spec is kept with the graph');
+    assert.deepEqual(json<{ traces: { fn: string; source: string }[] }>(row.spec, { traces: [] }).traces.map((t) => [t.fn, t.source]), [['x^2', 'y = x^2']], 'the spec is kept with the graph');
   });
-
   test('a checker that finds no relation for the graph, or a contradiction, fails the check', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Testo: la parabola $$y = x^2$$');
     const drawn = answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'y = x^2', source: 'y = x^2' }] });
-    fake.next(drawn, answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: '' }], fit: 'not-a-function-graph' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
-    fake.next(drawn, answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: 'Il testo chiama y la velocità, l\'asse dice spazio.' }], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }));
-    const details = ctx.db.all<{ status: string; checks: string }>('SELECT status, checks FROM enrichments ORDER BY rowid').map((r) => [r.status, json<{ method: string; detail: string }[]>(r.checks, []).find((c) => c.method === 'independent')!.detail]);
-    assert.equal(details[0]![0], 'issue');
-    assert.match(details[0]![1], /finds no relation in the section/);
-    assert.equal(details[1]![0], 'issue');
-    assert.match(details[1]![1], /matches x\^2 .*problem: Il testo chiama y la velocità/);
+    const twice = async (check: ReturnType<typeof answer>) => {
+      fake.next(drawn, check, drawn, check);
+      return String((await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }))).skipped);
+    };
+    assert.match(await twice(answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: '' }], fit: 'not-a-function-graph' })), /finds no relation in the section/);
+    assert.match(await twice(answer({ traces: [{ label: 'y = x^2', expected: 'x^2', problem: 'Il testo chiama y la velocità, l\'asse dice spazio.' }], fit: 'fits' })), /matches x\^2 .*problem: Il testo chiama y la velocità/);
     // An answer that leaves traces out checked only part of the graph.
-    fake.next(drawn, answer({ traces: [], fit: 'fits' }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola', force: true }));
-    const last = ctx.db.get<{ status: string; checks: string }>('SELECT status, checks FROM enrichments ORDER BY rowid DESC LIMIT 1')!;
-    assert.equal(last.status, 'issue');
-    assert.match(last.checks, /The checker answered for 0 of 1 traces/);
+    assert.match(await twice(answer({ traces: [], fit: 'fits' })), /The checker answered for 0 of 1 traces/);
+    assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 0);
   });
 
+  test('the checker is told where each trace lies, so a branch on the wrong side of the axis is a contradiction it can name', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Il valore assoluto: $$|x| = -x \\text{ per } x < 0$$ e un punto angoloso in $x = 0$.');
+    const branch = (domain: number[]) => answer({ ...graph, xDomain: [-5, 5], yDomain: [-6, 6], traces: [
+      { kind: 'function', fn: '-x', label: 'y = -x (ramo sinistro, x < 0)', source: '|x| = -x', domain },
+      { kind: 'points', label: 'Punto angoloso', source: 'x = 0', points: [{ x: 0, y: 0 }] },
+    ] });
+    const verdict = (problem: string) => answer({ traces: [{ label: 'y = -x', expected: '-x', problem }, { label: 'Punto angoloso', expected: '', problem: '' }], fit: 'fits' });
+    fake.next(branch([0, 5]), verdict('Il ramo sinistro è disegnato per x da 0 a 5.'), branch([-5, 0]), verdict(''));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'modulo' })), { made: 1 });
+    assert.match(fake.calls[1]!.prompt, /1\. y = -x \(ramo sinistro, x < 0\): a curve y = f\(x\) drawn for x from 0 to 5/);
+    assert.match(fake.calls[1]!.prompt, /2\. Punto angoloso: points \(0, 0\)/);
+    assert.match(fake.calls[1]!.system ?? '', /only for a contradiction/);
+    assert.match(fake.calls[2]!.prompt, /problem: Il ramo sinistro è disegnato per x da 0 a 5/);
+    assert.match(fake.calls[3]!.prompt, /drawn for x from -5 to 0/);
+  });
+
+  test('a constant fitted to different values in the traces of one graph fails the check; one value for all passes', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Energia reticolare: $$U = -\\frac{k\\,|z_+ z_-|}{d}$$');
+    const traces = (factors: number[]) => factors.map((f, k) => ({ kind: 'function', fn: `-${f}/x`, label: `Cariche ±${k + 1}`, source: 'U = -\\frac{k\\,|z_+ z_-|}{d}' }));
+    const lattice = (factors: number[]) => answer({ ...graph, xDomain: [0.5, 4], yDomain: [-20, 0], traces: traces(factors) });
+    // What the checker wrote for the published graph: the charges squared, with one unknown k.
+    const expected = answer({ traces: ['-C/x', '-4*C/x', '-9*C/x'].map((e, k) => ({ label: `Cariche ±${k + 1}`, expected: e, problem: '' })), fit: 'fits' });
+    fake.next(lattice([1, 2, 3]), expected, lattice([1, 4, 9]), expected);
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'reticolo' })), { made: 1 });
+    assert.match(fake.calls[2]!.prompt, /C is fitted to 1 on "Cariche ±1", 0\.5 on "Cariche ±2", 0\.3333 on "Cariche ±3"/);
+    const independent = json<{ method: string; ok: boolean; detail: string }[]>(ctx.db.get<{ checks: string }>('SELECT checks FROM enrichments')!.checks, []).find((c) => c.method === 'independent')!;
+    assert.equal(independent.ok, true);
+    assert.doesNotMatch(independent.detail, /is fitted to/);
+  });
+
+  test('writer and checker read the whole section, past the first 8000 characters', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `${'Testo introduttivo. '.repeat(500)}\n\nEsempio finale: $$y = x^2$$`);
+    fake.next(answer(graph), checkerFits);
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
+    for (const call of fake.calls) assert.match(call.prompt, /Esempio finale: \$\$y = x\^2\$\$/);
+  });
+
+  test('a steep curve the sampler kept whole is accepted at generation, so an edit that keeps it does not fail', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Distribuzione di Fermi: $$f = \\frac{1}{e^{(E - 1)/0{,}0005} + 1}$$');
+    const fermi = { ...graph, xDomain: [0, 2], yDomain: [0, 1.1], traces: [{ kind: 'function', fn: '1/(exp((x-1)/0.0005)+1)', label: 'Occupazione', source: 'f = \\frac{1}{e^{(E - 1)/0{,}0005} + 1}' }] };
+    fake.next(answer(fermi), answer({ traces: [{ label: 'Occupazione', expected: '', problem: '' }], fit: 'fits' }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Fermi' })), { made: 1 });
+    const row = ctx.db.get<{ id: string; payload: string; lint_accepted: string }>('SELECT id, payload, lint_accepted FROM enrichments')!;
+    assert.deepEqual(json(row.lint_accepted, []), ['joined-jump:Occupazione']);
+    const payload = json<Record<string, unknown>>(row.payload, {});
+    const edited = updateEnrichmentPayload(ctx, row.id, { ...payload, title: 'Occupazione dei livelli' });
+    assert.equal(edited.status, 'verified');
+    assert.deepEqual(edited.lintOpen, []);
+    // The same data typed in by an author, with nothing accepted, is a joined jump.
+    ctx.db.run(`UPDATE enrichments SET lint_accepted = '[]' WHERE id = ?`, row.id);
+    assert.equal(updateEnrichmentPayload(ctx, row.id, payload).status, 'issue');
+  });
+
+  test('an edit drops the spec and the checker\'s revision; Accept anyway keeps them and the independent check', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    fake.next(answer({ ...graph, traces: [{ kind: 'function', fn: 'x^2', label: 'Seno', source: 'y = x^2' }, { kind: 'function', fn: 'x', label: 'Coseno', source: 'y = x^2' }], yDomain: [-2, 4] }),
+      answer({ traces: [{ label: 'Seno', expected: 'x^2', problem: '' }, { label: 'Coseno', expected: 'x', problem: '' }], fit: 'fits' }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
+    const id = ctx.db.get<{ id: string }>('SELECT id FROM enrichments')!.id;
+    const stored = listEnrichments(ctx, P)[0]!;
+    assert.deepEqual(stored.lintOpen, ['placeholder:'], 'a warning the author has not accepted');
+    assert.equal(stored.status, 'verified', 'a warning does not fail the graph');
+    const accepted = updateEnrichmentPayload(ctx, id, stored.payload, { acceptLint: true });
+    assert.deepEqual(accepted.lintAccepted, ['placeholder:'], 'Accept anyway takes warnings too');
+    assert.deepEqual(accepted.lintOpen, []);
+    assert.deepEqual(accepted.checks.map((c) => c.method), ['numeric', 'lint', 'source', 'independent'], 'the same payload keeps the checks that were about it');
+    assert.ok(accepted.spec && accepted.checkedRevisionId);
+    const edited = updateEnrichmentPayload(ctx, id, { ...stored.payload, title: 'Altro titolo' });
+    assert.deepEqual(edited.checks.map((c) => c.method), ['numeric', 'lint']);
+    assert.equal(edited.spec, null, 'the spec described the graph as drawn, not as edited');
+    assert.equal(edited.checkedRevisionId, null);
+  });
+
+  test('a graph whose section changed after its check is stale at export', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const rev = seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    fake.next(answer(graph), checkerFits);
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' }));
+    const stale = () => compileBook(loadBookInput(ctx, P)).findings.filter((f) => f.rule === 'graph-stale');
+    assert.deepEqual(stale(), []);
+    // A typo fix outside the quoted formula is a new revision of the section all the same.
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, rev);
+    seedRevision('s1', 'Testo uno, corretto: $$y = x^2$$');
+    assert.equal(stale().length, 1);
+  });
   test('a Bode pair saves two graphs on the same log frequency axis', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
     const t = startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' });
     fake.next(answer({
-      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }],
+      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }],
       xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
-      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
     }), checkerFits, checkerFits);
     assert.deepEqual(await enrichGraph(ctx, t), { made: 2 });
     const rows = ctx.db.all<{ payload: string; status: string }>(`SELECT payload, status FROM enrichments WHERE kind = 'graph' ORDER BY rowid`);
@@ -1482,12 +1585,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 
   test('a Bode pair is saved in one transaction: when the second graph cannot be written, the first is not kept, so a retry draws the pair again', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
     ctx.db.raw.exec(`CREATE TRIGGER second_graph_fails BEFORE INSERT ON enrichments WHEN (SELECT count(*) FROM enrichments) >= 1 BEGIN SELECT RAISE(ABORT, 'disk full'); END`);
     const pair = {
-      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }],
+      verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }],
       xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB',
-      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
+      pair: { id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi' },
     };
     fake.next(answer(pair), checkerFits, checkerFits);
     await assert.rejects(enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' })), /disk full/);
@@ -1499,13 +1602,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
 });
 
 describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
-  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'Testo' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
+  const graph = { verdict: 'graph', reason: 'r', id: 'g1', title: 'Grafico', description: 'd', traces: [{ kind: 'function', fn: 'x^2', label: 'f', source: 'y = x^2' }], xDomain: [-2, 2], yDomain: [0, 4], xLabel: 'x', yLabel: 'y' };
   const off = { ...graph, yDomain: [10, 20] };
   const failing = async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Testo uno.');
-    fake.next(answer(off));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'parabola' }));
+    seedRevision('s1', 'Testo uno: $$y = x^2$$');
+    storeAnswer(off);
     return { enrichment: ctx.db.get<{ id: string }>(`SELECT id FROM enrichments`)!.id, issue: ctx.db.get<{ id: string }>(`SELECT id FROM review_issues WHERE source = 'verification'`)!.id };
   };
 
@@ -1513,19 +1615,24 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     const { enrichment, issue } = await failing();
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM enrichments')!.status, 'issue', 'the failed graph is stored with a verification issue, as the issue describes');
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] })), { skipped: 'routed', routed: { graphs: 1 } });
-    assert.equal(fake.calls.length, 1, 'the text writer is not asked');
+    assert.equal(fake.calls.length, 0, 'the text writer is not asked');
     const input = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%'`)!.input, {});
     assert.deepEqual([input.force, input.replaceId, input.issueIds], [true, enrichment, [issue]]);
     assert.match(String(input.purpose), /failed its check[\s\S]*never enters the visible range/);
 
-    // The redraw fails again: the old graph stays, no second graph and no second issue appear, the reason is shown.
-    fake.next(answer(off));
+    // The redraw fails twice: the old graph stays, no second graph and no second issue appear, the reason is shown.
+    fake.next(answer(off), answer(off));
     await enrichGraph(ctx, startTask('enrich.graph', input));
-    assert.match(fake.calls[1].prompt, /failed its check/);
+    assert.match(fake.calls[0]!.prompt, /The last check of the graph failed: .*never enters the visible range/, 'the redraw is told the last failure');
+    assert.match(fake.calls[1]!.prompt, /A first draft failed its checks/);
     assert.equal(ctx.db.all('SELECT 1 FROM enrichments').length, 1);
     assert.equal(ctx.db.all(`SELECT 1 FROM review_issues`).length, 1);
     assert.match(ctx.db.get<{ resolution: string }>('SELECT resolution FROM review_issues')!.resolution, /redrawn but failed its check again: .*never enters the visible range/);
     assert.equal(ctx.db.get<{ status: string }>('SELECT status FROM review_issues')!.status, 'open');
+    // The next Fix tells the redraw why the last one failed.
+    await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
+    const next = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE kind = 'enrich.graph' AND key LIKE 'fixgraph:%' ORDER BY rowid DESC LIMIT 1`)!.input, {});
+    assert.match(String(next.purpose), /redrawn but failed its check again: .*never enters the visible range/);
 
     fake.next(answer(graph), checkerFits);
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', input)), { made: 1, replaced: true });
@@ -1581,7 +1688,7 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
     ctx.db.run(`UPDATE enrichments SET status = 'verified' WHERE id = ?`, enrichment);
     const r = await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: [issue] }));
     assert.deepEqual(r, { skipped: 'nothing requested' });
-    assert.equal(fake.calls.length, 1);
+    assert.equal(fake.calls.length, 0);
     assert.deepEqual({ ...ctx.db.get<Record<string, unknown>>('SELECT status, resolution FROM review_issues') }, { status: 'fixed', resolution: 'The graph passes its check now.' });
     ctx.db.run(`UPDATE review_issues SET status = 'open'`);
     ctx.db.run('DELETE FROM enrichments');
@@ -1591,14 +1698,13 @@ describe('Auto Fix redraws a graph that failed its check (issue 36)', () => {
 });
 
 describe('Auto Fix redraws each failing graph of a Bode pair for its own issues', () => {
-  const mag = (over = {}) => ({ verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'passa-basso' }], xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB', ...over });
-  const phase = (over = {}) => ({ id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'passa-basso' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi', ...over });
+  const mag = (over = {}) => ({ verdict: 'graph', reason: 'r', id: 'bode', title: 'Modulo', description: 'Modulo in dB', traces: [{ kind: 'function', fn: '-10*log10(1+(x/1000)^2)', label: '|H|', source: 'f_c = 1000' }], xDomain: [10, 100000], yDomain: [-40, 5], xScale: 'log', yScale: null, xLabel: 'f (Hz)', yLabel: 'dB', ...over });
+  const phase = (over = {}) => ({ id: 'bode', title: 'Fase', description: 'Fase in gradi', traces: [{ kind: 'function', fn: '-atan(x/1000)*180/pi', label: 'fase', source: 'f_c = 1000' }], yDomain: [-100, 10], yScale: null, yLabel: 'gradi', ...over });
   /** Both graphs of the pair fail: their y ranges are far from the curves. */
   const failingPair = async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
-    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ yDomain: [500, 600] }) }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
+    storeAnswer({ ...mag({ yDomain: [10, 20] }), pair: phase({ yDomain: [500, 600] }) });
     const rows = ctx.db.all<{ id: string; payload: string }>(`SELECT id, payload FROM enrichments ORDER BY rowid`).map((r) => ({ id: r.id, graphId: json<{ id: string }>(r.payload, { id: '' }).id }));
     const issues = ctx.db.all<{ id: string; quote: string }>(`SELECT id, quote FROM review_issues ORDER BY rowid`);
     return { magRow: rows[0]!.id, phaseRow: rows[1]!.id, magIssue: issues[0]!.id, phaseIssue: issues[1]!.id, issues, rows };
@@ -1632,9 +1738,8 @@ describe('Auto Fix redraws each failing graph of a Bode pair for its own issues'
 
   test('two failing graphs with the same title are not told apart by an issue, so neither issue is routed to the first of them', async () => {
     seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Il filtro passa-basso.');
-    fake.next(answer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) }));
-    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'Bode' }));
+    seedRevision('s1', 'Il filtro passa-basso con $f_c = 1000$ Hz.');
+    storeAnswer({ ...mag({ yDomain: [10, 20] }), pair: phase({ title: 'Modulo', yDomain: [500, 600] }) });
     const issues = ctx.db.all<{ id: string; quote: string }>('SELECT id, quote FROM review_issues ORDER BY rowid');
     assert.deepEqual(issues.map((i) => i.quote), ['Modulo', 'Modulo']);
     assert.deepEqual(await sectionRevise(ctx, startTask('section.revise', { nodeId: 's1', issueIds: issues.map((i) => i.id) })), { skipped: 'nothing requested' });
@@ -2505,7 +2610,7 @@ describe('the review converges', () => {
     assert.match(fake.calls[0].prompt, /full review: review all of the text/);
     assert.doesNotMatch(fake.calls[0].prompt, /ALREADY FIXED|DECIDED ARE FINE/);
 
-    // Issues handled before the first review: a fix since then would make the next review a sweep.
+    // Issues handled before the first review.
     const old = { project_id: P, source: 'review', severity: 'major', category: 'clarity', suggestion: '', resolution: '', created_at: '2000-01-01T00:00:00.000Z' };
     ctx.db.insert('review_issues', { ...old, id: 'd1', node_id: 's1', quote: 'Frase scelta', message: 'Preferirei un altro ordine', status: 'dismissed' });
     ctx.db.insert('review_issues', { ...old, id: 'a1', node_id: 's2', quote: 'Altro', message: 'Ipotesi mancante', status: 'accepted' });
@@ -2673,16 +2778,17 @@ describe('the review converges', () => {
     assert.equal(getProjectSummary(ctx, P).review!.clean, false);
     assert.equal(getProjectSummary(ctx, P).review!.openSerious, 1);
 
-    // The author fixes the issue by hand. The next review (the sweep after the fix) reads the chapter again and finds nothing.
+    // The author fixes the issue by hand. The next review reads the changed text and finds nothing.
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review'`);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, r1);
     seedRevision('s1', 'Una frase corretta.\n\nAltro blocco.');
     assert.equal(getProjectSummary(ctx, P).review!.clean, false, 'changed text has not been reviewed');
-    fake.next(answer({ issues: [] }), crossNone);
+    fake.next(answer({ issues: [] }));
     const second = await review();
     ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(second));
     assert.deepEqual([second.clean, second.openSerious], [true, 0]);
-    assert.deepEqual(getProjectSummary(ctx, P).review, { clean: true, openSerious: 0, reviewedAt: getProjectSummary(ctx, P).review!.reviewedAt });
+    // The text changed since the first review read the whole chapter, so a sweep is on offer.
+    assert.deepEqual(getProjectSummary(ctx, P).review, { clean: true, openSerious: 0, reviewedAt: getProjectSummary(ctx, P).review!.reviewedAt, sweepsDue: 1 });
 
     // A blocker from another source, or text written after the review, ends it.
     ctx.db.insert('review_issues', { id: 'lint1', project_id: P, node_id: 's1', source: 'lint', severity: 'blocker', category: 'katex', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
@@ -2942,73 +3048,113 @@ describe('r8. excluded sources stop counting', () => {
   });
 });
 
-describe('independent samples, the sweep after a fix round and the severity floor', () => {
+describe('independent samples, the sweep the author asks for, repeats merged in code and the severity floor', () => {
   const finding = (o: Record<string, unknown> = {}) => ({ sectionId: 's1', severity: 'major', category: 'correctness', quote: 'Una frase.', message: 'Errore', suggestion: 'Correggi', ...o });
-  const verdicts = (...v: { verdict?: string; severity: string; sameAs?: number | null }[]) => answer({ findings: v.map((x, k) => ({ index: k + 1, verdict: x.verdict ?? 'real', severity: x.severity, reason: '', sameAs: x.sameAs ?? null })) });
+  const verdicts = (...v: { verdict?: string; severity: string }[]) => answer({ findings: v.map((x, k) => ({ index: k + 1, verdict: x.verdict ?? 'real', severity: x.severity, reason: '' })) });
   const review = (input: Record<string, unknown> = {}) => chapterReview(ctx, startTask('chapter.review', { chapterId: 'c1', ...input }));
   const done = (r: unknown) => ctx.db.run(`UPDATE tasks SET state = 'succeeded', finished_at = ?, result = ? WHERE kind = 'chapter.review' AND state = 'running'`, now(), JSON.stringify(r));
   const samples = (n: number) => ctx.db.run('UPDATE projects SET options = ? WHERE id = ?', JSON.stringify({ selfCheck: false, reviewSamples: n }), P);
-  /** A fix of the first review's issue: the issue is closed and the section gets a new revision. */
-  const fix = (nodeId: string, from: string, to: string) => {
+  /** A fix of the open review issues of a section: they are closed and the section gets a new revision. */
+  const fix = (nodeId: string, to: string) => {
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE source = 'review' AND status = 'open' AND node_id = ?`, nodeId);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = ? AND status = 'current'`, nodeId);
-    seedRevision(nodeId, to);
-    return from;
+    return seedRevision(nodeId, to);
   };
+  const heads = (...ids: string[]) => ids.sort().join(',');
+  const quota = () => () => Object.assign(new Error("You've hit your usage limit. Try again in 2 hours."), { code: 'cli-failed' });
 
-  test('the first review keeps the union of the reviewer calls and the cross review, and the second opinion merges repeats of one problem', async () => {
+  test('repeats are merged by section and block of at least 20 characters, keep the highest severity and take correctness from any member', () => {
+    const long = 'Un blocco abbastanza lungo da contare come passaggio';
+    const blocks: Record<string, string[]> = { s1: [long, 'Sia x = 1.', '.'], s2: [long] };
+    const f = (o: Partial<{ sectionId: string; severity: 'blocker' | 'major' | 'minor'; category: string; quote: string; message: string }>) => ({ sectionId: 's1', severity: 'major' as const, category: 'correctness', quote: 'abbastanza lungo', message: 'm', suggestion: '', ...o });
+    const { findings, merged } = mergeRepeats([
+      f({ severity: 'minor', message: 'primo' }),
+      f({ quote: 'Sia x = 1.', message: 'breve 1' }),
+      f({ quote: 'Sia x', message: 'breve 2' }),
+      f({ quote: '.', message: 'punto 1' }),
+      f({ quote: '.', message: 'punto 2' }),
+      f({ severity: 'blocker', category: 'unsupported', quote: 'Un blocco abbastanza', message: 'secondo' }),
+      f({ sectionId: 's2', message: 'altra sezione' }),
+      f({ quote: 'in nessun blocco', message: 'fuori 1' }),
+      f({ quote: 'in nessun blocco', message: 'fuori 2' }),
+      f({ quote: '', message: 'senza citazione 1' }),
+      f({ quote: '', message: 'senza citazione 2' }),
+    ], (id) => blocks[id] ?? []);
+    assert.equal(merged, 1);
+    assert.deepEqual(findings.map((x) => [x.message, x.severity, x.category]), [
+      ['secondo', 'blocker', 'correctness'], ['breve 1', 'major', 'correctness'], ['breve 2', 'major', 'correctness'], ['punto 1', 'major', 'correctness'], ['punto 2', 'major', 'correctness'],
+      ['altra sezione', 'major', 'correctness'], ['fuori 1', 'major', 'correctness'], ['fuori 2', 'major', 'correctness'], ['senza citazione 1', 'major', 'correctness'], ['senza citazione 2', 'major', 'correctness'],
+    ]);
+    assert.equal(mergeRepeats([f({ category: 'language' }), f({ category: 'notation', severity: 'minor' })], (id) => blocks[id] ?? []).findings[0].category, 'language', 'no correctness member, no correctness');
+  });
+
+  test('members of a group that raise different problems stay separate points; overlapping quotes or the same message are one point', () => {
+    const block = 'Per k grande si ha b_k ~ 1/k e quindi a_k ~ 1/k², dunque la serie converge.';
+    const f = (quote: string, message: string, o: Partial<{ severity: 'blocker' | 'major' | 'minor'; category: string }> = {}) => ({ sectionId: 's1', severity: 'major' as const, category: 'correctness', quote, message, suggestion: `fix ${message}`, ...o });
+    const { findings, merged } = mergeRepeats([
+      f('b_k ~ 1/k', 'b_k non è asintotico a 1/k'),
+      f('a_k ~ 1/k²', 'a_k non è asintotico a 1/k²', { severity: 'blocker' }),
+      f('si ha b_k ~ 1/k', 'Stima di b_k sbagliata', { severity: 'minor', category: 'language' }),
+      f('dunque la serie converge', 'a_k non è asintotico a 1/k²'),
+    ], () => [block]);
+    assert.equal(merged, 3);
+    assert.equal(findings.length, 1);
+    const [g] = findings;
+    assert.deepEqual([g.severity, g.category, g.quote], ['blocker', 'correctness', 'a_k ~ 1/k²']);
+    assert.deepEqual((g as typeof g & { points?: { message: string; severity: string }[] }).points?.map((x) => [x.message, x.severity]), [['b_k non è asintotico a 1/k', 'major'], ['a_k non è asintotico a 1/k²', 'blocker']]);
+    assert.equal(g.message, '(1) "b_k ~ 1/k": b_k non è asintotico a 1/k (2) "a_k ~ 1/k²": a_k non è asintotico a 1/k²');
+    assert.equal(g.suggestion, '(1) fix b_k non è asintotico a 1/k (2) fix a_k non è asintotico a 1/k²');
+  });
+
+  test('the second opinion keeps the points of a merged finding that hold, or all of them when it names none', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Per k grande si ha b_k ~ 1/k e quindi a_k ~ 1/k², dunque la serie converge.\n\nUna seconda frase abbastanza lunga.');
+    const two = () => [answer({ issues: [finding({ quote: 'b_k ~ 1/k', message: 'Stima di b_k falsa', suggestion: 'Scrivi b_k ~ 1/k²' })] }), answer({ issues: [finding({ quote: 'a_k ~ 1/k²', message: 'Stima di a_k falsa', suggestion: 'Scrivi a_k ~ 1/k³' })] }), crossNone];
+    const verdict = (o: Record<string, unknown>) => answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '', ...o }] });
+    // One real point and one false one: only the real one is stored.
+    fake.next(...two(), verdict({ points: [2], reason: 'Regge solo il punto 1.2.' }));
+    const r = await review();
+    assert.equal(r.merged, 1);
+    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[major\] 2 points raised by independent reviewers about this passage:\n {3}1\.1 "b_k ~ 1\/k" Stima di b_k falsa Suggested fix: Scrivi b_k ~ 1\/k²\n {3}1\.2 "a_k ~ 1\/k²" Stima di a_k falsa/);
+    assert.match(fake.calls[3].system ?? '', /The finding is real when any of its points is real/);
+    assert.deepEqual(issues(`status = 'open'`).map((i) => [i.quote, i.message, i.suggestion]), [['a_k ~ 1/k²', 'Stima di a_k falsa', 'Scrivi a_k ~ 1/k³']]);
+    // Two different errors that both hold: both reach the stored issue, and so the fix prompt. The task above never succeeded,
+    // so each review is again a first review that replaces the open issues.
+    fake.next(...two(), verdict({ points: [1, 2] }));
+    await review();
+    assert.deepEqual(issues(`status = 'open'`).map((i) => [i.message, i.suggestion]), [['(1) "b_k ~ 1/k": Stima di b_k falsa (2) "a_k ~ 1/k²": Stima di a_k falsa', '(1) Scrivi b_k ~ 1/k² (2) Scrivi a_k ~ 1/k³']]);
+    // A verdict that names no point keeps them all.
+    fake.next(...two(), verdict({}));
+    await review();
+    assert.match(issues(`status = 'open'`)[0].message, /^\(1\) .*\(2\) /);
+  });
+
+  test('the first review keeps the union of the reviewer calls and the cross review, and merges repeats before the second opinion', async () => {
     samples(2);
     seedOutline([['c1', ['s1', 's2']]]);
-    seedRevision('s1', 'Una frase.\n\nUn esempio.');
-    seedRevision('s2', 'Una didascalia.');
+    seedRevision('s1', 'Una frase che afferma una equivalenza.\n\nUn esempio con un conto sbagliato.\n\nUna frase troncata a metà del');
+    seedRevision('s2', 'Una didascalia della figura.');
     fake.next(
-      answer({ issues: [finding({ sectionId: 's2', quote: 'Una didascalia.', message: 'La didascalia è falsa' }), finding({ message: 'Equivalenza falsa', severity: 'minor' })] }),
-      answer({ issues: [finding({ message: 'Equivalenza asintotica sbagliata', severity: 'blocker' }), finding({ quote: 'Un esempio.', message: 'Esempio sbagliato' })] }),
-      answer({ issues: [finding({ quote: 'Un esempio.', category: 'language', severity: 'minor', message: 'Frase troncata' })] }),
-      // In section order: s1 "Equivalenza falsa", s1 "Equivalenza asintotica sbagliata", s1 "Esempio sbagliato", s1 "Frase troncata", s2.
-      verdicts({ severity: 'minor' }, { severity: 'major', sameAs: 1 }, { severity: 'major' }, { severity: 'minor' }, { severity: 'major' }),
+      answer({ issues: [finding({ sectionId: 's2', quote: 'Una didascalia', message: 'La didascalia è falsa' }), finding({ quote: 'afferma una equivalenza', message: 'Equivalenza falsa', severity: 'minor' })] }),
+      answer({ issues: [finding({ quote: 'Una frase che afferma', category: 'unsupported', message: 'Equivalenza non supportata', severity: 'blocker' }), finding({ quote: 'un conto sbagliato', message: 'Esempio sbagliato' })] }),
+      answer({ issues: [finding({ quote: 'troncata a metà', category: 'language', severity: 'minor', message: 'Frase troncata' })] }),
+      verdicts({ severity: 'minor' }, { severity: 'major' }, { severity: 'minor' }, { severity: 'major' }),
     );
     const r = await review();
-    assert.deepEqual([r.samples, r.crossModel, r.model, r.merged, r.issues], [2, 'claude-opus-5-5', 'gpt-6-sol', 1, 4]);
+    assert.deepEqual([r.samples, r.sampleModels, r.chapterRead, r.crossModel, r.model, r.merged, r.issues, r.lowered], [2, ['gpt-6-sol', 'gpt-6-sol'], true, 'claude-opus-5-5', 'gpt-6-sol', 1, 4, 1]);
     assert.deepEqual(fake.calls.slice(0, 3).map((c) => c.selection.model), ['gpt-6-sol', 'gpt-6-sol', 'claude-opus-5-5']);
     assert.equal(fake.calls[0].prompt, fake.calls[1].prompt, 'every sample reads the same prompt');
     assert.match(fake.calls[0].system ?? '', /Report every error you find; there is no limit\./);
     assert.doesNotMatch(fake.calls[0].system ?? '', /fewer, solid issues/);
-    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[minor\] "Una frase\." Equivalenza falsa Suggested fix: Correggi\n2\. \[s1\] \[blocker\] "Una frase\." Equivalenza asintotica[\s\S]*5\. \[s2\]/);
-    assert.match(fake.calls[3].system ?? '', /set sameAs to the number of that earlier finding/);
-    // The merged problem is stored once, with the higher severity a reviewer gave it, and the floor keeps it major.
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [
-      ['Equivalenza falsa', 'major'], ['Esempio sbagliato', 'major'], ['Frase troncata', 'minor'], ['La didascalia è falsa', 'major'],
+    // The two findings on the first block reach the second opinion as one: the blocker, which takes correctness from its repeat.
+    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[blocker\] "Una frase che afferma" Equivalenza non supportata Suggested fix: Correggi\n2\. \[s1\] \[major\] "un conto sbagliato"[\s\S]*4\. \[s2\]/);
+    assert.doesNotMatch(fake.calls[3].prompt, /Equivalenza falsa|sameAs/);
+    assert.doesNotMatch(fake.calls[3].system ?? '', /sameAs/);
+    // The floor keeps the merged false statement major although the second opinion said minor.
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity, i.category]), [
+      ['Equivalenza non supportata', 'major', 'correctness'], ['Esempio sbagliato', 'major', 'correctness'], ['Frase troncata', 'minor', 'language'], ['La didascalia è falsa', 'major', 'correctness'],
     ]);
-  });
-
-  test('a merged group stays when any member is real, takes the floor from any correctness member, and a recheck merges nothing', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.\n\nUn passo.');
-    fake.next(
-      answer({ issues: [finding({ category: 'unsupported', message: 'Non supportato' }), finding({ severity: 'blocker', message: 'Falso' })] }),
-      answer({ issues: [finding({ quote: 'Un passo.', message: 'Passo' }), finding({ quote: 'Un passo.', message: 'Passo ripetuto' })] }),
-      // In order: "Non supportato", "Falso" (same as 1), "Passo", "Passo ripetuto" (same as 3).
-      verdicts({ verdict: 'not-real', severity: 'minor' }, { severity: 'minor', sameAs: 1 }, { severity: 'major' }, { severity: 'major', sameAs: 3 }),
-    );
-    const r = await review();
-    assert.deepEqual([r.merged, r.issues, r.dropped], [2, 2, 0]);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity, i.category]), [['Non supportato', 'major', 'correctness'], ['Passo', 'major', 'correctness']]);
-    // Two open rows of one problem (a failed second opinion stored both): a recheck judges each on its own verdict.
-    done(r);
-    fake.next(verdicts({ severity: 'major' }, { verdict: 'not-real', severity: 'major', sameAs: 1 }));
-    const again = await review({ mode: 'recheck' });
-    assert.deepEqual([again.dropped, again.rechecked], [1, 2]);
-    assert.deepEqual(issues(`source = 'review' AND status = 'dismissed'`).map((i) => i.message), ['Passo']);
-  });
-
-  test('a merged group keeps the most severe verdict that calls a member real', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.');
-    fake.next(answer({ issues: [finding({ severity: 'minor', message: 'Svista' })] }), answer({ issues: [finding({ severity: 'blocker', message: 'Somma sbagliata' })] }), verdicts({ severity: 'minor' }, { severity: 'blocker', sameAs: 1 }));
-    const r = await review();
-    assert.equal(r.merged, 1);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity]), [['Svista', 'blocker']]);
   });
 
   test('a cross review that fails leaves the reviewer findings; a reviewer call that fails fails the task', async () => {
@@ -3038,27 +3184,27 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(issues(`message = 'Errore'`)[0].severity, 'major', 'a recheck keeps the floor too');
   });
 
-  test('after a fix round one sweep reads the whole chapter with the fixed and open issues; later reviews read changed text only', async () => {
+  test('an asked sweep reads the whole chapter with the fixed and open issues; a review without the ask reads changed text only', async () => {
     samples(2);
     seedOutline([['c1', ['s1', 's2']], ['c2', ['s3']]]);
     seedRevision('s1', 'Una frase.\n\nAltro.');
     seedRevision('s2', 'Seconda sezione intatta.');
     seedRevision('s3', 'Altro capitolo.');
     ctx.db.insert('review_issues', { id: 'elsewhere', project_id: P, node_id: 's3', source: 'review', severity: 'major', category: 'correctness', quote: 'Un estremo interno', message: 'Un estremo interno non richiede la derivabilità', suggestion: '', status: 'fixed', resolution: '', created_at: now() });
-    fake.next(answer({ issues: [finding({ message: 'Ipotesi mancante' }), finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', message: 'Resta aperto' })] }), answer({ issues: [] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
-    const first = await review();
+    fake.next(answer({ issues: [finding({ message: 'Ipotesi mancante' }), finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', category: 'language', severity: 'minor', message: 'Resta aperto' })] }), answer({ issues: [] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
+    const first = await review({ sweep: true });
     done(first);
-    assert.deepEqual([first.full, first.sweep, first.samples], [true, undefined, 2]);
+    assert.deepEqual([first.full, first.sweep, first.samples, first.chapterRead], [true, undefined, 2, true], 'the first review is a whole-chapter read, not a sweep');
 
-    // Fix round: the s1 issue is fixed. The next review is the sweep: three calls on the whole chapter, minors kept.
-    fix('s1', 'Una frase.', 'Una frase corretta.\n\nAltro.');
+    // Fix round: the s1 issue is fixed. The asked review is the sweep: two calls on the whole chapter and the cross review, minors kept.
+    fix('s1', 'Una frase corretta.\n\nAltro.');
     fake.next(
       answer({ issues: [finding({ sectionId: 's2', quote: 'Seconda sezione intatta.', severity: 'minor', message: 'Stesso errore altrove' })] }),
       answer({ issues: [] }), crossNone, verdicts({ severity: 'minor' }),
     );
-    const sweep = await review();
+    const sweep = await review({ sweep: true });
     done(sweep);
-    assert.deepEqual([sweep.sweep, sweep.mode, sweep.samples, sweep.issues, sweep.minorsDropped], [true, 'sweep', 2, 1, undefined]);
+    assert.deepEqual([sweep.sweep, sweep.mode, sweep.samples, sweep.chapterRead, sweep.issues, sweep.minorsDropped], [true, 'sweep', 2, true, 1, undefined]);
     const prompt = fake.calls[4].prompt;
     assert.match(prompt, /This is a sweep after a round of fixes/);
     assert.match(prompt, /=== \[s2\] Sezione 1\.2 ===\nSeconda sezione intatta\./, 'unchanged sections are read in full');
@@ -3069,30 +3215,27 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(fake.calls[6].selection.model, 'claude-opus-5-5');
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message).sort(), ['Resta aperto', 'Stesso errore altrove']);
 
-    // The sweep's finding is fixed: the next review reads only the changed text, with one call, and no second sweep follows.
-    fix('s2', 'Seconda sezione intatta.', 'Seconda sezione corretta.');
+    // The next fix makes the chapter due again, but the review queued at the end of a generate run does not ask: one call on the changed text.
+    fix('s2', 'Seconda sezione corretta.');
     fake.next(answer({ issues: [] }));
     const after = await review();
     done(after);
-    assert.equal(after.sweep, undefined);
-    assert.equal(after.samples, 1);
+    assert.deepEqual([after.sweep, after.samples, after.chapterRead], [undefined, 1, undefined]);
     assert.match(fake.calls[8].prompt, /SINCE THE LAST REVIEW/);
     assert.equal(fake.calls.length, 9);
   });
 
-  test('the sweep keeps an open issue whose passage is still there, also in a rewritten block, and runs after a fix that changed no text', async () => {
+  test('a sweep keeps an open issue whose passage is still there, and does not delete one in a rewritten block that still holds its quote', async () => {
     seedOutline([['c1', ['s1']]]);
-    const r1 = seedRevision('s1', 'Una frase.\n\nUn passo.');
-    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    seedRevision('s1', 'Una frase.\n\nUn passo. Ancora.');
+    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', severity: 'minor', category: 'language', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
     done(await review());
-    // The first issue is closed as already resolved: no new text, yet the round had a fix, so the sweep runs.
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
+    seedRevision('s1', 'Una frase corretta.\n\nUn passo. Ancora riscritto.');
     fake.next(answer({ issues: [] }), crossNone);
-    const sweep = await review();
-    done(sweep);
-    assert.deepEqual([sweep.reused, sweep.sweep], [undefined, true]);
-    assert.equal(r1, sweep.reviewed);
-    // A later review of a rewrite that keeps the open issue's passage would replace it; the sweep did not.
+    const sweep = await review({ sweep: true });
+    assert.equal(sweep.sweep, true);
     assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
     assert.match(fake.calls[3].prompt, /ISSUES STILL OPEN[^\n]*\n- \[s1\] "Un passo\." Resta aperto/);
   });
@@ -3100,47 +3243,85 @@ describe('independent samples, the sweep after a fix round and the severity floo
   test('the sweep is not told to skip an open issue whose quote a rewrite removed, since that issue is replaced', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.\n\n2 + 2 = 5.');
-    fake.next(answer({ issues: [finding(), finding({ quote: '2 + 2 = 5.', message: 'Somma sbagliata' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    fake.next(answer({ issues: [finding(), finding({ quote: '2 + 2 = 5.', severity: 'minor', category: 'language', message: 'Somma sbagliata' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'minor' }));
     done(await review());
     ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
     ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
     seedRevision('s1', 'Una frase corretta.\n\nLa somma di 2 e 2 è 5.');
     fake.next(answer({ issues: [] }), crossNone);
-    assert.equal((await review()).sweep, true);
+    assert.equal((await review({ sweep: true })).sweep, true);
     assert.doesNotMatch(fake.calls[3].prompt, /ISSUES STILL OPEN|Somma sbagliata/);
   });
 
-  test('a sweep does not delete an open issue in a rewritten block that still holds its quote', async () => {
-    seedOutline([['c1', ['s1']]]);
-    seedRevision('s1', 'Una frase.\n\nUn passo. Ancora.');
-    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
-    done(await review());
-    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
-    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
-    seedRevision('s1', 'Una frase corretta.\n\nUn passo. Ancora riscritto.');
-    fake.next(answer({ issues: [] }), crossNone);
-    const sweep = await review();
-    assert.equal(sweep.sweep, true);
-    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
-  });
-
-  test('the sweep is not due without a fix since the last whole-chapter review, and a Full review starts a new round', async () => {
+  test('a chapter is due for a sweep when its text changed since its last whole-chapter read and no blocker or major from review is open', async () => {
     seedOutline([['c1', ['s1']]]);
     const nodes = ['c1', 's1'];
-    seedRevision('s1', 'Una frase.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'never reviewed');
+    const r1 = seedRevision('s1', 'Una frase.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r1)), false, 'never reviewed: the first review reads the whole chapter anyway');
     fake.next(answer({ issues: [finding()] }), crossNone, verdicts({ severity: 'major' }));
     done(await review());
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'nothing fixed yet');
-    fix('s1', 'Una frase.', 'Una frase corretta.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), true);
-    fake.next(answer({ issues: [] }), crossNone);
-    done(await review());
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), false, 'one sweep per round');
-    fake.next(answer({ issues: [finding({ quote: 'Una frase corretta.' })] }), verdicts({ severity: 'major' }));
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r1)), false, 'an open major from review, and the text was just read');
+    const r2 = fix('s1', 'Una frase corretta.');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true, 'the text changed since the read and nothing serious is open');
+    assert.equal(getProjectSummary(ctx, P).review!.sweepsDue, 1);
+    // An open major from review blocks it; one from the exercise check or lint does not.
+    ctx.db.insert('review_issues', { id: 'open1', project_id: P, node_id: 's1', source: 'review', severity: 'major', category: 'correctness', quote: 'Una frase', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), false);
+    ctx.db.run(`UPDATE review_issues SET source = 'lint' WHERE id = 'open1'`);
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true);
+    ctx.db.run(`DELETE FROM review_issues WHERE id = 'open1'`);
+    // A Full review reads section by section with one call each: it is not the read a sweep counts from.
+    fake.next(answer({ issues: [] }));
     done(await review({ mode: 'full' }));
-    fix('s1', 'Una frase corretta.', 'Una frase giusta.');
-    assert.equal(sweepDue(ctx, P, 'c1', nodes), true, 'a Full review and its fixes get their own sweep');
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), true);
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review({ sweep: true });
+    done(sweep);
+    assert.equal(sweep.sweep, true);
+    assert.equal(sweepDue(ctx, P, 'c1', nodes, heads(r2)), false, 'one sweep per change of the text');
+    assert.equal(getProjectSummary(ctx, P).review!.sweepsDue, 0);
+  });
+
+  test('reviews stored before the whole-chapter reads counted do not count: an old book is due, and the asked sweep runs on unchanged text', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    // What a review stored before #133 looks like: one call, no chapterRead.
+    startTask('chapter.review', { chapterId: 'c1' });
+    done({ reviewed: r1, full: true, issues: 0 });
+    assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true);
+    // Without the ask, unchanged text is not read again.
+    assert.equal((await review()).reused, true);
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review({ sweep: true });
+    assert.deepEqual([sweep.reused, sweep.sweep, sweep.chapterRead], [undefined, true, true]);
+  });
+
+  test('a whole-chapter read with a reviewer call on the fallback model records the models and does not count as the read', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.');
+    // The first reviewer call hits the Codex limit: both samples run on the fallback (Sonnet).
+    fake.next(quota(), answer({ issues: [] }), answer({ issues: [] }), crossNone);
+    const first = await review();
+    done(first);
+    assert.deepEqual([first.samples, first.sampleModels, first.chapterRead], [2, ['claude-sonnet-5-5', 'claude-sonnet-5-5'], undefined]);
+    assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true, 'the chapter still needs a read on the reviewer model');
+  });
+
+  test('only a review run started with the sweep asks for it; the review at the end of a generate run never does', () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    // startRun wakes the queue; the test only looks at the planned tasks.
+    (ctx.queue as unknown as { wake(): void }).wake = () => undefined;
+    const inputs = (scope: Record<string, unknown>) => {
+      const run = startRun(ctx, P, 'review', scope);
+      return ctx.db.all<{ input: string }>(`SELECT input FROM tasks WHERE run_id = ? AND kind = 'chapter.review'`, run.id).map((t) => JSON.parse(t.input));
+    };
+    assert.deepEqual(inputs({ sweep: true }), [{ chapterId: 'c1', sweep: true }]);
+    assert.deepEqual(inputs({}), [{ chapterId: 'c1' }]);
+    assert.deepEqual(inputs({ sweep: true, reviewMode: 'full' }), [{ chapterId: 'c1', mode: 'full' }]);
+    assert.ok(generateSpecs(ctx, P).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
+    assert.ok(generateSpecs(ctx, P, undefined, ['s1']).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
   });
 
   test('a fix of a wrong formula rewrites its body under the same key', () => {

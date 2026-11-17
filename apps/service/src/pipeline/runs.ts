@@ -13,6 +13,8 @@ export interface RunScope {
   chapterIds?: string[]; nodeIds?: string[]; missingOnly?: boolean; issueIds?: string[]; questionIds?: string[]; instruction?: string; selection?: string; reviewMode?: 'full' | 'recheck';
   /** review runs: check again every generated question that is in a chapter of the book (instead of `questionIds`). */
   generatedQuestions?: boolean;
+  /** review runs: chapters due for a sweep get one (see sweepDue). The author confirms its cost first; nothing else sets it. */
+  sweep?: boolean;
   /** align runs: apply this report (the chosen finding indexes; empty means all) instead of checking the book. */
   align?: { reportId: string; findings?: number[] };
   /** prepare runs: split this exam file with the bulk model instead of the text rules. */
@@ -103,7 +105,7 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
           .map((c) => ({
             kind: 'chapter.review', key: `review:${c.id}`, pool: 'reviewer',
             label: scope.reviewMode === 'full' ? `Full review "${c.title}"` : scope.reviewMode === 'recheck' ? `Second opinion on "${c.title}"` : `Review "${c.title}"`,
-            input: { chapterId: c.id, ...(scope.reviewMode ? { mode: scope.reviewMode } : {}) },
+            input: { chapterId: c.id, ...(scope.reviewMode ? { mode: scope.reviewMode } : scope.sweep ? { sweep: true } : {}) },
           }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
       runId = ctx.queue.createRun(projectId, 'review', specs);

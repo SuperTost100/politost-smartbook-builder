@@ -128,13 +128,13 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
     onSuccess: () => { toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
-  // "Accept anyway" saves the stored graph again with its blocking lint findings accepted, so it ships as it is.
+  // "Accept anyway" saves the stored graph again with all its lint findings accepted, warnings included, so it ships as it is.
   const accept = useMutation({
     mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: e.payload, acceptLint: true } }),
     onSuccess: () => { toast('Accepted'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
-  const lintFailed = e.kind === 'graph' && e.checks.some((c) => c.method === 'lint' && !c.ok);
+  const lintOpen = e.kind === 'graph' && e.lintOpen.length > 0;
   const remove = useMutation({
     mutationFn: () => api('DELETE /api/enrichments/:eid', { params: { eid: e.id } }),
     onSuccess: () => { toast('Deleted'); setConfirm(false); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
@@ -162,9 +162,9 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
           {e.kind === 'ide' && code && (<div><div className="ui-meta">Code preview</div><pre className="ui-pre ex-code">{code}</pre></div>)}
           {e.kind === 'graph' && <p className="ui-muted">Graphs are evaluated when the book is checked and drawn in the reader. Figures of origin plot appear on the Figures tab.</p>}
           <div><div className="ui-meta">Check results</div><Checks checks={e.checks} /></div>
-          {lintFailed && !dirty && (
+          {lintOpen && !dirty && (
             <div className="ui-stack">
-              <p className="ui-muted">If the graph is right as it is, for example two curves that coincide on purpose, accept the lint findings and it goes into the book.</p>
+              <p className="ui-muted">If the graph is right as it is (two curves that coincide on purpose, a warning that does not apply), accept its lint findings. They stop failing the graph and leave the export report.</p>
               <div><button type="button" className="ui-btn ui-btn--sm" disabled={accept.isPending} onClick={() => accept.mutate()}>Accept anyway</button></div>
             </div>
           )}

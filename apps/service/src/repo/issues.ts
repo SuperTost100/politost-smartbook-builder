@@ -151,6 +151,21 @@ export function countOpenSerious(ctx: AppContext, projectId: string, nodeIds?: s
 }
 
 /**
+ * A chapter is due for a sweep (a new whole-chapter read by `reviewSamples` reviewer calls) when it was reviewed before, its
+ * text (`current`: the sorted ids of its section heads) changed since its last whole-chapter read, or it never had one, and no
+ * blocker or major from review is open or proposed in it. A read counts only when it recorded `chapterRead`: the reads before
+ * #133 were one call, and a read with a sample on the reviewer's fallback model is not the read the sweep stands for.
+ */
+export function sweepDue(ctx: AppContext, projectId: string, chapterId: string, nodeIds: string[], current: string): boolean {
+  const inNodes = nodeIds.map(() => '?').join(',');
+  const review = `project_id = ? AND kind = 'chapter.review' AND state = 'succeeded' AND json_extract(input, '$.chapterId') = ? AND json_extract(result, '$.reviewed') IS NOT NULL`;
+  if (!current || !ctx.db.get(`SELECT 1 FROM tasks WHERE ${review} LIMIT 1`, projectId, chapterId)) return false;
+  if (ctx.db.get(`SELECT 1 FROM review_issues WHERE project_id = ? AND source = 'review' AND severity IN ('blocker', 'major') AND status IN ('open', 'proposed') AND node_id IN (${inNodes}) LIMIT 1`, projectId, ...nodeIds)) return false;
+  const read = ctx.db.get<Rec>(`SELECT json_extract(result, '$.reviewed') AS reviewed FROM tasks WHERE ${review} AND json_extract(result, '$.chapterRead') = 1 ORDER BY finished_at DESC, rowid DESC LIMIT 1`, projectId, chapterId);
+  return read?.reviewed !== current;
+}
+
+/**
  * The state of the review loop for the book (see ReviewState). A chapter counts as reviewed when its latest review read
  * exactly the section revisions that are current now, so text changed after a review makes the book unreviewed again.
  * Null when no chapter was ever reviewed.
@@ -166,11 +181,10 @@ export function reviewState(ctx: AppContext, projectId: string): ReviewState | n
   const outlineRow = ctx.db.get<Rec>('SELECT o.outline FROM outline_revisions o JOIN projects p ON p.outline_rev_id = o.id WHERE p.id = ?', projectId);
   const chapters = json<{ chapters?: { id: string; sections?: { id: string }[] }[] }>(outlineRow?.outline, {}).chapters ?? [];
   const heads = new Map(ctx.db.all<Rec>(`SELECT node_id, id FROM content_revisions WHERE project_id = ? AND status = 'current' AND kind = 'section'`, projectId).map((r) => [r.node_id as string, r.id as string]));
-  const reviewedNow = chapters.every((c) => {
-    const current = (c.sections ?? []).map((s) => heads.get(s.id)).filter((id): id is string => !!id).sort().join(',');
-    return !current || latest.get(c.id)?.reviewed === current;
-  });
+  const current = (c: (typeof chapters)[number]) => (c.sections ?? []).map((s) => heads.get(s.id)).filter((id): id is string => !!id).sort().join(',');
+  const reviewedNow = chapters.every((c) => !current(c) || latest.get(c.id)?.reviewed === current(c));
+  const sweepsDue = chapters.filter((c) => sweepDue(ctx, projectId, c.id, [c.id, ...(c.sections ?? []).map((s) => s.id)], current(c))).length;
   const openSerious = countOpenSerious(ctx, projectId);
   const reviewedAt = [...latest.values()].map((l) => l.finishedAt).sort().at(-1)!;
-  return { clean: reviewedNow && openSerious === 0, openSerious, reviewedAt };
+  return { clean: reviewedNow && openSerious === 0, openSerious, reviewedAt, sweepsDue };
 }

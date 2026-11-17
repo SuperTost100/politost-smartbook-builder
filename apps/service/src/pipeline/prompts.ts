@@ -860,15 +860,16 @@ Return JSON: verdict, reason, id (kebab-case), title and description in ${langua
 export const graphCheckSchema = z.object({
   traces: z.array(z.object({
     label: z.string(),
-    expected: codeString().describe('the curve this trace must show, as an expression in x (log = natural log, log10 decimal; C, C1, C2 for constants the section gives no value for); empty when the trace is not a curve y = f(x)'),
-    problem: z.string().describe('what in the label, the axes or the source contradicts the section; empty when nothing does'),
+    expected: codeString().describe('the curve this trace must show, as an expression in x (log = natural log, log10 decimal; C, C1, C2 for constants the section gives no value for, one value each in the whole graph); empty when the trace is not a curve y = f(x)'),
+    problem: z.string().describe('a contradiction between the section and this trace (its label, interval, values or source) or the axes; empty when there is none, never a remark'),
   })),
   fit: z.enum(['fits', 'not-a-function-graph']).describe('"not-a-function-graph" when the section states no relation that this plane graph can show'),
 });
 
-export function graphCheckPrompt(p: { language: string; section: string; graph: { title: string; xLabel: string; yLabel: string; traces: { label: string; source?: string }[] } }) {
+export function graphCheckPrompt(p: { language: string; section: string; graph: { title: string; xLabel: string; yLabel: string; traces: { label: string; source?: string; where: string }[] } }) {
   return {
-    system: `You check an interactive graph of a textbook in ${languageName(p.language)} against the section it illustrates. You are not shown the graph's data. From the section's own formulas and numbers, write for each trace the function y = f(x) it must show, with x the quantity on the x axis. Use x, numbers, + - * / ^, parentheses, e, pi and sin cos tan asin acos atan exp log log10 sqrt abs floor; log is the natural logarithm and log10 the decimal one. When the curve needs a constant the section gives no value for (an additive constant, a reference level), write it as C, or C1 and C2 for two, and the builder fits it to the data. Leave "expected" empty for a trace that is not a curve y = f(x) (points, a vertical line, bars, a parametric curve). Report anything in a label, an axis or a source that contradicts the section.`,
+    system: `You check an interactive graph of a textbook in ${languageName(p.language)} against the section it illustrates. You are not shown the formulas the graph was drawn with. From the section's own formulas and numbers, write for each trace the function y = f(x) it must show, with x the quantity on the x axis. Use x, numbers, + - * / ^, parentheses, e, pi and sin cos tan asin acos atan exp log log10 sqrt abs floor; log is the natural logarithm and log10 the decimal one. When the curve needs a constant the section gives no value for (an additive constant, a reference level), write it as C, or C1 and C2 for two, and the builder fits it to the data. C, C1 and C2 each have one value in the whole graph: when traces differ in a constant, write each trace's own value as a number. Leave "expected" empty for a trace that is not a curve y = f(x) (points, a vertical line, bars, a parametric curve).
+Each trace comes with its kind and where it is drawn: the x interval of a curve, the values of points, bars and vertical lines. Use "problem" only for a contradiction with the section: a label, sign, factor or formula the section does not state, a curve drawn on an interval where the section's law does not hold (a branch on the wrong side of the axis, a concentration below zero), a value that differs from the section's, an axis that names the wrong quantity. Otherwise leave "problem" empty: it is not for notes, and a trace that is not a curve y = f(x) is not a problem.`,
     prompt: `Section text:
 ${p.section}
 
@@ -876,7 +877,7 @@ Graph: "${p.graph.title}"
 x axis: ${p.graph.xLabel}
 y axis: ${p.graph.yLabel}
 Traces:
-${p.graph.traces.map((t, i) => `${i + 1}. ${t.label}${t.source ? `   (source: ${t.source})` : ''}`).join('\n')}
+${p.graph.traces.map((t, i) => `${i + 1}. ${t.label}: ${t.where}${t.source ? `   (source: ${t.source})` : ''}`).join('\n')}
 
 Return JSON: traces (label, expected, problem) in the same order, and fit.`,
   };
@@ -964,8 +965,8 @@ export const secondOpinionSchema = z.object({
     index: z.number().int().min(1).describe('the number of the finding in the list'),
     verdict: z.enum(['real', 'not-real']),
     severity: z.enum(['blocker', 'major', 'minor']).describe('the severity it deserves; never higher than the one given'),
-    reason: z.string().describe('one short sentence'),
-    sameAs: z.number().int().min(1).nullable().optional().describe('the number of an earlier finding in the list that reports the same problem in the same passage; null otherwise'),
+    reason: z.string().describe('one short sentence; for a finding with several points, say which points hold'),
+    points: z.array(z.number().int().min(1)).optional().describe('for a finding with several points: the numbers of the points that hold (2 for point 3.2 of finding 3)'),
   })),
 });
 
@@ -977,9 +978,9 @@ export function secondOpinionPrompt(p: { language: string; notation?: string; ex
 
 A finding is not real when the text already says what the finding asks for (here or in an earlier passage it builds on), when it misreads the text, when its counterexample needs a case the setting excludes or that the course never meets (a negative angular frequency, an open system in a chapter about closed ones, dividing by a quantity that is nonzero in the setting), or when it is a preference about wording. A finding that the text writes a symbol differently from the exam papers is real, and not a preference about wording, when the exam symbols below use another symbol for that quantity and the notation fixed for the whole book defines none for it. When the book's notation defines the symbol, the finding is not real.
 
-Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.
+A finding may list several points that independent reviewers raised about the same passage (numbered 3.1, 3.2, ...). They can be different problems: check each one. The finding is real when any of its points is real; say in the reason which points hold and list their numbers in "points". Its severity is that of the points that hold.
 
-Several reviewers may have read the same text, so the list can report one problem more than once. When a finding reports the same problem in the same passage as an earlier finding in the list, set sameAs to the number of that earlier finding; otherwise set it to null. Still give every finding its own verdict and severity.`,
+Severity: blocker only if a student who follows the text gets a wrong result in the setting the text describes; major for a missing hypothesis that matters, an unsupported claim, a misleading explanation or a symbol that differs from the exam papers in the way described above; minor for everything else. You may keep or lower the severity, never raise it. Be strict about mathematics and physics: a real error stays real even when it is small.`,
     prompt: `Notation fixed for the whole book:
 ${p.notation || '(standard)'}
 ${p.examSymbols?.length ? `\nSymbols used in the exam papers on this chapter's topics: ${p.examSymbols.join(', ')}.\n` : ''}
@@ -992,7 +993,7 @@ ${p.text}
 EVIDENCE the writer had (verbatim source passages):
 ${p.evidence || '(none)'}
 
-Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "...", "sameAs": <number>|null}]} with one entry per finding.`,
+Return JSON {"findings": [{"index": <number>, "verdict": "real"|"not-real", "severity": "blocker"|"major"|"minor", "reason": "...", "points": [<numbers of the points that hold, only for a finding with several points>]}]} with one entry per finding.`,
   };
 }
 
