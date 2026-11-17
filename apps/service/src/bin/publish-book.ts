@@ -33,7 +33,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const value = (name: string) => { const i = args.indexOf(`--${name}`); const v = i >= 0 ? args[i + 1] : undefined; return v && !v.startsWith('--') ? v : undefined; };
   const projectId = value('project');
   const books = value('books');
-  if (!projectId || !books) {
+  if (!projectId || !books || (args.includes('--version') && !value('version'))) {
     console.log('Usage: npm run publish-book -- --project <id> --books <books checkout> [--version x.y.z] [--dry-run] [--data-dir dir]');
     process.exit(1);
   }

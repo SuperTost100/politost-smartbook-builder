@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterEach, beforeEach, test } from 'node:test';
@@ -136,6 +136,18 @@ test('publish stops on a hand edit and prints the back-port dry run, even when t
   assert.deepEqual(publish(projectId).refusals, []);
 });
 
+test('a symbolic link in the book folder is refused before anything is read or written', async () => {
+  const { projectId, folder } = await book();
+  publish(projectId);
+  const outside = join(books, 'fuori.md');
+  writeFileSync(outside, 'non toccare');
+  const chapter = chapterOf(folder);
+  rmSync(join(folder, chapter));
+  symlinkSync(outside, join(folder, chapter));
+  assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /is a symbolic link/);
+  assert.equal(readFileSync(outside, 'utf8'), 'non toccare');
+});
+
 test('a change made in the builder since the last publish is not a hand edit', async () => {
   const { projectId, folder } = await book();
   publish(projectId);
@@ -152,7 +164,9 @@ test('the CONTRIBUTING sequence: a fix made in the books folder, back-ported, th
   const fixed = readFileSync(join(folder, chapter), 'utf8').replace('vicino a un punto', 'in prossimità di un punto');
   assert.notEqual(fixed, readFileSync(join(folder, chapter), 'utf8'));
   writeFileSync(join(folder, chapter), fixed);
-  assert.deepEqual(publish(projectId, { dryRun: true }).handEdited, [chapter], 'before the back-port the fix is a hand edit');
+  // The contributor also raises the version, as CONTRIBUTING asks of every change.
+  writeFileSync(join(folder, 'smartbook.json'), readFileSync(join(folder, 'smartbook.json'), 'utf8').replace('"version": "1.0.0"', '"version": "1.0.1"'));
+  assert.deepEqual(publish(projectId, { dryRun: true }).handEdited, [chapter], 'before the back-port the fix is a hand edit, the version is not');
 
   const back = backportProject(t.ctx, projectId, folder);
   assert.equal(back.written, true, JSON.stringify(back.units));
@@ -160,7 +174,7 @@ test('the CONTRIBUTING sequence: a fix made in the books folder, back-ported, th
   const p = publish(projectId);
   assert.deepEqual(p.refusals, []);
   assert.equal(readFileSync(join(folder, chapter), 'utf8'), fixed, 'the published text is the contributor\'s');
-  assert.equal(versionIn(folder), '1.0.1');
+  assert.equal(versionIn(folder), '1.0.2');
   assert.equal(manifestOf(folder).exportId, listExports(t.ctx, projectId)[0].id);
 });
 
