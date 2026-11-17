@@ -12,12 +12,13 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, verifyVerdict } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, verifyVerdict, type VerifyAnswer } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifyPrompt, verifySchema } from './prompts.ts';
+import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, PROBLEM_KINDS, reviewSchema, verifyPrompt, verifySchema } from './prompts.ts';
+import { toProviderSchema } from '../llm/schema.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
@@ -390,26 +391,21 @@ describe('5b. a corrected solution of an authentic exam question leaves a trace'
 });
 
 describe('15. disagreement is a blocker', () => {
-  test('agrees=false with no problems, or only minor/major ones, adds a blocker; an existing blocker is not duplicated', async () => {
+  test('a different result adds a blocker next to the listed problems, which are major at most', async () => {
     const a = q();
     fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.deepEqual(issues(`question_id = '${a}'`).map((i) => i.severity), ['blocker']);
 
     const b = q();
-    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }));
+    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ kind: 'wrong-value', message: 'm', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ kind: 'wrong-value', message: 'm', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.severity).sort(), ['blocker', 'major']);
+    assert.equal(row(b).status, 'issue');
 
-    const c = q();
-    fake.next(answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '2', resultsAgree: false, agrees: false, problems: [{ severity: 'blocker', message: 'wrong', suggestion: 's' }] }));
-    await questionVerify(ctx, startTask('question.verify', { questionId: c }));
-    assert.deepEqual(issues(`question_id = '${c}'`).map((i) => i.severity), ['blocker']);
-    assert.equal(row(c).status, 'issue');
-
-    // Same result, gap in the argument: the reviewer's severity stands, no extra blocker.
+    // Same result, a wrong step: no extra blocker.
     const d = q();
-    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ severity: 'major', message: 'gap', suggestion: 's' }] }));
+    fake.next(answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ kind: 'wrong-method', message: 'gap', suggestion: 's' }] }), answer({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: false, problems: [{ kind: 'wrong-method', message: 'gap', suggestion: 's' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: d }));
     assert.deepEqual(issues(`question_id = '${d}'`).map((i) => i.severity), ['major']);
   });
@@ -478,7 +474,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
 });
 
 describe('15c. the exercise check asks whether the problem is well posed', () => {
-  const good = { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] as { severity: 'blocker' | 'major' | 'minor'; message: string; suggestion: string }[] };
+  const good = { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] as VerifyAnswer['problems'] };
   // Fisica E8.4: principal moments 3, 3 and 12 kg m^2 break the triangle inequality, and both models agree on the ellipsoid.
   const tensor = 'I tensore d\'inerzia è diag(3, 3, 12) kg m². Scrivi l\'ellissoide d\'inerzia.';
   const triangle = (a: number, b: number, c: number) => `I = sorted([${a}, ${b}, ${c}])\nprint("CONSISTENT" if I[2] <= I[0] + I[1] else f"INCONSISTENT: {I[2]} > {I[0]} + {I[1]}")`;
@@ -499,13 +495,13 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     const mismatch = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
     assert.equal(verifyVerdict(good, null, consistent).ok, true);
     assert.equal(verifyVerdict(good, null, null).ok, true, 'no program: the prompt allows it for a problem with no numeric data');
-    assert.equal(verifyVerdict({ ...good, problems: [{ severity: 'minor', message: 'm', suggestion: 's' }] }, null, consistent).ok, true);
+    assert.equal(verifyVerdict({ ...good, problems: [{ kind: 'rigor', message: 'm', suggestion: 's' }] }, null, consistent).ok, true);
     assert.equal(verifyVerdict({ ...good, dataProblems: ['', ' '] }, null, consistent).ok, true, 'blank entries are not problems');
     const blocked: [string, ReturnType<typeof verifyVerdict>][] = [
       ['agrees', verifyVerdict({ ...good, agrees: false }, null, consistent)],
       ['resultsAgree', verifyVerdict({ ...good, resultsAgree: false }, null, consistent)],
       ['numeric mismatch', verifyVerdict(good, { compared: [mismatch], mismatches: [mismatch], complete: true }, consistent)],
-      ['major problem', verifyVerdict({ ...good, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }, null, consistent)],
+      ['major problem', verifyVerdict({ ...good, problems: [{ kind: 'wrong-unit', message: 'm', suggestion: 's' }] }, null, consistent)],
       ['wellPosed', verifyVerdict({ ...good, wellPosed: false, wellPosedReason: 'Gli atomi di O risultano 3,75.' }, null, consistent)],
       ['dataProblems', verifyVerdict({ ...good, dataProblems: ['La massa molare 60 non è quella di C3H6O.'] }, null, consistent)],
       ['INCONSISTENT', verifyVerdict(good, null, { verdict: 'inconsistent', detail: 'INCONSISTENT: 12 > 3 + 3' })],
@@ -572,7 +568,7 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
 
 describe('15f. the Python recompute settles numbers, and a verified question files no issue', () => {
   const verdict = (o: Record<string, unknown>) => answer({ ...posed, independentAnswer: '-', resultsAgree: true, agrees: true, problems: [], ...o });
-  const minor = (message: string) => ({ severity: 'minor', message, suggestion: 's' });
+  const minor = (message: string) => ({ kind: 'rigor', message, suggestion: 's' });
   const checksOf = (id: string) => json<{ method: string; ok: boolean; detail: string }[]>(row(id).checks, []);
 
   test('a last-digit "different result" is not a blocker when the recompute matched every stated value (339 N, 79,9 %, 79,7 %)', async () => {
@@ -627,17 +623,82 @@ describe('15f. the Python recompute settles numbers, and a verified question fil
     assert.deepEqual(issues(`question_id = '${id}'`), []);
     assert.match(checksOf(id)[0]!.detail, /Minor notes: Non dice che il piano è semplicemente connesso\. Nomina la norma\./);
     const bad = q();
-    const failing = verdict({ problems: [{ severity: 'major', message: 'Il risultato richiesto non è mai scritto.', suggestion: 's' }, minor('Nomina la norma.')] });
+    const failing = verdict({ problems: [{ kind: 'answer-missing', message: 'Il risultato richiesto non è mai scritto.', suggestion: 's' }, minor('Nomina la norma.')] });
     fake.next(failing, failing);
     await questionVerify(ctx, startTask('question.verify', { questionId: bad }));
     assert.deepEqual(issues(`question_id = '${bad}'`).map((i) => i.severity).sort(), ['major', 'minor']);
   });
 
-  test('the prompt tells the checker what a formula reference is and what counts as major', () => {
+  test('the prompt tells the checker what a formula reference is and explains each kind of problem', () => {
     const { system, prompt } = verifyPrompt({ language: 'it', statement: 's', solution: 'v' });
     assert.match(prompt, /\{\{formula:@key\}\}.*cross-references, not placeholders/s);
-    assert.match(prompt, /never states, is at least major/);
+    for (const kind of PROBLEM_KINDS) assert.match(prompt, new RegExp(`^- ${kind}: `, 'm'), kind);
+    assert.match(prompt, /answer-missing: .*Use it only when the statement asks for that item in so many words/);
     assert.match(system, /Do not report rigor or wording/);
+  });
+});
+
+describe('15h. the model names the kind of each problem and the code sets its severity', () => {
+  const good = { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [] as VerifyAnswer['problems'] };
+  const problem = (kind: VerifyAnswer['problems'][number]['kind'], message = 'm') => ({ kind, message, suggestion: 's' });
+
+  test('each kind maps to its severity, and a major kind blocks whatever the model\'s agrees says', () => {
+    const severities = Object.fromEntries(PROBLEM_KINDS.map((k) => [k, problemSeverity(k)]));
+    assert.deepEqual(severities, {
+      'wrong-value': 'major', 'wrong-unit': 'major', 'answer-missing': 'major', 'inconsistent-statement': 'major', 'wrong-method': 'major',
+      rigor: 'minor', wording: 'minor', other: 'minor',
+    });
+    for (const kind of PROBLEM_KINDS) {
+      const v = verifyVerdict({ ...good, problems: [problem(kind)] }, null, null);
+      assert.equal(v.ok, severities[kind] === 'minor', kind);
+      assert.deepEqual(v.problems.map((p) => p.severity), [severities[kind]], kind);
+    }
+    // Fisica F1-4: the checker said agrees with "Q = 450R J" listed; the kind blocks it.
+    assert.equal(verifyVerdict({ ...good, problems: [problem('wrong-unit', 'Q = 450R J non è in joule.')] }, null, null).ok, false);
+    // A1: agrees false over two rigor nits, which stay notes.
+    assert.equal(verifyVerdict({ ...good, agrees: false, problems: [problem('rigor'), problem('wording')] }, null, null).ok, true);
+    assert.equal(verifyVerdict({ ...good, agrees: false }, null, null).ok, false, 'a disagreement with nothing named still blocks');
+  });
+
+  test('a wrong-value problem is dropped when the recompute compared every stated value without a mismatch, and kept otherwise', () => {
+    const match = { name: 'x', stated: '2,7017', computed: '2.70178' };
+    const settled = { compared: [match], mismatches: [], complete: true };
+    const wrongValue = { ...good, resultsAgree: false, agrees: false, problems: [problem('wrong-value', '2,7017 è troncato.'), problem('rigor', 'Nomina la norma.')] };
+    const v = verifyVerdict(wrongValue, settled, null);
+    assert.equal(v.ok, true);
+    assert.deepEqual(v.problems.map((p) => p.message), ['Nomina la norma.']);
+    assert.equal(verifyVerdict(wrongValue, { ...settled, complete: false }, null).ok, false, 'a recompute that could not read every value settles nothing');
+    assert.equal(verifyVerdict(wrongValue, null, null).ok, false, 'no recompute: the model\'s word stands');
+    assert.equal(verifyVerdict({ ...wrongValue, problems: [problem('wrong-unit')] }, settled, null).ok, false, 'only wrong-value is settled by the numbers');
+  });
+
+  test('in the handler: a wrong-value cleared by the recompute files nothing and makes no second call; an answer-missing blocks', async () => {
+    const id = q({ statement: 'Calcola il rapporto.', solution: 'Il rapporto è 3,331.' });
+    const calls = fake.calls.length;
+    fake.next(answer({ ...good, independentAnswer: '3,330', resultsAgree: false, agrees: false, problems: [problem('wrong-value', '40,00/12,01 = 3,330, non 3,331.')], computation: 'print(f"r = {40.00/12.01}")', statedValues: [{ name: 'r', value: '3,331' }] }));
+    assert.deepEqual(await questionVerify(ctx, startTask('question.verify', { questionId: id })), { ok: true, problems: 0, recomputed: 1, mismatches: 0 });
+    assert.equal(fake.calls.length, calls + 1);
+    assert.equal(row(id).status, 'verified');
+    assert.deepEqual(issues(`question_id = '${id}'`), []);
+
+    const missing = q({ statement: 'Bilancia la reazione e calcola la massa.', solution: 'La massa è 3 g.' });
+    const a = answer({ ...good, problems: [problem('answer-missing', 'L\'equazione bilanciata non è mai scritta.')] });
+    fake.next(a, a);
+    await questionVerify(ctx, startTask('question.verify', { questionId: missing }));
+    assert.equal(row(missing).status, 'issue');
+    assert.deepEqual(issues(`question_id = '${missing}'`).map((i) => [i.severity, i.message]), [['major', 'L\'equazione bilanciata non è mai scritta.']]);
+  });
+
+  test('an answer written before problem kinds still parses: a minor reads as other, anything above blocks as wrong-method', () => {
+    const old = verifySchema.parse({ ...good, consistency: '', problems: [
+      { severity: 'minor', message: 'a', suggestion: 's' }, { severity: 'major', message: 'b', suggestion: 's' }, { severity: 'blocker', message: 'c', suggestion: 's' },
+    ] });
+    assert.deepEqual(old.problems.map((p) => p.kind), ['other', 'wrong-method', 'wrong-method']);
+    assert.deepEqual(verifySchema.parse({ ...good, problems: [{ kind: 'rigor', severity: 'major', message: 'a', suggestion: 's' }] }).problems, [{ kind: 'rigor', message: 'a', suggestion: 's' }], 'the model\'s own severity is ignored');
+    assert.equal(verifySchema.safeParse({ ...good, problems: [{ kind: 'notation', message: 'a', suggestion: 's' }] }).success, false);
+    const sent = JSON.stringify(toProviderSchema(verifySchema));
+    assert.doesNotMatch(sent, /severity/, 'the model is not asked for a severity');
+    assert.match(sent, /"wrong-value"/);
   });
 });
 
@@ -660,7 +721,7 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     fake.next(...check);
     return { fixed, checked: await questionVerify(ctx, verify) };
   }
-  const fails = answer({ ...posed, independentAnswer: '9,03', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'Ora il risultato è 9,03, ma è 9,02.', suggestion: 's' }] });
+  const fails = answer({ ...posed, independentAnswer: '9,03', resultsAgree: false, agrees: false, problems: [{ kind: 'wrong-value', message: 'Ora il risultato è 9,03, ma è 9,02.', suggestion: 's' }] });
   const passes = answer({ ...posed, independentAnswer: '9,02', resultsAgree: true, agrees: true, problems: [] });
 
   test('the check after a fix fails: the text and status come back from question_revisions, and the closed issues reopen with the reason', async () => {

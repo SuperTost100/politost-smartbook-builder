@@ -734,11 +734,24 @@ Copy "Esercizio <number>" of this session for each listed number: its statement 
   };
 }
 
+/**
+ * What kind of problem the exercise check found. The model names the kind and the code sets the severity from it
+ * (`problemSeverity`): Sonnet rated "Q = 450R J" and a balanced equation never written as minor, whatever the prompt said.
+ */
+export const PROBLEM_KINDS = ['wrong-value', 'wrong-unit', 'answer-missing', 'inconsistent-statement', 'wrong-method', 'rigor', 'wording', 'other'] as const;
+export type ProblemKind = (typeof PROBLEM_KINDS)[number];
+
+const verifyProblem = z.object({ kind: z.enum(PROBLEM_KINDS), message: z.string(), suggestion: z.string() });
+
 export const verifySchema = z.object({
   independentAnswer: z.string(),
   resultsAgree: z.boolean().describe('the final results of the given solution match yours'),
   agrees: z.boolean().describe('results match and the reasoning has no major gap'),
-  problems: z.array(z.object({ severity: z.enum(['blocker', 'major', 'minor']), message: z.string(), suggestion: z.string() })),
+  // An answer written before problem kinds has a severity instead: a minor reads as "other", anything above as "wrong-method",
+  // so it blocks as it did.
+  problems: z.array(z.preprocess((p) => p && typeof p === 'object' && !('kind' in p) && 'severity' in p
+    ? { ...p, kind: (p as { severity: unknown }).severity === 'minor' ? 'other' : 'wrong-method' }
+    : p, verifyProblem)),
   computation: codeString().optional().describe('Python that recomputes numeric final results, or empty'),
   statedValues: z.array(z.object({ name: z.string(), value: z.string() })).optional().describe('the final numeric results the given solution states, one per printed line of the computation'),
   wellPosed: z.boolean().describe('the data of the STATEMENT are consistent and possible, and they determine the requested answer'),
@@ -757,7 +770,15 @@ ${p.statement}
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with severity, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right. A wrong number or unit in a result, or an answer the statement asks for that the solution never states, is at least major.
+Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with kind, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right. The kind is one of:
+- wrong-value: a number in the solution or its answer is wrong (for example 1,002·10⁻¹⁰ m where the data give 1,001·10⁻¹⁰ m).
+- wrong-unit: a result has a wrong or missing unit (for example "Q = 450R J", which is not in joules).
+- answer-missing: something the statement explicitly asks for is never stated in the solution (for example it asks for the balanced equation and the solution never writes it). Use it only when the statement asks for that item in so many words.
+- inconsistent-statement: the data contradict each other, or the problem has no solution as posed (for example a massless, frictionless piston at rest with different pressures on its two sides).
+- wrong-method: a step is mathematically or physically wrong (for example a law applied outside its hypotheses, which changes the result).
+- rigor: a hypothesis or a check an expert would state, which does not change the result (for example "say that x ≠ −3").
+- wording: phrasing, notation or presentation.
+- other: anything else.
 
 The text may contain {{formula:@key}} or {{formula:key}}, which point to a numbered formula of the book, and links whose target starts with ref: (for example [Serie di funzioni](ref:section/...)), which point to another part of the book. The reader shows them as links: they are cross-references, not placeholders, and not problems.
 
