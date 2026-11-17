@@ -17,7 +17,7 @@ import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './p
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
 import { setStockDeps } from '../figures/stock.ts';
-import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifySchema } from './prompts.ts';
+import { examReadParser, generatedQuestionsSchema, parseQuestionText, patchPrompt, reviewSchema, verifyPrompt, verifySchema } from './prompts.ts';
 import { generateSpecs, startRun } from './runs.ts';
 import { registerHandlers } from './index.ts';
 import { computePriorities } from './prepare.ts';
@@ -248,7 +248,7 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
     const iid = lintIssue(id);
     fake.next(answer({ statement: 'Calcola.', hint: '', solution: `${clean} acu` }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
-    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal((r as { skipped?: string }).skipped, 'the repair changed words or numbers');
     assert.equal(row(id).solution, broken);
     assert.equal(row(id).origin, 'authentic');
     const [issue] = issues(`id = '${iid}'`);
@@ -261,7 +261,7 @@ c) $E = 0{,}742\,\mu\mathrm{J}$.`;
     const iid = lintIssue(id);
     fake.next(answer({ statement: 'Calcola.', hint: '', solution: '' }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
-    assert.deepEqual(r, { skipped: 'the repair changed words or numbers' });
+    assert.equal((r as { skipped?: string }).skipped, 'the repair changed words or numbers');
     assert.equal(row(id).solution, broken);
     const [issue] = issues(`id = '${iid}'`);
     assert.equal(issue.status, 'open');
@@ -496,19 +496,20 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
 
   test('the verdict: each failing field blocks on its own', () => {
     const consistent = { verdict: 'consistent', detail: 'CONSISTENT' } as const;
-    assert.equal(verifyVerdict(good, 0, consistent).ok, true);
-    assert.equal(verifyVerdict(good, 0, null).ok, true, 'no program: the prompt allows it for a problem with no numeric data');
-    assert.equal(verifyVerdict({ ...good, problems: [{ severity: 'minor', message: 'm', suggestion: 's' }] }, 0, consistent).ok, true);
-    assert.equal(verifyVerdict({ ...good, dataProblems: ['', ' '] }, 0, consistent).ok, true, 'blank entries are not problems');
+    const mismatch = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
+    assert.equal(verifyVerdict(good, null, consistent).ok, true);
+    assert.equal(verifyVerdict(good, null, null).ok, true, 'no program: the prompt allows it for a problem with no numeric data');
+    assert.equal(verifyVerdict({ ...good, problems: [{ severity: 'minor', message: 'm', suggestion: 's' }] }, null, consistent).ok, true);
+    assert.equal(verifyVerdict({ ...good, dataProblems: ['', ' '] }, null, consistent).ok, true, 'blank entries are not problems');
     const blocked: [string, ReturnType<typeof verifyVerdict>][] = [
-      ['agrees', verifyVerdict({ ...good, agrees: false }, 0, consistent)],
-      ['resultsAgree', verifyVerdict({ ...good, resultsAgree: false }, 0, consistent)],
-      ['numeric mismatch', verifyVerdict(good, 1, consistent)],
-      ['major problem', verifyVerdict({ ...good, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }, 0, consistent)],
-      ['wellPosed', verifyVerdict({ ...good, wellPosed: false, wellPosedReason: 'Gli atomi di O risultano 3,75.' }, 0, consistent)],
-      ['dataProblems', verifyVerdict({ ...good, dataProblems: ['La massa molare 60 non è quella di C3H6O.'] }, 0, consistent)],
-      ['INCONSISTENT', verifyVerdict(good, 0, { verdict: 'inconsistent', detail: 'INCONSISTENT: 12 > 3 + 3' })],
-      ['program failed', verifyVerdict(good, 0, { verdict: 'failed', detail: 'The consistency program failed: Timed out after 15 s' })],
+      ['agrees', verifyVerdict({ ...good, agrees: false }, null, consistent)],
+      ['resultsAgree', verifyVerdict({ ...good, resultsAgree: false }, null, consistent)],
+      ['numeric mismatch', verifyVerdict(good, { compared: [mismatch], mismatches: [mismatch], complete: true }, consistent)],
+      ['major problem', verifyVerdict({ ...good, problems: [{ severity: 'major', message: 'm', suggestion: 's' }] }, null, consistent)],
+      ['wellPosed', verifyVerdict({ ...good, wellPosed: false, wellPosedReason: 'Gli atomi di O risultano 3,75.' }, null, consistent)],
+      ['dataProblems', verifyVerdict({ ...good, dataProblems: ['La massa molare 60 non è quella di C3H6O.'] }, null, consistent)],
+      ['INCONSISTENT', verifyVerdict(good, null, { verdict: 'inconsistent', detail: 'INCONSISTENT: 12 > 3 + 3' })],
+      ['program failed', verifyVerdict(good, null, { verdict: 'failed', detail: 'The consistency program failed: Timed out after 15 s' })],
     ];
     for (const [field, v] of blocked) assert.equal(v.ok, false, field);
     assert.equal(blocked[4]![1].data, "The statement's data do not determine one answer: Gli atomi di O risultano 3,75.");
@@ -566,6 +567,229 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
     assert.equal(row(b).status, 'issue');
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.category), ['data']);
+  });
+});
+
+describe('15f. the Python recompute settles numbers, and a verified question files no issue', () => {
+  const verdict = (o: Record<string, unknown>) => answer({ ...posed, independentAnswer: '-', resultsAgree: true, agrees: true, problems: [], ...o });
+  const minor = (message: string) => ({ severity: 'minor', message, suggestion: 's' });
+  const checksOf = (id: string) => json<{ method: string; ok: boolean; detail: string }[]>(row(id).checks, []);
+
+  test('a last-digit "different result" is not a blocker when the recompute matched every stated value (339 N, 79,9 %, 79,7 %)', async () => {
+    const cases = [
+      { id: '785e1c65', program: 'import math\nprint(f"R = {9.8*230/(5*math.tan(math.radians(53)))} N")', stated: [{ name: 'R', value: '339 N' }], model: '339,7 N' },
+      { id: '4d3131a0', program: 'print(f"resa = {11.2/14.0074*100} %")', stated: [{ name: 'resa', value: '79,9 %' }], model: '80,0 %' },
+      { id: 'fd4d6c96', program: 'print(f"m_teorica = {25.0757} g")\nprint(f"resa = {20.0/25.0757*100} %")', stated: [{ name: 'm_teorica', value: '25,08 g' }, { name: 'resa', value: '79,7 %' }], model: '79,8 %' },
+    ];
+    for (const c of cases) {
+      const id = q({ statement: `Esercizio ${c.id}`, solution: `Risultato ${c.stated.map((v) => v.value).join(', ')}` });
+      const calls = fake.calls.length;
+      fake.next(verdict({ independentAnswer: c.model, resultsAgree: false, agrees: false, problems: [minor(`L'ultima cifra è ${c.model}.`)], computation: c.program, statedValues: c.stated }));
+      const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+      assert.equal((r as { ok: boolean }).ok, true, c.id);
+      assert.equal(fake.calls.length, calls + 1, `${c.id}: the recompute settled it, so no second opinion`);
+      assert.equal(row(id).status, 'verified', c.id);
+      assert.deepEqual(issues(`question_id = '${id}'`), [], `${c.id}: no blocker, and the minor note files no issue`);
+      assert.match(checksOf(id).find((k) => k.method === 'independent-solve')!.detail, /Minor notes: L'ultima cifra/, c.id);
+    }
+  });
+
+  test('"9,02 × 10^23 atomi" is recomputed, and the model\'s wrong 9,03 does not block it', async () => {
+    const id = q({ statement: 'Quanti atomi ci sono in 9,00 g di acqua?', solution: 'Gli atomi sono $9{,}02 \\times 10^{23}$.' });
+    fake.next(verdict({ independentAnswer: '9,03 × 10^23 atomi', resultsAgree: false, agrees: false, computation: 'print(f"N_atomi = {3*9.00/18.015*6.02214e23}")', statedValues: [{ name: 'N_atomi', value: '9,02 × 10^23 atomi' }] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: true, problems: 0, recomputed: 1, mismatches: 0 });
+    assert.equal(row(id).status, 'verified');
+  });
+
+  test('a real mismatch still blocks (Fisica 6e84f71e, 170 against 140 kPa), and with two programs only when both show it', async () => {
+    const program = 'p2 = 200000 + 0.5*1000*(2**2 - 8**2)\nprint(f"p2 = {p2} Pa")';
+    const wrong = verdict({ computation: program, statedValues: [{ name: 'p2', value: '140 kPa' }] });
+    const id = q({ statement: 'Bernoulli: calcola p2.', solution: 'p2 = 140 kPa' });
+    fake.next(wrong, wrong);
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+    assert.match(issues(`question_id = '${id}'`)[0]!.message, /p2 is 170000\.0 Pa by the computation and 140 kPa in the solution/);
+    // The reviewer's program reads the statement otherwise and matches the solution: two programs disagree, nothing is proved.
+    const other = q({ statement: 'Bernoulli: calcola p2.', solution: 'p2 = 140 kPa' });
+    fake.next(wrong, verdict({ computation: 'print("p2 = 140000.0 Pa")', statedValues: [{ name: 'p2', value: '140 kPa' }] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: other }));
+    assert.equal(row(other).status, 'verified');
+    assert.deepEqual(issues(`question_id = '${other}'`), []);
+  });
+
+  test('a verified question files no minor issue and loses its old open ones; a failed one files its minors with the rest', async () => {
+    const id = q();
+    ctx.db.insert('review_issues', { id: newId(), project_id: P, node_id: null, question_id: id, rev_id: null, source: 'verification', severity: 'minor', category: 'solution', quote: '', message: 'Segnaposto {{formula:@x}}.', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    fake.next(verdict({ problems: [minor('Non dice che il piano è semplicemente connesso.'), minor('Nomina la norma.')] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(row(id).status, 'verified');
+    assert.deepEqual(issues(`question_id = '${id}'`), []);
+    assert.match(checksOf(id)[0]!.detail, /Minor notes: Non dice che il piano è semplicemente connesso\. Nomina la norma\./);
+    const bad = q();
+    const failing = verdict({ problems: [{ severity: 'major', message: 'Il risultato richiesto non è mai scritto.', suggestion: 's' }, minor('Nomina la norma.')] });
+    fake.next(failing, failing);
+    await questionVerify(ctx, startTask('question.verify', { questionId: bad }));
+    assert.deepEqual(issues(`question_id = '${bad}'`).map((i) => i.severity).sort(), ['major', 'minor']);
+  });
+
+  test('the prompt tells the checker what a formula reference is and what counts as major', () => {
+    const { system, prompt } = verifyPrompt({ language: 'it', statement: 's', solution: 'v' });
+    assert.match(prompt, /\{\{formula:@key\}\}.*cross-references, not placeholders/s);
+    assert.match(prompt, /never states, is at least major/);
+    assert.match(system, /Do not report rigor or wording/);
+  });
+});
+
+describe('15g. a fix whose check fails is undone; a data issue on a statement that was not generated stays with the author', () => {
+  const blocker = (qid: string, category = 'solution', message = 'Il risultato è sbagliato.') => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'verification', severity: 'blocker', category, quote: '', message, suggestion: 's', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const history = (id: string) => ctx.db.all<Record<string, any>>('SELECT * FROM question_revisions WHERE question_id = ? ORDER BY created_at, rowid', id);
+  /** The fix task, then the check queued after it in the same run, as `generateSpecs` plans them. */
+  async function fixThenCheck(id: string, issueIds: string[], editor: Record<string, string>, check: ReturnType<typeof answer>[]) {
+    const runId = newId();
+    fake.next(answer(editor));
+    const fix = startTask('question.revise', { questionId: id, issueIds }, { runId, key: `qfix:${id}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    const verify = startTask('question.verify', { questionId: id }, { runId, key: `qverify:${id}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify.task.id, fix.task.id);
+    verify.deps = { [fix.task.key]: fixed };
+    fake.next(...check);
+    return { fixed, checked: await questionVerify(ctx, verify) };
+  }
+  const fails = answer({ ...posed, independentAnswer: '9,03', resultsAgree: false, agrees: false, problems: [{ severity: 'major', message: 'Ora il risultato è 9,03, ma è 9,02.', suggestion: 's' }] });
+  const passes = answer({ ...posed, independentAnswer: '9,02', resultsAgree: true, agrees: true, problems: [] });
+
+  test('the check after a fix fails: the text and status come back from question_revisions, and the closed issues reopen with the reason', async () => {
+    const id = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const iid = blocker(id);
+    const { checked } = await fixThenCheck(id, [iid], { statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }, [fails, fails]);
+    assert.deepEqual(checked, { ok: false, restored: true, reopened: 1 });
+    assert.equal(row(id).solution, 'Sono 9,02 atomi.');
+    assert.equal(row(id).status, 'issue');
+    const [i, ...rest] = issues(`question_id = '${id}'`);
+    assert.equal(rest.length, 0, 'the failed check files nothing about the text it undid');
+    assert.equal(i!.status, 'open');
+    assert.match(i!.resolution, /^The AI fix was undone because the check after it failed: Ora il risultato è 9,03, ma è 9,02; the independent solution reaches a different result: 9,03/);
+    assert.deepEqual(history(id).map((r) => [r.origin, r.solution]), [['revised', 'Sono 9,03 atomi.'], ['restored', 'Sono 9,02 atomi.']]);
+  });
+
+  test('once: the same check run again on the restored text does not undo anything more', async () => {
+    const id = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const iid = blocker(id);
+    const runId = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix = startTask('question.revise', { questionId: id, issueIds: [iid] }, { runId, key: `qfix:${id}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    const verify = startTask('question.verify', { questionId: id }, { runId, key: `qverify:${id}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify.task.id, fix.task.id);
+    verify.deps = { [fix.task.key]: fixed };
+    fake.next(fails, fails, fails, fails);
+    assert.equal((await questionVerify(ctx, verify) as { restored?: boolean }).restored, true);
+    const again = await questionVerify(ctx, verify);
+    assert.equal((again as { restored?: boolean }).restored, undefined);
+    assert.equal(row(id).solution, 'Sono 9,02 atomi.');
+    assert.deepEqual(history(id).map((r) => r.origin), ['revised', 'restored']);
+  });
+
+  test('a check after a fix that passes keeps the fix, and an author edit after the fix is never undone', async () => {
+    const a = q({ status: 'issue', solution: 'Sono 9,03 atomi.' });
+    await fixThenCheck(a, [blocker(a)], { statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,02 atomi.' }, [passes]);
+    assert.equal(row(a).solution, 'Sono 9,02 atomi.');
+    assert.equal(row(a).status, 'verified');
+
+    const b = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const iid = blocker(b);
+    const runId = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix = startTask('question.revise', { questionId: b, issueIds: [iid] }, { runId, key: `qfix:${b}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    updateQuestion(ctx, b, row(b).rev, { solution: 'Sono 9,025 atomi.' });
+    const verify = startTask('question.verify', { questionId: b }, { runId, key: `qverify:${b}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify.task.id, fix.task.id);
+    verify.deps = { [fix.task.key]: fixed };
+    fake.next(fails, fails);
+    await questionVerify(ctx, verify);
+    assert.equal(row(b).solution, 'Sono 9,025 atomi.');
+    assert.equal(row(b).status, 'issue');
+  });
+
+  test('an author edit of the origin after the fix, or a fix result of the older shape, is never undone', async () => {
+    const c = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const runId = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix = startTask('question.revise', { questionId: c, issueIds: [blocker(c)] }, { runId, key: `qfix:${c}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    updateQuestion(ctx, c, row(c).rev, { origin: 'adapted' });
+    const verify = startTask('question.verify', { questionId: c }, { runId, key: `qverify:${c}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify.task.id, fix.task.id);
+    verify.deps = { [fix.task.key]: fixed };
+    fake.next(fails, fails);
+    await questionVerify(ctx, verify);
+    assert.deepEqual([row(c).origin, row(c).solution], ['adapted', 'Sono 9,03 atomi.']);
+
+    // A fix that finished before this version returned { revised: true } alone.
+    const d = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const run2 = newId();
+    fake.next(answer({ statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }));
+    const fix2 = startTask('question.revise', { questionId: d, issueIds: [blocker(d)] }, { runId: run2, key: `qfix:${d}:1` });
+    await questionRevise(ctx, fix2);
+    const verify2 = startTask('question.verify', { questionId: d }, { runId: run2, key: `qverify:${d}:1` });
+    ctx.db.run('INSERT INTO task_deps (task_id, dep_id) VALUES (?, ?)', verify2.task.id, fix2.task.id);
+    verify2.deps = { [fix2.task.key]: { revised: true } };
+    fake.next(fails, fails);
+    const r = await questionVerify(ctx, verify2);
+    assert.equal((r as { ok: boolean }).ok, false);
+    assert.equal(row(d).solution, 'Sono 9,03 atomi.', 'the check files its issues as usual');
+  });
+
+  test('an authentic exam question: the editor never sees a data issue, and the statement stays', async () => {
+    const id = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '1', status: 'issue', statement: 'Un fluido scorre con v = 2 m/s.', solution: 'p2 = 140 kPa' });
+    const data = blocker(id, 'data', 'Manca l\'ipotesi di moto stazionario.');
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [data] }));
+    assert.deepEqual(r, { skipped: 'a data issue on this statement stays with the author', rev: row(id).rev });
+    assert.equal(fake.calls.length, 0);
+    assert.equal(row(id).statement, 'Un fluido scorre con v = 2 m/s.');
+    const [i] = issues(`id = '${data}'`);
+    assert.equal(i!.status, 'open');
+    assert.match(i!.resolution, /does not change the data of a statement that was not generated/);
+
+    // With a solution issue too, only that one reaches the editor.
+    const sol = blocker(id, 'solution', 'p2 vale 170 kPa.');
+    fake.next(answer({ statement: 'Un fluido stazionario scorre con v = 2 m/s.', hint: '', solution: 'p2 = 170 kPa' }));
+    await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [data, sol] }));
+    assert.doesNotMatch(String(fake.calls[0]!.prompt), /stazionario/);
+    assert.match(String(fake.calls[0]!.prompt), /p2 vale 170 kPa/);
+    assert.equal(issues(`id = '${data}'`)[0]!.status, 'open');
+    assert.equal(row(id).statement, 'Un fluido scorre con v = 2 m/s.', 'the editor added the hypothesis, and it is not saved');
+    assert.equal(row(id).solution, 'p2 = 170 kPa');
+
+    // The check queued after a fix that changed nothing makes no call, unless the author edited the question since.
+    const e = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '2', status: 'issue', statement: 'Un gas ideale.', solution: 'p = 2 atm' });
+    const skipped = await questionRevise(ctx, startTask('question.revise', { questionId: e, issueIds: [blocker(e, 'data', 'Manca la temperatura.')] }));
+    const verify = startTask('question.verify', { questionId: e });
+    verify.deps = { [`qfix:${e}:1`]: skipped };
+    assert.deepEqual(await questionVerify(ctx, verify), { skipped: 'the fix changed no words or numbers' });
+    assert.equal(fake.calls.length, 1);
+    updateQuestion(ctx, e, row(e).rev, { statement: 'Un gas ideale a 300 K.' });
+    fake.next(answer({ ...posed, independentAnswer: '2 atm', resultsAgree: true, agrees: true, problems: [] }));
+    await questionVerify(ctx, verify);
+    assert.equal(fake.calls.length, 2, 'the edited text is checked');
+    assert.equal(row(e).status, 'verified');
+
+    // A formatting finding selected with the data issue: the formatter has nothing to change, so the check makes no call either.
+    const f = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '3', status: 'issue', statement: 'Un gas ideale.', solution: 'p = 2 atm' });
+    const format = newId();
+    ctx.db.insert('review_issues', { id: format, project_id: P, node_id: null, question_id: f, rev_id: null, source: 'lint', severity: 'blocker', category: 'compile:math-mixed', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    const formatted = await questionRevise(ctx, startTask('question.revise', { questionId: f, issueIds: [blocker(f, 'data', 'Manca la temperatura.'), format] }));
+    assert.deepEqual(formatted, { skipped: 'the formatter changed nothing', rev: row(f).rev });
+    const check = startTask('question.verify', { questionId: f });
+    check.deps = { [`qfix:${f}:1`]: formatted };
+    assert.deepEqual(await questionVerify(ctx, check), { skipped: 'the fix changed no words or numbers' });
+    assert.equal(fake.calls.length, 2);
   });
 });
 

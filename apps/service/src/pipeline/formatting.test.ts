@@ -342,7 +342,7 @@ describe('a question fix settles formatting findings in code too', () => {
     ctx.db.run('DELETE FROM review_issues WHERE id = ?', iss);
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iss] }));
     assert.equal(fake.calls.length, 0);
-    assert.deepEqual(r, { skipped: 'the requested issues are gone' });
+    assert.equal((r as { skipped?: string }).skipped, 'the requested issues are gone');
     const row = ctx.db.get<{ statement: string; status: string; rev: number }>('SELECT statement, status, rev FROM questions WHERE id = ?', id)!;
     assert.deepEqual([row.statement, row.status, row.rev], ['Sia $f$ con $$ g(x) = x $$ vera.', 'verified', 1]);
   });
@@ -380,7 +380,7 @@ describe('formula blocks in a question', () => {
     const ref = note(id, 'formula-ref-unknown', '{{formula:@laplace-seno}}');
     fake.next(() => ({ structured: { statement: 'Calcola il lavoro.', hint: '', solution: '$$\\oint_{\\partial R} F\\cdot d\\mathbf{r}=\\iint_R g\\,dA$$\n\nPer la {{formula:@green-rettangolo}} e per la {{formula:@laplace-trasformata}} si ha $L=2$.' } as never, text: '{}', usage: usageOf(1, 1) }));
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [block, ref] }));
-    assert.deepEqual(r, { revised: true });
+    assert.equal((r as { revised?: boolean }).revised, true);
     assert.equal(fake.calls.length, 1, 'only the reference note went to the editor');
     const prompt = String(fake.calls[0].prompt);
     assert.match(prompt, /unknown|exists in the book/);

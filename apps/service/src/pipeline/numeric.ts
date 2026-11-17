@@ -11,7 +11,8 @@ interface Quantity { base: number; asWritten: number; factor: number; unit: stri
 interface Printed { name: string; value: number; unit: string | null; text: string }
 
 export interface Comparison { name: string; stated: string; computed: string }
-export interface NumericCheck { compared: Comparison[]; mismatches: Comparison[] }
+/** `complete` is true when every stated value was compared with a printed one: none was left out for a unit this file cannot read. */
+export interface NumericCheck { compared: Comparison[]; mismatches: Comparison[]; complete: boolean }
 
 const MISMATCH_PREFIX = 'Recomputing the final values in Python gives a different result: ';
 /** The text of the blocker the numeric check raises, one clause per value. `readMismatches` reads it back when the fix is recorded. */
@@ -36,6 +37,9 @@ const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u0
 // Units whose value in the solution is the SI value once the prefix is applied. min, h, L, bar, deg, km/h and mol/L are not: an unmarked printed value cannot be read against them.
 const SI_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'mol', 'K', 'C', 'S', 'T', 'rad', 'kg']);
 const MAX_PRINTED_VALUES = 50;
+// What a stated count is a count of ("9,02 × 10^23 atomi di ossigeno"): the value is a plain number. A count per unit (ioni/L,
+// ions of sodium L⁻¹) is a density, so only "di …" or "of …" in words may follow the noun, and never "per".
+const COUNT_NOUN = /^(?:atom[io]|molecol[ae]|ion[ei]|elettron[ei]|proton[ei]|neutron[ei]|foton[ei]|particell[ae]|nucle[io]|atoms?|molecules?|ions?|electrons?|protons?|neutrons?|photons?|particles?|nuclei|nucleus)(?:\s+(?:di|del|della|dello|dei|degli|delle|of)(?!.*\bper\b)(?:\s+[\p{L}']+)+)?$/iu;
 
 /** Strips LaTeX the model may leave in a value and unifies the symbols that differ between sources. */
 function plain(text: string): string {
@@ -50,6 +54,7 @@ const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^
 
 /** Splits a unit into a prefix factor and a base unit. A unit this does not recognise (m/s, mol/L, kg·m²) stays whole with factor 1. */
 function splitUnit(raw: string): { factor: number; unit: string } {
+  if (COUNT_NOUN.test(raw.trim())) return { factor: 1, unit: '' };
   const unit = raw.replace(/\s+/g, '').replace(/\.$/, '');
   // A percentage is a plain number written a hundred times larger: 50% and 0.5 are the same value.
   if (unit === '%') return { factor: 0.01, unit: '' };
@@ -165,7 +170,7 @@ export function compareValues(stated: StatedValue[], stdout: string): NumericChe
     compared.push(c);
     if (verdict === 'mismatch') mismatches.push(c);
   }
-  return compared.length ? { compared, mismatches } : null;
+  return compared.length ? { compared, mismatches, complete: compared.length === stated.length } : null;
 }
 
 /**
@@ -185,6 +190,19 @@ export async function recomputeFinalValues(computation: string | undefined, stat
   }
   if (!result.ok || !result.stdout.trim()) return null;
   return compareValues(stated, result.stdout);
+}
+
+/**
+ * The recompute that decides, when the checker and the reviewer may each have run one. With both, a mismatch counts only when
+ * both programs dispute the value of the same name. Two programs that disagree prove nothing about the solution, so the result
+ * is not complete and the model's verdict on the results stands. With one program, that one decides.
+ */
+export function combineRecomputes(checker: NumericCheck | null, reviewer: NumericCheck | null): NumericCheck | null {
+  if (!checker || !reviewer) return reviewer ?? checker;
+  const named = (list: Comparison[], m: Comparison) => list.some((c) => key(c.name) === key(m.name));
+  const confirmed = reviewer.mismatches.filter((m) => named(checker.mismatches, m));
+  const disputed = reviewer.mismatches.length + checker.mismatches.length > 2 * confirmed.length;
+  return { ...reviewer, mismatches: confirmed, complete: reviewer.complete && !disputed };
 }
 
 /**
