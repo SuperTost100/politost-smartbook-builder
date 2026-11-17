@@ -296,7 +296,7 @@ function isStrayDigitWrap(body: string): boolean {
   // The closing digit follows a brace, a letter or a one-digit exponent: "}4", "a4", "^24".
   if (!/(?:\}|[A-Za-z]|\^\d)$/.test(body)) return false;
   // "$2\times2$", "$2\sqrt2$", "$1\cdot1$": an operator before the last digit is maths.
-  if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty)$/.test(body)) return false;
+  if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty|(?:arc)?(?:sin|cos|tan|cot|sec|csc)h?|log|ln|lg|exp)$/.test(body)) return false;
   // A relation inside the formula (outside a unit in \mathrm) makes it an equation: "$1x=1$".
   return !/=|\\le|\\ge|<|>/.test(body.replace(/\\mathrm\{(?:[^{}]|\{[^{}]*\})*\}/g, ''));
 }
@@ -358,6 +358,7 @@ function listStarts(lines: ScannedLine[]): { line: number; first: number; text: 
     let lastItem = i;
     while (j < lines.length) {
       if (item(lines[j])) { lastItem = j; j++; continue; }
+      if (/^(?:#{1,6}\s|:::)/.test(lines[j].raw)) break;
       if (lines[j].raw.trim() && lines[j - 1].raw.trim()) { j++; continue; }
       if (!lines[j].raw.trim() || /^\s{2,}\S/.test(lines[j].raw)) { j++; continue; }
       break;
@@ -490,7 +491,7 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       if ([...l.masked.matchAll(/(?<!\\)\\[nt]/g)].some((m) => !LATEX_COMMAND_N_T.test(l.masked.slice(m.index)))) add(mk('literal-escape', file, 'A literal backslash followed by n or t in the text, where a line break or a tab was meant. Write the line break itself.', l.n, t));
 
       // A digit copied in front of an inline formula and again after it: $4\mathrm{C_4H_{10}}4$. It renders, so KaTeX never complains.
-      for (const m of t.matchAll(STRAY_DIGIT_WRAP)) {
+      for (const m of noCode.matchAll(STRAY_DIGIT_WRAP)) {
         if (isStrayDigitWrap(m[2])) add(mk('stray-digit-wrap', file, `The formula ${m[0]} starts and ends with the digit ${m[1]}: a stray digit copied around it.`, l.n, t));
       }
 
@@ -501,7 +502,7 @@ function lintText(markdown: string, o: TextLintOptions): LintFinding[] {
       if (/(?<![.])\.\s?\.(?![.])/.test(l.masked)) add(mk('double-period', file, 'Two periods in a row.', l.n, t));
 
       // A link scheme the compiler and the reader do not resolve, such as ref:formula:@key.
-      for (const m of t.matchAll(/\]\((ref:[^)\s]*)\)/g)) {
+      for (const m of noCode.matchAll(/\]\((ref:[^)\s]*)\)/g)) {
         if (!REF_SCHEME.test(m[1])) add(mk('ref-scheme', file, `Link "${m[1]}" is not a form the reader resolves: use ref:formula/@key, ref:formula/N.M, ref:section/id or ref:chapter/N#pK.`, l.n, t));
       }
 

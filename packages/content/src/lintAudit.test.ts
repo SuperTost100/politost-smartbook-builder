@@ -15,7 +15,7 @@ test('stray-digit-wrap: a digit copied around an inline formula is a blocker', (
   assert.equal(sev('Si ottengono $4\\mathrm{C_4H_{10}}4$ molecole.', 'stray-digit-wrap'), 'blocker');
   assert.equal(hits('Gli orbitali $4sp^24$ sono ibridi.', 'stray-digit-wrap').length, 1);
   // near misses: arithmetic that starts and ends with the same digit
-  for (const ok of ['Vale $2\\times2$.', 'Vale $2\\sqrt2$.', 'Vale $1\\cdot1$.', 'Tende a $1x=1$.', 'Il limite $\\dots\\to0$ e $3 + 3$.']) {
+  for (const ok of ['Vale $2\\times2$.', 'Vale $2\\sqrt2$.', 'Vale $1\\cdot1$.', 'Vale $2\\sin2$ e $3\\ln3$.', 'Il testo `$4\\mathrm{C}4$` è codice.', 'Tende a $1x=1$.', 'Il limite $\\dots\\to0$ e $3 + 3$.']) {
     assert.deepEqual(hits(ok, 'stray-digit-wrap'), [], ok);
   }
   // a display formula and an exercise line are not inline text
@@ -25,7 +25,7 @@ test('stray-digit-wrap: a digit copied around an inline formula is a blocker', (
 test('ref-scheme: a link that is none of the four forms the reader resolves is a blocker', () => {
   assert.equal(sev('Vedi la [legge](ref:formula:@legge-di-hess).', 'ref-scheme'), 'blocker');
   assert.equal(hits('Vedi [qui](ref:formulas/@a) e [là](ref:chapter/3#p4x).', 'ref-scheme').length, 2);
-  for (const ok of ['[a](ref:formula/@legge-di-hess)', '[a](ref:formula/3.2)', '[a](ref:section/s-3-1)', '[a](ref:chapter/3#p4)', 'Un [sito](https://example.org/x)']) {
+  for (const ok of ['[a](ref:formula/@legge-di-hess)', '[a](ref:formula/3.2)', '[a](ref:section/s-3-1)', '[a](ref:chapter/3#p4)', 'Il codice `[x](ref:formula:@x)` resta.', 'Un [sito](https://example.org/x)']) {
     assert.deepEqual(hits(ok, 'ref-scheme'), [], ok);
   }
 });
@@ -56,6 +56,7 @@ test('list-start: a numbered list that starts at 3 after prose is major; resumed
   assert.deepEqual(hits('Si ha\n\n$$\nx = 1\n$$\n\n3. Terza.', 'list-start'), []);
   // a new section starts counting again, and a year at the start of a sentence is no list
   assert.equal(hits('1. Prima.\n\n### Altro\n\n3. Terza.', 'list-start').length, 1);
+  assert.equal(hits('1. Prima.\n### Altro\n\n3. Terza.', 'list-start').length, 1);
   assert.deepEqual(hits('1984 fu un anno.', 'list-start'), []);
 });
 
