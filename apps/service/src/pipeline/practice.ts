@@ -616,7 +616,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     if (!issues.length && !formatIssues.length) return { skipped: 'a data issue on this statement stays with the author', rev: q.rev };
   }
   const settled = settleQuestionFormatting(ctx, { projectId: q.projectId, questionId: q.id, language: project.language, issues: formatIssues });
-  if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing' };
+  if (formatIssues.length && !issues.length) return settled.changed ? { revised: true } : { skipped: 'the formatter changed nothing', rev: q.rev };
   // The model works on the text the formatter left.
   if (settled.changed) q = getQuestion(ctx, q.id);
   // The editor cannot tell which formula keys exist, so a note about an unknown reference comes with the book's keys and labels.

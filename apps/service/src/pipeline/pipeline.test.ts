@@ -779,6 +779,17 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     await questionVerify(ctx, verify);
     assert.equal(fake.calls.length, 2, 'the edited text is checked');
     assert.equal(row(e).status, 'verified');
+
+    // A formatting finding selected with the data issue: the formatter has nothing to change, so the check makes no call either.
+    const f = q({ kind: 'exam', origin: 'authentic', exam_group: 'Appello', number: '3', status: 'issue', statement: 'Un gas ideale.', solution: 'p = 2 atm' });
+    const format = newId();
+    ctx.db.insert('review_issues', { id: format, project_id: P, node_id: null, question_id: f, rev_id: null, source: 'lint', severity: 'blocker', category: 'compile:math-mixed', quote: '', message: 'm', suggestion: '', status: 'open', resolution: '', created_at: now() });
+    const formatted = await questionRevise(ctx, startTask('question.revise', { questionId: f, issueIds: [blocker(f, 'data', 'Manca la temperatura.'), format] }));
+    assert.deepEqual(formatted, { skipped: 'the formatter changed nothing', rev: row(f).rev });
+    const check = startTask('question.verify', { questionId: f });
+    check.deps = { [`qfix:${f}:1`]: formatted };
+    assert.deepEqual(await questionVerify(ctx, check), { skipped: 'the fix changed no words or numbers' });
+    assert.equal(fake.calls.length, 2);
   });
 });
 
