@@ -1,12 +1,12 @@
 // Back-port: carries hand edits made in a published book folder (politost-books `books/<slug>`) back into the builder's
-// sources, so the next export does not undo them. The builder's current compile of the book is diffed against the folder
-// one unit at a time (a section, an exercise, a graph, a figure caption), each unit is mapped to the row it comes from and
-// rewritten there as an author edit, and the book is compiled again before anything is written. A unit is written only when
-// the new compile reproduces it exactly and adds no blocker or major finding.
-import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative, sep } from 'node:path';
+// sources, so the next export does not undo them. The folder is compared with the export it was published from (named by its
+// .builder.json) one unit at a time (a section, an exercise, a graph, a figure caption): only units the folder changed are
+// candidates, and one the builder also changed since the publish is refused. Each candidate is mapped to the row it comes
+// from and rewritten there as an author edit, and the book is compiled again before anything is written. A unit is written
+// only when the new compile reproduces it exactly and adds no blocker or major finding.
 import { captionToPlain, checkFunctionGraph, compileBook, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
+import { bookFiles, MANIFEST, publishedExport, readManifest } from './publish.ts';
 import { countUnresolvedBlockers, currentHeads, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
 import { closeGoneCompileNotes } from '../routes/review.ts';
 import { relint } from '../routes/views.ts';
@@ -88,6 +88,18 @@ const attrOf = (attrs: string, name: string) => new RegExp(`\\b${name}="([^"]*)"
 /** An image line as the current compiler writes it: captions get Unicode super- and subscripts ("x^2" becomes "x²"). */
 const foldImageLine = (line: string) => line.replace(/\bcaption="([^"]*)"/, (_, c: string) => `caption="${captionToPlain(c)}"`);
 const foldImages = (s: string) => s.split('\n').map((l) => (IMAGE_LINE.test(l) ? foldImageLine(l) : l)).join('\n');
+
+/** Lines of `now` that pass `pick` and are not in `was`. */
+const newLines = (was: string, now: string, pick: (l: string) => boolean) => {
+  const old = new Set(was.split('\n'));
+  return now.split('\n').filter((l) => pick(l) && !old.has(l));
+};
+const formulaIds = (s: string) => [...s.matchAll(/^:::formula\{[^}\n]*\bid="([^"]+)"/gm)].map((m) => m[1]);
+/** Numbered formula ids in `now` that `was` does not have. */
+const newFormulaIds = (was: string, now: string) => {
+  const old = new Set(formulaIds(was));
+  return formulaIds(now).filter((id) => !old.has(id)).map((id) => `formula ${id}`);
+};
 
 // ---------- line diff ----------
 
@@ -213,11 +225,22 @@ function replaceMiddle(S: string[], mapped: number, oldLine: string, newLine: st
 
 // ---------- the plan ----------
 
+export interface PlanOptions {
+  /**
+   * The export the folder was published from. A unit the folder holds as in that export is left alone, so a change made in
+   * the builder since the publish stays; a unit both changed is refused. Without it every difference is a candidate.
+   */
+  published?: Record<string, string | Uint8Array>;
+  /** Write a graph whose graph lint has blocking findings, accepting them as the author's "Accept anyway". */
+  acceptGraphLint?: boolean;
+}
+
 /**
  * Works out what a back-port of the books folder `target` (file path -> contents) would change in `input`, and checks it by
  * compiling. Pure: nothing is written.
  */
-export function planBackport(input: BookInput, target: Record<string, string | Uint8Array>): BackportPlan {
+export function planBackport(input: BookInput, target: Record<string, string | Uint8Array>, opts: PlanOptions = {}): BackportPlan {
+  const pub = opts.published;
   const base = compileBook(input);
   const inv = inverseOf(base);
   const units: BackportUnit[] = [];
@@ -245,11 +268,16 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     .map((x) => { const c = sectionsOf(text(f[x])!); return `${x}\n${c.front}${Object.entries(c.titles).map(([k, v]) => `${k} | ${v}`).join('\n')}`; });
   const [outlineBase, outlineBooks] = [outlineOf(base.files), outlineOf(target)];
   const outlineDiff = outlineBase.find((x, i) => x !== outlineBooks[i]) ?? (outlineBase.length !== outlineBooks.length ? 'the number of chapters' : undefined);
-  const files = outlineDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
+  // The books' formula references are numbers, which the builder's numbering must still give the same formulas.
+  const numbering = (f: Record<string, string | Uint8Array>) => Object.keys(f).filter((x) => /^chapters\/.*\.md$/.test(x)).sort().map((x) => `${x}: ${formulaIds(text(f[x])!).join(' ')}`).join('\n');
+  const formulaDiff = pub && numbering(pub) !== numbering(base.files);
+  const files = outlineDiff || formulaDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
   for (const file of [...files].sort()) {
     const was = base.files[file];
     const now = target[file];
     if (same(was, now)) { stable.push({ name: file, check: (after) => same(after.files[file], now) }); continue; }
+    // The folder left this file as published: what differs was changed in the builder since, and stays.
+    if (pub && (same(pub[file], now) || (pub[file] === undefined && now === undefined))) continue;
     if (file === 'ptsb.json') { add({ unit: file, kind: 'file', status: 'compiler-owned', reason: 'package header, written at export' }); continue; }
     if (was === undefined || now === undefined) { add({ unit: file, kind: 'file', status: 'unmapped', reason: was === undefined ? 'only in the books folder' : 'missing from the books folder' }); continue; }
     if (file === 'smartbook.json') {
@@ -258,20 +286,29 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       add({ unit: file, kind: 'file', status: same ? 'compiler-owned' : 'unmapped', reason: same ? `version ${b.version} is set when the book is published` : 'book settings differ' });
       continue;
     }
-    if (/^chapters\/\d+-.*\.md$/.test(file)) { chapterUnits(file, text(was)!, text(now)!); continue; }
-    if (file === 'esercizi.md' || file === 'esami.md') { questionUnits(file, text(was)!, text(now)!); continue; }
-    if (file === 'grafici.json') { graphUnits(text(was)!, text(now)!); continue; }
+    if (/^chapters\/\d+-.*\.md$/.test(file)) { chapterUnits(file, text(was)!, text(now)!, text(pub?.[file])); continue; }
+    if (file === 'esercizi.md' || file === 'esami.md') { questionUnits(file, text(was)!, text(now)!, text(pub?.[file])); continue; }
+    if (file === 'grafici.json') { graphUnits(text(was)!, text(now)!, text(pub?.[file])); continue; }
     add({ unit: file, kind: 'file', status: 'unmapped', reason: file.startsWith('assets/') ? 'the figure file itself changed' : 'the back-port does not read this file' });
   }
 
-  function chapterUnits(file: string, was: string, now: string) {
+  function chapterUnits(file: string, was: string, now: string, published?: string) {
     const b = sectionsOf(was);
     const t = sectionsOf(now);
+    const e = published === undefined ? undefined : sectionsOf(published);
     const number = Number(/^chapters\/(\d+)/.exec(file)![1]);
     for (const key of new Set([...Object.keys(b.bodies), ...Object.keys(t.bodies)])) {
       const unit = `${file}#${key}`;
       if (!(key in b.bodies) || !(key in t.bodies)) { add({ unit, kind: 'section', status: 'unmapped', reason: key in b.bodies ? 'section removed in the books' : 'section added in the books' }); continue; }
       if (b.bodies[key] === t.bodies[key]) { stable.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === t.bodies[key] }); continue; }
+      if (e) {
+        const was = e.bodies[key];
+        if (was === t.bodies[key]) continue; // not edited in the books: the builder's text since the publish stays
+        if (was === undefined) { add({ unit, kind: 'section', status: 'unmapped', reason: 'section added in the books' }); continue; }
+        if (foldImages(b.bodies[key]) !== foldImages(was)) { add({ unit, kind: 'section', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
+        const added = [...newLines(was, t.bodies[key], (l) => /^#{1,6}\s/.test(l)), ...newFormulaIds(was, t.bodies[key])];
+        if (added.length) { add({ unit, kind: 'section', status: 'refused', reason: `adds what the export does not have, which shifts numbers or headings: ${added.join(', ')}` }); continue; }
+      }
       if (foldImages(b.bodies[key]) === foldImages(t.bodies[key])) {
         add({ unit, kind: 'caption', status: 'compiler-owned', reason: 'the compiler now writes super- and subscripts in captions' });
         continue;
@@ -307,9 +344,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     }
   }
 
-  function questionUnits(file: string, was: string, now: string) {
+  function questionUnits(file: string, was: string, now: string, published?: string) {
     const b = exercisesOf(was);
     const t = exercisesOf(now);
+    const e = published === undefined ? undefined : exercisesOf(published);
     // Exercises are numbered by their place, so a question added or removed since the export shifts every number after it.
     if (Object.keys(b).sort().join() !== Object.keys(t).sort().join()) { numberingDiff = file; return; }
     // Exercise id -> question id: the book compiled once more with each statement replaced by its question id.
@@ -319,6 +357,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     for (const id of new Set([...Object.keys(b), ...Object.keys(t)])) {
       const unit = `${file}#${id}`;
       if (JSON.stringify(b[id]) === JSON.stringify(t[id])) { stable.push({ name: unit, check: (after) => JSON.stringify(exercisesOf(text(after.files[file]) ?? '')[id]) === JSON.stringify(t[id]) }); continue; }
+      if (e) {
+        if (JSON.stringify(e[id]) === JSON.stringify(t[id])) continue; // not edited in the books
+        if (JSON.stringify(b[id]) !== JSON.stringify(e[id])) { add({ unit, kind: 'question', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
+      }
       const q = input.questions.find((x) => x.id === questionOf.get(id));
       if (!q) { add({ unit, kind: 'question', status: 'unmapped', reason: 'no question compiles to this exercise' }); continue; }
       if (b[id].attrs !== t[id].attrs) add({ unit: `${unit} attributes`, kind: 'question', status: 'unmapped', reason: 'difficulty or chapter changed', target: q.id });
@@ -352,24 +394,33 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     }
   }
 
-  function graphUnits(was: string, now: string) {
+  function graphUnits(was: string, now: string, published?: string) {
     const byId = (s: string) => new Map((JSON.parse(s) as Record<string, unknown>[]).map((g) => [String(g.id), g]));
     const [b, t] = [byId(was), byId(now)];
+    const e = published === undefined ? undefined : byId(published);
     for (const id of new Set([...b.keys(), ...t.keys()])) {
       const unit = `grafici.json#${id}`;
       if (JSON.stringify(b.get(id)) === JSON.stringify(t.get(id))) { stable.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(t.get(id)) }); continue; }
+      if (e) {
+        if (JSON.stringify(e.get(id)) === JSON.stringify(t.get(id))) continue; // not edited in the books
+        if (JSON.stringify(b.get(id)) !== JSON.stringify(e.get(id))) { add({ unit, kind: 'graph', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
+      }
       const payload = t.get(id);
       // A graph whose check failed is held out of the export, so it can be in the books folder and missing from `b`.
-      const e = input.enrichments.find((x) => x.kind === 'graph' && String(x.payload.id) === id);
-      if (!payload || !e) { add({ unit, kind: 'graph', status: 'unmapped', reason: payload ? 'graph added in the books' : 'graph removed in the books' }); continue; }
+      const row = input.enrichments.find((x) => x.kind === 'graph' && String(x.payload.id) === id);
+      if (!payload || !row) { add({ unit, kind: 'graph', status: 'unmapped', reason: payload ? 'graph added in the books' : 'graph removed in the books' }); continue; }
       const check = checkFunctionGraph(payload);
-      if (!check.ok) { add({ unit, kind: 'graph', status: 'refused', reason: `the builder's graph check fails on the books version: ${check.detail}`, target: e.id }); continue; }
-      // The books' graphs were checked by hand, so the graph lint's blocking findings are accepted as an author would.
-      const accepted = graphLintCheck(payload, e.lintAccepted).findings.filter((f) => f.severity === 'block' && !e.lintAccepted.includes(lintKey(f)));
-      const u = add({ unit, kind: 'graph', status: 'mapped', target: e.id, ...(accepted.length ? { reason: `graph lint accepted: ${accepted.map(lintKey).join(', ')}` } : {}) });
-      const title = typeof payload.title === 'string' ? payload.title : e.id;
+      if (!check.ok) { add({ unit, kind: 'graph', status: 'refused', reason: `the builder's graph check fails on the books version: ${check.detail}`, target: row.id }); continue; }
+      // A blocking graph lint finding is written only when the run accepts it, as an author's "Accept anyway".
+      const blocking = graphLintCheck(payload, row.lintAccepted).findings.filter((f) => f.severity === 'block' && !row.lintAccepted.includes(lintKey(f)));
+      if (blocking.length && !opts.acceptGraphLint) {
+        add({ unit, kind: 'graph', status: 'refused', reason: `the graph lint blocks it: ${blocking.map(lintKey).join(', ')} (add --accept-graph-lint to write it anyway)`, target: row.id });
+        continue;
+      }
+      const u = add({ unit, kind: 'graph', status: 'mapped', target: row.id, ...(blocking.length ? { reason: `graph lint accepted: ${blocking.map(lintKey).join(', ')}` } : {}) });
+      const title = typeof payload.title === 'string' ? payload.title : row.id;
       pending.push({
-        unit: u, changes: [{ kind: 'graph', enrichmentId: e.id, payload }],
+        unit: u, changes: [{ kind: 'graph', enrichmentId: row.id, payload }],
         check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(payload),
         owns: (f, quote) => f === 'grafici.json' && quote === title,
       });
@@ -381,6 +432,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const baseSerious = serious(base.findings);
   let after = base;
   let bookRefusal: string | null = outlineDiff ? `the outline differs from the one the books were exported with, at ${outlineDiff.split('\n')[0]}`
+    : formulaDiff ? 'the builder numbers its formulas differently from the export the books were published from, so a formula number in the books may point at another formula'
     : numberingDiff ? `${numberingDiff} does not hold the same exercises as the books, so their numbers may point at other questions` : null;
   for (;;) {
     const live = pending.filter((p) => p.unit.status === 'mapped');
@@ -454,21 +506,7 @@ export function applyChanges(input: BookInput, changes: BackportChange[]): BookI
   return next;
 }
 
-// ---------- reading the books folder and writing the plan ----------
-
-function readBookFolder(dir: string): Record<string, Uint8Array> {
-  const out: Record<string, Uint8Array> = {};
-  const walk = (d: string) => {
-    for (const name of readdirSync(d)) {
-      const full = join(d, name);
-      if (statSync(full).isDirectory()) walk(full);
-      // Dotfiles (a sync manifest) are not part of the book.
-      else if (!name.startsWith('.')) out[relative(dir, full).split(sep).join('/')] = readFileSync(full);
-    }
-  };
-  walk(dir);
-  return out;
-}
+// ---------- writing the plan ----------
 
 export interface BackportResult extends BackportPlan {
   written: boolean;
@@ -477,30 +515,23 @@ export interface BackportResult extends BackportPlan {
 }
 
 /**
- * Back-ports the books folder `fromDir` into the project. The units are checked as in `planBackport`; then, unless `dryRun`,
- * the mapped changes are written in one transaction as author edits: sections as human revisions (`rewriteHead`), questions
- * through `updateQuestion` (which marks them edited, so no AI fix overwrites them), graphs through `updateEnrichmentPayload`
- * (which runs the graph check) and captions on the asset row. Inside the same transaction the book is compiled from the
- * database again and must equal the checked compile, or nothing is written.
+ * Back-ports the books folder `fromDir` into the project. The folder must have been published with `npm run publish-book`:
+ * its .builder.json names the export it came from, which is the baseline, and a folder without one is refused. The units are
+ * checked as in `planBackport`; then, unless `dryRun`, the mapped changes are written in one transaction as author edits:
+ * sections as human revisions (`rewriteHead`), questions through `updateQuestion` as the back-port's (which marks them
+ * edited, so no AI fix overwrites them), graphs through `updateEnrichmentPayload` (which runs the graph check) and captions on
+ * the asset row. Inside the same transaction the book is compiled from the database again and must equal the checked
+ * compile, or nothing is written.
  */
-export function backportProject(ctx: AppContext, projectId: string, fromDir: string, opts: { dryRun?: boolean } = {}): BackportResult {
-  const header = join(fromDir, 'ptsb.json');
-  if (!existsSync(header)) throw new Error(`${fromDir} has no ptsb.json, so the export it came from is unknown.`);
-  const exportedAt = String(JSON.parse(readFileSync(header, 'utf8')).createdAt ?? '');
-  if (!exportedAt) throw new Error(`${header} has no createdAt.`);
+export function backportProject(ctx: AppContext, projectId: string, fromDir: string, opts: { dryRun?: boolean; acceptGraphLint?: boolean } = {}): BackportResult {
+  const manifest = readManifest(fromDir);
+  if (!manifest) throw new Error(`${fromDir} has no ${MANIFEST}, so the export it came from is unknown. Publish the book with npm run publish-book first, then make the fix on top of that.`);
+  const published = publishedExport(ctx, projectId, manifest);
+  if (typeof published === 'string') throw new Error(`${fromDir} cannot be back-ported: ${published}.`);
   const input = loadBookInput(ctx, projectId, { approvedOnly: true });
   const heads = currentHeads(ctx, projectId);
   const questions = new Map(input.questions.map((q) => [q.id, q]));
-  const plan = planBackport(input, readBookFolder(fromDir));
-  // The books map back to the builder by section, formula and exercise numbers, which any text or question written after the
-  // export can shift (a new formula renumbers the later ones), and then the wrong text would be overwritten. So a book with
-  // such changes is not written. Once a back-port has run, its own edits are newer than the export, but nothing is left to write.
-  // shortcut: graphs and assets have no change date, so they are not checked; add one if graphs get edited after an export.
-  const newer = [...[...heads.values()].map((h) => h.createdAt), ...input.questions.map((q) => (q.updatedAt > q.createdAt ? q.updatedAt : q.createdAt))]
-    .filter((at) => at > exportedAt).sort();
-  if (plan.changes.length && newer.length) {
-    throw new Error(`${newer.length} texts or questions changed in the builder after the export of ${exportedAt} (the last on ${newer.at(-1)}), so the numbers in the books may point at other text. Nothing was written.`);
-  }
+  const plan = planBackport(input, bookFiles(fromDir), { published, acceptGraphLint: opts.acceptGraphLint });
   const before = countUnresolvedBlockers(ctx, projectId);
   if (opts.dryRun || !plan.changes.length) return { ...plan, written: false, openBlockers: { before, after: before } };
 
@@ -509,9 +540,9 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
       if (c.kind === 'section') {
         rewriteHead(ctx, projectId, c.nodeId, () => c.markdown, { origin: 'human', expectedHeadId: heads.get(c.nodeId)?.id ?? null });
       } else if (c.kind === 'question') {
-        updateQuestion(ctx, c.questionId, questions.get(c.questionId)!.rev, c.parts);
+        updateQuestion(ctx, c.questionId, questions.get(c.questionId)!.rev, c.parts, { origin: 'backport' });
       } else if (c.kind === 'graph') {
-        updateEnrichmentPayload(ctx, c.enrichmentId, c.payload, { acceptLint: true });
+        updateEnrichmentPayload(ctx, c.enrichmentId, c.payload, { acceptLint: !!opts.acceptGraphLint });
       } else {
         // In place, not on a copy as the figure editor does: a copy gets a new file name, and the books name the old one.
         const rows = ctx.db.all<{ id: string; node_id: string | null }>('SELECT id, node_id FROM assets WHERE project_id = ? AND filename = ?', projectId, c.filename);

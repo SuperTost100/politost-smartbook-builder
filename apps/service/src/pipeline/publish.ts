@@ -153,7 +153,7 @@ const same = (a: Uint8Array | undefined, b: Uint8Array | undefined) => a === und
  * The files of the export a manifest names, as this builder stored it. The manifest's own hashes are not trusted: they live in
  * the books repo, where anyone can rewrite them with the files.
  */
-function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderManifest): Record<string, Uint8Array> | string {
+export function publishedExport(ctx: AppContext, projectId: string, manifest: BuilderManifest): Record<string, Uint8Array> | string {
   if (manifest.projectId !== projectId) return `its ${MANIFEST} belongs to project ${manifest.projectId}, not ${projectId}`;
   let row;
   try {
