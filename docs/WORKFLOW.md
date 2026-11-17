@@ -308,6 +308,17 @@ A pull request on politost-books that edits a book the builder published fails i
 7. Start the service: `systemctl --user start smartbuilder.service`.
 8. Commit what `publish-book` wrote on the pull request's branch and push. `builder-sync` then passes, and the pull request is merged as usual.
 
+A pull request on politost-books that edits a book the builder published fails its `builder-sync` check, because the folder no longer matches its `.builder.json`. A maintainer carries the fix into the builder and publishes it onto the same branch:
+
+1. Check out the pull request in a politost-books clone: `gh pr checkout <number>`.
+2. Stop the service: `systemctl --user stop smartbuilder.service`.
+3. Run `npm run backport -- --project <id> --from <clone>/books/<slug> --dry-run` and read what each difference maps to.
+4. Run it again without `--dry-run`.
+5. Run `npm run publish-book -- --project <id> --books <clone> --dry-run`. A file it still lists as edited outside the builder did not back-port; fix it in the builder by hand.
+6. Run it again without `--dry-run`.
+7. Start the service: `systemctl --user start smartbuilder.service`.
+8. Commit what `publish-book` wrote on the pull request's branch and push. `builder-sync` then passes, and the pull request is merged as usual.
+
 ## Editing as you go
 
 You can edit any block of the Manuscript with a live formula preview, and regenerate a passage with an instruction. The open block is saved 3 seconds after you stop typing and when you leave it. Each save is a revision, and History folds your own edits made within 10 minutes of each other into one row. The AI never overwrites your edits (see [Fix](#fix)).
