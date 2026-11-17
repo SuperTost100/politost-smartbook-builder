@@ -1,0 +1,306 @@
+import { parse } from 'mathjs';
+import type { MathNode } from 'mathjs';
+import { compileExpr } from './expr.ts';
+
+/**
+ * Checks of a plotly graph from its data alone, with no model call: what the existing check (does it draw?) lets through.
+ * They run at generation, on an author's edit and at export, so they also cover graphs drawn before they existed.
+ * The thresholds and the label parser were tuned on the 74 graphs of the four audited books (issue #128).
+ */
+export interface GraphLintFinding {
+  code: string;
+  /** A blocking finding keeps a generated or edited graph out of the book until it is redrawn or the author accepts it. */
+  severity: 'block' | 'warn';
+  /** The trace's name, when the finding is about one trace. */
+  trace?: string;
+  detail: string;
+}
+
+const BLOCKING = new Set(['duplicate', 'joined-jump', 'invisible', 'label-mismatch', 'needs-parametric', 'point-as-curve', 'all-constant', 'placeholder', 'axis-scale', 'empty']);
+
+type Trace = Record<string, unknown>;
+type Point = [unknown, unknown];
+
+const isNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+const axisTitle = (a: unknown): string => {
+  const t = (a as { title?: unknown } | undefined)?.title;
+  if (typeof t === 'string') return t;
+  const text = (t as { text?: unknown } | undefined)?.text;
+  return typeof text === 'string' ? text : '';
+};
+const median = (a: number[]) => {
+  const s = [...a].sort((p, q) => p - q);
+  return s.length ? s[Math.floor(s.length / 2)]! : 0;
+};
+const nameOf = (t: Trace) => (typeof t.name === 'string' ? t.name : '');
+
+/** The points of a trace, with x defaulting to the index as Plotly does. */
+function points(t: Trace): Point[] {
+  const ys = Array.isArray(t.y) ? (t.y as unknown[]) : [];
+  const xs = Array.isArray(t.x) ? (t.x as unknown[]) : ys.map((_, k) => k);
+  return ys.map((y, k) => [xs[k], y]);
+}
+const finitePoints = (pts: Point[]) => pts.filter((p): p is [number, number] => isNum(p[0]) && isNum(p[1]));
+
+// ---------- formulas written in a label ----------
+
+const SUP: Record<string, string> = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁻': '-', 'ⁿ': 'n' };
+const SUB: Record<string, string> = { '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9', 'ₙ': 'n', 'ₓ': 'x', 'ᵧ': 'y', 'ₜ': 't' };
+const CONSTANTS = new Set(['e', 'pi']);
+
+/** The plain-text maths of a label in mathjs syntax: "x²" becomes "x^(2)", "ln" becomes "log", "0,5" becomes "0.5". */
+export function normaliseLabelFormula(s: string): string {
+  let t = s.normalize('NFC')
+    .replace(/[−–]/g, '-').replace(/[·×⋅]/g, '*').replace(/π/g, 'pi').replace(/√\s*\(/g, 'sqrt(').replace(/√\s*([a-zA-Z0-9.]+)/g, 'sqrt($1)')
+    .replace(/log₁₀/g, 'log10').replace(/\bln\b/g, 'log').replace(/\barctan\b/g, 'atan').replace(/\|([^|]+)\|/g, 'abs($1)')
+    .replace(/(\d),(\d)/g, '$1.$2');
+  t = t.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁻ⁿ]+/g, (m) => `^(${[...m].map((c) => SUP[c]).join('')})`);
+  t = t.replace(/[₀₁₂₃₄₅₆₇₈₉ₙₓᵧₜ]/g, (c) => SUB[c]!);
+  return t.trim();
+}
+
+/** The symbols of an expression that are neither functions nor e and pi, or null when it does not parse. */
+function freeSymbols(src: string): Set<string> | null {
+  let node: MathNode;
+  try { node = parse(src); } catch { return null; }
+  const out = new Set<string>();
+  node.traverse((n, path, parent) => {
+    if (n.type === 'SymbolNode' && !(parent?.type === 'FunctionNode' && path === 'fn')) {
+      const name = (n as unknown as { name: string }).name;
+      if (!CONSTANTS.has(name)) out.add(name);
+    }
+  });
+  return out;
+}
+
+/** The first symbol of an axis title: "Volume V (L)" is V, "Tempo, t (s)" is t. */
+function axisVar(title: string): string | null {
+  const m = /(?:^|[\s,(])([A-Za-zΔθλ](?:[_₀-₉a-z]{0,3})?)\s*(?:\(|\[|$|,)/u.exec(title.trim());
+  return m ? m[1]! : null;
+}
+
+type Claim =
+  | { kind: 'fn'; evaluate: (x: number) => number; src: string }
+  | { kind: 'const' | 'vline' | 'circle' | 'ray'; value: number; src: string };
+
+/**
+ * What a label states about its trace, from its "lhs = rhs" segments whose right side is maths: y = f(x), y constant,
+ * x constant, a circle of radius r or a ray at angle θ. Prose, parameters ("con K = 60,9") and labels that define several
+ * functions are not claims about the curve.
+ */
+export function labelClaims(name: string, xTitle: string, yTitle: string): Claim[] {
+  const claims: Claim[] = [];
+  const xv = axisVar(xTitle) ?? 'x';
+  const lower = name.toLowerCase();
+  if ((name.match(/[a-zA-Z]\([^)]*\)\s*=/g) ?? []).length > 1) return claims;
+  const circle = /circonferenza|cerchio|circle/.test(lower);
+  const ray = /semiretta|ray/.test(lower);
+  for (const seg of name.split(/[;:]|,\s(?=[^\d])|\scon\s|\sper\s|\(|\)/)) {
+    const parts = seg.split('=');
+    if (parts.length < 2) continue;
+    const lhs = normaliseLabelFormula(parts[0]!).replace(/\s+/g, ' ').trim();
+    const lhsSym = lhs.split(' ').at(-1) ?? '';
+    // "minimo in x = 0" or "sezione y = 0" name a place, not the curve.
+    if (lhs !== lhsSym && !circle && !ray) continue;
+    for (const raw of parts.slice(1)) {
+      const rhs = normaliseLabelFormula(raw).replace(/\s*→.*$/, '').replace(/\s+(g|kg|m|s|K|J|W|Pa|L|N|V|atm|mol)$/, '').trim();
+      if (!rhs || /[a-zA-Z]{4,}/.test(rhs.replace(/sqrt|log10|log|atan|exp|sin|cos|tan|abs|floor|ceil|cbrt/g, ''))) continue;
+      const free = freeSymbols(rhs);
+      if (!free) continue;
+      const src = seg.trim();
+      if (free.size === 0) {
+        const c = compileExpr(rhs, []);
+        if (!c.ok) continue;
+        const value = c.evaluate({});
+        if (!isNum(value)) continue;
+        if (circle && lhsSym === 'r') claims.push({ kind: 'circle', value, src });
+        else if (ray && /^(θ|theta)$/.test(lhsSym)) claims.push({ kind: 'ray', value, src });
+        else if (lhsSym === xv) claims.push({ kind: 'vline', value, src });
+        // The left side must name the plotted quantity: y, a function f(...), or the y axis symbol.
+        else if (/^[a-zA-Z]{1,2}_?[a-z0-9]?(\(.*\))?$/.test(lhsSym) && (lhsSym === 'y' || lhsSym.includes('(') || lhsSym === axisVar(yTitle) || lhsSym.startsWith('f'))) claims.push({ kind: 'const', value, src });
+      } else if (free.size === 1) {
+        const v = [...free][0]!;
+        if (v !== xv && v !== 'x') continue;
+        const c = compileExpr(rhs, [v]);
+        if (c.ok) claims.push({ kind: 'fn', evaluate: (x) => c.evaluate({ [v]: x }), src });
+      }
+    }
+  }
+  return claims;
+}
+
+/** Where the data contradicts a claim, or null when at most 2% of the points do. */
+function checkClaim(claim: Claim, pts: Point[]): string | null {
+  const fin = finitePoints(pts);
+  if (fin.length < 2) return null;
+  const xs = fin.map(([x]) => x);
+  const cx = (Math.min(...xs) + Math.max(...xs)) / 2;
+  const scale = Math.max(1e-9, ...fin.map(([, y]) => Math.abs(y)));
+  let bad = 0;
+  let worst = '';
+  const miss = (text: string) => { bad++; worst ||= text; };
+  for (const [x, y] of fin) {
+    if (claim.kind === 'vline') {
+      if (Math.abs(x - claim.value) > 1e-6 * Math.max(1, Math.abs(claim.value))) miss(`x=${x} but the label says ${claim.src}`);
+    } else if (claim.kind === 'circle') {
+      const r = Math.hypot(x - cx, y);
+      if (Math.abs(r - claim.value) > 1e-3 * claim.value) miss(`point (${x}, ${y}) is at distance ${r.toPrecision(4)}, the label says ${claim.src}`);
+    } else if (claim.kind === 'ray') {
+      const th = Math.atan2(y, x);
+      if (Math.hypot(x, y) > 1e-9 && Math.abs(th - claim.value) > 1e-3) miss(`point (${x}, ${y}) has angle ${th.toPrecision(4)}, the label says ${claim.src}`);
+    } else {
+      const e = claim.kind === 'fn' ? claim.evaluate(x) : claim.value;
+      if (!isNum(e)) continue;
+      if (Math.abs(y - e) > 1e-4 * Math.max(Math.abs(e), scale * 1e-3, 1e-9)) miss(`at x=${x} the data is ${y}, the label's ${claim.src} gives ${Number(e.toPrecision(6))}`);
+    }
+  }
+  return bad > fin.length * 0.02 ? worst : null;
+}
+
+// ---------- the checks ----------
+
+const PRIMITIVES: [string, (x: number) => number][] = [
+  ['x', (x) => x], ['x²', (x) => x * x], ['x³', (x) => x ** 3], ['sin x', Math.sin], ['cos x', Math.cos], ['eˣ', Math.exp], ['|x|', Math.abs],
+];
+
+/**
+ * Lints a graph payload ({ type: 'plotly', config: { data, layout } }). Other graph types (the reader's own "function"
+ * graphs) have no sampled data to read and get no findings.
+ */
+export function lintGraph(payload: Record<string, unknown>): GraphLintFinding[] {
+  if (payload.type !== 'plotly') return [];
+  const out: GraphLintFinding[] = [];
+  const add = (code: string, trace: string | undefined, detail: string) => out.push({ code, severity: BLOCKING.has(code) ? 'block' : 'warn', ...(trace === undefined ? {} : { trace }), detail });
+  const cfg = (payload.config && typeof payload.config === 'object' ? payload.config : {}) as { data?: unknown; layout?: unknown };
+  const data = (Array.isArray(cfg.data) ? cfg.data : []).filter((t): t is Trace => !!t && typeof t === 'object' && !Array.isArray(t));
+  const layout = (cfg.layout && typeof cfg.layout === 'object' ? cfg.layout : {}) as { xaxis?: { type?: unknown; range?: unknown }; yaxis?: { type?: unknown; range?: unknown } };
+  const xT = axisTitle(layout.xaxis);
+  const yT = axisTitle(layout.yaxis);
+  const xLog = layout.xaxis?.type === 'log';
+  const yLog = layout.yaxis?.type === 'log';
+  const ty = (v: number) => (yLog ? Math.log10(v) : v);
+  if (!data.length) { add('empty', undefined, 'the graph has no traces'); return out; }
+
+  // The visible y range: the layout's (as exponents on a log axis), else the data's.
+  const allY = data.flatMap((t) => points(t).map(([, y]) => y).filter(isNum));
+  const range = layout.yaxis?.range;
+  let yr: number[] = Array.isArray(range) && range.length === 2 && range.every(isNum) ? range : [Math.min(...allY), Math.max(...allY)];
+  if (yLog && Array.isArray(range)) yr = yr.map((v) => 10 ** v);
+  const yspan = Math.max(1e-12, ty(yr[1]!) - ty(yr[0]!));
+
+  const lineTraces = data.filter((t) => (t.type ?? 'scatter') === 'scatter' && /lines/.test(typeof t.mode === 'string' ? t.mode : 'lines+markers'));
+
+  // A trace with the same points as an earlier one hides it.
+  for (let i = 0; i < data.length; i++) {
+    for (let j = 0; j < i; j++) {
+      const a = points(data[i]!);
+      const b = points(data[j]!);
+      if (a.length !== b.length || a.length < 2) continue;
+      const scale = Math.max(1e-12, ...a.map(([, y]) => (isNum(y) ? Math.abs(y) : 0)));
+      const same = a.every(([x, y], k) => x === b[k]![0] && ((y === null && b[k]![1] === null) || (isNum(y) && isNum(b[k]![1]) && Math.abs(y - (b[k]![1] as number)) <= 1e-6 * scale)));
+      if (same) add('duplicate', nameOf(data[i]!), `same data as "${nameOf(data[j]!)}", so one hides the other`);
+    }
+  }
+
+  for (const t of lineTraces) {
+    const pts = points(t);
+    const fin = finitePoints(pts);
+    if (fin.length < 2) { add('empty', nameOf(t), 'fewer than two finite points'); continue; }
+
+    // A vertical segment: one step far larger than its neighbours, or a sign flip over half the window, in a y = f(x) trace.
+    const increasing = fin.every(([x], k) => k === 0 || x > fin[k - 1]![0]);
+    const dy: (number | null)[] = [];
+    for (let k = 1; k < pts.length; k++) {
+      const a = pts[k - 1]![1];
+      const b = pts[k]![1];
+      dy.push(isNum(a) && isNum(b) && (!yLog || (a > 0 && b > 0)) ? Math.abs(ty(b) - ty(a)) : null);
+    }
+    for (let k = 0; increasing && k < dy.length; k++) {
+      const d = dy[k];
+      if (d == null) continue;
+      const near: number[] = [];
+      for (let j = Math.max(0, k - 4); j <= Math.min(dy.length - 1, k + 4); j++) if (j !== k && dy[j] != null) near.push(dy[j]!);
+      const a = pts[k]![1] as number;
+      const b = pts[k + 1]![1] as number;
+      const isolated = d > 20 * Math.max(median(near), 1e-12 * yspan);
+      const poleFlip = Math.sign(a) !== Math.sign(b) && d > 0.5 * yspan;
+      if (d > 0.05 * yspan && (isolated || poleFlip)) {
+        add('joined-jump', nameOf(t), `vertical segment between x=${String(pts[k]![0])} and x=${String(pts[k + 1]![0])} (Δy=${Number(d.toPrecision(3))}, ${Math.round((100 * d) / yspan)}% of the y range)`);
+        break;
+      }
+    }
+
+    // A trace that looks like a flat line at zero because the axis is sized for the other traces.
+    const ys = fin.map(([, y]) => y);
+    const own = Math.max(...ys) - Math.min(...ys);
+    if (!yLog && lineTraces.length > 1 && own > 1e-9 * yspan && own < 0.02 * yspan && Math.max(...ys.map(Math.abs)) < 0.02 * yspan) {
+      add('invisible', nameOf(t), `varies by ${Number(own.toPrecision(3))} on an axis ${Number(yspan.toPrecision(3))} high: it looks like a flat line at zero`);
+    }
+
+    for (const c of labelClaims(nameOf(t), xT, yT)) {
+      const bad = checkClaim(c, pts);
+      if (bad) add('label-mismatch', nameOf(t), bad);
+    }
+  }
+
+  // Traces on one y axis whose names give different units.
+  const unitOf = (n: string) => /\((?:[^()]*\s)?(Pa|m\/s|m|s|J|W|K|°C|V|mmHg|atm|kJ\/mol|kg·m\/s|N|L|mol\/L)\)/.exec(n)?.[1];
+  const units = new Set(data.map((t) => unitOf(nameOf(t))).filter(Boolean));
+  if (units.size > 1) add('mixed-units', undefined, `one y axis carries ${[...units].join(', ')}`);
+
+  for (const [ax, title, log] of [['x', xT, xLog], ['y', yT, yLog]] as const) {
+    if (/logaritm|log scale|log-scale/i.test(title) && !log) add('axis-scale', undefined, `${ax} axis title "${title}" says logarithmic, the axis is linear`);
+  }
+
+  // One axis standing for several quantities ("Distanza, forza ... o temperatura", "Velocità / quota").
+  const wordy = (p: string) => /[A-Za-zàèéìòù]{5,}/.test(p.replace(/\w+_\w+/g, ''));
+  for (const [ax, title] of [['x', xT], ['y', yT]] as const) {
+    const slash = title.split(/\s\/\s/);
+    if (/\b(oppure|or)\b|,.*\so\s/i.test(title) || (slash.length > 1 && slash.every(wordy))) add('multiplexed-axis', undefined, `${ax} axis "${title}" stands for several quantities`);
+  }
+
+  // Shapes a y = f(x) trace cannot draw.
+  for (const t of lineTraces) {
+    const n = nameOf(t).toLowerCase();
+    const xs = points(t).filter(([, y]) => isNum(y)).map(([x]) => x as number);
+    const monotone = xs.every((x, k) => k === 0 || x >= xs[k - 1]!);
+    if (/^(circonferenza|cerchio|circle|ellisse|ellipse)\b/.test(n) && monotone) add('needs-parametric', nameOf(t), 'a closed curve drawn as y = f(x)');
+    if (/isocora|isochor|retta verticale|vertical line/.test(n) && new Set(xs).size > 2) add('needs-parametric', nameOf(t), 'a vertical line drawn as y = f(x)');
+    if ((/(valore|value|punto|point|regolarizzat|isolat)[^,]*\b(in|at|a)\s*x\s*=\s*[-\d.]+/.test(n) || /valore regolarizzato|punto isolato/.test(n)) && xs.length > 5) {
+      add('point-as-curve', nameOf(t), 'a value at one point drawn as a curve');
+    }
+  }
+
+  // Every trace a horizontal line: the x axis carries no information.
+  const constant = lineTraces.filter((t) => {
+    const ys = points(t).map(([, y]) => y).filter(isNum);
+    return ys.length > 1 && Math.max(...ys) - Math.min(...ys) <= 1e-9 * Math.max(1, ...ys.map(Math.abs));
+  });
+  if (lineTraces.length >= 2 && constant.length === lineTraces.length) add('all-constant', undefined, 'every trace is a horizontal line, so the x axis carries no information');
+
+  // Textbook primitives (x, x², sin x, ...) under names that state no formula. One is a fine linear law; two are a made-up graph.
+  const hits: { name: string; prim: string }[] = [];
+  for (const t of lineTraces) {
+    if (/[=()^²³|]|\b(sin|cos|exp|log)\b|\d/.test(nameOf(t))) continue;
+    const fin = finitePoints(points(t));
+    if (fin.length <= 10) continue;
+    const prim = PRIMITIVES.find(([, f]) => [1, 2, 0.5, -1].some((k) => fin.every(([x, y]) => Math.abs(y - k * f(x)) <= 1e-6 * Math.max(1, Math.abs(y)))));
+    if (prim) hits.push({ name: nameOf(t), prim: prim[0] });
+  }
+  if (new Set(hits.map((h) => h.prim)).size >= 2) add('placeholder', undefined, `traces are ${hits.map((h) => `${h.prim} ("${h.name}")`).join(', ')} while their names state no formula`);
+  return out;
+}
+
+/** The key under which an author accepts a finding. It names the code and the trace, so it survives later edits of other traces. */
+export const lintKey = (f: GraphLintFinding) => `${f.code}:${f.trace ?? ''}`;
+
+/**
+ * The lint as a check entry: it fails on a blocking finding the author has not accepted. Warnings and accepted findings
+ * are listed in the detail and do not fail it.
+ */
+export function graphLintCheck(payload: Record<string, unknown>, accepted: readonly string[] = []): { method: 'lint'; ok: boolean; detail: string; findings: GraphLintFinding[] } {
+  const findings = lintGraph(payload);
+  const open = findings.filter((f) => f.severity === 'block' && !accepted.includes(lintKey(f)));
+  const line = (f: GraphLintFinding) => `${f.code}${f.trace ? ` ("${f.trace}")` : ''}: ${f.detail}${f.severity === 'warn' ? ' (warning)' : accepted.includes(lintKey(f)) ? ' (accepted by the author)' : ''}`;
+  return { method: 'lint', ok: open.length === 0, detail: findings.length ? findings.map(line).join('; ') : 'No problems in the data.', findings };
+}

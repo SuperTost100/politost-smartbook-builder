@@ -338,4 +338,8 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE content_revisions ADD COLUMN restored_from TEXT;
   `,
+  // 8: graph lint findings the author accepted, as "code:trace" keys (see lintKey in @smartbuilder/content).
+  `
+  ALTER TABLE enrichments ADD COLUMN lint_accepted TEXT NOT NULL DEFAULT '[]';
+  `,
 ];

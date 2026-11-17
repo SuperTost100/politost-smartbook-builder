@@ -1,5 +1,5 @@
 // Extras: the bulk model picks where graphs and lab examples (Python or MATLAB) help; the writer creates them; we check them.
-import { sampleFunctionGraph } from '@smartbuilder/content';
+import { graphLintCheck, sampleFunctionGraph } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
 import { runRole } from '../llm/index.ts';
@@ -38,7 +38,7 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
     return { id: s.id, title: s.title, text: head?.markdown ?? '' };
   }).filter((s) => s.text);
   const { data } = await runRole(ctx, {
-    role: 'bulk', ...enrichPickPrompt({ sections: sections.map((s) => `${s.id} | ${s.title} | ${truncate(s.text.replace(/\s+/g, ' '), 600)}`).join('\n'), graphs: project.options.graphs, ide: project.options.ide, lab, maxIde }),
+    role: 'bulk', ...enrichPickPrompt({ sections: sections.map((s) => `${s.id} | ${s.title} | ${pickSummary(s.text)}`).join('\n'), graphs: project.options.graphs, ide: project.options.ide, lab, maxIde }),
     schema: enrichPickSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   const have = new Set(sections.map((s) => s.id));
@@ -47,8 +47,9 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
   const force = t.task.input.force ? { force: true } : {};
   const titleOf = (id: string) => chapter.sections.find((s) => s.id === id)?.title ?? '';
   const specs: TaskSpec[] = [
-    ...(project.options.graphs ? usable(data.graphs).slice(0, 2) : [])
-      .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
+    // A pick that names no relation is a graph the section does not support (a classification, a structure): none is drawn.
+    ...(project.options.graphs ? usable(data.graphs.filter((p) => p.relation.trim())).slice(0, 2) : [])
+      .map((p) => ({ kind: 'enrich.graph', key: `enrich.graph:${p.sectionId}`, label: `Draw a graph for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, relation: p.relation.trim(), ...force }, pool: 'editor' })),
     ...(project.options.ide ? usable(data.ide).slice(0, maxIde) : [])
       .map((p) => ({ kind: 'enrich.ide', key: `enrich.ide:${p.sectionId}`, label: `Write a ${LAB_NAME[lab]} example for "${titleOf(p.sectionId)}"`, input: { nodeId: p.sectionId, purpose: p.purpose, ...force }, pool: 'editor' })),
   ];
@@ -57,6 +58,13 @@ export async function chapterEnrich(ctx: AppContext, t: TaskContext) {
 }
 
 const LAB_NAME = { python: 'Python', matlab: 'MATLAB' } as const;
+
+/** What the picker reads of a section: its opening and its first display formulas, where the relations a graph needs are stated. */
+export function pickSummary(text: string): string {
+  const formulas = [...text.matchAll(/\$\$([\s\S]+?)\$\$/g)].slice(0, 4).map((m) => truncate(m[1]!.replace(/\s+/g, ' ').trim(), 160));
+  const opening = truncate(text.replace(/\s+/g, ' '), 600);
+  return formulas.length ? `${opening} | formulas: ${formulas.join(' ; ')}` : opening;
+}
 
 /** The task key is per section, so a section picked twice would enqueue one task and use up two places. */
 function uniqueSections<T extends { sectionId: string }>(picks: T[]): T[] {
@@ -99,7 +107,7 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
     setIssuesStatus(ctx, projectId, issueIds, 'fixed', reason);
     return { made: 0, skipped: reason };
   }
-  const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const g = await runRole(ctx, { role: 'editor', ...graphPrompt({ language: project.language, purpose: String(t.task.input.purpose ?? ''), relation: typeof t.task.input.relation === 'string' ? t.task.input.relation : undefined, section: truncate(head.markdown, 8000) }), schema: graphSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
   const main = g.data;
   const toSpec = (id: string, title: string, yDomain: [number, number], yScale: 'linear' | 'log' | undefined, yLabel: string, functions: { fn: string; label: string }[]) => ({
     id, title, xDomain: main.xDomain, yDomain, xScale: main.xScale, yScale, xLabel: main.xLabel, yLabel,
@@ -108,9 +116,13 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   const graphs = [{ spec: toSpec(main.id, main.title, main.yDomain, main.yScale, main.yLabel, main.functions), description: main.description }];
   // A pair (the phase under a Bode magnitude) shares the first graph's x axis, so the two line up when read one after the other.
   if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.functions), description: main.pair.description });
+  // A graph that draws can still be wrong in ways its data shows (a joined jump, two traces in one place): the lint reads it.
   const built = graphs.map(({ spec, description }) => {
     const sampled = sampleFunctionGraph(spec);
-    return { sampled, checks: [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }] };
+    const lint = graphLintCheck(sampled.payload);
+    const checks = [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }, { method: 'lint', ok: lint.ok, detail: lint.detail }];
+    const failed = [sampled.ok ? '' : sampled.detail, lint.ok ? '' : lint.detail].filter(Boolean).join('; ');
+    return { sampled, checks, ok: !failed, failed };
   });
   // A redraw that Auto Fix asked for (issues about a graph that failed its check) replaces the failing graph only when the
   // new one passes. A new failure adds no graph and no second issue: the issues stay open with the reason.
@@ -124,10 +136,10 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
       setIssuesStatus(ctx, projectId, issueIds, 'open', reason);
       return { made: 0, skipped: reason };
     }
-    const { sampled, checks } = pick;
-    if (!sampled.ok) {
-      setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${sampled.detail}`);
-      return { made: 0, failed: sampled.detail };
+    const { sampled, checks, ok, failed } = pick;
+    if (!ok) {
+      setIssuesStatus(ctx, projectId, issueIds, 'open', `The graph was redrawn but failed its check again: ${failed}`);
+      return { made: 0, failed };
     }
     if (replaceId) {
       // Work done while the author changed the same graph is never applied over it: the check and the write are one transaction.
@@ -188,7 +200,7 @@ function saveEnrichment(ctx: AppContext, projectId: string, nodeId: string, kind
   if (!ok) {
     ctx.db.insert('review_issues', {
       id: newId(), project_id: projectId, node_id: nodeId, question_id: null, rev_id: null, source: 'verification', severity: 'major',
-      category: kind, quote: String(payload.title ?? ''), message: `The ${kind === 'ide' ? `${LAB_NAME[payload.language === 'matlab' ? 'matlab' : 'python']} example` : 'graph'} failed its check: ${checks.map((c) => c.detail).join('; ')}`,
+      category: kind, quote: String(payload.title ?? ''), message: `The ${kind === 'ide' ? `${LAB_NAME[payload.language === 'matlab' ? 'matlab' : 'python']} example` : 'graph'} failed its check: ${checks.filter((c) => !c.ok).map((c) => c.detail).join('; ')}`,
       suggestion: 'Edit it in Extras or delete it.', status: 'open', resolution: '', created_at: now(),
     });
     ctx.events.emit('issue.created', { nodeId, severity: 'major' }, { projectId });

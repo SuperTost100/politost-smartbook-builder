@@ -105,8 +105,8 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/enrichments', async (req) => listEnrichments(ctx, projectOf(ctx, req)));
 
   app.patch('/api/enrichments/:eid', async (req) => {
-    const { payload } = parse(z.object({ payload: z.record(z.string(), z.unknown()) }), req.body);
-    return updateEnrichmentPayload(ctx, getEnrichment(ctx, idParam(req, 'eid')).id, payload);
+    const { payload, acceptLint } = parse(z.object({ payload: z.record(z.string(), z.unknown()), acceptLint: z.boolean().optional() }), req.body);
+    return updateEnrichmentPayload(ctx, getEnrichment(ctx, idParam(req, 'eid')).id, payload, { acceptLint });
   });
 
   app.delete('/api/enrichments/:eid', async (req) => {
