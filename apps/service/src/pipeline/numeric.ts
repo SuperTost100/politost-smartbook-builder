@@ -37,9 +37,9 @@ const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u0
 // Units whose value in the solution is the SI value once the prefix is applied. min, h, L, bar, deg, km/h and mol/L are not: an unmarked printed value cannot be read against them.
 const SI_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'mol', 'K', 'C', 'S', 'T', 'rad', 'kg']);
 const MAX_PRINTED_VALUES = 50;
-// What a stated count is a count of ("9,02 × 10^23 atomi di ossigeno"): the value is a plain number. A count per unit (ioni/L) is a
-// density, so only "di …" or "of …" may follow the noun.
-const COUNT_NOUN = /^(?:atom[io]|molecol[ae]|ion[ei]|elettron[ei]|proton[ei]|neutron[ei]|foton[ei]|particell[ae]|nucle[io]|atoms?|molecules?|ions?|electrons?|protons?|neutrons?|photons?|particles?|nuclei|nucleus)(?:\s+(?:di|del|della|dello|dei|degli|delle|of)\s+[^/^]*)?$/iu;
+// What a stated count is a count of ("9,02 × 10^23 atomi di ossigeno"): the value is a plain number. A count per unit (ioni/L,
+// ions of sodium L⁻¹) is a density, so only "di …" or "of …" in words may follow the noun, and never "per".
+const COUNT_NOUN = /^(?:atom[io]|molecol[ae]|ion[ei]|elettron[ei]|proton[ei]|neutron[ei]|foton[ei]|particell[ae]|nucle[io]|atoms?|molecules?|ions?|electrons?|protons?|neutrons?|photons?|particles?|nuclei|nucleus)(?:\s+(?:di|del|della|dello|dei|degli|delle|of)(?!.*\bper\b)(?:\s+[\p{L}']+)+)?$/iu;
 
 /** Strips LaTeX the model may leave in a value and unifies the symbols that differ between sources. */
 function plain(text: string): string {
@@ -194,12 +194,13 @@ export async function recomputeFinalValues(computation: string | undefined, stat
 
 /**
  * The recompute that decides, when the checker and the reviewer may each have run one. With both, a mismatch counts only when
- * both programs dispute the same value (same name, or the same stated value): two programs that disagree prove nothing about
- * the solution. With one, that one decides.
+ * both programs dispute the same value: the same name, or a stated value that only one result has. Two programs that disagree
+ * prove nothing about the solution. With one, that one decides.
  */
 export function combineRecomputes(checker: NumericCheck | null, reviewer: NumericCheck | null): NumericCheck | null {
   if (!checker || !reviewer) return reviewer ?? checker;
-  const same = (a: Comparison, b: Comparison) => key(a.name) === key(b.name) || a.stated === b.stated;
+  const once = (list: Comparison[], stated: string) => list.filter((x) => x.stated === stated).length === 1;
+  const same = (a: Comparison, b: Comparison) => key(a.name) === key(b.name) || (a.stated === b.stated && once(checker.compared, a.stated) && once(reviewer.compared, b.stated));
   return { ...reviewer, mismatches: reviewer.mismatches.filter((m) => checker.mismatches.some((c) => same(c, m))) };
 }
 

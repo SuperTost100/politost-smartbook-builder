@@ -35,6 +35,8 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     assert.equal(parseQuantity('3 atomic units'), null, 'a word that only starts like a count noun is not one');
     assert.equal(parseQuantity('2,00 × 10^20 ions/L'), null, 'a count per litre is a density, not a plain number');
     assert.equal(parseQuantity('2,00 × 10^23 ioni/m^3'), null);
+    assert.equal(parseQuantity('2.00e20 ions of sodium L⁻¹'), null);
+    assert.equal(parseQuantity('2.00e20 ioni di sodio per litro'), null);
     // Chimica 2a682723: the solution's 9,02 is right; the model claimed 9,03 and no recompute ran.
     assert.equal(compareValues([{ name: 'N_atomi', value: '9,02 × 10^23 atomi' }], 'N_atomi = 9.02497780e23')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'N_atomi', value: '9,10 × 10^23 atomi' }], 'N_atomi = 9.02497780e23 atomi')!.mismatches.length, 1);
@@ -68,6 +70,14 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     const a = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
     const b = { name: 'b', stated: '2.00 V', computed: '2.5 V' };
     assert.deepEqual(combineRecomputes({ compared: [a, b], mismatches: [a], complete: true }, { compared: [a, b], mismatches: [b], complete: true })!.mismatches, []);
+    // Two results stated with the same value are told apart by name.
+    const a1 = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
+    const b1 = { name: 'b', stated: '1.00 V', computed: '1.5 V' };
+    assert.deepEqual(combineRecomputes({ compared: [a1, b1], mismatches: [a1], complete: true }, { compared: [a1, b1], mismatches: [b1], complete: true })!.mismatches, []);
+    // Programs that name one result differently still agree on it through its stated value.
+    const p = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
+    const q = { name: 'pressione', stated: '140 kPa', computed: '170000 Pa' };
+    assert.equal(combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [q], mismatches: [q], complete: true })!.mismatches.length, 1);
   });
 });
 
