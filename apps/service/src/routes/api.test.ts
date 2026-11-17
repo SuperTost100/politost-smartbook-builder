@@ -829,6 +829,27 @@ describe('review fixes (server)', () => {
     assert.match(broken.checks[0].detail, /at least one curve/);
   });
 
+  it('6c. an edited graph is linted, and "Accept anyway" keeps the accepted finding from failing it again', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-lint'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('Charles'), trace('Gay-Lussac')], layout: {} } };
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'verified', checks: [], created_at: now() });
+    const linted = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: twins })).body;
+    assert.equal(linted.status, 'issue');
+    assert.deepEqual(linted.checks.map((c: { method: string; ok: boolean }) => [c.method, c.ok]), [['numeric', true], ['lint', false]]);
+    assert.deepEqual(linted.lintAccepted, []);
+    const accepted = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: twins, acceptLint: true })).body;
+    assert.equal(accepted.status, 'verified');
+    assert.deepEqual(accepted.lintAccepted, ['duplicate:Gay-Lussac']);
+    assert.match(accepted.checks[1].detail, /accepted by the author/);
+    // A later edit keeps the acceptance; a new finding on another trace still fails.
+    const renamed = { ...twins, config: { ...twins.config, data: [trace('Charles'), trace('Gay-Lussac'), trace('Boyle')] } };
+    const again = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: renamed })).body;
+    assert.equal(again.status, 'issue');
+    assert.match(again.checks[1].detail, /duplicate \("Boyle"\)/);
+  });
+
   it('7. the generate route forwards scope.nodeIds', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('node-scope'));
     await t.req('POST', `/api/projects/${p.id}/runs`, { kind: 'generate', scope: { nodeIds: ['s3'] } });

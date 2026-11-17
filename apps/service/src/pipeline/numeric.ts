@@ -186,3 +186,39 @@ export async function recomputeFinalValues(computation: string | undefined, stat
   if (!result.ok || !result.stdout.trim()) return null;
   return compareValues(stated, result.stdout);
 }
+
+/**
+ * What the checker's consistency program said about the statement's data. `failed` covers a program that crashed, timed out
+ * or printed neither verdict: the data were not shown consistent, so it does not pass.
+ */
+export interface ConsistencyCheck { verdict: 'consistent' | 'inconsistent' | 'failed'; detail: string }
+
+const CONSISTENCY_TIMEOUT_MS = 15_000;
+
+/**
+ * Runs the checker's consistency program in the sandbox of `python.ts` and reads its last printed line. Null when there is no
+ * program, which the prompt allows only for a problem with no numeric data.
+ */
+export async function runConsistency(code: string | undefined, run: (code: string, timeoutMs: number) => Promise<PythonResult> = runPython): Promise<ConsistencyCheck | null> {
+  if (!code?.trim()) return null;
+  let result: PythonResult;
+  try {
+    result = await run(code, CONSISTENCY_TIMEOUT_MS);
+  } catch (err) {
+    return { verdict: 'failed', detail: `The consistency program could not run: ${(err as Error).message}` };
+  }
+  const last = result.stdout.trim().split('\n').map((l) => l.trim()).filter(Boolean).pop() ?? '';
+  // A program that found an inconsistency and then crashed still found it.
+  if (/^INCONSISTENT\b/.test(last)) return { verdict: 'inconsistent', detail: truncateLine(last) };
+  if (!result.ok) return { verdict: 'failed', detail: `The consistency program failed: ${truncateLine(errorLine(result.error ?? ''))}` };
+  if (/^CONSISTENT\b/.test(last)) return { verdict: 'consistent', detail: truncateLine(last) };
+  return { verdict: 'failed', detail: last ? `The consistency program printed neither CONSISTENT nor INCONSISTENT: ${truncateLine(last)}` : 'The consistency program printed nothing.' };
+}
+
+/** The line of a Python traceback that names the error ("ModuleNotFoundError: No module named 'sympy'"); Pyodide adds advice after it. */
+function errorLine(error: string): string {
+  const lines = error.trim().split('\n').map((l) => l.trim()).filter(Boolean);
+  return lines.findLast((l) => /^[\w.]*(Error|Exception|Interrupt|Exit)\b/.test(l)) ?? lines.pop() ?? 'no error message';
+}
+
+const truncateLine = (s: string) => (s.length > 400 ? `${s.slice(0, 399)}…` : s);

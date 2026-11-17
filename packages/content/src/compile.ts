@@ -4,6 +4,7 @@ import type { Question } from '@smartbuilder/domain';
 import type { BookInput, ChapterInput, CompiledBook, LintFinding } from './types.ts';
 import { lintCompiled, lintQuestionText, lintSection, langOf } from './lint.ts';
 import { proseLines } from './blocks.ts';
+import { lintGraph, lintKey } from './graphLint.ts';
 import { dropUnclosedDisplay, maskMath, parseAttrs, scan, type FormulaBlock } from './scan.ts';
 
 // ---------------------------------------------------------------------------------------------
@@ -690,6 +691,15 @@ export function compileBook(input: BookInput): CompiledBook {
     if (e.status !== 'issue') continue;
     const title = typeof e.payload.title === 'string' ? e.payload.title : e.id;
     findings.push(finding('extra-excluded', 'major', e.kind === 'ide' ? 'ide.json' : 'grafici.json', `The ${e.kind === 'ide' ? 'lab example' : 'graph'} "${title}" failed its check and is left out of the export. Fix it in Extras or delete it.`, undefined, title));
+  }
+  // A graph drawn before the graph lint existed ships with what the lint finds now, reported here. A finding the author accepted is not.
+  for (const e of input.enrichments) {
+    if (e.kind !== 'graph' || e.status === 'issue') continue;
+    const title = typeof e.payload.title === 'string' ? e.payload.title : e.id;
+    for (const f of lintGraph(e.payload)) {
+      if (e.lintAccepted.includes(lintKey(f))) continue;
+      findings.push(finding('graph-lint', 'minor', 'grafici.json', `The graph "${title}": ${f.code}${f.trace ? ` on "${f.trace}"` : ''}, ${f.detail}. Redraw it or fix it in Extras.`, undefined, title));
+    }
   }
   const payloads = (kind: 'ide' | 'graph') =>
     input.enrichments

@@ -27,6 +27,8 @@ export interface SubjectProfile {
   hypotheses: string;
   /** Cases the setting rules out, so a reviewer does not report them as missing hypotheses. */
   excluded: string;
+  /** Constraints the data of a problem must meet, as examples for the exercise check's consistency program. */
+  constraints: string;
 }
 
 export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
@@ -38,6 +40,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'how to write the domain, intervals, derivatives, limits, sets and vectors',
     hypotheses: 'domains, continuity, convergence, a denominator that may vanish',
     excluded: 'a positive angular frequency in a period, a nonzero quantity the text divides by, the origin in polar coordinates, a sign convention the text fixed, a function the text already assumes continuous',
+    constraints: 'a probability lies in [0,1], a quantity the statement gives twice (a value, a period, a coefficient) has the same value both times, a set or an interval the problem works on is not empty, the hypotheses of the theorem the solution needs hold for the given data',
   },
   physics: {
     figureKinds: ['plot', 'drawing', 'photo'],
@@ -47,6 +50,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'the symbol and unit of each quantity, how vectors and components are written, the sign conventions and the axes',
     hypotheses: 'the system and its approximations, the frame of reference, the range where a law holds, the units',
     excluded: 'a positive angular frequency in a period, a frictionless or point-like model the text declared, a sign convention the text fixed',
+    constraints: 'principal moments of inertia satisfy the triangle inequality (each at most the sum of the other two), the same circle or orbit has the same radius everywhere, an amplitude, a period or a speed given and also implied by the other data has the same value, a friction coefficient or an efficiency lies in its range',
   },
   chemistry: {
     figureKinds: ['plot', 'structure', 'levels', 'orbitals', 'cell', 'periodic', 'drawing', 'photo'],
@@ -56,6 +60,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'how to write species, charges, states of matter, concentrations, equilibrium constants and units',
     hypotheses: 'the conditions (temperature, pressure, standard state), closed or open system, ideal behaviour, the units',
     excluded: 'an open system in a chapter about closed ones, ideal behaviour the text declared, a standard state the text fixed',
+    constraints: 'a molar mass equals the one of the formula the other data imply, atom counts and stoichiometric coefficients are whole numbers, mass fractions add up to 100%, a concentration cannot exceed what the dissolved amount allows, an equilibrium constant agrees with the given concentrations',
   },
   electronics: {
     figureKinds: ['plot', 'drawing', 'photo'],
@@ -65,6 +70,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'units written in upright type with SI prefixes, the sign conventions for voltage and current, how phasors, small-signal quantities and logic levels are written',
     hypotheses: 'the operating region, the sign convention, linearity, ideal components, steady state, the logic family',
     excluded: 'an ideal component the text declared, steady state in a chapter about the steady state, a sign convention the text fixed',
+    constraints: 'Kirchhoff\'s laws hold for the given voltages and currents, a component works in the region the data assume, a power or an efficiency is possible, a value given and also implied by the other data is the same',
   },
   'computer-science': {
     figureKinds: ['plot', 'drawing'],
@@ -74,6 +80,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'how to write complexity bounds, sets, sequences, indices and pseudocode',
     hypotheses: 'preconditions on the input, the model of computation, loop invariants, termination',
     excluded: 'inputs the text restricts, a model of computation the text fixed, a sorted input where the algorithm requires one',
+    constraints: 'the input meets the preconditions, sizes and indices are whole numbers in range, a value given and also implied by the other data is the same',
   },
   mechanics: {
     figureKinds: ['plot', 'drawing', 'photo'],
@@ -83,6 +90,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'the symbol and unit of each quantity, how forces, vectors and components are written, the sign conventions and the reference frame',
     hypotheses: 'the model (rigid body, small deformation, linear elasticity), the reference frame, the sign convention, the units',
     excluded: 'a rigid body or small deformations the text declared, a sign convention the text fixed',
+    constraints: 'the given forces and reactions satisfy equilibrium, principal moments of inertia satisfy the triangle inequality, a stress stays in the range of the stated model, a value given and also implied by the other data is the same',
   },
   other: {
     figureKinds: ['plot', 'drawing', 'photo'],
@@ -92,6 +100,7 @@ export const SUBJECT_PROFILES: Record<SubjectArea, SubjectProfile> = {
     notation: 'the conventions to use throughout (symbols, units, how the main objects are written)',
     hypotheses: 'the assumptions a statement needs, the conditions of a method, the units',
     excluded: 'a case the text declared out of scope, a convention the text fixed',
+    constraints: 'a quantity given and also implied by the other data has the same value, a quantity lies in its possible range, counts are whole numbers',
   },
 };
 

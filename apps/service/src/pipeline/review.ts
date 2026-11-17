@@ -3,7 +3,7 @@ import { applyGuardedChanges, compileChapter, dropReferences, formatModelText, l
 import { outlineSchema, subjectProfileOf, type EvidenceNote } from '@smartbuilder/domain';
 import { currentHeads, repairHead } from '../repo/content.ts';
 import { countOpenSerious, issuesChanged, setIssuesStatus } from '../repo/issues.ts';
-import { questionsChanged } from '../repo/questions.ts';
+import { questionsChanged, recordQuestionRevision } from '../repo/questions.ts';
 import { bookContext, chapterInput, relint } from '../routes/views.ts';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -681,7 +681,11 @@ export async function sectionRevise(ctx: AppContext, t: TaskContext): Promise<Re
             .filter((x) => uses(x.statement + x.hint + x.solution));
           for (const x of qs) {
             if (x.origin === 'generated') ctx.db.run('UPDATE questions SET chapter_id = NULL, rev = rev + 1, updated_at = ? WHERE id = ?', now(), x.id);
-            else ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, rev = rev + 1, updated_at = ? WHERE id = ?', dropReferences(x.statement, '', lost), dropReferences(x.hint, '', lost), dropReferences(x.solution, '', lost), now(), x.id);
+            else {
+              const after = { statement: dropReferences(x.statement, '', lost), hint: dropReferences(x.hint, '', lost), solution: dropReferences(x.solution, '', lost) };
+              ctx.db.run('UPDATE questions SET statement = ?, hint = ?, solution = ?, rev = rev + 1, updated_at = ? WHERE id = ?', after.statement, after.hint, after.solution, now(), x.id);
+              recordQuestionRevision(ctx, x.id, x, after, { origin: 'reference-dropped', taskId: t.task.id });
+            }
           }
           if (qs.length) questionsChanged(ctx, projectId, qs.map((x) => x.id));
         }

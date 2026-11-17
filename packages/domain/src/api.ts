@@ -143,7 +143,7 @@ export interface Api {
   'POST /api/projects/:id/outline/approve': { body: { revId: string }; res: OutlineRevision };
 
   /** Starts a run. kind=prepare: extract+map; plan: outline; generate: draft everything in scope. */
-  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; reviewMode?: 'full' | 'recheck'; missingOnly?: boolean } }; res: RunSummary };
+  'POST /api/projects/:id/runs': { body: { kind: RunSummary['kind']; scope?: { chapterIds?: string[]; nodeIds?: string[]; questionIds?: string[]; generatedQuestions?: boolean; reviewMode?: 'full' | 'recheck'; missingOnly?: boolean } }; res: RunSummary };
   'GET /api/projects/:id/runs': { res: RunSummary[] };
   'GET /api/runs/:runId': { res: RunSummary & { tasks: TaskRow[]; usage: UsageRow[] } };
   'POST /api/runs/:runId/pause': { res: RunSummary };
@@ -201,7 +201,7 @@ export interface Api {
   'GET /api/assets/:assetId/file': { res: Blob };
   'POST /api/projects/:id/assets': { res: Asset };
   'GET /api/projects/:id/enrichments': { res: Enrichment[] };
-  'PATCH /api/enrichments/:eid': { body: { payload: Record<string, unknown> }; res: Enrichment };
+  'PATCH /api/enrichments/:eid': { body: { payload: Record<string, unknown>; acceptLint?: boolean }; res: Enrichment };
   'DELETE /api/enrichments/:eid': { res: { ok: true } };
 
   /** The course program; null fields until the author saves one. */
