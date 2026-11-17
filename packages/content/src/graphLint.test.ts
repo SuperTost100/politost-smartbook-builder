@@ -136,3 +136,33 @@ test('a joined jump is a narrow step: a wide segment drawn by hand is not one', 
   const xs = Array.from({ length: 201 }, (_, k) => k / 5);
   assert.deepEqual(codes(line('Curva di riscaldamento', xs, xs.map((x) => (x < 20 ? 0 : 100)))), ['joined-jump']);
 });
+
+test('warnings for what the reader shows differently: raw notation, dropped keys, long axis titles, a label on another variable', () => {
+  const xs = [0, 0.5, 1, 1.5, 2];
+  const tr = (name: string, extra: object = {}) => ({ type: 'scatter', mode: 'lines', name, x: xs, y: xs.map((x) => x * x), ...extra });
+  const found = (data: object[], layout: object = { xaxis: { title: 'x' }, yaxis: { title: 'y' } }) =>
+    lintGraph(raw(data, layout)).filter((f) => ['raw-notation', 'dropped-key', 'long-axis-title', 'axis-variable'].includes(f.code)).map((f) => [f.code, f.severity, f.trace ?? '']);
+
+  assert.deepEqual(found([tr('y = x^2')]), [['raw-notation', 'warn', 'y = x^2']]);
+  assert.deepEqual(found([tr('Componente y: a_y = 5 sin(θ)')]), [['raw-notation', 'warn', 'Componente y: a_y = 5 sin(θ)']], 'y has no Unicode subscript');
+  assert.deepEqual(found([tr('y = x²')]), []);
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'Frazione molare, x_soluto' }, yaxis: { title: 'y' } }), [], 'a word after an underscore reads as text');
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'x' }, yaxis: { title: 'Q_c (M⁻¹)' } }), [['raw-notation', 'warn', '']]);
+
+  assert.deepEqual(found([tr('f', { line: { color: '#000', dash: 'dash' } })]), [['dropped-key', 'warn', 'f']]);
+  assert.deepEqual(found([tr('f', { line: { color: '#000', dash: 'solid' } })]), []);
+  assert.deepEqual(found([tr('Banda', { fill: 'toself' })]), [['dropped-key', 'warn', 'Banda']]);
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'x' }, yaxis: { title: 'y', tickformat: '.1f' }, separators: ',.' }).map((f) => f[0]), ['dropped-key', 'dropped-key']);
+
+  const y51 = 'Posizione [m], velocità [m/s], accelerazione [m/s²]';
+  assert.equal([...y51].length, 51);
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'x' }, yaxis: { title: y51 } }), [['long-axis-title', 'warn', '']]);
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'x' }, yaxis: { title: y51.slice(0, 50) } }), []);
+  assert.deepEqual(found([tr('f')], { xaxis: { title: 'Distanza r del punto di applicazione dal polo O (m)' }, yaxis: { title: 'y' } }), [], 'an x axis has more room');
+
+  const onT = { xaxis: { title: 't' }, yaxis: { title: 'y(t)' } };
+  assert.deepEqual(found([tr('y′ = y/x + x; y(1) = 3')], onT), [['axis-variable', 'warn', 'y′ = y/x + x; y(1) = 3']]);
+  assert.deepEqual(found([tr('y′ = y/t + t; y(1) = 3')], onT), []);
+  assert.deepEqual(found([tr('f(y)=y·(y−1), g(t)=1, y(0)=1/2')], onT), [], 'a function of y beside g(t) names the axis variable');
+  assert.deepEqual(found([tr('y = 2x')], { xaxis: { title: 'Velocità v (m/s)' }, yaxis: { title: 'y' } }), [], 'only x and t name an axis variable');
+});

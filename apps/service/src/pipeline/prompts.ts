@@ -1,7 +1,7 @@
 // Prompt templates. Instructions are in English; generated book text is always in the book language.
 // Bump PROMPT_VERSION when a template changes meaning, so cached results can be told apart.
 import { z } from 'zod';
-import { ALLOWED_FUNCTIONS, guardRules, PATCH_MARK, parsePatchAnswer, rewriteLatexNames, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
+import { ALLOWED_FUNCTIONS, guardRules, langOf, PATCH_MARK, parsePatchAnswer, rewriteLatexNames, sanitizeModelValue, type ParsedPatch } from '@smartbuilder/content';
 import { FIGURE_KINDS, SUBJECT_PROFILES, subjectProfileOf, type ExamFormat, type FigureKind, type ProgramItem, type SubjectProfile } from '@smartbuilder/domain';
 import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
@@ -863,6 +863,7 @@ export function graphPrompt(p: { language: string; purpose: string; relation?: s
     system: `You design an interactive graph for a textbook in ${languageName(p.language)}. The graph shows a relation the section states, with the section's own formulas and numbers. Rules:
 - Every trace comes from one formula or worked example of the section. Copy that formula or example into "source" exactly as the section writes it. Do not invent laws, "schematic" or "qualitative" curves, or numbers the section does not give; pick parameter values the section uses.
 - The label of a curve states its formula in plain text, and "fn" is that same formula. Check the formula against the section once more before answering: signs, factors, which logarithm.
+- The title, the labels and the axis titles are shown as plain text, with no LaTeX and no HTML. Write their maths in Unicode: x², e⁻ᵏᵗ, aₓ, √(x² + 1), 2x, a·b, ⌊x⌋, and − for minus. Write decimals ${langOf(p.language) === 'it' ? 'with a comma (1,5)' : 'with a point (1.5)'}. Never write < followed later by >, because the text between them is removed; write the comparison in words. An axis title names one quantity and its unit in under 50 characters, as "Tempo t (s)". Only "fn", "xt" and "yt" use the expression syntax below.
 - Expressions use the variable x (t for parametric curves), numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). log is the natural logarithm and log10 the decimal one (in chemistry and physics texts "\\log" usually means log10). The builder samples the curves, so the graph shows exactly these expressions.
 - One x axis is one quantity and one y axis is one quantity in one unit. Do not put different quantities or units on one axis; make a smaller graph instead.
 - Trace kinds: "function" for y = f(x); give "domain" when the law holds only on part of the axis (one branch, a phase of a process, until a concentration reaches zero). "parametric" for circles, ellipses, rays, closed or vertical curves. "points" for values at single points, isolated points and holes ("open": true). "vline" for a vertical line such as an isochore. "bars" for a few values of distinct cases (before and after, classes, compounds). Leave the fields of the other kinds null.

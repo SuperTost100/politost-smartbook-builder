@@ -150,6 +150,18 @@ describe('planBackport', () => {
     assert.deepEqual(applyChanges(input, plan.changes).enrichments[0].lintAccepted, ['duplicate:b']);
   });
 
+  test('a hand-fixed graph is written as the graph formatter writes it, and the residual says why grafici.json still differs', () => {
+    const input = book();
+    const trace = (name: string) => ({ x: [0, 1, 2], y: [0, 0.5, 2], name, mode: 'lines' });
+    input.enrichments[0].payload = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [trace('s(t)')], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
+    const target = published(input, { 'grafici.json': (s) => s.replace('"s(t)"', '"s = 0.5*t^2"') });
+    const plan = planBackport(input, target);
+    assert.equal(statusOf(plan, 'grafici.json#parabola'), 'mapped');
+    const written = plan.changes.find((c) => c.kind === 'graph')!;
+    assert.equal(written.kind === 'graph' && (written.payload.config as { data: { name: string }[] }).data[0]!.name, 's = 0,5t²');
+    assert.deepEqual(plan.residual.find((r) => r.file === 'grafici.json')?.causes, ['grafici.json#parabola: written as the graph formatter writes it (Unicode maths, decimal commas, colours, ticks)']);
+  });
+
   test('a unit the new compile does not reproduce is refused', () => {
     const input = book();
     // The compiler writes every heading of a section as ###, so a ## heading added by hand cannot come out as written.
