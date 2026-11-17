@@ -6,7 +6,7 @@ import { notFound } from './errors.ts';
 import type { Rec } from './util.ts';
 
 export function mapEnrichment(r: Rec): Enrichment {
-  return { id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, payload: json(r.payload, {}), status: r.status, checks: json(r.checks, []), lintAccepted: json(r.lint_accepted, []), createdAt: r.created_at };
+  return { id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, payload: json(r.payload, {}), status: r.status, checks: json(r.checks, []), lintAccepted: json(r.lint_accepted, []), spec: r.spec ? json(r.spec, null) : null, createdAt: r.created_at };
 }
 
 export function listEnrichments(ctx: AppContext, projectId: string): Enrichment[] {
@@ -19,7 +19,7 @@ export function getEnrichment(ctx: AppContext, id: string): Enrichment {
   return mapEnrichment(r);
 }
 
-export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'createdAt' | 'status' | 'checks' | 'lintAccepted'> & Partial<Pick<Enrichment, 'status' | 'checks'>>): Enrichment {
+export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'createdAt' | 'status' | 'checks' | 'lintAccepted' | 'spec'> & Partial<Pick<Enrichment, 'status' | 'checks'>>): Enrichment {
   const id = newId();
   ctx.db.insert('enrichments', { id, project_id: e.projectId, node_id: e.nodeId, kind: e.kind, payload: e.payload, status: e.status ?? 'draft', checks: e.checks ?? [], created_at: now() });
   ctx.events.emit('enrichment.updated', { enrichmentId: id, nodeId: e.nodeId }, { projectId: e.projectId });

@@ -363,4 +363,8 @@ export const MIGRATIONS: string[] = [
   `
   ALTER TABLE enrichments ADD COLUMN lint_accepted TEXT NOT NULL DEFAULT '[]';
   `,
+  // 10: the typed spec a graph was drawn from (GraphSpec in @smartbuilder/content), with the section quote of each trace. NULL on graphs drawn before.
+  `
+  ALTER TABLE enrichments ADD COLUMN spec TEXT;
+  `,
 ];
