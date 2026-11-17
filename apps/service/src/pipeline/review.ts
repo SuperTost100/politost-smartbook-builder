@@ -23,7 +23,7 @@ const cut = (s: string, n: number) => s.replace(/\s+/g, ' ').trim().slice(0, n);
 
 type Severity = 'blocker' | 'major' | 'minor';
 const RANK: Record<Severity, number> = { minor: 0, major: 1, blocker: 2 };
-interface Finding { sectionId: string; severity: Severity; quote: string; message: string; suggestion: string; category?: string }
+interface Finding { sectionId: string; severity: Severity; quote: string; message: string; suggestion: string; category?: string; points?: Point[] }
 
 /**
  * A finding that says the text is false as written (category correctness) and that the reviewer rated blocker or major stays
@@ -35,45 +35,91 @@ export function severityAfterOpinion(f: { severity: Severity; category?: string 
   return (f.category ?? 'correctness') === 'correctness' && RANK[f.severity] >= RANK.major && RANK[opinion] < RANK.major ? 'major' : opinion;
 }
 
+/** One problem a reviewer raised about a passage. A merged finding keeps one per distinct problem its members raised. */
+interface Point { severity: Severity; category?: string; quote: string; message: string; suggestion: string }
+const flatText = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
+/** Where a quote sits in its block, as a character range of the whitespace-normalised block (the whole block when the quote holds it). */
+function spanIn(quote: string, block: string): [number, number] {
+  const b = flatText(block);
+  const q = flatText(quote);
+  const at = b.indexOf(q.slice(0, 60));
+  return at < 0 ? [0, b.length] : [at, at + q.length];
+}
+
+/** The finding as one issue: a single point as it is, several as a numbered list with the passage each one is about. */
+function withPoints<F extends Finding>(f: F, points: Point[]): F {
+  const top = points.reduce((a, b) => (RANK[b.severity] > RANK[a.severity] ? b : a));
+  const category = points.some((x) => (x.category ?? 'correctness') === 'correctness') ? 'correctness' : top.category;
+  const base = { ...f, severity: top.severity, category, quote: top.quote };
+  if (points.length === 1) return { ...base, message: top.message, suggestion: top.suggestion, points: undefined };
+  return {
+    ...base,
+    message: points.map((x, n) => `(${n + 1}) ${x.quote ? `"${x.quote}": ` : ''}${x.message}`).join(' '),
+    suggestion: points.map((x, n) => (x.suggestion ? `(${n + 1}) ${x.suggestion}` : '')).filter(Boolean).join(' '),
+    points,
+  };
+}
+
 /**
- * Findings of several reviewer calls that report one problem, merged before the second opinion: same section, and quotes in
- * the same block of at least 20 characters (a shorter block, such as one that is only ".", says nothing about the problem).
- * The most severe member stands for the group, with category `correctness` when any member has it, so the floor of
- * severityAfterOpinion still applies. On the 47 stored findings of three runs it made 11 groups, all true repeats, and merged 15.
+ * Findings of several reviewer calls on one passage, merged before the second opinion: same section, and quotes in the same
+ * block of at least 20 characters (a shorter block, such as one that is only ".", says nothing about the problem). Members
+ * whose quotes overlap in the block or whose messages are the same are one point; members that raise different problems in
+ * the block stay separate points of the merged finding, so a second error in the same sentence is not lost (Analisi 2 ch. 8
+ * has one sentence with two wrong claims). The most severe point stands for each point and for the group, with category
+ * `correctness` when any member has it, so the floor of severityAfterOpinion still applies. On the 47 stored findings of
+ * three runs it made 11 groups and merged 15 findings.
  */
 export function mergeRepeats<F extends Finding>(findings: F[], blocksOf: (sectionId: string) => string[]): { findings: F[]; merged: number } {
-  const groups = new Map<string, F[]>();
+  const groups = new Map<string, { block: string; members: F[] }>();
   const order: (string | F)[] = [];
   for (const f of findings) {
     const blocks = f.quote.trim() ? blocksOf(f.sectionId) : [];
     const n = blocks.findIndex((b) => quoteInBlock(f.quote, b));
     if (n < 0 || blocks[n].trim().length < 20) { order.push(f); continue; }
     const key = `${f.sectionId}\n${n}`;
-    if (!groups.has(key)) { groups.set(key, []); order.push(key); }
-    groups.get(key)!.push(f);
+    if (!groups.has(key)) { groups.set(key, { block: blocks[n], members: [] }); order.push(key); }
+    groups.get(key)!.members.push(f);
   }
   let merged = 0;
   const out = order.map((x) => {
     if (typeof x !== 'string') return x;
-    const g = groups.get(x)!;
-    merged += g.length - 1;
-    const top = g.reduce((a, b) => (RANK[b.severity] > RANK[a.severity] ? b : a));
-    return g.some((f) => (f.category ?? 'correctness') === 'correctness') ? { ...top, category: 'correctness' } : top;
+    const { block, members } = groups.get(x)!;
+    merged += members.length - 1;
+    // Each member joins the first point it repeats: a quote that overlaps one of the point's quotes, or the same message.
+    const points: F[][] = [];
+    for (const f of members) {
+      const [a, b] = spanIn(f.quote, block);
+      const same = points.find((p) => p.some((g) => {
+        const [c, d] = spanIn(g.quote, block);
+        return (a < d && c < b) || flatText(g.message).toLowerCase() === flatText(f.message).toLowerCase();
+      }));
+      if (same) same.push(f); else points.push([f]);
+    }
+    const top = members.reduce((a, b) => (RANK[b.severity] > RANK[a.severity] ? b : a));
+    return withPoints(top, points.map((p) => {
+      const lead = p.reduce((a, b) => (RANK[b.severity] > RANK[a.severity] ? b : a));
+      const category = p.some((f) => (f.category ?? 'correctness') === 'correctness') ? 'correctness' : lead.category;
+      return { severity: lead.severity, category, quote: lead.quote, message: lead.message, suggestion: lead.suggestion };
+    }));
   });
   return { findings: out, merged };
 }
 
 /**
  * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
- * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. When the check cannot run,
- * the findings stay as they are.
+ * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. A merged finding with
+ * several points is real when any point is; only the points the verifier says hold are kept, or all of them when it names
+ * none. When the check cannot run, the findings stay as they are.
  */
 async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string }) {
   const kept: F[] = [];
   const dropped: { finding: F; reason: string }[] = [];
   let lowered = 0;
   if (!p.findings.length) return { kept, dropped, lowered, checked: undefined as boolean | undefined, model: undefined as string | undefined };
-  const list = p.findings.map((f, n) => `${n + 1}. [${f.sectionId}] [${f.severity}] ${f.quote ? `"${f.quote}" ` : ''}${f.message}${f.suggestion ? ` Suggested fix: ${f.suggestion}` : ''}`).join('\n');
+  const line = (x: { quote: string; message: string; suggestion: string }) => `${x.quote ? `"${x.quote}" ` : ''}${x.message}${x.suggestion ? ` Suggested fix: ${x.suggestion}` : ''}`;
+  const list = p.findings.map((f, n) => `${n + 1}. [${f.sectionId}] [${f.severity}] ${f.points
+    ? `${f.points.length} points raised by independent reviewers about this passage:${f.points.map((x, k) => `\n   ${n + 1}.${k + 1} ${line(x)}`).join('')}`
+    : line(f)}`).join('\n');
   try {
     const { data, route } = await runRole(ctx, {
       role: 'verifier', ...secondOpinionPrompt({ language: p.language, notation: p.notation, examSymbols: p.examSymbols, findings: list, text: p.text, evidence: p.evidence }),
@@ -83,9 +129,11 @@ async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext,
     p.findings.forEach((f, n) => {
       const v = verdicts.get(n);
       if (v?.verdict === 'not-real') { dropped.push({ finding: f, reason: v.reason.trim() }); return; }
-      const severity = v ? severityAfterOpinion(f, v.severity) : f.severity;
-      if (RANK[severity] < RANK[f.severity]) lowered++;
-      kept.push({ ...f, severity });
+      const holding = f.points?.filter((_, k) => v?.points?.includes(k + 1));
+      const g = f.points && holding?.length ? withPoints(f, holding) : f;
+      const severity = v ? severityAfterOpinion(g, v.severity) : g.severity;
+      if (RANK[severity] < RANK[g.severity]) lowered++;
+      kept.push({ ...g, severity });
     });
     return { kept, dropped, lowered, checked: true as boolean | undefined, model: route.model as string | undefined };
   } catch (err) {
