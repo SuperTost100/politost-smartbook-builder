@@ -146,6 +146,17 @@ test('a symbolic link in the book folder is refused before anything is read or w
   symlinkSync(outside, join(folder, chapter));
   assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /is a symbolic link/);
   assert.equal(readFileSync(outside, 'utf8'), 'non toccare');
+  // A manifest that is a link, even one pointing nowhere yet, is refused too, and nothing is created at its target.
+  rmSync(join(folder, chapter));
+  rmSync(join(folder, MANIFEST));
+  symlinkSync(join(books, 'manifest-fuori.json'), join(folder, MANIFEST));
+  assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /\.builder\.json is a symbolic link/);
+  assert.ok(!existsSync(join(books, 'manifest-fuori.json')));
+  // So is a book folder that is a dangling link.
+  rmSync(folder, { recursive: true });
+  symlinkSync(join(books, 'altrove'), folder);
+  assert.throws(() => planPublish(t.ctx, { projectId, booksDir: books }), /is a symbolic link/);
+  assert.ok(!existsSync(join(books, 'altrove')));
 });
 
 test('a change made in the builder since the last publish is not a hand edit', async () => {
