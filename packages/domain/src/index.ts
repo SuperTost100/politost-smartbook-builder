@@ -470,6 +470,8 @@ export interface Enrichment {
   payload: Record<string, unknown>;
   status: 'draft' | 'verified' | 'issue';
   checks: QuestionCheck[];
+  /** Graph lint findings the author accepted ("Accept anyway"), as "code:trace" keys. They no longer fail the lint check. */
+  lintAccepted: string[];
   createdAt: string;
 }
 

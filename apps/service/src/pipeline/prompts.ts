@@ -7,7 +7,7 @@ import { META_SEPARATOR, bodyFormatRule, bodyParser } from '../llm/body.ts';
 import { codeString, describeIssues, dropOptionalNulls, fillAbsentNulls, rawJsonSchema, toProviderSchema } from '../llm/schema.ts';
 import { figureSchemaFor } from '../figures/materialize.ts';
 
-export const PROMPT_VERSION = 23;
+export const PROMPT_VERSION = 24;
 
 const LANGUAGE_NAMES: Record<string, string> = { it: 'Italian', en: 'English', fr: 'French', de: 'German', es: 'Spanish', pt: 'Portuguese' };
 export const languageName = (code: string) => LANGUAGE_NAMES[code] ?? code;
@@ -770,7 +770,11 @@ Also return: wellPosed (false when the data are inconsistent, impossible or insu
 // ---------- enrichment ----------
 
 export const enrichPickSchema = z.object({
-  graphs: z.array(z.object({ sectionId: z.string(), purpose: z.string() })),
+  graphs: z.array(z.object({
+    sectionId: z.string(),
+    relation: z.string().describe('the relation between two quantities the graph plots, as the section writes it (a formula y = f(x) or a law with a parameter); empty when the section states none'),
+    purpose: z.string(),
+  })),
   ide: z.array(z.object({ sectionId: z.string(), purpose: z.string() })),
 });
 
@@ -779,11 +783,11 @@ export function enrichPickPrompt(p: { sections: string; graphs: boolean; ide: bo
     ? `at most ${p.maxIde} sections for a MATLAB example. The book teaches MATLAB, so give a script to every section whose commands, functions or methods a student should try (most of them); skip only sections with nothing to run`
     : `at most ${p.maxIde} section${p.maxIde === 1 ? '' : 's'} for a Python example`;
   return {
-    system: `You decide where interactive material helps students learn. Interactive graphs fit concepts students understand by exploring a function. ${p.lab === 'matlab' ? 'MATLAB examples fit commands and functions worth trying, numerical methods, matrices, plots and computations worth running.' : 'Python examples fit numerical methods, sequences and series, approximations and computations worth running.'} Choose high-value places; it is fine to choose none.`,
+    system: `You decide where interactive material helps students learn. An interactive graph fits only where the section states a relation between two quantities, a formula y = f(x) or a law with a parameter, that a student understands better by seeing it on a plane; give that relation as the section writes it. It never fits classifications, structures, names, three-dimensional shapes, a few discrete values or a single computed result, and a made-up or schematic curve is worse than no graph. ${p.lab === 'matlab' ? 'MATLAB examples fit commands and functions worth trying, numerical methods, matrices, plots and computations worth running.' : 'Python examples fit numerical methods, sequences and series, approximations and computations worth running.'} Choose high-value places; it is fine to choose none.`,
     prompt: `Sections (id | title | summary):
 ${p.sections}
 
-Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? ide : `no ${p.lab === 'matlab' ? 'MATLAB' : 'Python'} examples`}. Return JSON with sectionId and purpose for each.`,
+Pick ${p.graphs ? 'at most 2 sections for interactive function graphs' : 'no graphs'} and ${p.ide ? ide : `no ${p.lab === 'matlab' ? 'MATLAB' : 'Python'} examples`}. Return JSON with sectionId and purpose for each, and relation for each graph.`,
   };
 }
 
@@ -815,11 +819,11 @@ export const graphSchema = z.object({
   pair: graphPairSchema.optional().describe('a second graph on the same x axis, or null'),
 });
 
-export function graphPrompt(p: { language: string; purpose: string; section: string }) {
+export function graphPrompt(p: { language: string; purpose: string; relation?: string; section: string }) {
   return {
     system: `You design an interactive function graph for a textbook in ${languageName(p.language)}. Expressions use the variable x, numbers, + - * / ^, parentheses, the constants e and pi, and the functions sin cos tan asin acos atan sinh cosh tanh exp log log10 sqrt cbrt abs sign floor ceil; write every multiplication with * (2*x, not 2x). The builder samples the curves, so the graph shows exactly these expressions. Choose domains that show the behaviour the text discusses. An axis can be logarithmic ("xScale" or "yScale" set to "log", null otherwise): its domain is then in data units and must be positive (a frequency axis from 10 to 100000, a decay over several orders of magnitude), and values stay plain numbers, so a gain in dB is a linear y axis with an expression in dB such as 20*log10(...). A Bode plot is two graphs that share one log frequency axis: the magnitude is the graph and the phase is "pair", which takes the graph's xDomain, xScale and xLabel; otherwise "pair" is null.`,
     prompt: `Purpose: ${p.purpose}
-Section text:
+${p.relation ? `Relation to plot, as the section states it: ${p.relation}\n` : ''}Section text:
 ${p.section}
 
 Return JSON: id (kebab-case), title and description in ${languageName(p.language)} (the description tells the student what to look at), functions (fn and label), xDomain, yDomain, xScale, yScale, xLabel, yLabel, pair.`,

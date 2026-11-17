@@ -359,4 +359,8 @@ export const MIGRATIONS: string[] = [
   );
   CREATE INDEX question_revisions_question ON question_revisions(question_id, created_at);
   `,
+  // 9: graph lint findings the author accepted, as "code:trace" keys (see lintKey in @smartbuilder/content).
+  `
+  ALTER TABLE enrichments ADD COLUMN lint_accepted TEXT NOT NULL DEFAULT '[]';
+  `,
 ];

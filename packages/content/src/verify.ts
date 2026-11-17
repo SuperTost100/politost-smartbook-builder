@@ -163,6 +163,26 @@ export function numericallyEqual(a: string, b: string, opts: { vars?: string[]; 
   return { ok: true, detail: `equal at ${compared} points in [${lo}, ${hi}] (relative tolerance 1e-6)` };
 }
 
+/**
+ * True when f jumps between a and b (a step, a pole, a hole) rather than climbing steeply. The bracket is halved 50 times
+ * around its steeper half: a continuous curve's gap shrinks with the bracket, a jump keeps at least a quarter of it.
+ */
+export function jumpsBetween(f: (x: number) => number, a: number, b: number, fa: number, fb: number): boolean {
+  let lo = a;
+  let hi = b;
+  let flo = fa;
+  let fhi = fb;
+  const gap = Math.abs(fb - fa);
+  for (let k = 0; k < 50; k++) {
+    const m = (lo + hi) / 2;
+    const fm = f(m);
+    if (!Number.isFinite(fm)) return true;
+    if (Math.abs(fm - flo) >= Math.abs(fhi - fm)) { hi = m; fhi = fm; } else { lo = m; flo = fm; }
+    if (hi - lo < 1e-12 * Math.max(1, Math.abs(a), Math.abs(b))) break;
+  }
+  return Math.abs(fhi - flo) > 0.25 * gap;
+}
+
 export interface FunctionGraphSpec {
   id: string;
   title: string;
@@ -206,8 +226,14 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
     const ys: (number | null)[] = [];
     let finite = 0;
     let inView = 0;
+    let prevX: number | null = null;
     let prev: number | null = null;
     const span = ty(y1) - ty(y0);
+    // The curve as drawn: on a log y axis the jump test reads the exponent, and a value the axis cannot show is undefined.
+    const drawn = (x: number) => {
+      const v = fn.evaluate({ x });
+      return Number.isFinite(v) && (yScale !== 'log' || v > 0) ? ty(v) : Number.NaN;
+    };
     for (const x of axisSamples(x0, x1, samples, xScale)) {
       let y: number | null = fn.evaluate({ x });
       if (Number.isNaN(y)) y = null;
@@ -216,10 +242,14 @@ export function sampleFunctionGraph(spec: FunctionGraphSpec, samples = 400): { p
       else {
         finite++;
         if (y >= y0 && y <= y1) inView++;
-        // A jump larger than the visible range is a discontinuity, not a steep slope.
-        if (prev !== null && Math.abs(ty(y) - ty(prev)) > span) { xs.push(x); ys.push(null); }
+        // A visible step is a jump or a pole only when it survives bisection; a steep continuous curve stays whole.
+        if (prev !== null && prevX !== null && Math.abs(ty(y) - ty(prev)) > 0.02 * span && jumpsBetween(drawn, prevX, x, ty(prev), ty(y))) {
+          xs.push(Number(((prevX + x) / 2).toPrecision(8)));
+          ys.push(null);
+        }
       }
       prev = y;
+      prevX = x;
       xs.push(Number(x.toPrecision(8)));
       ys.push(y === null ? null : Number(y.toPrecision(8)));
     }

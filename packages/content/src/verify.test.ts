@@ -280,3 +280,33 @@ test('checkFunctionGraph gives a trace without x the coordinates 0, 1, 2, ... th
   assert.equal(checkFunctionGraph(trace([1, 2, 3, 4], [-1, -2, 0, 5])).ok, false, 'explicit x values are still read as they are');
   assert.match(checkFunctionGraph(trace([1, 2, 3, 4], [-1, -2, 0, 5])).detail, /undefined on most of the domain/);
 });
+
+test('sampleFunctionGraph breaks the line at jumps and poles found by bisection, and keeps a steep continuous curve whole', () => {
+  const sample = (expr: string, xDomain: [number, number], yDomain: [number, number]) => {
+    const r = sampleFunctionGraph({ id: 'j', title: 'J', functions: [{ expr, label: expr }], xDomain, yDomain, xLabel: 'x', yLabel: 'y' });
+    const t = r.payload.config.data[0] as { x: number[]; y: (number | null)[] };
+    return t.x.filter((_, k) => t.y[k] === null);
+  };
+  // A unit step of floor on a window 8 high: the old rule (a step larger than the whole window) joined it.
+  const step = sample('floor(x) - 0.5', [0.5, 2.2], [-2, 6]);
+  assert.ok(step.some((x) => x > 0.995 && x < 1.005), `a gap at x = 1, got ${step.join(', ')}`);
+  assert.ok(step.some((x) => x > 1.995 && x < 2.005), 'and one at x = 2');
+  assert.equal(step.length, 2);
+  // A pole whose two sides stay inside a wide window.
+  const pole = sample('1/(x-1)', [0, 3], [-400, 400]);
+  assert.equal(pole.length, 1);
+  assert.ok(Math.abs(pole[0]! - 1) < 0.01, `a gap at the pole, got ${pole[0]}`);
+  assert.ok(sample('x - floor(x)', [-3, 3], [-4, 9]).length >= 5, 'the mantissa breaks at every integer');
+  assert.deepEqual(sample('atan(200*(x-1))', [0, 2], [-2, 2]), [], 'a steep but continuous curve is not cut');
+  assert.deepEqual(sample('x^3', [-10, 10], [-1000, 1000]), [], 'nor is a smooth curve with large steps');
+});
+
+test('jumpsBetween tells a jump from a steep slope', async () => {
+  const { jumpsBetween } = await import('./verify.ts');
+  const floor = (x: number) => Math.floor(x);
+  assert.equal(jumpsBetween(floor, 0.99, 1.01, 0, 1), true);
+  const steep = (x: number) => Math.atan(200 * (x - 1));
+  assert.equal(jumpsBetween(steep, 0.99, 1.01, steep(0.99), steep(1.01)), false);
+  const pole = (x: number) => 1 / (x - 1);
+  assert.equal(jumpsBetween(pole, 0.99, 1.02, pole(0.99), pole(1.02)), true);
+});

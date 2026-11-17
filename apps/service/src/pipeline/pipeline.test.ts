@@ -1112,12 +1112,12 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     seedRevision('s2', 'Testo due.');
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: true }), P);
     const t = startTask('chapter.enrich', { chapterId: 'c1' });
-    fake.next(answer({ graphs: [{ sectionId: 's1', purpose: 'parabola' }], ide: [{ sectionId: 's2', purpose: 'serie' }] }));
+    fake.next(answer({ graphs: [{ sectionId: 's1', relation: 'y = x^2', purpose: 'parabola' }], ide: [{ sectionId: 's2', purpose: 'serie' }] }));
     const r = await chapterEnrich(ctx, t);
     assert.deepEqual(r, { picked: 2 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.ide:s2']);
     const child = json<Record<string, unknown>>(ctx.db.get<{ input: string }>(`SELECT input FROM tasks WHERE key = 'enrich.graph:s1'`)!.input, {});
-    assert.deepEqual(child, { nodeId: 's1', purpose: 'parabola' });
+    assert.deepEqual(child, { nodeId: 's1', purpose: 'parabola', relation: 'y = x^2' });
     assert.equal(fake.calls.length, 1);
     const again = await chapterEnrich(ctx, t);
     assert.deepEqual(again, { reused: 2 });
@@ -1149,11 +1149,26 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: true, labLanguage: 'matlab' }), P);
     const t = startTask('chapter.enrich', { chapterId: 'c1' });
     fake.next(answer({
-      graphs: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's1', purpose: 'doppione' }, { sectionId: 's2', purpose: 'b' }],
+      graphs: [{ sectionId: 'x9', relation: 'y = x', purpose: 'inventata' }, { sectionId: 's1', relation: 'y = x', purpose: 'a' }, { sectionId: 's1', relation: 'y = x', purpose: 'doppione' }, { sectionId: 's2', relation: 'y = 2x', purpose: 'b' }],
       ide: [{ sectionId: 'x9', purpose: 'inventata' }, { sectionId: 's1', purpose: 'a' }, { sectionId: 's2', purpose: 'b' }],
     }));
     assert.deepEqual(await chapterEnrich(ctx, t), { picked: 4 });
     assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s1', 'enrich.graph:s2', 'enrich.ide:s1', 'enrich.ide:s2']);
+  });
+
+  test('a graph pick that states no relation is dropped, and the relation of a kept one reaches the graph prompt', async () => {
+    seedOutline([['c1', ['s1', 's2']]]);
+    seedRevision('s1', 'Le classi di idrocarburi: alcani, alcheni, alchini.');
+    seedRevision('s2', 'La legge di Hooke:\n\n$$F = k\\,x$$\n\nlega forza e allungamento.');
+    ctx.db.run(`UPDATE projects SET options = ? WHERE id = ?`, JSON.stringify({ graphs: true, ide: false }), P);
+    const t = startTask('chapter.enrich', { chapterId: 'c1' });
+    fake.next(answer({ graphs: [{ sectionId: 's1', relation: ' ', purpose: 'confrontare le classi' }, { sectionId: 's2', relation: 'F = k x', purpose: 'Hooke' }], ide: [] }));
+    assert.deepEqual(await chapterEnrich(ctx, t), { picked: 1 });
+    assert.deepEqual(taskKeys(t.task.runId).filter((k) => k.startsWith('enrich.')), ['enrich.graph:s2']);
+    assert.match(fake.calls.at(-1)!.prompt, /s2 \| .* \| formulas: F = k\\,x/, 'the picker sees the display formulas');
+    fake.next(answer(graph));
+    await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's2', purpose: 'Hooke', relation: 'F = k x' }));
+    assert.match(fake.calls.at(-1)!.prompt, /Relation to plot, as the section states it: F = k x/);
   });
 
   test('MATLAB code with A\\b and a string holding \\n is stored exactly as written', async () => {
@@ -1191,6 +1206,19 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await enrichGraph(ctx, t), { reused: true });
     assert.equal(fake.calls.length, 1);
     assert.equal(ctx.db.all(`SELECT 1 FROM enrichments WHERE kind = 'graph'`).length, 1);
+  });
+
+  test('a graph that draws but fails the graph lint is stored as an issue, so Auto Fix redraws it', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Le leggi di Charles e di Gay-Lussac.');
+    fake.next(answer({ ...graph, functions: [{ fn: 'x', label: 'Charles' }, { fn: 'x', label: 'Gay-Lussac' }], yDomain: [-2, 2] }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'gas' })), { made: 1 });
+    const row = ctx.db.get<{ status: string; checks: string }>(`SELECT status, checks FROM enrichments`)!;
+    assert.equal(row.status, 'issue');
+    assert.deepEqual(json<{ method: string; ok: boolean }[]>(row.checks, []).map((c) => [c.method, c.ok]), [['numeric', true], ['lint', false]]);
+    const issue = ctx.db.get<{ message: string }>(`SELECT message FROM review_issues WHERE source = 'verification'`)!;
+    assert.match(issue.message, /failed its check: duplicate \("Gay-Lussac"\): same data as "Charles"/);
+    assert.doesNotMatch(issue.message, /Sampled/, 'the issue names what failed, not the checks that passed');
   });
 
   test('a Bode pair saves two graphs on the same log frequency axis', async () => {

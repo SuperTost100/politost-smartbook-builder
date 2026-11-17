@@ -573,6 +573,17 @@ test('a graph or lab example whose check failed stays out of the export and is r
   assert.ok(skipped.every((f) => f.severity === 'major'));
 });
 
+test('an exported graph is linted, and a finding the author accepted is not reported', () => {
+  const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2, 3], y: [0, 1, 2, 3] });
+  const payload = { id: 'gas', title: 'Leggi dei gas', type: 'plotly', config: { data: [trace('Charles'), trace('Gay-Lussac')], layout: {} } };
+  const lint = (lintAccepted: string[]) => compileBook(fixtureBook({ enrichments: [enrichment({ id: 'g', kind: 'graph', nodeId: 'sec-vel', payload, lintAccepted })] })).findings.filter((f) => f.rule === 'graph-lint');
+  const found = lint([]);
+  assert.equal(found.length, 1);
+  assert.equal(found[0]!.severity, 'minor');
+  assert.match(found[0]!.message, /"Leggi dei gas": duplicate on "Gay-Lussac"/);
+  assert.deepEqual(lint(['duplicate:Gay-Lussac']), []);
+});
+
 test('a truth table and a matrix written as KaTeX arrays survive the compile and the reader parser', () => {
   const table = '$$\n\\begin{array}{cc|c}\nA & B & A \\cdot B \\\\\n\\hline\n0 & 0 & 0 \\\\\n1 & 1 & 1\n\\end{array}\n$$';
   const matrix = '$$\n\\begin{pmatrix} 1 & 0 \\\\ 0 & 1 \\end{pmatrix}\n$$';
