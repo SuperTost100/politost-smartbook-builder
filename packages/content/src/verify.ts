@@ -18,6 +18,9 @@ const DATA_KEYS: Record<string, string[]> = { scatter: ['y'], bar: ['y'], histog
 
 const nonEmpty = (v: unknown): boolean => Array.isArray(v) && v.length > 0;
 
+/** Fewest points of an unbroken run that count as a branch drawn on purpose on part of the x grid. */
+const MIN_BRANCH_POINTS = 20;
+
 /**
  * A plotly graph, read back from its arrays. Only a function curve (a scatter drawn as lines or markers) gets the sampled-curve
  * checks that `sampleFunctionGraph` applies. Other supported traces pass when they hold the data their type needs.
@@ -53,8 +56,13 @@ function checkPlotlyGraph(cfg: Record<string, unknown>): { ok: boolean; detail: 
     // Without an x array Plotly counts up by 1 from x0, or from 0. The reader keeps x0 and drops dx, so the step is always 1. (A scatter needs a y array, so y is never implicit here.)
     const x0 = typeof t.x0 === 'number' && Number.isFinite(t.x0) ? t.x0 : 0;
     const xsOf: unknown[] = Array.isArray(t.x) ? t.x : ys.map((_, k) => x0 + k);
-    const finite = ys.filter((y, k): y is number => typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof xsOf[k] === 'number' && xsOf[k] > 0)));
-    if (finite.length < ys.length * 0.5) problems.push(`${name}: undefined on most of the domain${xLog || yLog ? ' (a log axis shows only positive values)' : ''}`);
+    const defined = ys.map((y, k) => typeof y === 'number' && Number.isFinite(y) && (!yLog || y > 0) && (!xLog || (typeof xsOf[k] === 'number' && xsOf[k] > 0)));
+    const finite = defined.filter(Boolean);
+    // A branch drawn on part of the x grid the traces share (|x| drawn as y = x for x ≥ 0) is undefined on the rest by design,
+    // and its points form one unbroken run. Points scattered through the trace, or a run too short to draw, still fail.
+    const [first, last] = [defined.indexOf(true), defined.lastIndexOf(true)];
+    const branch = first >= 0 && last - first + 1 >= MIN_BRANCH_POINTS && defined.slice(first, last + 1).every(Boolean);
+    if (finite.length < ys.length * 0.5 && !branch) problems.push(`${name}: undefined on most of the domain${xLog || yLog ? ' (a log axis shows only positive values)' : ''}`);
     else if (view || xView) {
       // A point is on screen when it is inside both ranges. An x that is not a number (a category) has no x range to be outside of.
       const shown = (y: unknown, k: number, inX: boolean) => {

@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { checkFunctionGraph, numericallyEqual, sampleFunctionGraph } from './verify.ts';
@@ -405,4 +406,20 @@ test('compareExpected checks the data against the expected curve and fits free c
   assert.match(branch.detail, /the data has a value and log\(x\) is undefined/);
   assert.equal(compareExpected('log(x)', [-5, -4, -3, -2, -1], [1, 2, 3, 4, 5], 10)!.ok, false, 'drawn only where the expected curve is undefined');
   assert.equal(compareExpected('x', [1, 2], [1, 2], 1), null, 'too few points');
+});
+
+test('checkFunctionGraph lets through a branch drawn on part of a shared x grid, and still fails a trace that is mostly undefined', () => {
+  // Two hand-drawn graphs of the books: each branch is one unbroken run of points on half of the x grid the other traces use.
+  const book = (id: string) => JSON.parse(readFileSync(new URL(`./testdata/graphs/${id}.json`, import.meta.url), 'utf8')) as Record<string, unknown>;
+  for (const id of ['valore-assoluto-punto-angoloso', 'gibbs-onde-quadra']) {
+    assert.equal(checkFunctionGraph(book(id)).ok, true, `${id}: ${checkFunctionGraph(book(id)).detail}`);
+  }
+  const lines = (y: (number | null)[]) => checkFunctionGraph({ type: 'plotly', config: { data: [{ type: 'scatter', mode: 'lines', x: y.map((_, k) => k), y }], layout: {} } });
+  const grid = Array.from({ length: 401 }, (_, k) => k);
+  assert.equal(lines(grid.map((k) => (k < 200 ? k : null))).ok, true, 'a branch on 200 of 401 points');
+  // What the rule is for: a curve the reader would barely draw.
+  assert.match(lines(grid.map((k) => (k % 3 === 0 ? k : null))).detail, /undefined on most of the domain/, 'defined only at scattered points');
+  assert.match(lines(grid.map((k) => (k < 5 ? k : null))).detail, /undefined on most of the domain/, 'a run of 5 points out of 401');
+  assert.match(lines([null, null, null, 1]).detail, /undefined on most of the domain/, 'one point of four');
+  assert.match(lines(grid.map((k) => (k < 100 || k > 300 ? k : null))).detail, /undefined on most of the domain/, 'two short runs with a hole in the middle');
 });
