@@ -224,3 +224,9 @@ test('an axis symbol with a subscript still matches the formula of a formatted l
   assert.equal(mismatch(g), 1);
   assert.equal(mismatch(formatGraphPayload(g, { language: 'it' })), 1);
 });
+
+test('notation nested deeper than a few levels is still formatted in one call', () => {
+  const deep = 'g(x) = floor(floor(floor(floor(floor(floor(x)))))) e e^(e^(x^2))';
+  assert.equal(it(deep), 'g(x) = ⌊⌊⌊⌊⌊⌊x⌋⌋⌋⌋⌋⌋ e exp(exp(x²))');
+  assert.equal(it(it(deep)), it(deep));
+});

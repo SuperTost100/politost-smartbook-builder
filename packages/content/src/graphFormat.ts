@@ -70,7 +70,8 @@ function wrapCalls(s: string, name: string, open: string, close: string): string
   for (let k = s.indexOf(`${name}(`); k >= 0; k = s.indexOf(`${name}(`, i)) {
     const b = isLetter(s[k - 1]) ? null : balanced(s, k + name.length);
     if (!b) { out += s.slice(i, k + name.length); i = k + name.length; continue; }
-    out += `${s.slice(i, k)}${open}${b.inner}${close}`;
+    // The argument is formatted too, so floor(floor(x)) is done in one call.
+    out += `${s.slice(i, k)}${open}${wrapCalls(b.inner, name, open, close)}${close}`;
     i = b.end;
   }
   return out + s.slice(i);
@@ -101,7 +102,7 @@ function superscripts(s: string): string {
       i = end;
     } else if (group && next === '(' && out.endsWith('e') && !isLetter(out.at(-2)) && !isDigit(out.at(-2))) {
       // e^(−0,25·Δχ²) has no superscript form; exp(…) reads the same and is plain text.
-      out = `${out.slice(0, -1)}exp(${group.inner})`;
+      out = `${out.slice(0, -1)}exp(${superscripts(group.inner)})`;
       i = end;
     } else {
       out += '^';
@@ -221,12 +222,13 @@ function angleBrackets(s: string, it: boolean): string {
 }
 
 /**
- * Formats one text a student sees: a label, a title, an axis title, a point's text, a tick text. Nested notation (e^(x^2),
- * floor(floor(x))) needs a pass per level, so passes repeat until the text stops changing.
+ * Formats one text a student sees: a label, a title, an axis title, a point's text, a tick text. Each step formats nested
+ * notation itself (floor(floor(x)), e^(x^2)); the passes repeat until the text stops changing, in case one step's output
+ * gives another step something to do. Every pass only shortens or keeps the notation, so few are needed: the cap is a guard.
  */
 export function formatGraphText(text: string, opts: GraphFormatOptions = {}): string {
   let out = text;
-  for (let pass = 0; pass < 5; pass++) {
+  for (let pass = 0; pass < 20; pass++) {
     const next = formatOnce(out, opts);
     if (next === out) break;
     out = next;

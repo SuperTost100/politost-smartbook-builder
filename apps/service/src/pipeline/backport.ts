@@ -447,7 +447,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
           continue;
         }
-        if (JSON.stringify(b.get(id)) !== JSON.stringify(e.get(id))) {
+        // A builder change that is only the graph formatter's (normalize-graphs) is no conflict with an edit in the books.
+        const asFormatted = (g: Record<string, unknown> | undefined) => JSON.stringify(g && formatGraphPayload(g, { language: input.meta.language }));
+        if (asFormatted(b.get(id)) !== asFormatted(e.get(id))) {
           add({ unit, kind: 'graph', status: 'refused', reason: 'changed in the builder since the publish, and in the books' });
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
           continue;
