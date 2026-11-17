@@ -2530,6 +2530,26 @@ describe('independent samples, the sweep after a fix round and the severity floo
     ]);
   });
 
+  test('a merged group stays when any member is real, takes the floor from any correctness member, and a recheck merges nothing', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.\n\nUn passo.');
+    fake.next(
+      answer({ issues: [finding({ category: 'unsupported', message: 'Non supportato' }), finding({ severity: 'blocker', message: 'Falso' })] }),
+      answer({ issues: [finding({ quote: 'Un passo.', message: 'Passo' }), finding({ quote: 'Un passo.', message: 'Passo ripetuto' })] }),
+      // In order: "Non supportato", "Falso" (same as 1), "Passo", "Passo ripetuto" (same as 3).
+      verdicts({ verdict: 'not-real', severity: 'minor' }, { severity: 'minor', sameAs: 1 }, { severity: 'major' }, { severity: 'major', sameAs: 3 }),
+    );
+    const r = await review();
+    assert.deepEqual([r.merged, r.issues, r.dropped], [2, 2, 0]);
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => [i.message, i.severity, i.category]), [['Non supportato', 'major', 'correctness'], ['Passo', 'major', 'correctness']]);
+    // Two open rows of one problem (a failed second opinion stored both): a recheck judges each on its own verdict.
+    done(r);
+    fake.next(verdicts({ severity: 'major' }, { verdict: 'not-real', severity: 'major', sameAs: 1 }));
+    const again = await review({ mode: 'recheck' });
+    assert.deepEqual([again.dropped, again.rechecked], [1, 2]);
+    assert.deepEqual(issues(`source = 'review' AND status = 'dismissed'`).map((i) => i.message), ['Passo']);
+  });
+
   test('a cross review that fails leaves the reviewer findings; a reviewer call that fails fails the task', async () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.');
@@ -2597,6 +2617,36 @@ describe('independent samples, the sweep after a fix round and the severity floo
     assert.equal(after.samples, 1);
     assert.match(fake.calls[8].prompt, /SINCE THE LAST REVIEW/);
     assert.equal(fake.calls.length, 9);
+  });
+
+  test('the sweep keeps an open issue whose passage is still there, also in a rewritten block, and runs after a fix that changed no text', async () => {
+    seedOutline([['c1', ['s1']]]);
+    const r1 = seedRevision('s1', 'Una frase.\n\nUn passo.');
+    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    done(await review());
+    // The first issue is closed as already resolved: no new text, yet the round had a fix, so the sweep runs.
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review();
+    done(sweep);
+    assert.deepEqual([sweep.reused, sweep.sweep], [undefined, true]);
+    assert.equal(r1, sweep.reviewed);
+    // A later review of a rewrite that keeps the open issue's passage would replace it; the sweep did not.
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
+  });
+
+  test('a sweep does not delete an open issue in a rewritten block that still holds its quote', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.\n\nUn passo. Ancora.');
+    fake.next(answer({ issues: [finding(), finding({ quote: 'Un passo.', message: 'Resta aperto' })] }), crossNone, verdicts({ severity: 'major' }, { severity: 'major' }));
+    done(await review());
+    ctx.db.run(`UPDATE review_issues SET status = 'fixed' WHERE message = 'Errore'`);
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE node_id = 's1' AND status = 'current'`);
+    seedRevision('s1', 'Una frase corretta.\n\nUn passo. Ancora riscritto.');
+    fake.next(answer({ issues: [] }), crossNone);
+    const sweep = await review();
+    assert.equal(sweep.sweep, true);
+    assert.deepEqual(issues(`source = 'review' AND status = 'open'`).map((i) => i.message), ['Resta aperto']);
   });
 
   test('the sweep is not due without a fix since the last whole-chapter review, and a Full review starts a new round', async () => {

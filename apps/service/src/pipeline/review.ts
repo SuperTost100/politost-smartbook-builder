@@ -38,10 +38,11 @@ export function severityAfterOpinion(f: { severity: Severity; category?: string 
 /**
  * Second opinion on review findings: another model re-reads each one against the text and the sources, drops the ones that
  * are not real and may lower (never raise) the severity, down to the floor of severityAfterOpinion. It also gets the findings
- * of several reviewer calls together and names the ones that repeat an earlier finding: those are merged into that finding,
- * which keeps the higher severity of the two. When the check cannot run, the findings stay as they are.
+ * of several reviewer calls together and names the ones that repeat an earlier finding: with `merge`, those are merged into that
+ * finding. The group keeps the highest severity, the floor when any member is a correctness finding, and stays when any member
+ * is real. When the check cannot run, the findings stay as they are.
  */
-async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string }) {
+async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext, p: { projectId: string; language: string; notation?: string; examSymbols?: string[]; findings: F[]; text: string; evidence: string; merge?: boolean }) {
   const kept: F[] = [];
   const dropped: { finding: F; reason: string }[] = [];
   let lowered = 0;
@@ -56,17 +57,26 @@ async function secondOpinion<F extends Finding>(ctx: AppContext, t: TaskContext,
     const verdicts = new Map(data.findings.map((v) => [v.index - 1, v]));
     // A repeat points at an earlier finding only, so a chain always ends at a finding that is kept or dropped on its own verdict.
     const into = new Map<number, number>();
-    p.findings.forEach((_, n) => {
-      const same = verdicts.get(n)?.sameAs;
-      if (same == null || same - 1 >= n || same < 1) return;
-      into.set(n, into.get(same - 1) ?? same - 1);
-    });
-    const groupSeverity = p.findings.map((f) => f.severity);
-    for (const [n, first] of into) if (RANK[p.findings[n].severity] > RANK[groupSeverity[first]]) groupSeverity[first] = p.findings[n].severity;
+    if (p.merge) {
+      p.findings.forEach((_, n) => {
+        const same = verdicts.get(n)?.sameAs;
+        if (same == null || same - 1 >= n || same < 1) return;
+        into.set(n, into.get(same - 1) ?? same - 1);
+      });
+    }
+    const group = p.findings.map((f, n) => ({ severity: f.severity, category: f.category, verdict: verdicts.get(n) }));
+    for (const [n, first] of into) {
+      const g = group[first];
+      const f = p.findings[n];
+      if (RANK[f.severity] > RANK[g.severity]) g.severity = f.severity;
+      if ((f.category ?? 'correctness') === 'correctness') g.category = 'correctness';
+      const v = verdicts.get(n);
+      if (g.verdict?.verdict === 'not-real' && v?.verdict !== 'not-real') g.verdict = v;
+    }
     p.findings.forEach((found, n) => {
       if (into.has(n)) { merged++; return; }
-      const f = { ...found, severity: groupSeverity[n] };
-      const v = verdicts.get(n);
+      const f = { ...found, severity: group[n].severity, category: group[n].category };
+      const v = group[n].verdict;
       if (v?.verdict === 'not-real') { dropped.push({ finding: f, reason: v.reason.trim() }); return; }
       const severity = v ? severityAfterOpinion(f, v.severity) : f.severity;
       if (RANK[severity] < RANK[f.severity]) lowered++;
@@ -135,7 +145,8 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   const reviewNodes = [chapterId, ...chapter.sections.map((s) => s.id)];
   // What the round left: blockers and majors still open (or waiting as a proposal) in the chapter, from every source.
   const standing = () => { const openSerious = countOpenSerious(ctx, projectId, reviewNodes); return { clean: openSerious === 0, openSerious }; };
-  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force) return { reused: true, reviewed, ...standing() };
+  // Unless the sweep is due: a fix round can close issues without changing the text (an issue the text already resolves).
+  if (mode === 'changed' && priorReviewed === reviewed && !t.task.input.force && !sweepDue(ctx, projectId, chapterId, reviewNodes)) return { reused: true, reviewed, ...standing() };
   const inNodes = reviewNodes.map(() => '?').join(',');
   const notation = outline!.outline.notation;
   // The reviewer learns what the exam covers, so it flags extra material as minor instead of inventing scope.
@@ -300,7 +311,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   // Findings in the order of the text, so the second opinion sees repeats of one problem next to each other.
   const order = new Map(sections.map((x, n) => [x.s.id, n]));
   candidates.sort((a, b) => (order.get(a.sectionId) ?? -1) - (order.get(b.sectionId) ?? -1));
-  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: candidates, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
+  const opinion = await secondOpinion(ctx, t, { projectId, language: project.language, notation, examSymbols: symbols, findings: candidates, merge: true, ...contextFor(new Set(candidates.map((c) => c.sectionId)), candidates.map((c) => c.quote)) });
 
   // Compile check of the whole chapter with the book's reference context, so broken refs surface here rather than at export.
   const compileIssues: { nodeId: string; severity: string; rule: string; quote: string; message: string }[] = [];
@@ -327,7 +338,8 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
       const open = ctx.db.all<{ id: string; node_id: string; quote: string }>(`SELECT id, node_id, quote FROM review_issues WHERE project_id = ? AND source = 'review' AND status = 'open' AND node_id IN (${inNodes})`, projectId, ...reviewNodes);
       for (const o of open) {
         const head = sections.find((x) => x.s.id === o.node_id)?.head;
-        if (head && o.quote.trim() && (inChanged(o.node_id, o.quote) || !quoteInBlock(o.quote, head.markdown))) ctx.db.run('DELETE FROM review_issues WHERE id = ?', o.id);
+        // The sweep is told not to report open issues again, so it replaces only those whose passage is gone.
+        if (head && o.quote.trim() && ((!sweep && inChanged(o.node_id, o.quote)) || !quoteInBlock(o.quote, head.markdown))) ctx.db.run('DELETE FROM review_issues WHERE id = ?', o.id);
       }
     }
     // Fixes that wait on a proposal that no longer exists are leftovers of earlier passes; a live proposal keeps its issues.
