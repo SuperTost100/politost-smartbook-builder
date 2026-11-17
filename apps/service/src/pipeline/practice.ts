@@ -436,7 +436,8 @@ export type VerifyAnswer = z.infer<typeof verifySchema>;
 export function dataFailure(d: Pick<VerifyAnswer, 'wellPosed' | 'wellPosedReason' | 'dataProblems'>, consistency: ConsistencyCheck | null): string | null {
   const parts: string[] = [];
   if (!d.wellPosed) parts.push(`The statement's data do not determine one answer${d.wellPosedReason.trim() ? `: ${d.wellPosedReason.trim().replace(/\.$/, '')}` : ''}.`);
-  if (d.dataProblems.length) parts.push(`Data problems: ${d.dataProblems.map((p) => p.trim().replace(/\.$/, '')).join('; ')}.`);
+  const problems = d.dataProblems.map((p) => p.trim().replace(/\.$/, '')).filter(Boolean);
+  if (problems.length) parts.push(`Data problems: ${problems.join('; ')}.`);
   if (consistency?.verdict === 'inconsistent') parts.push(`The consistency check printed: ${consistency.detail}`);
   if (consistency?.verdict === 'failed') parts.push(consistency.detail);
   return parts.length ? parts.join(' ') : null;

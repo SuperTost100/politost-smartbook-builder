@@ -483,6 +483,7 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     assert.equal(verifyVerdict(good, 0, consistent).ok, true);
     assert.equal(verifyVerdict(good, 0, null).ok, true, 'no program: the prompt allows it for a problem with no numeric data');
     assert.equal(verifyVerdict({ ...good, problems: [{ severity: 'minor', message: 'm', suggestion: 's' }] }, 0, consistent).ok, true);
+    assert.equal(verifyVerdict({ ...good, dataProblems: ['', ' '] }, 0, consistent).ok, true, 'blank entries are not problems');
     const blocked: [string, ReturnType<typeof verifyVerdict>][] = [
       ['agrees', verifyVerdict({ ...good, agrees: false }, 0, consistent)],
       ['resultsAgree', verifyVerdict({ ...good, resultsAgree: false }, 0, consistent)],
