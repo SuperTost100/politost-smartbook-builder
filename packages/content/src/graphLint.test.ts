@@ -52,3 +52,27 @@ test('graphLintCheck fails on a blocking finding until the author accepts it, an
   assert.match(warned.detail, /\(warning\)/);
   assert.deepEqual(graphLintCheck(sampled([{ expr: 'x', label: 'f(x) = x' }])), { method: 'lint', ok: true, detail: 'No problems in the data.', findings: [] });
 });
+
+test('label formulas keep their parentheses, a parenthesised aside with "=" is read on its own, and a value at one point is no claim', () => {
+  assert.deepEqual(codes(sampled([{ expr: '2*(x+1)', label: 'y = 2(x+1)' }])), []);
+  assert.deepEqual(codes(sampled([{ expr: 'cos(x)', label: 'y = sin(x)' }])), ['label-mismatch'], 'a function call in a label is a claim');
+  assert.deepEqual(codes(sampled([{ expr: '50*x', label: 'F = 50·x (N)' }], { y: [-100, 100] })), [], 'a unit in parentheses after the formula');
+  assert.deepEqual(codes(sampled([{ expr: '2*x', label: 'Retta (y = 2x)' }])), [], 'an aside holding the formula');
+  assert.deepEqual(codes(sampled([{ expr: '3*x', label: 'Retta (y = 2x)' }])), ['label-mismatch']);
+  assert.deepEqual(codes(sampled([{ expr: '3*exp(x-1)', label: 'y′ = y; y(1) = 3' }], { y: [0, 10] })), [], 'an initial condition');
+  assert.deepEqual(codes(sampled([{ expr: '5*x', label: 'fᵧ(2,x) = 5' }])), ['label-mismatch'], 'a partial derivative stated constant but drawn as 5x');
+});
+
+test('a trace without x starts at its x0, as Plotly draws it', () => {
+  const trace = (name: string, x0?: number) => ({ type: 'scatter', mode: 'lines', name, y: [10, 11, 12], ...(x0 === undefined ? {} : { x0 }) });
+  assert.deepEqual(codes(raw([trace('y = x', 10)], { xaxis: { title: 'x' }, yaxis: { title: 'y', range: [0, 20] } })), []);
+  assert.deepEqual(codes(raw([trace('y = x')], { xaxis: { title: 'x' }, yaxis: { title: 'y', range: [0, 20] } })), ['label-mismatch']);
+  assert.deepEqual(codes(raw([trace('a', 0), trace('b', 5)])), [], 'the same y at other x is not a duplicate');
+});
+
+test('a steep continuous curve the builder sampled is not a joined jump; the same data from an author is', () => {
+  const steep = sampled([{ expr: 'atan(20000*(x-1.0025))', label: 'gradino ripido' }], { x: [0, 2], y: [-2, 2] });
+  assert.deepEqual(codes(steep), ['joined-jump'], 'from the data alone it looks like a jump');
+  assert.equal(graphLintCheck(steep, [], { sampled: true }).ok, true);
+  assert.equal(graphLintCheck(steep).ok, false);
+});

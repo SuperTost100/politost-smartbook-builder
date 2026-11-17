@@ -34,10 +34,11 @@ const median = (a: number[]) => {
 };
 const nameOf = (t: Trace) => (typeof t.name === 'string' ? t.name : '');
 
-/** The points of a trace, with x defaulting to the index as Plotly does. */
+/** The points of a trace. Without an x array Plotly counts up by 1 from x0, or from 0 (the reader keeps x0 and drops dx). */
 function points(t: Trace): Point[] {
   const ys = Array.isArray(t.y) ? (t.y as unknown[]) : [];
-  const xs = Array.isArray(t.x) ? (t.x as unknown[]) : ys.map((_, k) => k);
+  const x0 = isNum(t.x0) ? t.x0 : 0;
+  const xs = Array.isArray(t.x) ? (t.x as unknown[]) : ys.map((_, k) => x0 + k);
   return ys.map((y, k) => [xs[k], y]);
 }
 const finitePoints = (pts: Point[]) => pts.filter((p): p is [number, number] => isNum(p[0]) && isNum(p[1]));
@@ -79,6 +80,20 @@ function axisVar(title: string): string | null {
   return m ? m[1]! : null;
 }
 
+/**
+ * The parts of a label that may state a formula: a parenthesised aside holding "=" ("Isocora (V = 2)") is a part of its own,
+ * and the rest is split at ";", ":", ", ", " con " and " per ". Parentheses without "=" stay, so "y = 2(x+1)" is one formula.
+ */
+function labelSegments(name: string): string[] {
+  const asides: string[] = [];
+  let rest = name;
+  for (let m = /\(([^()]*=[^()]*)\)/.exec(rest); m; m = /\(([^()]*=[^()]*)\)/.exec(rest)) {
+    asides.push(m[1]!);
+    rest = `${rest.slice(0, m.index)}; ${rest.slice(m.index + m[0].length)}`;
+  }
+  return [...rest.split(/[;:]|,\s(?=[^\d])|\scon\s|\sper\s/), ...asides];
+}
+
 type Claim =
   | { kind: 'fn'; evaluate: (x: number) => number; src: string }
   | { kind: 'const' | 'vline' | 'circle' | 'ray'; value: number; src: string };
@@ -95,7 +110,7 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
   if ((name.match(/[a-zA-Z]\([^)]*\)\s*=/g) ?? []).length > 1) return claims;
   const circle = /circonferenza|cerchio|circle/.test(lower);
   const ray = /semiretta|ray/.test(lower);
-  for (const seg of name.split(/[;:]|,\s(?=[^\d])|\scon\s|\sper\s|\(|\)/)) {
+  for (const seg of labelSegments(name)) {
     const parts = seg.split('=');
     if (parts.length < 2) continue;
     const lhs = normaliseLabelFormula(parts[0]!).replace(/\s+/g, ' ').trim();
@@ -103,7 +118,8 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
     // "minimo in x = 0" or "sezione y = 0" name a place, not the curve.
     if (lhs !== lhsSym && !circle && !ray) continue;
     for (const raw of parts.slice(1)) {
-      const rhs = normaliseLabelFormula(raw).replace(/\s*→.*$/, '').replace(/\s+(g|kg|m|s|K|J|W|Pa|L|N|V|atm|mol)$/, '').trim();
+      // A trailing unit, bare ("… 2 V") or in parentheses ("… 50*x (N)"), is not part of the formula.
+      const rhs = normaliseLabelFormula(raw).replace(/\s*→.*$/, '').replace(/\s+\([^()=]*\)$/, '').replace(/\s+(g|kg|m|s|K|J|W|Pa|L|N|V|atm|mol)$/, '').trim();
       if (!rhs || /[a-zA-Z]{4,}/.test(rhs.replace(/sqrt|log10|log|atan|exp|sin|cos|tan|abs|floor|ceil|cbrt/g, ''))) continue;
       const free = freeSymbols(rhs);
       if (!free) continue;
@@ -116,8 +132,9 @@ export function labelClaims(name: string, xTitle: string, yTitle: string): Claim
         if (circle && lhsSym === 'r') claims.push({ kind: 'circle', value, src });
         else if (ray && /^(θ|theta)$/.test(lhsSym)) claims.push({ kind: 'ray', value, src });
         else if (lhsSym === xv) claims.push({ kind: 'vline', value, src });
-        // The left side must name the plotted quantity: y, a function f(...), or the y axis symbol.
-        else if (/^[a-zA-Z]{1,2}_?[a-z0-9]?(\(.*\))?$/.test(lhsSym) && (lhsSym === 'y' || lhsSym.includes('(') || lhsSym === axisVar(yTitle) || lhsSym.startsWith('f'))) claims.push({ kind: 'const', value, src });
+        // The left side must name the plotted quantity: y, a function f(...) of a variable, or the y axis symbol. A value at
+        // one point such as an initial condition "y(1) = 3" says nothing about the rest of the curve.
+        else if (/^[a-zA-Z]{1,2}_?[a-z0-9]?(\(.*[a-zA-Z].*\))?$/.test(lhsSym) && (lhsSym === 'y' || lhsSym.includes('(') || lhsSym === axisVar(yTitle) || lhsSym.startsWith('f'))) claims.push({ kind: 'const', value, src });
       } else if (free.size === 1) {
         const v = [...free][0]!;
         if (v !== xv && v !== 'x') continue;
@@ -296,10 +313,11 @@ export const lintKey = (f: GraphLintFinding) => `${f.code}:${f.trace ?? ''}`;
 
 /**
  * The lint as a check entry: it fails on a blocking finding the author has not accepted. Warnings and accepted findings
- * are listed in the detail and do not fail it.
+ * are listed in the detail and do not fail it. `sampled` is for a graph the builder sampled itself (see sampleFunctionGraph).
  */
-export function graphLintCheck(payload: Record<string, unknown>, accepted: readonly string[] = []): { method: 'lint'; ok: boolean; detail: string; findings: GraphLintFinding[] } {
-  const findings = lintGraph(payload);
+export function graphLintCheck(payload: Record<string, unknown>, accepted: readonly string[] = [], opts: { sampled?: boolean } = {}): { method: 'lint'; ok: boolean; detail: string; findings: GraphLintFinding[] } {
+  // A graph the builder just sampled had every visible step bisected, so a steep continuous curve there is not a joined jump.
+  const findings = lintGraph(payload).filter((f) => !(opts.sampled && f.code === 'joined-jump'));
   const open = findings.filter((f) => f.severity === 'block' && !accepted.includes(lintKey(f)));
   const line = (f: GraphLintFinding) => `${f.code}${f.trace ? ` ("${f.trace}")` : ''}: ${f.detail}${f.severity === 'warn' ? ' (warning)' : accepted.includes(lintKey(f)) ? ' (accepted by the author)' : ''}`;
   return { method: 'lint', ok: open.length === 0, detail: findings.length ? findings.map(line).join('; ') : 'No problems in the data.', findings };

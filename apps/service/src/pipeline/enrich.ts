@@ -119,7 +119,7 @@ export async function enrichGraph(ctx: AppContext, t: TaskContext) {
   // A graph that draws can still be wrong in ways its data shows (a joined jump, two traces in one place): the lint reads it.
   const built = graphs.map(({ spec, description }) => {
     const sampled = sampleFunctionGraph(spec);
-    const lint = graphLintCheck(sampled.payload);
+    const lint = graphLintCheck(sampled.payload, [], { sampled: true });
     const checks = [{ method: 'numeric', ok: sampled.ok, detail: `${description}\n${sampled.detail}` }, { method: 'lint', ok: lint.ok, detail: lint.detail }];
     const failed = [sampled.ok ? '' : sampled.detail, lint.ok ? '' : lint.detail].filter(Boolean).join('; ');
     return { sampled, checks, ok: !failed, failed };
