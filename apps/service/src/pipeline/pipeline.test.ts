@@ -2791,7 +2791,7 @@ describe('independent samples, the sweep the author asks for, repeats merged in 
       f({ quote: 'Sia x', message: 'breve 2' }),
       f({ quote: '.', message: 'punto 1' }),
       f({ quote: '.', message: 'punto 2' }),
-      f({ severity: 'blocker', category: 'unsupported', quote: 'Un blocco', message: 'secondo' }),
+      f({ severity: 'blocker', category: 'unsupported', quote: 'Un blocco abbastanza', message: 'secondo' }),
       f({ sectionId: 's2', message: 'altra sezione' }),
       f({ quote: 'in nessun blocco', message: 'fuori 1' }),
       f({ quote: 'in nessun blocco', message: 'fuori 2' }),
@@ -2804,6 +2804,48 @@ describe('independent samples, the sweep the author asks for, repeats merged in 
       ['altra sezione', 'major', 'correctness'], ['fuori 1', 'major', 'correctness'], ['fuori 2', 'major', 'correctness'], ['senza citazione 1', 'major', 'correctness'], ['senza citazione 2', 'major', 'correctness'],
     ]);
     assert.equal(mergeRepeats([f({ category: 'language' }), f({ category: 'notation', severity: 'minor' })], (id) => blocks[id] ?? []).findings[0].category, 'language', 'no correctness member, no correctness');
+  });
+
+  test('members of a group that raise different problems stay separate points; overlapping quotes or the same message are one point', () => {
+    const block = 'Per k grande si ha b_k ~ 1/k e quindi a_k ~ 1/k², dunque la serie converge.';
+    const f = (quote: string, message: string, o: Partial<{ severity: 'blocker' | 'major' | 'minor'; category: string }> = {}) => ({ sectionId: 's1', severity: 'major' as const, category: 'correctness', quote, message, suggestion: `fix ${message}`, ...o });
+    const { findings, merged } = mergeRepeats([
+      f('b_k ~ 1/k', 'b_k non è asintotico a 1/k'),
+      f('a_k ~ 1/k²', 'a_k non è asintotico a 1/k²', { severity: 'blocker' }),
+      f('si ha b_k ~ 1/k', 'Stima di b_k sbagliata', { severity: 'minor', category: 'language' }),
+      f('dunque la serie converge', 'a_k non è asintotico a 1/k²'),
+    ], () => [block]);
+    assert.equal(merged, 3);
+    assert.equal(findings.length, 1);
+    const [g] = findings;
+    assert.deepEqual([g.severity, g.category, g.quote], ['blocker', 'correctness', 'a_k ~ 1/k²']);
+    assert.deepEqual((g as typeof g & { points?: { message: string; severity: string }[] }).points?.map((x) => [x.message, x.severity]), [['b_k non è asintotico a 1/k', 'major'], ['a_k non è asintotico a 1/k²', 'blocker']]);
+    assert.equal(g.message, '(1) "b_k ~ 1/k": b_k non è asintotico a 1/k (2) "a_k ~ 1/k²": a_k non è asintotico a 1/k²');
+    assert.equal(g.suggestion, '(1) fix b_k non è asintotico a 1/k (2) fix a_k non è asintotico a 1/k²');
+  });
+
+  test('the second opinion keeps the points of a merged finding that hold, or all of them when it names none', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Per k grande si ha b_k ~ 1/k e quindi a_k ~ 1/k², dunque la serie converge.\n\nUna seconda frase abbastanza lunga.');
+    const two = () => [answer({ issues: [finding({ quote: 'b_k ~ 1/k', message: 'Stima di b_k falsa', suggestion: 'Scrivi b_k ~ 1/k²' })] }), answer({ issues: [finding({ quote: 'a_k ~ 1/k²', message: 'Stima di a_k falsa', suggestion: 'Scrivi a_k ~ 1/k³' })] }), crossNone];
+    const verdict = (o: Record<string, unknown>) => answer({ findings: [{ index: 1, verdict: 'real', severity: 'major', reason: '', ...o }] });
+    // One real point and one false one: only the real one is stored.
+    fake.next(...two(), verdict({ points: [2], reason: 'Regge solo il punto 1.2.' }));
+    const r = await review();
+    assert.equal(r.merged, 1);
+    assert.match(fake.calls[3].prompt, /1\. \[s1\] \[major\] 2 points raised by independent reviewers about this passage:\n {3}1\.1 "b_k ~ 1\/k" Stima di b_k falsa Suggested fix: Scrivi b_k ~ 1\/k²\n {3}1\.2 "a_k ~ 1\/k²" Stima di a_k falsa/);
+    assert.match(fake.calls[3].system ?? '', /The finding is real when any of its points is real/);
+    assert.deepEqual(issues(`status = 'open'`).map((i) => [i.quote, i.message, i.suggestion]), [['a_k ~ 1/k²', 'Stima di a_k falsa', 'Scrivi a_k ~ 1/k³']]);
+    // Two different errors that both hold: both reach the stored issue, and so the fix prompt. The task above never succeeded,
+    // so each review is again a first review that replaces the open issues.
+    fake.next(...two(), verdict({ points: [1, 2] }));
+    await review();
+    assert.deepEqual(issues(`status = 'open'`).map((i) => [i.message, i.suggestion]), [['(1) "b_k ~ 1/k": Stima di b_k falsa (2) "a_k ~ 1/k²": Stima di a_k falsa', '(1) Scrivi b_k ~ 1/k² (2) Scrivi a_k ~ 1/k³']]);
+    // A verdict that names no point keeps them all.
+    fake.next(...two(), verdict({}));
+    await review();
+    assert.match(issues(`status = 'open'`)[0].message, /^\(1\) .*\(2\) /);
   });
 
   test('the first review keeps the union of the reviewer calls and the cross review, and merges repeats before the second opinion', async () => {
