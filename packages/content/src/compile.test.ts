@@ -234,14 +234,14 @@ test('exams: ids from the exam date, session line for authentic, marker for gene
   const authentic = ex[0].question.split('\n');
   assert.equal(authentic[0], '**Esame del 25 gennaio 2023 - turno 1**');
   assert.equal(ex[0].solution, 'Vedi la {{formula:2.1}}.');
-  assert.equal(ex[1].question.split('\n')[0], "**Esercizio in stile d'esame (generato)**");
-  assert.ok(!ex[0].question.includes('generato'));
+  assert.equal(ex[1].question.split('\n')[0], "**Esercizio in stile d'esame**");
+  assert.ok(!ex[0].question.includes("stile d'esame"));
   // Exams have no hints, even when the question carries one.
   assert.ok(ex.every((e) => !e.hint), 'exam hints are not compiled');
   assert.ok(text(book, 'esercizi.md').includes(':::hint'));
 
   const en = compileBook(fixtureBook({ meta: { ...fixtureBook().meta, language: 'en' } }));
-  assert.ok(text(en, 'esami.md').includes('**Exam-style exercise (generated)**'));
+  assert.ok(text(en, 'esami.md').includes('**Exam-style exercise**\n'));
 });
 
 test('exam ids count per year', () => {
