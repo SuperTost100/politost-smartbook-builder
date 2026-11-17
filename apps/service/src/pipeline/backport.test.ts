@@ -153,15 +153,25 @@ describe('planBackport', () => {
     assert.deepEqual(plan.changes, []);
   });
 
-  test('a graph the builder check fails, and a unit that changed in the builder since the export, are refused', () => {
+  test('a graph the builder check fails is refused, and the other units are still mapped', () => {
     const input = book();
     const plan = planBackport(input, published(input, {
       'grafici.json': (s) => s.replace('"x^2"', '"sqrt(-1-x^2)"'),
       'esercizi.md': AUDIT_EDITS['esercizi.md'],
-    }), { conflict: (c) => (c.kind === 'question' ? 'changed in the builder' : null) });
+    }));
     assert.equal(statusOf(plan, 'grafici.json#parabola'), 'refused');
     assert.match(plan.units.find((u) => u.unit === 'grafici.json#parabola')!.reason!, /graph check fails/);
-    assert.equal(plan.units.find((u) => u.unit === 'esercizi.md#E1.1')!.reason, 'changed in the builder');
+    assert.equal(statusOf(plan, 'esercizi.md#E1.1'), 'mapped');
+    assert.deepEqual(plan.changes.map((c) => c.kind), ['question']);
+  });
+
+  test('a book whose exercises differ in number from the books is refused, because the numbers may point at other questions', () => {
+    const input = book();
+    // An exercise of the export was deleted in the builder since: E1.1 of the books is no longer the first question.
+    const extra = { ...input.questions[0], id: 'q0', statement: 'Un esercizio poi cancellato.' };
+    const target = published({ ...input, questions: [extra, ...input.questions] }, AUDIT_EDITS);
+    const plan = planBackport(input, target);
+    assert.match(plan.bookRefusal ?? '', /esercizi\.md does not hold the same exercises as the books/);
     assert.deepEqual(plan.changes, []);
   });
 
@@ -176,13 +186,10 @@ describe('planBackport', () => {
     assert.deepEqual(plan.changes, []);
   });
 
-  test('changes with no source are unmapped: an added exercise, a figure file', () => {
+  test('a change with no source is unmapped: a figure file', () => {
     const input = book();
-    const plan = planBackport(input, published(input, {
-      'esercizi.md': (s) => `${s}\n:::exercise{id="E1.9" chapter="1" difficulty="medio"}\n## Domanda\nNuovo.\n:::\n`,
-      'assets/fig.svg': (s) => s.replace('<rect', '<circle'),
-    }));
-    assert.deepEqual(plan.units.map((u) => [u.unit, u.status]), [['assets/fig.svg', 'unmapped'], ['esercizi.md#E1.9', 'unmapped']]);
+    const plan = planBackport(input, published(input, { 'assets/fig.svg': (s) => s.replace('<rect', '<circle') }));
+    assert.deepEqual(plan.units.map((u) => [u.unit, u.status]), [['assets/fig.svg', 'unmapped']]);
     assert.deepEqual(plan.changes, []);
   });
 
@@ -266,12 +273,22 @@ describe('backportProject', () => {
     assert.deepEqual(again.residual.map((r) => r.file), ['ptsb.json']);
   });
 
-  test('a section changed in the builder after the export is not overwritten', () => {
+  test('a book with text changed in the builder after the export is refused and nothing is written', () => {
     seed('2026-01-01T12:00:00Z', { [CH]: AUDIT_EDITS[CH] });
-    const r = backportProject(ctx, 'p1', dir);
-    assert.equal(r.written, false);
-    assert.match(r.units[0].reason!, /changed in the builder on 2026-01-02/);
-    assert.equal(currentHead(ctx, 'p1', 's1')!.origin, 'ai');
+    const rows = counts();
+    assert.throws(() => backportProject(ctx, 'p1', dir), /changed in the builder after the export of 2026-01-01T12:00:00Z \(the last on 2026-01-02/);
+    assert.deepEqual(counts(), rows);
+  });
+
+  test('a question added in the builder after the export refuses the book, since it can shift the exercise numbers', () => {
+    seed('2026-02-01T00:00:00Z', AUDIT_EDITS);
+    ctx.db.insert('questions', {
+      id: 'q0', project_id: 'p1', kind: 'exercise', origin: 'generated', statement: 'Nuovo.', hint: '', solution: 'Sì.', difficulty: 'medio',
+      topic_ids: [], chapter_id: 'c1', status: 'draft', checks: [], rev: 1, created_at: '2026-03-01T00:00:00Z', updated_at: '2026-03-01T00:00:00Z',
+    });
+    const r = backportProject(ctx, 'p1', dir, { dryRun: true });
+    assert.match(r.bookRefusal ?? '', /does not hold the same exercises as the books/);
+    assert.deepEqual(r.changes, []);
   });
 
   test('a folder without ptsb.json is refused', () => {

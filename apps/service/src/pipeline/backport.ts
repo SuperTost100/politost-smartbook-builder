@@ -213,16 +213,11 @@ function replaceMiddle(S: string[], mapped: number, oldLine: string, newLine: st
 
 // ---------- the plan ----------
 
-export interface PlanOptions {
-  /** Why a mapped unit must not be written (it changed in the builder since the export the folder came from), or null. */
-  conflict?: (change: BackportChange) => string | null;
-}
-
 /**
  * Works out what a back-port of the books folder `target` (file path -> contents) would change in `input`, and checks it by
  * compiling. Pure: nothing is written.
  */
-export function planBackport(input: BookInput, target: Record<string, string | Uint8Array>, opts: PlanOptions = {}): BackportPlan {
+export function planBackport(input: BookInput, target: Record<string, string | Uint8Array>): BackportPlan {
   const base = compileBook(input);
   const inv = inverseOf(base);
   const units: BackportUnit[] = [];
@@ -241,6 +236,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     return undefined;
   };
   const add = (u: BackportUnit) => { units.push(u); return u; };
+  let numberingDiff: string | null = null;
 
   // Sections are numbered pN by their place in the outline. If the chapter files or their headings differ from the books,
   // the outline is not the one the books were exported with (an older revision approved again keeps its date), so pN
@@ -314,13 +310,14 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   function questionUnits(file: string, was: string, now: string) {
     const b = exercisesOf(was);
     const t = exercisesOf(now);
+    // Exercises are numbered by their place, so a question added or removed since the export shifts every number after it.
+    if (Object.keys(b).sort().join() !== Object.keys(t).sort().join()) { numberingDiff = file; return; }
     // Exercise id -> question id: the book compiled once more with each statement replaced by its question id.
     const marked = compileBook({ ...input, questions: input.questions.map((q) => ({ ...q, statement: `QID${q.id}`, hint: '', solution: '' })) });
     const questionOf = new Map<string, string>();
     for (const m of (text(marked.files[file]) ?? '').matchAll(/:::exercise\{id="([^"]+)"[\s\S]*?QID(\S+)/g)) questionOf.set(m[1], m[2]);
     for (const id of new Set([...Object.keys(b), ...Object.keys(t)])) {
       const unit = `${file}#${id}`;
-      if (!b[id] || !t[id]) { add({ unit, kind: 'question', status: 'unmapped', reason: b[id] ? 'exercise removed in the books' : 'exercise added in the books' }); continue; }
       if (JSON.stringify(b[id]) === JSON.stringify(t[id])) { stable.push({ name: unit, check: (after) => JSON.stringify(exercisesOf(text(after.files[file]) ?? '')[id]) === JSON.stringify(t[id]) }); continue; }
       const q = input.questions.find((x) => x.id === questionOf.get(id));
       if (!q) { add({ unit, kind: 'question', status: 'unmapped', reason: 'no question compiles to this exercise' }); continue; }
@@ -379,16 +376,12 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     }
   }
 
-  for (const p of pending) {
-    const why = p.changes.map((c) => opts.conflict?.(c)).find(Boolean);
-    if (why) Object.assign(p.unit, { status: 'refused', reason: why });
-  }
-
   // Compile with every mapped change; refuse the units that do not come out as in the books or that add a serious finding,
   // and compile again without them, until every unit left passes.
   const baseSerious = serious(base.findings);
   let after = base;
-  let bookRefusal: string | null = outlineDiff ? `the outline differs from the one the books were exported with, at ${outlineDiff.split('\n')[0]}` : null;
+  let bookRefusal: string | null = outlineDiff ? `the outline differs from the one the books were exported with, at ${outlineDiff.split('\n')[0]}`
+    : numberingDiff ? `${numberingDiff} does not hold the same exercises as the books, so their numbers may point at other questions` : null;
   for (;;) {
     const live = pending.filter((p) => p.unit.status === 'mapped');
     after = compileBook(applyChanges(input, live.flatMap((p) => p.changes)));
@@ -498,13 +491,16 @@ export function backportProject(ctx: AppContext, projectId: string, fromDir: str
   const input = loadBookInput(ctx, projectId, { approvedOnly: true });
   const heads = currentHeads(ctx, projectId);
   const questions = new Map(input.questions.map((q) => [q.id, q]));
-  // A row changed in the builder after the export the folder came from holds work the books never saw: it is not overwritten.
+  const plan = planBackport(input, readBookFolder(fromDir));
+  // The books map back to the builder by section, formula and exercise numbers, which any text or question written after the
+  // export can shift (a new formula renumbers the later ones), and then the wrong text would be overwritten. So a book with
+  // such changes is not written. Once a back-port has run, its own edits are newer than the export, but nothing is left to write.
   // shortcut: graphs and assets have no change date, so they are not checked; add one if graphs get edited after an export.
-  const conflict = (c: BackportChange) => {
-    const at = c.kind === 'section' ? heads.get(c.nodeId)?.createdAt : c.kind === 'question' ? questions.get(c.questionId)?.updatedAt : undefined;
-    return at && at > exportedAt ? `changed in the builder on ${at}, after the export of ${exportedAt}` : null;
-  };
-  const plan = planBackport(input, readBookFolder(fromDir), { conflict });
+  const newer = [...[...heads.values()].map((h) => h.createdAt), ...input.questions.map((q) => (q.updatedAt > q.createdAt ? q.updatedAt : q.createdAt))]
+    .filter((at) => at > exportedAt).sort();
+  if (plan.changes.length && newer.length) {
+    throw new Error(`${newer.length} texts or questions changed in the builder after the export of ${exportedAt} (the last on ${newer.at(-1)}), so the numbers in the books may point at other text. Nothing was written.`);
+  }
   const before = countUnresolvedBlockers(ctx, projectId);
   if (opts.dryRun || !plan.changes.length) return { ...plan, written: false, openBlockers: { before, after: before } };
 
