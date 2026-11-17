@@ -269,7 +269,8 @@ export function katexError(tex: string, display: boolean): string | null {
   const warn = console.warn;
   console.warn = () => {}; // KaTeX warns about glyphs without metrics even when it does not throw
   try {
-    if (KATEX_ERROR_COLOR.test(display ? renderDisplayTex(tex) : renderLatexInText(`$${tex}$`))) {
+    // shortcut: a formula that sets #cc0000 itself is not checked, since its red cannot be told from the error red; upgrade when KaTeX exposes the error.
+    if (!/cc0000/i.test(tex) && KATEX_ERROR_COLOR.test(display ? renderDisplayTex(tex) : renderLatexInText(`$${tex}$`))) {
       try {
         katex.renderToString(tex, { throwOnError: true, displayMode: display, strict: 'ignore' });
         err = 'the formula does not render';

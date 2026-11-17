@@ -148,6 +148,6 @@ test('katexError renders as the reader does: undefined commands and missing brac
   assert.match(katexError('\\foo', false) ?? '', /Undefined control sequence/);
   assert.match(katexError('\\frac{a}', true) ?? '', /parse error/i);
   assert.equal(katexError('a_', false) !== null, true);
-  for (const ok of ['x^2 + 1', '(0,20)^2 = 0,04', '1,5\\,\\mathrm{kg}', '\\text{н}']) assert.equal(katexError(ok, false), null, ok);
+  for (const ok of ['x^2 + 1', '(0,20)^2 = 0,04', '1,5\\,\\mathrm{kg}', '\\text{н}', '\\color{#cc0000}{x}']) assert.equal(katexError(ok, false), null, ok);
   assert.equal(katexError('\\begin{pmatrix} 1,5 & 2 \\\\ 3 & 4 \\end{pmatrix}', true), null);
 });
