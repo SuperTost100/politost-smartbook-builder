@@ -211,6 +211,49 @@ describe('planBackport', () => {
   });
 });
 
+describe('planBackport against the published export', () => {
+  const pubOf = (input: BookInput) => compileBook(input).files;
+
+  test('two formulas swapped in the builder since the publish refuse the book, though their numbers stay in sequence', () => {
+    const VEL = ':::formula{key="vel-media" label="Velocità media"}\n$$v = \\frac{s}{t}$$\n:::';
+    const ACC = ':::formula{key="acc-media" label="Accelerazione media"}\n$$a = \\frac{v}{t}$$\n:::';
+    const text = (first: string, second: string) => `Prima formula.\n\n${first}\n\nSeconda formula.\n\n${second}\n\nCon la {{formula:@vel-media}} si ottiene il risultato in un passo.`;
+    const input = book();
+    input.chapters[0].sections[0].markdown = text(VEL, ACC);
+    const pub = pubOf(input);
+    const target = published(input, { [CH]: (s) => s.replace('si ottiene il risultato in un passo', 'si ottiene subito il risultato') });
+    // The builder swaps them: 1.1 and 1.2 now name the other formula, and the books' {{formula:1.1}} would point at the wrong one.
+    input.chapters[0].sections[0].markdown = text(ACC, VEL);
+    const swapped = String(compileBook(input).files[CH]);
+    assert.deepEqual([...swapped.matchAll(/:::formula\{id="([^"]+)"/g)].map((m) => m[1]), ['1.1', '1.2'], 'the numbers stay in sequence');
+    const plan = planBackport(input, target, { published: pub });
+    assert.match(plan.bookRefusal ?? '', /numbers its formulas differently/);
+    assert.deepEqual(plan.changes, []);
+  });
+
+  test('an exercise added in the builder since the publish refuses the book even when the books did not touch the exercises', () => {
+    const input = book();
+    const pub = pubOf(input);
+    const target = published(input, { [CH]: (s) => s.replace('si ottiene il risultato in un passo', 'si ottiene subito il risultato') });
+    input.questions.unshift({ ...input.questions[0], id: 'q0', statement: 'Un esercizio nuovo, scritto dopo la pubblicazione.' });
+    const plan = planBackport(input, target, { published: pub });
+    assert.match(plan.bookRefusal ?? '', /esercizi\.md does not hold the same exercises as the books/);
+    assert.deepEqual(plan.changes, []);
+  });
+
+  test('a caption fixed in the books is refused when it would change a section the builder edited since the publish', () => {
+    const input = book();
+    input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
+    const pub = pubOf(input);
+    // The books change the caption in p1 and leave p2 as published; the builder edits the prose of p2 since.
+    const target = published(input, { [CH]: (s) => s.replace('Moto con aₓ costante"', 'Moto con aₓ costante nel tempo"') });
+    input.chapters[0].sections[1].markdown = input.chapters[0].sections[1].markdown.replace('Per la velocità', 'Per la velocità media');
+    const plan = planBackport(input, target, { published: pub });
+    assert.match(plan.bookRefusal ?? '', /#p2 was changed in the builder since the publish, and the back-port would change it too/);
+    assert.deepEqual(plan.changes, []);
+  });
+});
+
 describe('backportProject', () => {
   let kit: ReturnType<typeof makeCtx>;
   let ctx: AppContext;

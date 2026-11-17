@@ -269,16 +269,30 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const [outlineBase, outlineBooks] = [outlineOf(base.files), outlineOf(target)];
   const outlineDiff = outlineBase.find((x, i) => x !== outlineBooks[i]) ?? (outlineBase.length !== outlineBooks.length ? 'the number of chapters' : undefined);
   // The books' formula references are numbers, which the builder's numbering must still give the same formulas.
-  const numbering = (f: Record<string, string | Uint8Array>) => Object.keys(f).filter((x) => /^chapters\/.*\.md$/.test(x)).sort().map((x) => `${x}: ${formulaIds(text(f[x])!).join(' ')}`).join('\n');
+  // A formula is told apart by its label: two formulas swapped in the builder keep the sequence of numbers but not the labels.
+  const formulaBindings = (md: string) => [...md.matchAll(/^:::formula\{([^}\n]*)\}/gm)].map((m) => `${attrOf(m[1], 'id') ?? ''}=${attrOf(m[1], 'label') ?? ''}`);
+  const numbering = (f: Record<string, string | Uint8Array>) => Object.keys(f).filter((x) => /^chapters\/.*\.md$/.test(x)).sort().map((x) => `${x}: ${formulaBindings(text(f[x])!).join(' | ')}`).join('\n');
   const formulaDiff = pub && numbering(pub) !== numbering(base.files);
   const files = outlineDiff || formulaDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
+  // Units the books left as published but the builder changed since: the back-port must leave them as the builder has them,
+  // including through a figure caption that two sections share.
+  const kept: { name: string; check: (after: CompiledBook) => boolean }[] = [];
+  // Exercises are numbered by their place, so one added or removed in the builder since the publish shifts the numbers of
+  // the others, also when the books did not touch the exercise files.
+  const exerciseIds = (md: string | undefined) => Object.keys(exercisesOf(md ?? '')).sort().join();
+  for (const file of ['esercizi.md', 'esami.md']) {
+    if (files.has(file) && exerciseIds(text(base.files[file])) !== exerciseIds(text(target[file]))) numberingDiff ??= file;
+  }
   for (const file of [...files].sort()) {
     const was = base.files[file];
     const now = target[file];
     if (same(was, now)) { stable.push({ name: file, check: (after) => same(after.files[file], now) }); continue; }
     // The folder left this file as published: what differs was changed in the builder since, and stays. The package header
     // and smartbook.json are still listed below, as the compiler's.
-    if (pub && file !== 'ptsb.json' && file !== 'smartbook.json' && (same(pub[file], now) || (pub[file] === undefined && now === undefined))) continue;
+    if (pub && file !== 'ptsb.json' && file !== 'smartbook.json' && (same(pub[file], now) || (pub[file] === undefined && now === undefined))) {
+      kept.push({ name: file, check: (after) => (was === undefined ? after.files[file] === undefined : same(after.files[file], was)) });
+      continue;
+    }
     if (file === 'ptsb.json') { add({ unit: file, kind: 'file', status: 'compiler-owned', reason: 'package header, written at export' }); continue; }
     if (was === undefined || now === undefined) { add({ unit: file, kind: 'file', status: 'unmapped', reason: was === undefined ? 'only in the books folder' : 'missing from the books folder' }); continue; }
     if (file === 'smartbook.json') {
@@ -304,7 +318,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       if (b.bodies[key] === t.bodies[key]) { stable.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === t.bodies[key] }); continue; }
       if (e) {
         const was = e.bodies[key];
-        if (was === t.bodies[key]) continue; // not edited in the books: the builder's text since the publish stays
+        if (was === t.bodies[key]) { // not edited in the books: the builder's text since the publish stays
+          kept.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key] });
+          continue;
+        }
         if (was === undefined) { add({ unit, kind: 'section', status: 'unmapped', reason: 'section added in the books' }); continue; }
         if (foldImages(b.bodies[key]) !== foldImages(was)) { add({ unit, kind: 'section', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
         const added = [...newLines(was, t.bodies[key], (l) => /^#{1,6}\s/.test(l)), ...newFormulaIds(was, t.bodies[key])];
@@ -359,7 +376,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       const unit = `${file}#${id}`;
       if (JSON.stringify(b[id]) === JSON.stringify(t[id])) { stable.push({ name: unit, check: (after) => JSON.stringify(exercisesOf(text(after.files[file]) ?? '')[id]) === JSON.stringify(t[id]) }); continue; }
       if (e) {
-        if (JSON.stringify(e[id]) === JSON.stringify(t[id])) continue; // not edited in the books
+        if (JSON.stringify(e[id]) === JSON.stringify(t[id])) { // not edited in the books
+          kept.push({ name: unit, check: (after) => JSON.stringify(exercisesOf(text(after.files[file]) ?? '')[id]) === JSON.stringify(b[id]) });
+          continue;
+        }
         if (JSON.stringify(b[id]) !== JSON.stringify(e[id])) { add({ unit, kind: 'question', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
       }
       const q = input.questions.find((x) => x.id === questionOf.get(id));
@@ -403,7 +423,10 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       const unit = `grafici.json#${id}`;
       if (JSON.stringify(b.get(id)) === JSON.stringify(t.get(id))) { stable.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(t.get(id)) }); continue; }
       if (e) {
-        if (JSON.stringify(e.get(id)) === JSON.stringify(t.get(id))) continue; // not edited in the books
+        if (JSON.stringify(e.get(id)) === JSON.stringify(t.get(id))) { // not edited in the books
+          kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
+          continue;
+        }
         if (JSON.stringify(b.get(id)) !== JSON.stringify(e.get(id))) { add({ unit, kind: 'graph', status: 'refused', reason: 'changed in the builder since the publish, and in the books' }); continue; }
       }
       const payload = t.get(id);
@@ -452,6 +475,8 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   }
   const broken = stable.find((x) => !x.check(after));
   if (broken) bookRefusal ??= `${broken.name} matches the books now and would no longer match`;
+  const changed = kept.find((x) => !x.check(after));
+  if (changed) bookRefusal ??= `${changed.name} was changed in the builder since the publish, and the back-port would change it too`;
   if (bookRefusal) {
     for (const p of pending) if (p.unit.status === 'mapped') Object.assign(p.unit, { status: 'refused', reason: 'the book was refused as a whole' });
     after = base;
