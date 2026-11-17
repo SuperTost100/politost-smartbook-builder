@@ -89,7 +89,8 @@ function freeSymbols(src: string): Set<string> | null {
 
 /** The first symbol of an axis title: "Volume V (L)" is V, "Tempo, t (s)" is t. */
 function axisVar(title: string): string | null {
-  const m = /(?:^|[\s,(])([A-Za-zΔθλ](?:[_₀-₉a-z]{0,3})?)\s*(?:\(|\[|$|,)/u.exec(title.trim());
+  // A subscript reads as its letter, as in a label (normaliseLabelFormula): an axis "aₓ" is the symbol ax of "y = aₓ²".
+  const m = /(?:^|[\s,(])([A-Za-zΔθλ](?:[_0-9a-z]{0,3})?)\s*(?:\(|\[|$|,)/u.exec(title.replace(SUB_CHAR, (c) => SUB[c]!).trim());
   return m ? m[1]! : null;
 }
 

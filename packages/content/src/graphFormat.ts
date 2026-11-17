@@ -220,8 +220,29 @@ function angleBrackets(s: string, it: boolean): string {
   return t.trim();
 }
 
-/** Formats one text a student sees: a label, a title, an axis title, a point's text, a tick text. */
+/**
+ * Formats one text a student sees: a label, a title, an axis title, a point's text, a tick text. Nested notation (e^(x^2),
+ * floor(floor(x))) needs a pass per level, so passes repeat until the text stops changing.
+ */
 export function formatGraphText(text: string, opts: GraphFormatOptions = {}): string {
+  let out = text;
+  for (let pass = 0; pass < 5; pass++) {
+    const next = formatOnce(out, opts);
+    if (next === out) break;
+    out = next;
+  }
+  return out;
+}
+
+/** Accepted lint keys ("code:trace name") also under the trace name the formatter gives, so formatting keeps an acceptance. */
+export function formatLintKeys(keys: readonly string[], opts: GraphFormatOptions = {}): string[] {
+  return [...new Set(keys.flatMap((k) => {
+    const at = k.indexOf(':');
+    return at < 0 || at === k.length - 1 ? [k] : [k, `${k.slice(0, at)}:${formatGraphText(k.slice(at + 1), opts)}`];
+  }))];
+}
+
+function formatOnce(text: string, opts: GraphFormatOptions): string {
   if (!text) return text;
   const it = langOf(opts.language) === 'it';
   // A URL is left exactly as written.
@@ -350,7 +371,10 @@ function distinctColors(data: Obj[]) {
     // The palette colour farthest from every colour the graph already shows: the first free one could be a shade of the clash.
     const used = data.map(traceColor).filter((c): c is string => !!c && !!rgb(c));
     const free = GRAPH_PALETTE.map((c) => ({ c, d: Math.min(...used.map((u) => colorDistance(c, u))) })).sort((p, q) => q.d - p.d)[0];
-    if (free && free.d > 0) setColor(b, color, free.c);
+    if (!free || free.d <= 0) continue;
+    setColor(b, color, free.c);
+    // Points marked on this curve, and its other pieces, keep its colour.
+    for (const c of data.slice(j + 1)) if (traceColor(c) === color && meantAsOne(b, c, lines, ySpan, xSpan)) setColor(c, color, free.c);
   }
 }
 
@@ -383,7 +407,12 @@ function linearTicks(lo: number, hi: number, it: boolean): { vals: number[]; tex
   if (!(m >= 1e4 || (m > 0 && m < 1e-2)) || !(hi > lo)) return null;
   const step = niceStep(hi - lo, 5);
   const vals: number[] = [];
-  for (let k = Math.ceil(lo / step - 1e-9); k * step <= hi + step * 1e-9; k++) vals.push(Number((k * step).toPrecision(12)));
+  const first = Math.ceil(lo / step - 1e-9);
+  const count = Math.floor(hi / step + 1e-9) - first;
+  // A range far narrower than its magnitude ([1e16, 1e16 + 2]) has no steps that floating point can tell apart.
+  if (!Number.isFinite(count) || count < 1 || count > 20) return null;
+  for (let i = 0; i <= count; i++) vals.push(Number(((first + i) * step).toPrecision(12)));
+  if (new Set(vals).size !== vals.length) return null;
   // Up to a million the digits fit; beyond, and below 0.01, the ticks share a power of ten: 2,5·10⁻⁶.
   // The digits of every tick are grouped, so 5000 and 10 000 on one axis read alike.
   if (m < 1e6 && m >= 1e4) return { vals, text: vals.map((v) => formatNumber(v, it, decimalsOf(step), true)) };

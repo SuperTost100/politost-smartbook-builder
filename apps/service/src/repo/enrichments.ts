@@ -1,4 +1,4 @@
-import { checkFunctionGraph, formatGraphPayload, graphLintCheck, lintGraph, lintKey } from '@smartbuilder/content';
+import { checkFunctionGraph, formatGraphPayload, formatLintKeys, graphLintCheck, lintGraph, lintKey } from '@smartbuilder/content';
 import type { Enrichment } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -44,12 +44,14 @@ export function updateEnrichmentPayload(ctx: AppContext, id: string, edit: Recor
   const cur = getEnrichment(ctx, id);
   let payload = edit;
   if (cur.kind === 'graph') {
-    const format = (p: Record<string, unknown>) => formatGraphPayload(p, { language: projectLanguage(ctx, cur.projectId) });
+    const language = projectLanguage(ctx, cur.projectId);
+    const format = (p: Record<string, unknown>) => formatGraphPayload(p, { language });
     payload = format(edit);
     const edited = JSON.stringify(payload) !== JSON.stringify(format(cur.payload));
     const checked = checkFunctionGraph(payload);
     const fresh = opts.acceptLint ? lintGraph(payload).map(lintKey) : [];
-    const accepted = [...new Set([...cur.lintAccepted, ...fresh])];
+    // A finding accepted on "y = x^2" stays accepted on the "y = x²" the formatter writes.
+    const accepted = [...new Set([...formatLintKeys(cur.lintAccepted, { language }), ...fresh])];
     const lint = graphLintCheck(payload, accepted);
     const kept = edited ? [] : cur.checks.filter((c) => c.method !== 'numeric' && c.method !== 'lint');
     const checks = [{ method: 'numeric', ok: checked.ok, detail: checked.detail }, { method: 'lint', ok: lint.ok, detail: lint.detail }, ...kept];

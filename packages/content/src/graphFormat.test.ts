@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { formatGraphPayload, formatGraphText, graphPayloadDiff, GRAPH_PALETTE } from './graphFormat.ts';
+import { formatGraphPayload, formatGraphText, formatLintKeys, graphPayloadDiff, GRAPH_PALETTE } from './graphFormat.ts';
 import { lintGraph } from './graphLint.ts';
 import { sampleGraph } from './verify.ts';
 
@@ -189,4 +189,38 @@ test('the graph lint reads the labels the formatter writes as the formulas they 
   assert.equal(mismatch(graph('y = e^(x/2)', (x) => Math.exp(x / 2))), 0);
   assert.equal(mismatch(graph('y = 2*x^2 - 1.5', (x) => 2 * x * x - 1.5)), 0);
   assert.equal(mismatch(graph('y = 2*x^2 - 1.5', (x) => 2 * x * x)), 1);
+});
+
+test('nested notation is formatted in one call, so a second call changes nothing', () => {
+  assert.equal(it('y = e^(x^2)'), 'y = exp(x²)');
+  assert.equal(it('floor(floor(x)) + abs(abs(x) - 1)'), '⌊⌊x⌋⌋ + ||x| − 1|');
+  assert.equal(it(it('y = e^(x^2)')), it('y = e^(x^2)'));
+});
+
+test('an accepted lint finding is also accepted under the trace name the formatter writes', () => {
+  assert.deepEqual(formatLintKeys(['duplicate:z = 2*t^2', 'mixed-units:'], { language: 'it' }), ['duplicate:z = 2*t^2', 'duplicate:z = 2t²', 'mixed-units:']);
+});
+
+test('points marked on a recoloured curve take its new colour', () => {
+  const g = plot([
+    line('A', '#C2410C', [0, 1], [0, 1]),
+    line('B', '#C2410C', [0, 1], [2, 3]),
+    { type: 'scatter', mode: 'markers', name: 'Punto di B', x: [0.5], y: [2.5], marker: { color: '#C2410C' } },
+  ]);
+  const c = colors(formatGraphPayload(g));
+  assert.equal(c[0], '#C2410C');
+  assert.notEqual(c[1], '#C2410C');
+  assert.equal(c[2], c[1]);
+});
+
+test('an axis far narrower than its magnitude gets no ticks, and formatting it ends', () => {
+  const layout = ticks({ yaxis: { title: 'y', range: [10000000000000000, 10000000000000002] } });
+  assert.equal(layout.yaxis!.tickvals, undefined);
+});
+
+test('an axis symbol with a subscript still matches the formula of a formatted label', () => {
+  const g = plot([line('y = a_x^2', '#C2410C', [0, 1, 2], [0, 1, 2])], { xaxis: { title: 'a_x' }, yaxis: { title: 'y', range: [0, 5] } });
+  const mismatch = (p: Record<string, unknown>) => lintGraph(p).filter((f) => f.code === 'label-mismatch').length;
+  assert.equal(mismatch(g), 1);
+  assert.equal(mismatch(formatGraphPayload(g, { language: 'it' })), 1);
 });

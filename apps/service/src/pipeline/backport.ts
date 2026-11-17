@@ -4,7 +4,7 @@
 // candidates, and one the builder also changed since the publish is refused. Each candidate is mapped to the row it comes
 // from and rewritten there as an author edit, and the book is compiled again before anything is written. A unit is written
 // only when the new compile reproduces it exactly and adds no blocker or major finding.
-import { captionToPlain, checkFunctionGraph, compileBook, formatGraphPayload, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
+import { captionToPlain, checkFunctionGraph, compileBook, formatGraphPayload, formatLintKeys, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { bookFiles, exerciseQuestions, MANIFEST, publishedExport, readManifest } from './publish.ts';
 import { countUnresolvedBlockers, currentHeads, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
@@ -463,7 +463,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       const check = checkFunctionGraph(payload);
       if (!check.ok) { add({ unit, kind: 'graph', status: 'refused', reason: `the builder's graph check fails on the books version: ${check.detail}`, target: row.id }); continue; }
       // A blocking graph lint finding is written only when the run accepts it, as an author's "Accept anyway".
-      const blocking = graphLintCheck(payload, row.lintAccepted).findings.filter((f) => f.severity === 'block' && !row.lintAccepted.includes(lintKey(f)));
+      // The acceptances follow the trace names the formatter writes, as updateEnrichmentPayload carries them.
+      const acceptedKeys = formatLintKeys(row.lintAccepted, { language: input.meta.language });
+      const blocking = graphLintCheck(payload, acceptedKeys).findings.filter((f) => f.severity === 'block' && !acceptedKeys.includes(lintKey(f)));
       if (blocking.length && !opts.acceptGraphLint) {
         add({ unit, kind: 'graph', status: 'refused', reason: `the graph lint blocks it: ${blocking.map(lintKey).join(', ')} (add --accept-graph-lint to write it anyway)`, target: row.id });
         continue;
@@ -557,7 +559,7 @@ export function applyChanges(input: BookInput, changes: BackportChange[]): BookI
       const fresh = graphLintCheck(c.payload).findings.map(lintKey);
       const format = (p: Record<string, unknown>) => JSON.stringify(formatGraphPayload(p, { language: input.meta.language }));
       const kept = e && format(c.payload) === format(e.payload) ? e.checks.filter((k) => k.method !== 'numeric' && k.method !== 'lint') : [];
-      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok && kept.every((k) => k.ok) ? 'verified' : 'issue', lintAccepted: [...new Set([...e.lintAccepted, ...fresh])] });
+      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok && kept.every((k) => k.ok) ? 'verified' : 'issue', lintAccepted: [...new Set([...formatLintKeys(e.lintAccepted, { language: input.meta.language }), ...fresh])] });
     }
   }
   return next;

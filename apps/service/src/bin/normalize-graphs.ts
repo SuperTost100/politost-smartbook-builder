@@ -9,7 +9,7 @@
 import { existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { formatGraphPayload, graphLintCheck, graphPayloadDiff, lintGraph, lintKey } from '@smartbuilder/content';
+import { formatGraphPayload, formatLintKeys, graphLintCheck, graphPayloadDiff, lintGraph, lintKey } from '@smartbuilder/content';
 import { parseArgs, paths } from '../config.ts';
 import { createContext, type AppContext } from '../context.ts';
 import { getEnrichment, getProject, listEnrichments, updateEnrichmentPayload } from '../repo/index.ts';
@@ -40,7 +40,9 @@ export function normalizeGraphs(ctx: AppContext, projectId: string, opts: { writ
     const changes = graphPayloadDiff(e.payload, after);
     const findings = lintGraph(after);
     const remaining = findings.filter((f) => HAND.has(f.code)).map((f) => `${f.code}${f.trace ? ` ("${f.trace}")` : ''}: ${f.detail}`);
-    const blocked = (p: Record<string, unknown>) => graphLintCheck(p, e.lintAccepted).findings.filter((f) => f.severity === 'block' && !e.lintAccepted.includes(lintKey(f))).map(lintKey);
+    // The save carries each acceptance over to the formatted trace name (formatLintKeys), so the check after formatting does too.
+    const accepted = formatLintKeys(e.lintAccepted, { language });
+    const blocked = (p: Record<string, unknown>) => graphLintCheck(p, accepted).findings.filter((f) => f.severity === 'block' && !accepted.includes(lintKey(f))).map(lintKey);
     const before = new Set(blocked(e.payload));
     const result: GraphNormalizeResult = {
       enrichmentId: e.id, graphId: typeof e.payload.id === 'string' ? e.payload.id : e.id, title: typeof e.payload.title === 'string' ? e.payload.title : e.id,
