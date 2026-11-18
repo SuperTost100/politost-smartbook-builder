@@ -155,3 +155,8 @@ test('katexError: undefined commands and missing braces fail, decimal commas and
   for (const ok of ['x^2 + 1', '(0,20)^2 = 0,04', '1,5\\,\\mathrm{kg}', '\\text{н}', '\\color{#cc0000}{x}']) assert.equal(katexError(ok, false), null, ok);
   assert.equal(katexError('\\begin{pmatrix} 1,5 & 2 \\\\ 3 & 4 \\end{pmatrix}', true), null);
 });
+
+test('stray-digit-wrap: a size written as $2x2$ is not a copied digit', () => {
+  assert.deepEqual(hits('Una matrice $2x2$ e una $3x3$.', 'stray-digit-wrap'), []);
+  assert.equal(hits('Gli orbitali $4sp^24$ sono ibridi.', 'stray-digit-wrap').length, 1);
+});

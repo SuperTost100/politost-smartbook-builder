@@ -287,6 +287,8 @@ const STRAY_DIGIT_WRAP = /(?<!\$)\$(\d)((?:\\[A-Za-z]+|[A-Za-z])[^$]*?)\1\$(?!\$
 function isStrayDigitWrap(body: string): boolean {
   // The closing digit follows a brace, a letter or a one-digit exponent: "}4", "a4", "^24".
   if (!/(?:\}|[A-Za-z]|\^\d)$/.test(body)) return false;
+  // "$2x2$", "$3x3$": the size of a matrix or a grid.
+  if (body === 'x') return false;
   // "$2\times2$", "$2\sqrt2$", "$1\cdot1$": an operator before the last digit is maths.
   if (/\\(?:times|cdot|sqrt|to|le|leq|ge|geq|pm|mp|div|ne|neq|approx|sim|equiv|infty|(?:arc)?(?:sin|cos|tan|cot|sec|csc)h?|log|ln|lg|exp)(?:[_^](?:\{[^{}]*\}|\w))*$/.test(body)) return false;
   // A relation inside the formula (outside a unit in \mathrm) makes it an equation: "$1x=1$".

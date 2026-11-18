@@ -3441,6 +3441,16 @@ describe('independent samples, the sweep the author asks for, repeats merged in 
     assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true, 'the chapter still needs a read on the reviewer model');
   });
 
+  test('a chapter longer than the reviewer reads is not recorded as read whole', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `${'Una frase lunga del capitolo. '.repeat(4200)}`);
+    fake.next(answer({ issues: [] }), answer({ issues: [] }), crossNone);
+    const r = await review();
+    done(r);
+    assert.deepEqual([r.samples, r.chapterRead], [2, undefined]);
+  });
+
   test('only a review run started with the sweep asks for it; the review at the end of a generate run never does', () => {
     seedOutline([['c1', ['s1']]]);
     seedRevision('s1', 'Una frase.');

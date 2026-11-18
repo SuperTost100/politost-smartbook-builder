@@ -434,13 +434,17 @@ function logTicks(lo: number, hi: number, it: boolean): { vals: number[]; text: 
     return { vals: ns.map((n) => Number((10 ** n).toPrecision(12))), text: ns.map(power) };
   }
   const vals: number[] = [];
+  const text: string[] = [];
   for (let n = Math.floor(lo); n <= Math.ceil(hi); n++) {
     for (const m of [1, 2, 5]) {
       const v = Number((m * 10 ** n).toPrecision(12));
-      if (Math.log10(v) >= lo - 1e-9 && Math.log10(v) <= hi + 1e-9) vals.push(v);
+      if (Math.log10(v) < lo - 1e-9 || Math.log10(v) > hi + 1e-9) continue;
+      vals.push(v);
+      // Beyond 20 decimals the digits are unreadable (and toFixed takes at most 100): 2·10⁻¹²⁰.
+      text.push(n < -20 ? `${m}·10${SUP_DIGITS(n)}` : formatNumber(v, it, Math.max(0, -n)));
     }
   }
-  return { vals, text: vals.map((v) => formatNumber(v, it, Math.max(0, -Math.floor(Math.log10(v))))) };
+  return { vals, text };
 }
 
 /** Sets tickvals and ticktext on an axis that would show SI suffixes or is logarithmic, unless the author set ticks. */

@@ -168,6 +168,19 @@ test('a symbolic link in the book folder is refused before anything is read or w
   }
 });
 
+test('publish stops on prose added before the first section, which no section holds', async () => {
+  const { projectId, folder } = await book();
+  publish(projectId);
+  const chapter = chapterOf(folder);
+  const text = readFileSync(join(folder, chapter), 'utf8');
+  const edited = text.replace(/\n## p1 \|/, '\nUna premessa scritta a mano.\n\n## p1 |');
+  assert.notEqual(edited, text);
+  writeFileSync(join(folder, chapter), edited);
+  const p = publish(projectId);
+  assert.deepEqual(p.handEdited, [`${chapter}#start`]);
+  assert.equal(readFileSync(join(folder, chapter), 'utf8'), edited, 'nothing written');
+});
+
 test('a change made in the builder since the last publish is not a hand edit', async () => {
   const { projectId, folder } = await book();
   publish(projectId);

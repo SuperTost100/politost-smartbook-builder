@@ -377,9 +377,13 @@ export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
       problems.push(`"${t.label}": ${bars.length ? 'some bars have no name or no value the y axis can show' : 'no bars'}.`);
       return null;
     }
+    // A bar rises from 0 (from the bottom of a log axis) to its value, and shows when that stretch meets the y window.
+    if (!bars.some((b) => (yScale === 'log' ? b.value >= y0 : Math.max(0, b.value) >= y0 && Math.min(0, b.value) <= y1))) problems.push(`"${t.label}": no bar reaches the visible window.`);
     return { type: 'bar', name: t.label, x: bars.map((b) => b.category), y: bars.map((b) => b.value), marker: { color } };
   }).filter(Boolean);
   if (x1 <= x0 || y1 <= y0) problems.push('The domain or range is empty.');
+  // Bars sit on a category axis (below), where a curve or a point would be placed by its index, not by its x value.
+  if (spec.traces.some((t) => t.kind === 'bars') && spec.traces.some((t) => t.kind !== 'bars')) problems.push('The bars sit on a category axis, so they cannot share a graph with curves, points or lines: draw them as a separate graph.');
   // The reader keeps an axis "type" and "range" (its sanitiser lists both). Plotly reads the range of a log axis as exponents.
   const axis = (title: string, scale: AxisScale, lo: number, hi: number) => (scale === 'log' ? { title, type: 'log', range: [Math.log10(lo), Math.log10(hi)] } : { title, range: [lo, hi] });
   // Bars sit on a category axis, where Plotly places them at 0, 1, 2, ...: a numeric range would clip them.
@@ -473,6 +477,9 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
   const c = compileExpr(expected, ['x', ...names]);
   if (!c.ok) return null;
   const at = (x: number, values: number[]) => c.evaluate({ x, ...Object.fromEntries(names.map((n, i) => [n, values[i]!])) });
+  // Affine in its constants, the expression is defined at C = 0 exactly where it is at C = 2. Otherwise (1/(C*x)) the points
+  // undefined at C = 0 below say nothing, and there is no verdict.
+  if (names.length && xs.some((x) => typeof x === 'number' && Number.isFinite(x) && Number.isFinite(at(x, names.map(() => 0))) !== Number.isFinite(at(x, names.map(() => 2))))) return null;
   // A drawn point where the expected curve is undefined is a branch the section does not have: it counts as a difference.
   const pts: [number, number][] = [];
   let undefinedAt: number | null = null;

@@ -76,3 +76,10 @@ test('a finding the author accepted stays accepted when formatting renames its t
   assert.equal(g.checkedRevisionId, 'r1');
   assert.deepEqual(g.checks.find((c) => c.method === 'independent'), CHECKS[2]);
 });
+
+test('a blocker the graph already had is not new when formatting renames its trace', () => {
+  const dup = structuredClone(RAW) as typeof RAW;
+  dup.config.data[1] = { ...dup.config.data[0]!, name: 'z = 0.5*x^2', line: { color: '#1D4ED8', width: 2.5 } };
+  ctx.db.insert('enrichments', { id: 'g1', project_id: 'p1', node_id: 's1', kind: 'graph', payload: dup, status: 'verified', checks: CHECKS, created_at: '2026-01-01T00:00:00Z' });
+  assert.deepEqual(normalizeGraphs(ctx, 'p1')[0]!.newlyBlocked, []);
+});

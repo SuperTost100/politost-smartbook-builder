@@ -67,6 +67,10 @@ test('--write stores the check with the revision it read; a failing graph become
   const issues = ctx.db.all<{ message: string }>(`SELECT message FROM review_issues WHERE source = 'verification' AND status = 'open'`);
   assert.equal(issues.length, 1, 'a second failing run opens no second issue');
   assert.match(issues[0]!.message, /points differ from 3\*x/);
+  fake.next(verdict('2*x'));
+  await checkGraphs(ctx, P, { write: true });
+  assert.equal(row(graph).status, 'verified');
+  assert.deepEqual(ctx.db.all(`SELECT status, resolution FROM review_issues WHERE source = 'verification'`).map((r) => ({ ...r })), [{ status: 'fixed', resolution: 'The graph passes its checks now.' }], 'a graph that passes again closes its issue');
 });
 
 test('--stale checks only graphs whose section changed since their last check', async () => {

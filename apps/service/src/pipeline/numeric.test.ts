@@ -89,6 +89,9 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     const b2 = { name: 'b', stated: '2.00 V', computed: '2.50 V' };
     const partial = combineRecomputes({ compared: [a2], mismatches: [], complete: false }, { compared: [a2, b2], mismatches: [b2], complete: true })!;
     assert.deepEqual([partial.mismatches.length, partial.complete], [0, false], 'not a blocker, and not settled as agreeing either');
+    // The checker stated a and p but compared only a; the reviewer stated only a. Nobody compared p, so nothing is settled.
+    const unchecked = combineRecomputes({ compared: [a2], mismatches: [], complete: false }, { compared: [a2], mismatches: [], complete: true })!;
+    assert.equal(unchecked.complete, false);
   });
 });
 

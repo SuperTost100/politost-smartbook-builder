@@ -43,7 +43,8 @@ export function normalizeGraphs(ctx: AppContext, projectId: string, opts: { writ
     // The save carries each acceptance over to the formatted trace name (formatLintKeys), so the check after formatting does too.
     const accepted = formatLintKeys(e.lintAccepted, { language });
     const blocked = (p: Record<string, unknown>) => graphLintCheck(p, accepted).findings.filter((f) => f.severity === 'block' && !accepted.includes(lintKey(f))).map(lintKey);
-    const before = new Set(blocked(e.payload));
+    // Under the trace names formatting writes, so a blocker the graph had before is not reported as new after a rename.
+    const before = new Set(formatLintKeys(blocked(e.payload), { language }));
     const result: GraphNormalizeResult = {
       enrichmentId: e.id, graphId: typeof e.payload.id === 'string' ? e.payload.id : e.id, title: typeof e.payload.title === 'string' ? e.payload.title : e.id,
       changes, remaining, newlyBlocked: blocked(after).filter((k) => !before.has(k)), written: false,
