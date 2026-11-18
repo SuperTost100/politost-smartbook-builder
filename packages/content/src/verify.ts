@@ -479,7 +479,9 @@ export function compareExpected(expected: string, xs: unknown[], ys: unknown[], 
   const at = (x: number, values: number[]) => c.evaluate({ x, ...Object.fromEntries(names.map((n, i) => [n, values[i]!])) });
   // Affine in its constants, the expression is defined at C = 0 exactly where it is at C = 2. Otherwise (1/(C*x)) the points
   // undefined at C = 0 below say nothing, and there is no verdict.
-  if (names.length && xs.some((x) => typeof x === 'number' && Number.isFinite(x) && Number.isFinite(at(x, names.map(() => 0))) !== Number.isFinite(at(x, names.map(() => 2))))) return null;
+  // The points the fit below uses: x and y both finite numbers. An x with no y (a jump, a gap) is not drawn.
+  const drawn = (x: unknown, y: unknown): x is number => typeof x === 'number' && typeof y === 'number' && Number.isFinite(x) && Number.isFinite(y);
+  if (names.length && xs.some((x, k) => drawn(x, ys[k]) && Number.isFinite(at(x, names.map(() => 0))) !== Number.isFinite(at(x, names.map(() => 2))))) return null;
   // A drawn point where the expected curve is undefined is a branch the section does not have: it counts as a difference.
   const pts: [number, number][] = [];
   let undefinedAt: number | null = null;

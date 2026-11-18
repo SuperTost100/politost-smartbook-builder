@@ -339,6 +339,9 @@ describe('planBackport against the published export', () => {
     const target = published(input, { [CH]: (s) => s.replace('\n## p1 |', '\nUna premessa scritta a mano.\n\n## p1 |') });
     const plan = planBackport(input, target, { published: pubOf(input) });
     assert.equal(statusOf(plan, `${CH}#start`), 'unmapped');
+    // A line before the first section that the books then indent, which makes it a code block: also a change.
+    const opening = (line: string) => published(input, { [CH]: (s) => s.replace('\n## p1 |', `\n${line}\n\n## p1 |`) });
+    assert.equal(statusOf(planBackport(input, opening('    Una premessa.'), { published: opening('Una premessa.') }), `${CH}#start`), 'unmapped');
   });
 
   test('a caption fixed in the books is refused when it would change a section the builder edited since the publish', () => {

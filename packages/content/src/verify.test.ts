@@ -443,5 +443,7 @@ test('compareExpected gives no verdict on an expression not affine in its consta
   const { compareExpected } = await import('./verify.ts');
   const xs = [1, 2, 3, 4, 5, 6];
   assert.equal(compareExpected('1/(C*x)', xs, xs.map((x) => 1 / (2 * x)), 1), null);
+  // An x the trace does not draw (y null) says nothing: C*x overflows there at C = 2, but the drawn points still fail the fit.
+  assert.equal(compareExpected('C*x', [...xs, 1e308], [...xs.map((x) => x * x), null], 1)!.ok, false);
   assert.equal(compareExpected('C + log(x)', [-5, -4, -3, -2, -1], [1, 2, 3, 4, 5], 10)!.ok, false, 'affine and undefined where drawn');
 });

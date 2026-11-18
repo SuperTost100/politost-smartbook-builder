@@ -52,7 +52,7 @@ export async function checkGraphs(ctx: AppContext, projectId: string, opts: { wr
 /**
  * Stores the check with the graph, in place of an earlier independent check, with the section revision the checker read. A
  * graph that fails becomes an issue and gets a verification issue, unless one about it is still open; a graph that passes every
- * check closes that issue. Nothing is written when the graph changed while the checker ran.
+ * check closes that issue, when no other graph of the section has its title and the section is still the text checked. Nothing is written when the graph changed while the checker ran.
  */
 function recordCheck(ctx: AppContext, id: string, payload: Record<string, unknown>, check: QuestionCheck, revisionId: string): boolean {
   const written = ctx.db.tx(() => {
@@ -63,7 +63,10 @@ function recordCheck(ctx: AppContext, id: string, payload: Record<string, unknow
     ctx.db.update('enrichments', id, { checks, status: verified ? 'verified' : 'issue', checked_rev_id: revisionId });
     const match = `project_id = ? AND node_id = ? AND source = 'verification' AND category = 'graph' AND quote = ? AND status = 'open'`;
     const keys = [cur.project_id, cur.node_id, String(payload.title ?? '')];
-    if (verified) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'The graph passes its checks now.' WHERE ${match}`, ...keys);
+    // The issue names its graph by title only, and the check must have read the section as it is now.
+    const sameTitle = ctx.db.all<{ payload: string }>(`SELECT payload FROM enrichments WHERE project_id = ? AND node_id = ? AND kind = 'graph' AND id != ?`, cur.project_id, cur.node_id, id)
+      .some((r) => String(JSON.parse(r.payload).title ?? '') === keys[2]);
+    if (verified && !sameTitle && headRevision(ctx, cur.project_id, cur.node_id)?.id === revisionId) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = 'The graph passes its checks now.' WHERE ${match}`, ...keys);
     else if (!check.ok && !ctx.db.get(`SELECT 1 FROM review_issues WHERE ${match}`, ...keys)) openCheckIssue(ctx, cur.project_id, cur.node_id, 'graph', payload, [check]);
     return cur;
   });

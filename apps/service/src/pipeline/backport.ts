@@ -63,7 +63,8 @@ function sectionsOf(md: string): { front: string; start: string; titles: Record<
     titles[parts[i]] = parts[i + 1];
     bodies[parts[i]] = (parts[i + 2] ?? '').trim();
   }
-  return { front, start: parts[0].trim(), titles, bodies };
+  // Blank lines around it do not count; the indentation of its first line does (four spaces make a code block).
+  return { front, start: parts[0].replace(/^\n+|\s+$/g, ''), titles, bodies };
 }
 
 interface ExerciseParts { attrs: string; statement: string; hint: string; solution: string }

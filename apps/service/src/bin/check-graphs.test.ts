@@ -103,3 +103,26 @@ test('a trace without x and a graph of the reader\'s own function type are read 
   assert.equal(ok!.verdict, 'pass', ok!.detail);
   assert.match(fake.calls.at(-1)!.prompt, /x axis: t[\s\S]*1\. v = 2 t: a curve y = f\(x\) drawn for x from 0 to 5/);
 });
+
+test('a passing check leaves the issue open when its section changed during the check, or another graph has the same title', async () => {
+  const { rev, graph } = seed();
+  fake.next(verdict('3*x'));
+  await checkGraphs(ctx, P, { write: true });
+  const open = () => ctx.db.all(`SELECT 1 FROM review_issues WHERE source = 'verification' AND status = 'open'`).length;
+  assert.equal(open(), 1);
+  // The author saves the section while the checker reads the old text.
+  fake.next(() => {
+    ctx.db.run(`UPDATE content_revisions SET status = 'superseded' WHERE id = ?`, rev);
+    ctx.db.insert('content_revisions', { id: newId(), project_id: P, node_id: 's1', kind: 'section', markdown: 'La velocità cresce come $$v = 3t$$', origin: 'human', model: null, parent_rev_id: rev, status: 'current', citations: {}, created_at: now() });
+    return verdict('2*x')();
+  });
+  await checkGraphs(ctx, P, { write: true });
+  assert.equal(open(), 1, 'checked against a text that is no longer the section');
+  // A second graph titled the same in the section: the issue may be about either one.
+  const twin = newId();
+  ctx.db.insert('enrichments', { id: twin, project_id: P, node_id: 's1', kind: 'graph', payload: JSON.parse(ctx.db.get<{ payload: string }>('SELECT payload FROM enrichments WHERE id = ?', graph)!.payload), status: 'issue', checks: [], created_at: now() });
+  fake.next(verdict('2*x'), verdict('2*x'));
+  await checkGraphs(ctx, P, { write: true });
+  assert.equal(row(graph).status, 'verified');
+  assert.equal(open(), 1, 'not closed while the title names two graphs');
+});
