@@ -61,16 +61,18 @@ test('--write saves the formatted graph and keeps its spec and checks; a second 
 
 test('a finding the author accepted stays accepted when formatting renames its trace, and nested notation keeps the checks', () => {
   const dup = structuredClone(RAW) as typeof RAW;
-  dup.title = 'Parabola y = e^(x^2)';
+  dup.title = 'Parabola y = e^(e^(x^2)), g = floor(floor(floor(floor(floor(floor(x))))))';
   dup.config.data[1] = { ...dup.config.data[0]!, name: 'z = 0.5*x^2', line: { color: '#1D4ED8', width: 2.5 } };
   ctx.db.insert('enrichments', { id: 'g1', project_id: 'p1', node_id: 's1', kind: 'graph', payload: dup, status: 'verified', checks: CHECKS, spec: { id: 'parabola' }, checked_rev_id: 'r1', lint_accepted: ['duplicate:z = 0.5*x^2'], created_at: '2026-01-01T00:00:00Z' });
   const [dry] = normalizeGraphs(ctx, 'p1');
   assert.deepEqual(dry!.newlyBlocked, []);
   normalizeGraphs(ctx, 'p1', { write: true });
   const g = getEnrichment(ctx, 'g1');
-  assert.equal(g.payload.title, 'Parabola y = exp(x²)');
+  assert.equal(g.payload.title, 'Parabola y = exp(exp(x²)), g = ⌊⌊⌊⌊⌊⌊x⌋⌋⌋⌋⌋⌋');
   assert.equal(g.status, 'verified');
   assert.ok(g.lintAccepted.includes('duplicate:z = 0,5x²'));
   assert.deepEqual(g.checks.map((c) => c.method), ['numeric', 'lint', 'independent']);
+  assert.deepEqual(g.spec, { id: 'parabola' });
   assert.equal(g.checkedRevisionId, 'r1');
+  assert.deepEqual(g.checks.find((c) => c.method === 'independent'), CHECKS[2]);
 });
