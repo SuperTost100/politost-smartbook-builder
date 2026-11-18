@@ -4,7 +4,7 @@
 // candidates, and one the builder also changed since the publish is refused. Each candidate is mapped to the row it comes
 // from and rewritten there as an author edit, and the book is compiled again before anything is written. A unit is written
 // only when the new compile reproduces it exactly and adds no blocker or major finding.
-import { captionToPlain, checkFunctionGraph, compileBook, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
+import { captionToPlain, checkFunctionGraph, compileBook, formatGraphPayload, formatLintKeys, graphLintCheck, lintKey, type BookInput, type CompiledBook, type LintFinding } from '@smartbuilder/content';
 import type { AppContext } from '../context.ts';
 import { bookFiles, exerciseQuestions, MANIFEST, publishedExport, readManifest } from './publish.ts';
 import { countUnresolvedBlockers, currentHeads, loadBookInput, rewriteHead, updateEnrichmentPayload, updateQuestion } from '../repo/index.ts';
@@ -248,6 +248,8 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const base = compileBook(input);
   const inv = inverseOf(base);
   const units: BackportUnit[] = [];
+  /** Graphs written in the builder's format, so grafici.json keeps differing from the folder by that formatting. */
+  const formatted = new Set<string>();
   const pending: { unit: BackportUnit; changes: BackportChange[]; check: (after: CompiledBook) => boolean; owns: (file: string, quote?: string) => boolean }[] = [];
   // What already matches the books must still match after the changes: a caption on a figure two sections share, or a
   // renumbered formula, changes text no unit is about.
@@ -445,20 +447,27 @@ export function planBackport(input: BookInput, target: Record<string, string | U
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
           continue;
         }
-        if (JSON.stringify(b.get(id)) !== JSON.stringify(e.get(id))) {
+        // A builder change that is only the graph formatter's (normalize-graphs) is no conflict with an edit in the books.
+        const asFormatted = (g: Record<string, unknown> | undefined) => JSON.stringify(g && formatGraphPayload(g, { language: input.meta.language }));
+        if (asFormatted(b.get(id)) !== asFormatted(e.get(id))) {
           add({ unit, kind: 'graph', status: 'refused', reason: 'changed in the builder since the publish, and in the books' });
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
           continue;
         }
       }
-      const payload = t.get(id);
+      // The builder formats every graph it saves (updateEnrichmentPayload), so the plan writes and checks the formatted one.
+      const folder = t.get(id);
+      const payload = folder && formatGraphPayload(folder, { language: input.meta.language });
+      if (folder && JSON.stringify(payload) !== JSON.stringify(folder)) formatted.add(unit);
       // A graph whose check failed is held out of the export, so it can be in the books folder and missing from `b`.
       const row = input.enrichments.find((x) => x.kind === 'graph' && String(x.payload.id) === id);
       if (!payload || !row) { add({ unit, kind: 'graph', status: 'unmapped', reason: payload ? 'graph added in the books' : 'graph removed in the books' }); continue; }
       const check = checkFunctionGraph(payload);
       if (!check.ok) { add({ unit, kind: 'graph', status: 'refused', reason: `the builder's graph check fails on the books version: ${check.detail}`, target: row.id }); continue; }
       // A blocking graph lint finding is written only when the run accepts it, as an author's "Accept anyway".
-      const blocking = graphLintCheck(payload, row.lintAccepted).findings.filter((f) => f.severity === 'block' && !row.lintAccepted.includes(lintKey(f)));
+      // The acceptances follow the trace names the formatter writes, as updateEnrichmentPayload carries them.
+      const acceptedKeys = formatLintKeys(row.lintAccepted, { language: input.meta.language });
+      const blocking = graphLintCheck(payload, acceptedKeys).findings.filter((f) => f.severity === 'block' && !acceptedKeys.includes(lintKey(f)));
       if (blocking.length && !opts.acceptGraphLint) {
         add({ unit, kind: 'graph', status: 'refused', reason: `the graph lint blocks it: ${blocking.map(lintKey).join(', ')} (add --accept-graph-lint to write it anyway)`, target: row.id });
         continue;
@@ -513,6 +522,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     // A section that was back-ported can still hold a caption the compiler now writes with super- and subscripts.
     const captionsOnly = a !== undefined && b !== undefined && foldImages(text(a)!) === foldImages(text(b)!);
     if (captionsOnly && !causes.length) causes.push('captions: the compiler now writes super- and subscripts');
+    for (const u of units) if (u.status === 'mapped' && formatted.has(u.unit) && u.unit.startsWith(`${file}#`)) causes.push(`${u.unit}: written as the graph formatter writes it (Unicode maths, decimal commas, colours, ticks)`);
     residual.push({ file, causes: causes.length ? causes : ['unexplained'] });
   }
   return { units, changes, base, after, bookRefusal, residual };
@@ -549,8 +559,9 @@ export function applyChanges(input: BookInput, changes: BackportChange[]): BookI
       // As updateEnrichmentPayload with acceptLint does: the lint's findings are accepted and the numeric check decides, together
       // with the graph's other checks when the payload is the one the builder has.
       const fresh = graphLintCheck(c.payload).findings.map(lintKey);
-      const kept = e && JSON.stringify(c.payload) === JSON.stringify(e.payload) ? e.checks.filter((k) => k.method !== 'numeric' && k.method !== 'lint') : [];
-      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok && kept.every((k) => k.ok) ? 'verified' : 'issue', lintAccepted: [...new Set([...e.lintAccepted, ...fresh])] });
+      const format = (p: Record<string, unknown>) => JSON.stringify(formatGraphPayload(p, { language: input.meta.language }));
+      const kept = e && format(c.payload) === format(e.payload) ? e.checks.filter((k) => k.method !== 'numeric' && k.method !== 'lint') : [];
+      if (e) Object.assign(e, { payload: c.payload, status: checkFunctionGraph(c.payload).ok && kept.every((k) => k.ok) ? 'verified' : 'issue', lintAccepted: [...new Set([...formatLintKeys(e.lintAccepted, { language: input.meta.language }), ...fresh])] });
     }
   }
   return next;

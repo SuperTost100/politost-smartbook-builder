@@ -22,6 +22,7 @@
     "backup": "node --import tsx apps/service/src/bin/backup.ts backup",
     "restore": "node --import tsx apps/service/src/bin/backup.ts restore",
     "normalize-text": "node --import tsx apps/service/src/bin/normalize-text.ts",
+    "normalize-graphs": "node --import tsx apps/service/src/bin/normalize-graphs.ts",
     "backport": "node --import tsx apps/service/src/bin/backport.ts",
     "check-graphs": "node --import tsx apps/service/src/bin/check-graphs.ts",
     "publish-book": "node --import tsx apps/service/src/bin/publish-book.ts",

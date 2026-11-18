@@ -47,18 +47,29 @@ const finitePoints = (pts: Point[]) => pts.filter((p): p is [number, number] => 
 
 // ---------- formulas written in a label ----------
 
-const SUP: Record<string, string> = { '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁻': '-', 'ⁿ': 'n' };
-const SUB: Record<string, string> = { '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9', 'ₙ': 'n', 'ₓ': 'x', 'ᵧ': 'y', 'ₜ': 't' };
+// Every superscript and subscript formatGraphText writes reads back here (ᵧ also stands for y, as some labels write it).
+const SUP: Record<string, string> = {
+  '⁰': '0', '¹': '1', '²': '2', '³': '3', '⁴': '4', '⁵': '5', '⁶': '6', '⁷': '7', '⁸': '8', '⁹': '9', '⁻': '-', '⁺': '+', '⁼': '=', '⁽': '(', '⁾': ')',
+  'ᵃ': 'a', 'ᵇ': 'b', 'ᶜ': 'c', 'ᵈ': 'd', 'ᵉ': 'e', 'ᶠ': 'f', 'ᵍ': 'g', 'ʰ': 'h', 'ⁱ': 'i', 'ʲ': 'j', 'ᵏ': 'k', 'ˡ': 'l', 'ᵐ': 'm', 'ⁿ': 'n', 'ᵒ': 'o',
+  'ᵖ': 'p', 'ʳ': 'r', 'ˢ': 's', 'ᵗ': 't', 'ᵘ': 'u', 'ᵛ': 'v', 'ʷ': 'w', 'ˣ': 'x', 'ʸ': 'y', 'ᶻ': 'z', 'ᵅ': 'α', 'ᵝ': 'β', 'ᵞ': 'γ', 'ᵟ': 'δ', 'ᶿ': 'θ', 'ᵠ': 'φ', 'ᵡ': 'χ',
+};
+const SUB: Record<string, string> = {
+  '₀': '0', '₁': '1', '₂': '2', '₃': '3', '₄': '4', '₅': '5', '₆': '6', '₇': '7', '₈': '8', '₉': '9', 'ₐ': 'a', 'ₑ': 'e', 'ₕ': 'h', 'ᵢ': 'i', 'ⱼ': 'j',
+  'ₖ': 'k', 'ₗ': 'l', 'ₘ': 'm', 'ₙ': 'n', 'ₒ': 'o', 'ₚ': 'p', 'ᵣ': 'r', 'ₛ': 's', 'ₜ': 't', 'ᵤ': 'u', 'ᵥ': 'v', 'ₓ': 'x', 'ᵧ': 'y',
+};
+const SUP_RUN = new RegExp(`[${Object.keys(SUP).join('')}]+`, 'g');
+const SUB_CHAR = new RegExp(`[${Object.keys(SUB).join('')}]`, 'g');
 const CONSTANTS = new Set(['e', 'pi']);
 
-/** The plain-text maths of a label in mathjs syntax: "x²" becomes "x^(2)", "ln" becomes "log", "0,5" becomes "0.5". */
+/** The plain-text maths of a label in mathjs syntax: "x²" becomes "x^(2)", "ln" becomes "log", "0,5" becomes "0.5", "⌊x⌋" becomes "floor(x)". */
 export function normaliseLabelFormula(s: string): string {
   let t = s.normalize('NFC')
     .replace(/[−–]/g, '-').replace(/[·×⋅]/g, '*').replace(/π/g, 'pi').replace(/√\s*\(/g, 'sqrt(').replace(/√\s*([a-zA-Z0-9.]+)/g, 'sqrt($1)')
+    .replace(/⌊([^⌊⌋]*)⌋/g, 'floor($1)').replace(/⌈([^⌈⌉]*)⌉/g, 'ceil($1)')
     .replace(/log₁₀/g, 'log10').replace(/\bln\b/g, 'log').replace(/\barctan\b/g, 'atan').replace(/\|([^|]+)\|/g, 'abs($1)')
     .replace(/(\d),(\d)/g, '$1.$2');
-  t = t.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁻ⁿ]+/g, (m) => `^(${[...m].map((c) => SUP[c]).join('')})`);
-  t = t.replace(/[₀₁₂₃₄₅₆₇₈₉ₙₓᵧₜ]/g, (c) => SUB[c]!);
+  t = t.replace(SUP_RUN, (m) => `^(${[...m].map((c) => SUP[c]).join('')})`);
+  t = t.replace(SUB_CHAR, (c) => SUB[c]!);
   return t.trim();
 }
 
@@ -78,7 +89,8 @@ function freeSymbols(src: string): Set<string> | null {
 
 /** The first symbol of an axis title: "Volume V (L)" is V, "Tempo, t (s)" is t. */
 function axisVar(title: string): string | null {
-  const m = /(?:^|[\s,(])([A-Za-zΔθλ](?:[_₀-₉a-z]{0,3})?)\s*(?:\(|\[|$|,)/u.exec(title.trim());
+  // A subscript reads as its letter, as in a label (normaliseLabelFormula): an axis "aₓ" is the symbol ax of "y = aₓ²".
+  const m = /(?:^|[\s,(])([A-Za-zΔθλ](?:[_0-9a-z]{0,3})?)\s*(?:\(|\[|$|,)/u.exec(title.replace(SUB_CHAR, (c) => SUB[c]!).trim());
   return m ? m[1]! : null;
 }
 
@@ -331,7 +343,85 @@ export function lintGraph(payload: Record<string, unknown>): GraphLintFinding[] 
     if (prim) hits.push({ name: nameOf(t), prim: prim[0] });
   }
   if (new Set(hits.map((h) => h.prim)).size >= 2) add('placeholder', undefined, `traces are ${hits.map((h) => `${h.prim} ("${h.name}")`).join(', ')} while their names state no formula`);
+
+  // What the reader shows differently from what the payload says: text it shows as written, and keys it drops.
+  const texts: { where: string; trace?: string; text: string }[] = [];
+  const title = (v: unknown) => (typeof v === 'string' ? v : typeof (v as { text?: unknown } | undefined)?.text === 'string' ? (v as { text: string }).text : '');
+  if (typeof payload.title === 'string') texts.push({ where: 'title', text: payload.title });
+  const lay = layout as Record<string, unknown>;
+  if (title(lay.title) && title(lay.title) !== payload.title) texts.push({ where: 'title', text: title(lay.title) });
+  for (const [where, axis] of [['x axis title', layout.xaxis], ['y axis title', layout.yaxis]] as const) {
+    if (title((axis as { title?: unknown } | undefined)?.title)) texts.push({ where, text: title((axis as { title?: unknown }).title) });
+    const tt = (axis as { ticktext?: unknown } | undefined)?.ticktext;
+    if (Array.isArray(tt)) for (const t of tt) if (typeof t === 'string') texts.push({ where: `${where.slice(0, 6)} tick`, text: t });
+  }
+  for (const a of Array.isArray(lay.annotations) ? lay.annotations : []) if (typeof (a as { text?: unknown })?.text === 'string') texts.push({ where: 'annotation', text: (a as { text: string }).text });
+  for (const t of data) {
+    if (nameOf(t)) texts.push({ where: 'label', trace: nameOf(t), text: nameOf(t) });
+    for (const x of Array.isArray(t.text) ? t.text : [t.text]) if (typeof x === 'string' && x) texts.push({ where: 'point text', trace: nameOf(t), text: x });
+  }
+  for (const { where, trace, text } of texts) {
+    const raw = RAW_NOTATION.exec(text);
+    if (raw) add('raw-notation', trace, `${where} "${text}" shows "${raw[0].trim()}" as written: the reader has no maths in graph text, so write it in Unicode (x², aₓ, √, ·) or in words`);
+  }
+  for (const t of data) {
+    const line = t.line as { dash?: unknown } | undefined;
+    if (line && typeof line === 'object' && line.dash !== undefined && line.dash !== 'solid') add('dropped-key', nameOf(t), 'line.dash: the reader draws every line solid');
+    if (t.fill !== undefined && t.fill !== 'none') add('dropped-key', nameOf(t), 'fill: the reader draws no filled area, only its outline');
+  }
+  const dropped = (o: unknown, path: string): void => {
+    if (!o || typeof o !== 'object' || Array.isArray(o)) return;
+    for (const [k, v] of Object.entries(o)) {
+      if (['tickformat', 'exponentformat', 'separators'].includes(k)) add('dropped-key', undefined, `${path}${k}: the reader drops it, so ticks show Plotly's default format (set tickvals and ticktext instead)`);
+      else dropped(v, `${path}${k}.`);
+    }
+  };
+  dropped(layout, '');
+  for (const [ax, t] of [['x', xT], ['y', yT]] as const) {
+    const max = AXIS_TITLE_MAX[ax];
+    if ([...t].length > max) add('long-axis-title', undefined, `${ax} axis title "${t}" has ${[...t].length} characters: at phone width (390 px) about ${max} fit`);
+  }
+  const xv = axisVar(xT);
+  if (xv && INDEPENDENT.has(xv)) {
+    for (const t of data) {
+      const other = otherVariable(nameOf(t), xv);
+      if (other) add('axis-variable', nameOf(t), `the label is a function of ${other}, the x axis is ${xv}`);
+    }
+  }
   return out;
+}
+
+/** Notation the reader would show as typed: a power, a short index, sqrt( or an asterisk product. */
+const RAW_NOTATION = /\^|_(?:\{|[\p{L}\d]{1,2}(?![\p{L}\d]))|\bsqrt\(|\S\s*\*\s*\S/u;
+
+// shortcut: a character count stands in for the rendered width. On the reader's renders of the four books at 390 px, a
+// y axis title of 50 to 55 characters runs from the bottom of the plot to its top edge and one of 51 with brackets and a
+// superscript is cut off, while an x axis title of 51 characters uses five sixths of the width. Upgrade by measuring the
+// text in the reader's 12 px font.
+const AXIS_TITLE_MAX = { x: 60, y: 50 };
+
+/** Letters that name the independent variable of a curve. */
+const INDEPENDENT = new Set(['x', 't']);
+
+/**
+ * The one variable a label's formula depends on when it is not the x axis variable: "y′ = y/x + x" on a t axis is x.
+ * Only when it is unambiguous: one segment "lhs = rhs" whose right side, less the left side's own symbols, has exactly one
+ * free symbol, a letter that names an independent variable, and the label never writes the axis variable.
+ */
+function otherVariable(name: string, axis: string): string | null {
+  const plain = normaliseLabelFormula(name);
+  if (new RegExp(`(?<![\\p{L}])${axis}(?![\\p{L}])`, 'u').test(plain)) return null;
+  for (const seg of labelSegments(name)) {
+    const parts = seg.split('=');
+    if (parts.length !== 2) continue;
+    const lhs = normaliseLabelFormula(parts[0]!).replace(/′/g, '').trim();
+    const own = new Set(lhs.match(/\p{L}+/gu) ?? []);
+    const free = freeSymbols(normaliseLabelFormula(parts[1]!).replace(/′/g, ''));
+    if (!free) continue;
+    const rest = [...free].filter((v) => !own.has(v));
+    if (rest.length === 1 && INDEPENDENT.has(rest[0]!) && rest[0] !== axis) return rest[0]!;
+  }
+  return null;
 }
 
 /** The key under which an author accepts a finding. It names the code and the trace, so it survives later edits of other traces. */

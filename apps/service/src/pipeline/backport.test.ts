@@ -4,7 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, test } from 'node:test';
-import { compileBook, packPtsb, unpackPtsb, type BookInput } from '@smartbuilder/content';
+import { compileBook, formatGraphPayload, packPtsb, unpackPtsb, type BookInput } from '@smartbuilder/content';
 import type { Question } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { newId } from '../db/db.ts';
@@ -148,6 +148,29 @@ describe('planBackport', () => {
     assert.equal(unit.status, 'mapped');
     assert.equal(unit.reason, 'graph lint accepted: duplicate:b');
     assert.deepEqual(applyChanges(input, plan.changes).enrichments[0].lintAccepted, ['duplicate:b']);
+  });
+
+  test('a hand-fixed graph is written as the graph formatter writes it, and the residual says why grafici.json still differs', () => {
+    const input = book();
+    const trace = (name: string) => ({ x: [0, 1, 2], y: [0, 0.5, 2], name, mode: 'lines' });
+    input.enrichments[0].payload = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [trace('s(t)')], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
+    const target = published(input, { 'grafici.json': (s) => s.replace('"s(t)"', '"s = 0.5*t^2"') });
+    const plan = planBackport(input, target);
+    assert.equal(statusOf(plan, 'grafici.json#parabola'), 'mapped');
+    const written = plan.changes.find((c) => c.kind === 'graph')!;
+    assert.equal(written.kind === 'graph' && (written.payload.config as { data: { name: string }[] }).data[0]!.name, 's = 0,5t²');
+    assert.deepEqual(plan.residual.find((r) => r.file === 'grafici.json')?.causes, ['grafici.json#parabola: written as the graph formatter writes it (Unicode maths, decimal commas, colours, ticks)']);
+  });
+
+  test('a graph the builder only formatted after the publish still takes a fix from the books', () => {
+    const raw = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [{ x: [0, 1, 2], y: [0, 0.5, 2], name: 's = 0.5*t^2', mode: 'lines' }], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
+    const atPublish = book();
+    atPublish.enrichments[0].payload = raw;
+    const now = book();
+    now.enrichments[0].payload = formatGraphPayload(raw, { language: 'it' });
+    const target = published(atPublish, { 'grafici.json': (s) => s.replace('"Moto accelerato"', '"Moto uniformemente accelerato"') });
+    const plan = planBackport(now, target, { published: compileBook(atPublish).files });
+    assert.equal(statusOf(plan, 'grafici.json#parabola'), 'mapped');
   });
 
   test('a unit the new compile does not reproduce is refused', () => {

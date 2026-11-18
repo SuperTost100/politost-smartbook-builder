@@ -2,6 +2,7 @@ import { parse } from 'mathjs';
 import { evalExprAtX } from './safeMathExpr.ts';
 import { compileExpr } from './expr.ts';
 import { axisSamples, type AxisScale } from './plot.ts';
+import { GRAPH_PALETTE } from './graphFormat.ts';
 
 const SAMPLES = 400;
 const READER_CHARS = /^[0-9x+\-*/().^ \t]+$/;
@@ -261,7 +262,7 @@ export function sampleGraph(spec: GraphSpec, samples = 400): SampledGraph {
   const showable = (v: number, scale: AxisScale) => Number.isFinite(v) && (scale !== 'log' || v > 0);
   const inView = (x: number, y: number) => x >= x0 && x <= x1 && y >= y0 && y <= y1;
   const r8 = (v: number) => Number(v.toPrecision(8));
-  const colors = ['#C2410C', '#1D4ED8', '#15803D', '#7C3AED'];
+  const colors = GRAPH_PALETTE;
   const data = spec.traces.map((t, i) => {
     const color = colors[i % colors.length];
     const line = { type: 'scatter', mode: 'lines', name: t.label };

@@ -1594,7 +1594,7 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     const verdict = (problem: string) => answer({ traces: [{ label: 'y = -x', expected: '-x', problem }, { label: 'Punto angoloso', expected: '', problem: '' }], fit: 'fits' });
     fake.next(branch([0, 5]), verdict('Il ramo sinistro è disegnato per x da 0 a 5.'), branch([-5, 0]), verdict(''));
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'modulo' })), { made: 1 });
-    assert.match(fake.calls[1]!.prompt, /1\. y = -x \(ramo sinistro, x < 0\): a curve y = f\(x\) drawn for x from 0 to 5/);
+    assert.match(fake.calls[1]!.prompt, /1\. y = −x \(ramo sinistro, x < 0\): a curve y = f\(x\) drawn for x from 0 to 5/, 'the label as the reader shows it, with a minus sign');
     assert.match(fake.calls[1]!.prompt, /2\. Punto angoloso: points \(0, 0\)/);
     assert.match(fake.calls[1]!.system ?? '', /only for a contradiction/);
     assert.match(fake.calls[2]!.prompt, /problem: Il ramo sinistro è disegnato per x da 0 a 5/);
@@ -1662,6 +1662,30 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.equal(edited.checkedRevisionId, null);
   });
 
+  test('a drawn graph is formatted before its checks, an author edit is formatted when saved, and formatting alone keeps the checks', async () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Testo uno: $$y = 0{,}5x^2$$');
+    const half = { ...graph, title: 'Grafico di 0.5*x^2', xLabel: 'x', traces: [{ kind: 'function', fn: '0.5*x^2', label: 'y = 0.5*x^2', source: 'y = 0{,}5x^2' }] };
+    fake.next(answer(half), answer({ traces: [{ label: 'y = 0,5x²', expected: '0.5*x^2', problem: '' }], fit: 'fits' }));
+    assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
+    assert.match(fake.calls.at(-1)!.prompt, /1\. y = 0,5x²: a curve/, 'the checker reads the label the reader will show');
+    const stored = listEnrichments(ctx, P)[0]!;
+    assert.equal(stored.payload.title, 'Grafico di 0,5x²');
+    assert.equal((stored.payload.config as { data: { name: string }[] }).data[0]!.name, 'y = 0,5x²');
+    assert.deepEqual(stored.lintOpen, []);
+    // The same graph with its labels as the writer typed them: the formatter makes it the stored one, so nothing was edited.
+    const typed = structuredClone(stored.payload) as { title: string; config: { data: { name: string }[] } };
+    typed.title = 'Grafico di 0.5*x^2';
+    typed.config.data[0]!.name = 'y = 0.5*x^2';
+    const same = updateEnrichmentPayload(ctx, stored.id, typed);
+    assert.deepEqual(same.payload, stored.payload);
+    assert.deepEqual(same.checks.map((c) => c.method), ['numeric', 'lint', 'source', 'independent']);
+    assert.ok(same.spec && same.checkedRevisionId);
+    const edited = updateEnrichmentPayload(ctx, stored.id, { ...typed, title: 'Parabola y = 2*x^2 - 1.5' });
+    assert.equal(edited.payload.title, 'Parabola y = 2x² − 1,5');
+    assert.deepEqual(edited.checks.map((c) => c.method), ['numeric', 'lint'], 'a real edit still drops the checks about the old graph');
+  });
+
   test('a graph whose section changed after its check is stale at export', async () => {
     seedOutline([['c1', ['s1']]]);
     const rev = seedRevision('s1', 'Testo uno: $$y = x^2$$');
@@ -1687,7 +1711,8 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     const rows = ctx.db.all<{ payload: string; status: string }>(`SELECT payload, status FROM enrichments WHERE kind = 'graph' ORDER BY rowid`);
     const layouts = rows.map((r) => json<{ id: string; config: { layout: { xaxis: { type: string; range: number[]; title: string } } } }>(r.payload, { id: '', config: { layout: { xaxis: { type: '', range: [], title: '' } } } }));
     assert.deepEqual(layouts.map((l) => l.id), ['bode', 'bode-2'], 'the second graph gets its own id');
-    for (const l of layouts) assert.deepEqual(l.config.layout.xaxis, { title: 'f (Hz)', type: 'log', range: [1, 5] });
+    const ticks = { tickvals: [10, 100, 1000, 10000, 100000], ticktext: ['10', '10²', '10³', '10⁴', '10⁵'] };
+    for (const l of layouts) assert.deepEqual(l.config.layout.xaxis, { title: 'f (Hz)', type: 'log', range: [1, 5], ...ticks }, 'one log axis, with the same powers of ten');
     assert.deepEqual(rows.map((r) => r.status), ['verified', 'verified']);
   });
 

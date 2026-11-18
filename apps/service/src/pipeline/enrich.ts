@@ -1,5 +1,5 @@
 // Extras: the bulk model picks where graphs and lab examples (Python or MATLAB) help; the writer creates them; we check them.
-import { compareExpected, graphLintCheck, graphSourceCheck, lintGraph, lintKey, sampleGraph, type GraphSpec, type GraphTrace, type SampledGraph } from '@smartbuilder/content';
+import { compareExpected, formatGraphPayload, graphLintCheck, graphSourceCheck, lintGraph, lintKey, sampleGraph, type GraphSpec, type GraphTrace, type SampledGraph } from '@smartbuilder/content';
 import type { QuestionCheck } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -109,7 +109,9 @@ async function drawGraphs(ctx: AppContext, t: TaskContext, p: { language: string
   if (main.pair) graphs.push({ spec: toSpec(main.pair.id === main.id ? `${main.pair.id}-2` : main.pair.id, main.pair.title, main.pair.yDomain, main.pair.yScale, main.pair.yLabel, main.pair.traces), description: main.pair.description });
   return {
     graphs: graphs.map(({ spec, description }) => {
-      const sampled = sampleGraph(spec);
+      // The labels are formatted before any check reads them, so the lint and the checker see what the reader will show.
+      const drawn = sampleGraph(spec);
+      const sampled = { ...drawn, payload: formatGraphPayload(drawn.payload, { language: p.language }) };
       const lint = graphLintCheck(sampled.payload, [], { sampled: true });
       const source = graphSourceCheck(spec.traces, p.section);
       const checks: QuestionCheck[] = [
