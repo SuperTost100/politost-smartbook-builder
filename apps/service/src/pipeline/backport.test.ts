@@ -322,6 +322,24 @@ describe('planBackport against the published export', () => {
     assert.deepEqual(plan.changes, []);
   });
 
+  test('a section the back-port refuses or does not map keeps its builder text when another section changes their shared figure', () => {
+    const shared = (input: BookInput) => { input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo" caption="Moto con a_x costante"}\n:::`; return input; };
+    // The books give the shared figure two different captions: one wins, and the other section is refused.
+    const input = shared(book());
+    const target = published(input, { [CH]: (s) => s.replace('Moto con aₓ costante"', 'Moto con aₓ costante nel tempo"').replace(/(sezione precedente[\s\S]*?)Moto con aₓ costante"/, '$1Moto con aₓ variabile"') });
+    const plan = planBackport(input, target, { published: pubOf(input) });
+    assert.ok(plan.bookRefusal, JSON.stringify(plan.units));
+    assert.deepEqual(plan.changes, []);
+    // A section the builder added after the publish, edited in the books too: unmapped, and a caption fixed elsewhere would change it.
+    const atPublish = book();
+    atPublish.chapters[0].sections = atPublish.chapters[0].sections.slice(0, 1);
+    const now = shared(book());
+    const folder = published(now, { [CH]: (s) => s.replace('Moto con aₓ costante"', 'Moto con aₓ costante nel tempo"').replace('la [sezione precedente]', 'la [sezione sopra]') });
+    const later = planBackport(now, folder, { published: pubOf(atPublish) });
+    assert.equal(statusOf(later, `${CH}#p2`), 'unmapped');
+    assert.match(later.bookRefusal ?? '', /#p2 is not back-ported/);
+  });
+
   test('a graph back-ported and saved formatted is the books graph, not a conflict, when the book is published again', () => {
     const raw = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [{ x: [0, 1, 2], y: [0, 0.5, 2], name: 's(t)', mode: 'lines' }], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
     const atPublish = book();
