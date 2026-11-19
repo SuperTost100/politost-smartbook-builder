@@ -103,7 +103,7 @@ export function parseQuantity(text: string): Quantity | null {
 
 const NAME_VALUE = /^\s*(.+?)\s*[=:]\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*(.*)$/;
 
-function parsePrinted(stdout: string): Printed[] {
+function parsePrinted(stdout: string, rounded: boolean): Printed[] {
   const out: Printed[] = [];
   for (const line of stdout.split('\n').slice(0, MAX_PRINTED_VALUES)) {
     const m = NAME_VALUE.exec(plain(line));
@@ -112,7 +112,7 @@ function parsePrinted(stdout: string): Printed[] {
     if (!Number.isFinite(value)) continue;
     const { factor, unit } = splitUnit(m[3] ?? '');
     if (!knownUnit(unit)) continue;
-    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step: lastDigit(m[2]!) * factor });
+    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step: rounded ? lastDigit(m[2]!) * factor : 0 });
   }
   return out;
 }
@@ -172,13 +172,22 @@ function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [Stat
 }
 
 /**
- * Compares the printed values with the stated ones. Null when nothing could be compared. `relative` widens the tolerance to
- * that fraction of the value; `byName` pairs values only by name, never a lone stated value with a lone printed one.
+ * True when a program rounds or formats the numbers it prints (round(x, 4), "%.3f", f"{x:.4g}"), so a printed value is known
+ * only to its last printed digit. A plain print shows the float in full, and a value that prints short (0.5, 3) is exact.
  */
-export function compareValues(stated: StatedValue[], stdout: string, opts: { relative?: number; byName?: boolean } = {}): NumericCheck | null {
+export function roundsOutput(code: string | undefined): boolean {
+  return /\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fgeE]\b|:[^{}]*\.\d+[fgeE%]?\}|\bformat\s*\(/.test(code ?? '');
+}
+
+/**
+ * Compares the printed values with the stated ones. Null when nothing could be compared. `relative` widens the tolerance to
+ * that fraction of the value; `byName` pairs values only by name, never a lone stated value with a lone printed one;
+ * `rounded` (see `roundsOutput`) widens it to the last printed digit.
+ */
+export function compareValues(stated: StatedValue[], stdout: string, opts: { relative?: number; byName?: boolean; rounded?: boolean } = {}): NumericCheck | null {
   const parsed = stated.flatMap((s) => { const q = parseQuantity(s.value); return q ? [{ s, q }] : []; });
   if (!parsed.length) return null;
-  const printed = parsePrinted(stdout);
+  const printed = parsePrinted(stdout, !!opts.rounded);
   const compared: Comparison[] = [];
   const mismatches: Comparison[] = [];
   for (const [s, p] of pair(parsed.map((x) => x.s), printed, !!opts.byName)) {
@@ -208,7 +217,7 @@ export async function recomputeFinalValues(computation: string | undefined, stat
     return null;
   }
   if (!result.ok || !result.stdout.trim()) return null;
-  return compareValues(stated, result.stdout);
+  return compareValues(stated, result.stdout, { rounded: roundsOutput(computation) });
 }
 
 /** What a computation program printed, or '' when there is none or it failed. Its lines are read by `compareValues`. */

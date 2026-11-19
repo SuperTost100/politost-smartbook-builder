@@ -12,7 +12,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { comparePrompt, compareSchema, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { compareValues, mismatchMessage, printedValues, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { compareValues, mismatchMessage, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
@@ -535,17 +535,24 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
  * The final-value check and the step check as one: every mismatch of either counts, once per name. A step mismatch is dropped
  * only when the blind program confirms the stated value within its last digit (`confirmed`): the step program may then use
  * another sign convention (ω′ printed negative for a rotation the solution calls anticlockwise and positive) or label a value
- * in mol/m³ as mol/L. The results are settled when the final values (or, with none, the steps) were all compared.
+ * in mol/m³ as mol/L. The results are settled when every stated value was compared by one of the two programs.
  */
-function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null): NumericCheck | null {
+function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: string[]): NumericCheck | null {
   const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
   const stepsLeft = steps && { ...steps, mismatches: steps.mismatches.filter((m) => !right.has(m.name)) };
-  if (!finals || !stepsLeft) return finals ?? stepsLeft;
+  if (!finals && !stepsLeft) return null;
   const named = (list: Comparison[]) => new Set(list.map((m) => m.name));
-  const compared = named(finals.compared);
-  const wrong = named(finals.mismatches);
-  return { compared: [...finals.compared, ...stepsLeft.compared.filter((c) => !compared.has(c.name))], mismatches: [...finals.mismatches, ...stepsLeft.mismatches.filter((m) => !wrong.has(m.name))], complete: finals.complete };
+  const compared = named(finals?.compared ?? []);
+  const wrong = named(finals?.mismatches ?? []);
+  const all = [...(finals?.compared ?? []), ...(stepsLeft?.compared ?? []).filter((c) => !compared.has(c.name))];
+  const seen = named(all);
+  // Settled only when every stated value was compared by one of the two programs, so a model's objection to a value
+  // neither could read still stands.
+  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (finals?.complete ?? true) && stated.every((n) => seen.has(n)) };
 }
+
+/** A request as the item check matches it between the two calls: letters and digits only. */
+const itemKey = (request: string) => request.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
 /** One model call of the exercise check: the service passes `runRole`, the measurement harness a cached one. */
 export type CheckCall = <T>(role: 'checker' | 'reviewer', prompt: { system: string; prompt: string }, schema: z.ZodType<T>, tag: string) => Promise<{ data: T; route: { model: string } }>;
@@ -575,14 +582,19 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   const finals = stated.filter((v) => v.final);
   // The blind program computes without the solution's rounded intermediate values, so a final value gets 0.1 % more room;
   // the step check catches a smaller error in the line where it is made.
-  const finalCheck = finals.length ? compareValues(finals, printed, { relative: 1e-3, byName: true }) : null;
-  const stepCheck = stated.length ? compareValues(stated, steps, { byName: true }) : null;
-  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, { byName: true }) : null);
+  const blind = { byName: true, rounded: roundsOutput(solve.computation) };
+  const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
+  const stepCheck = stated.length ? compareValues(stated, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
+  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, blind) : null, stated.map((v) => v.name));
+  // An item the blind solve listed and the comparison left out was never checked: a doubt for the reviewer.
+  const said = new Set(cmp.items.map((i) => itemKey(i.request)));
+  const unmatched = solve.items.filter((i) => !said.has(itemKey(i.request)));
+  const skipped = cmp.items.length >= solve.items.length ? [] : unmatched.length ? unmatched : solve.items.slice(cmp.items.length);
   const answer: VerifyAnswer & { items: CheckedItem[] } = {
     independentAnswer: cmp.items.map((i) => `${i.request.trim()}: ${i.answer.trim()}`).join('; '),
     resultsAgree: cmp.resultsAgree, agrees: cmp.agrees, items: cmp.items,
     // A line that does not hold is a wrong step; a quote that is not in the solution was made up and is dropped.
-    problems: [...cmp.problems, ...audit.steps.filter((x) => !x.holds && x.quote.trim() && quoteFound(x.quote, q.solution)).map((x) => ({ kind: 'wrong-method' as const, message: `"${truncate(x.quote.trim(), 200)}" does not hold: ${x.why.trim()}`, suggestion: 'Correct this line and what follows from it.' }))],
+    problems: [...cmp.problems, ...skipped.map((i) => ({ kind: 'answer-missing' as const, message: `The check found no answer to "${truncate(i.request.trim(), 160)}" in the solution: the comparison left this item out.`, suggestion: `State it explicitly: ${truncate(i.answer.trim(), 300)}.` })), ...audit.steps.filter((x) => !x.holds && x.quote.trim() && quoteFound(x.quote, q.solution)).map((x) => ({ kind: 'wrong-method' as const, message: `"${truncate(x.quote.trim(), 200)}" does not hold: ${x.why.trim()}`, suggestion: 'Correct this line and what follows from it.' }))],
     wellPosed: solve.wellPosed, wellPosedReason: solve.wellPosedReason, dataProblems: [...solve.dataProblems, ...cmp.dataProblems],
     consistency: solve.consistency,
   };
@@ -606,6 +618,8 @@ export async function checkExercise(q: { statement: string; solution: string; la
   if (v.ok || proved || v.data || !opts.reviewer) return checked;
   opts.progress?.('Asking the reviewer for a second opinion');
   const { data, route } = await call('reviewer', verifyPrompt({ ...q, items: true }), verifyItemsSchema, 'review');
+  // Only its own program settles its numbers: the checker's found no mismatch in the values it listed, which on the
+  // held-out set did not include a wrong term inside an expression (√13 changed to √16) that the reviewer reported.
   const recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   // Its consistency program is its verdict on the data; with no program, the checker's result stands.
   const consistency = (await runConsistency(data.consistency)) ?? first.consistency;

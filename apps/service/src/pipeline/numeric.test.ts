@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
+import { compareValues, roundsOutput, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
 import type { PythonResult } from './python.ts';
 
 const ran = (stdout: string, ok = true): (() => Promise<PythonResult>) => async () => ({ ok, stdout, version: 'test' });
@@ -60,9 +60,18 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
 describe('the step and final checks of the exercise check (18 November)', () => {
   test('a program that prints fewer digits than the solution is compared at its own precision', () => {
     // Chimica 01252ddb and 4d3131a0: the step program printed 0.002801 kg and 79.958 %.
-    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002801 kg')!.mismatches.length, 0);
-    assert.equal(compareValues([{ name: 'resa', value: '79.9578 %' }], 'resa = 79.958 %')!.mismatches.length, 0);
-    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002901 kg')!.mismatches.length, 1);
+    const rounded = { rounded: true };
+    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002801 kg', rounded)!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'resa', value: '79.9578 %' }], 'resa = 79.958 %', rounded)!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'x', value: '1.23' }], 'x = 1.2', rounded)!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002901 kg', rounded)!.mismatches.length, 1);
+    // A program that prints plainly shows a float in full: a short print is an exact value, with no room from its last digit.
+    assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'n', value: '3.4' }], 'n = 3')!.mismatches.length, 1);
+    assert.equal(roundsOutput('print(f"m = {m:.4g} kg")'), true);
+    assert.equal(roundsOutput('print("resa = %.3f %%" % r)'), true);
+    assert.equal(roundsOutput('print("p =", round(p, 4), "Pa")'), true);
+    assert.equal(roundsOutput('print(f"m = {m} kg")\nprint("n =", n)'), false);
   });
 
   test('a sum written out states what follows its last equals sign', () => {

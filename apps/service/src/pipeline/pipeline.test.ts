@@ -48,7 +48,7 @@ function storeAnswer(a: Record<string, any>) {
 /** The data part of an exercise check that finds nothing wrong with the statement. No program: nothing to run in the sandbox. */
 const posed = { wellPosed: true, wellPosedReason: 'I dati determinano una sola risposta.', dataProblems: [] as string[], consistency: '' };
 /** What one exercise check finds, in the fields of the single-call answer the tests were written with. */
-type Verdict = Partial<VerifyAnswer> & { items?: CheckedItem[]; steps?: { quote: string; work: string; holds: boolean; why: string }[]; matches?: boolean; quote?: string; stated?: boolean };
+type Verdict = Partial<VerifyAnswer> & { asked?: { request: string; answer: string }[]; items?: CheckedItem[]; steps?: { quote: string; work: string; holds: boolean; why: string }[]; matches?: boolean; quote?: string; stated?: boolean };
 /** The solution a check prompt carries, so a scripted item can quote it. */
 const solutionIn = (prompt: string) => /GIVEN SOLUTION:\n([\s\S]*?)\n\n(?:The text may contain|First list|Return JSON)/.exec(prompt)?.[1] ?? '';
 const itemsOf = (v: Verdict, prompt: string): CheckedItem[] => v.items ?? [{ request: 'Calcola.', answer: v.independentAnswer ?? '1', quote: v.quote ?? solutionIn(prompt), stated: v.stated ?? true, matches: v.matches ?? true }];
@@ -63,7 +63,7 @@ const check = (v: Verdict) => {
       ? { items: itemsOf(v, input.prompt), resultsAgree: v.resultsAgree ?? true, agrees: v.agrees ?? true, problems: v.problems ?? [], statedValues: (v.statedValues ?? []).map((x) => ({ ...x, final: true })), computation: v.computation ?? '', dataProblems: [] }
       : input.prompt.includes('Return JSON with steps:')
         ? { steps: v.steps ?? [] }
-        : { items: [{ request: 'Calcola.', answer: v.independentAnswer ?? '1' }], computation: v.computation ?? '', wellPosed: v.wellPosed ?? true, wellPosedReason: v.wellPosedReason ?? 'I dati determinano una sola risposta.', dataProblems: v.dataProblems ?? [], consistency: v.consistency ?? '' };
+        : { items: v.asked ?? [{ request: 'Calcola.', answer: v.independentAnswer ?? '1' }], computation: v.computation ?? '', wellPosed: v.wellPosed ?? true, wellPosedReason: v.wellPosedReason ?? 'I dati determinano una sola risposta.', dataProblems: v.dataProblems ?? [], consistency: v.consistency ?? '' };
     return { structured: data as never, text: JSON.stringify(data), usage: usageOf(10, 10) };
   };
   return [step, step, step];
@@ -780,6 +780,15 @@ describe('15i. the check lists the requested items with a quote of the solution,
     assert.deepEqual(r, { ok: false, problems: 1 });
     assert.equal(fake.calls.length, 3, 'proved in code: the reviewer is not asked');
     assert.deepEqual(issues(`question_id = '${id}'`).map((i) => [i.severity, i.message]), [['major', 'The solution never states the answer to "Bilancia l\u2019equazione".']]);
+    assert.equal(row(id).status, 'issue');
+  });
+
+  test('an item the comparison leaves out is a doubt for the reviewer, not a silent pass', async () => {
+    const id = q(balance);
+    const quote = 'Il controllo degli atomi dà coefficienti bilanciati.';
+    fake.next(...check({ asked: [{ request: 'Bilancia l\u2019equazione', answer: '…' }, { request: 'Indica i coefficienti', answer: '2, 6, 10, 1, 6, 10' }], items: [item({ quote })] }), review({ items: [item({ quote: '' })] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(fake.calls.length, 4, 'the reviewer is asked');
     assert.equal(row(id).status, 'issue');
   });
 
