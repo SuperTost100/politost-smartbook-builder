@@ -812,9 +812,12 @@ describe('15i. the check lists the requested items with a quote of the solution,
     assert.match(missing!.suggestion, /10CO/);
     // A recompute that settled the numbers drops a model's wrong value, never an answer the quote check found missing.
     const settled = { compared: [{ name: 'x', stated: '1', computed: '1' }], mismatches: [], complete: true };
-    const v = verifyVerdict({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [], items: [item({ quote: '' }), item({ quote: 'Il controllo degli atomi dà coefficienti bilanciati.', matches: false })] }, settled, null, balance.solution);
+    const v = verifyVerdict({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [], items: [item({ quote: '' }), item({ answer: 'm = 2,80 g', quote: 'Il controllo degli atomi dà coefficienti bilanciati.', matches: false })] }, settled, null, balance.solution);
     assert.deepEqual(v.problems.map((p) => p.kind), ['answer-missing']);
     assert.equal(v.ok, false);
+    // A classification that differs is not a number, so matching numbers do not settle it.
+    const named = verifyVerdict({ ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [], items: [item({ request: 'Classifica l\u2019ossido', answer: 'ossido basico', quote: 'Il controllo degli atomi dà coefficienti bilanciati.', matches: false }), item({ request: 'Calcola la massa', answer: 'm = 2,80 g', quote: 'Il controllo degli atomi dà coefficienti bilanciati.', matches: false })] }, settled, null, balance.solution);
+    assert.deepEqual(named.problems.map((p) => p.message.match(/"([^"]+)"/)![1]), ['Classifica l\u2019ossido']);
   });
 
   test('in the handler: an answer the solution never states blocks in code, with no second opinion', async () => {
