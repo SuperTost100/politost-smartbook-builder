@@ -48,7 +48,7 @@ function storeAnswer(a: Record<string, any>) {
 /** The data part of an exercise check that finds nothing wrong with the statement. No program: nothing to run in the sandbox. */
 const posed = { wellPosed: true, wellPosedReason: 'I dati determinano una sola risposta.', dataProblems: [] as string[], consistency: '' };
 /** What one exercise check finds, in the fields of the single-call answer the tests were written with. */
-type Verdict = Partial<VerifyAnswer> & { asked?: { request: string; answer: string }[]; items?: CheckedItem[]; steps?: { quote: string; work: string; holds: boolean; why: string }[]; matches?: boolean; quote?: string; stated?: boolean };
+type Verdict = Partial<VerifyAnswer> & { stepProgram?: string; asked?: { request: string; answer: string }[]; items?: CheckedItem[]; steps?: { quote: string; work: string; holds: boolean; why: string }[]; matches?: boolean; quote?: string; stated?: boolean };
 /** The solution a check prompt carries, so a scripted item can quote it. */
 const solutionIn = (prompt: string) => /GIVEN SOLUTION:\n([\s\S]*?)\n\n(?:The text may contain|First list|Return JSON)/.exec(prompt)?.[1] ?? '';
 const itemsOf = (v: Verdict, prompt: string): CheckedItem[] => v.items ?? [{ request: 'Calcola.', answer: v.independentAnswer ?? '1', quote: v.quote ?? solutionIn(prompt), stated: v.stated ?? true, matches: v.matches ?? true }];
@@ -60,7 +60,7 @@ const itemsOf = (v: Verdict, prompt: string): CheckedItem[] => v.items ?? [{ req
 const check = (v: Verdict) => {
   const step = (input: { prompt: string }) => {
     const data = input.prompt.includes('REFERENCE ANSWERS')
-      ? { items: itemsOf(v, input.prompt), resultsAgree: v.resultsAgree ?? true, agrees: v.agrees ?? true, problems: v.problems ?? [], statedValues: (v.statedValues ?? []).map((x) => ({ ...x, final: true })), computation: v.computation ?? '', dataProblems: [] }
+      ? { items: itemsOf(v, input.prompt), resultsAgree: v.resultsAgree ?? true, agrees: v.agrees ?? true, problems: v.problems ?? [], statedValues: (v.statedValues ?? []).map((x) => ({ ...x, final: true })), computation: v.stepProgram ?? v.computation ?? '', dataProblems: [] }
       : input.prompt.includes('Return JSON with steps:')
         ? { steps: v.steps ?? [] }
         : { items: v.asked ?? [{ request: 'Calcola.', answer: v.independentAnswer ?? '1' }], computation: v.computation ?? '', wellPosed: v.wellPosed ?? true, wellPosedReason: v.wellPosedReason ?? 'I dati determinano una sola risposta.', dataProblems: v.dataProblems ?? [], consistency: v.consistency ?? '' };
@@ -490,6 +490,17 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /Q2 is 6235\.5 J by the computation and 6235,8 J in the solution/);
+  });
+
+  test('a final value the blind program could not compare is not settled by the step program: the model\'s wrong value stands', async () => {
+    // The blind program rounds, and its 0.5 agrees with the stated 0.55 only within its last printed digit; the step
+    // program follows the solution and matches. Nothing proved the final value right.
+    const id = q({ statement: 'Calcola m.', solution: 'm = 0,55 kg' });
+    const wrong = { problems: [{ kind: 'wrong-value' as const, message: 'm vale 0,50 kg.', suggestion: 's' }], computation: 'print("m =", round(0.5, 1), "kg")', stepProgram: 'print("m = 0.55 kg")', statedValues: [{ name: 'm', value: '0,55 kg' }] };
+    fake.next(...check(wrong), review(wrong));
+    await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(row(id).status, 'issue');
+    assert.equal(fake.calls.length, 4, 'the wrong value rests on the model\'s word, so the reviewer is asked');
   });
 
   test('a computation that throws is ignored and the model verdict stands', async () => {

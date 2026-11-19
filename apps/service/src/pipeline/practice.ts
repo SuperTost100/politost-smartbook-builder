@@ -535,9 +535,10 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
  * The final-value check and the step check as one: every mismatch of either counts, once per name. A step mismatch is dropped
  * only when the blind program confirms the stated value within its last digit (`confirmed`): the step program may then use
  * another sign convention (ω′ printed negative for a rotation the solution calls anticlockwise and positive) or label a value
- * in mol/m³ as mol/L. The results are settled when every stated value was compared by one of the two programs.
+ * in mol/m³ as mol/L. The results are settled when the blind program compared every final value and every stated value was
+ * compared by one of the two programs.
  */
-function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: string[]): NumericCheck | null {
+function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: string[], hasFinals: boolean): NumericCheck | null {
   const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
   const stepsLeft = steps && { ...steps, mismatches: steps.mismatches.filter((m) => !right.has(m.name)) };
   if (!finals && !stepsLeft) return null;
@@ -546,9 +547,10 @@ function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, co
   const wrong = named(finals?.mismatches ?? []);
   const all = [...(finals?.compared ?? []), ...(stepsLeft?.compared ?? []).filter((c) => !compared.has(c.name))];
   const seen = named(all);
-  // Settled only when every stated value was compared by one of the two programs, so a model's objection to a value
-  // neither could read still stands.
-  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (finals?.complete ?? true) && stated.every((n) => seen.has(n)) };
+  // Settled only when the blind program compared every final value (the step program follows the solution's own numbers,
+  // so its match proves nothing about the answer) and every stated value was compared by one of the two, so a model's
+  // objection to a value neither could read still stands.
+  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (hasFinals ? !!finals?.complete : true) && stated.every((n) => seen.has(n)) };
 }
 
 /** A request as the item check matches it between the two calls: letters and digits only. */
@@ -585,7 +587,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   const blind = { byName: true, rounded: roundsOutput(solve.computation) };
   const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
   const stepCheck = stated.length ? compareValues(stated, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
-  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, blind) : null, stated.map((v) => v.name));
+  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, blind) : null, stated.map((v) => v.name), finals.length > 0);
   // An item the blind solve listed and the comparison left out was never checked: a doubt for the reviewer.
   const said = new Set(cmp.items.map((i) => itemKey(i.request)));
   const unmatched = solve.items.filter((i) => !said.has(itemKey(i.request)));
