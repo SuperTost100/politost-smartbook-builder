@@ -579,8 +579,9 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   // Two recomputes: each final value against the blind program, and every stated value against the step program, which
   // follows the solution's own rounded values so that a wrong line shows and a carried rounding does not.
   const steps = await printedValues(cmp.computation);
-  // A name listed again is the same value restated.
-  const stated = cmp.statedValues.filter((v, i, all) => all.findIndex((w) => w.name.trim() === v.name.trim()) === i);
+  // A name listed again is the same value restated; it stays final when any of its listings says so.
+  const stated = cmp.statedValues.filter((v, i, all) => all.findIndex((w) => w.name.trim() === v.name.trim()) === i)
+    .map((v) => ({ ...v, final: cmp.statedValues.some((w) => w.name.trim() === v.name.trim() && w.final) }));
   const finals = stated.filter((v) => v.final);
   // The blind program computes without the solution's rounded intermediate values, so a final value gets 0.1 % more room;
   // the step check catches a smaller error in the line where it is made.

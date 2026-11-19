@@ -75,6 +75,9 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(roundsOutput('print(f"m = {m:.4g} kg")'), true);
     assert.equal(roundsOutput('print("resa = %.3f %%" % r)'), true);
     assert.equal(roundsOutput('print("p =", round(p, 4), "Pa")'), true);
+    assert.equal(roundsOutput('print(f"x = {x:.2F}")'), true);
+    assert.equal(roundsOutput('print("x = %.3G" % x)'), true);
+    assert.equal(compareValues([{ name: 'x', value: '1.23456' }], 'x = 1.23', { rounded: roundsOutput('print(f"x = {x:.2F}")') }), null, 'a rounded print of a right value is left unsettled');
     assert.equal(roundsOutput('print(f"m = {m} kg")\nprint("n =", n)'), false);
   });
 

@@ -503,6 +503,17 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.equal(fake.calls.length, 4, 'the wrong value rests on the model\'s word, so the reviewer is asked');
   });
 
+  test('a value listed first as a step and again as the final answer is still checked as final', async () => {
+    const id = q({ statement: 'Calcola m.', solution: 'm = 0,55 kg' });
+    fake.next(...check({ computation: 'print("m = 0.5 kg")', stepProgram: 'print("m = 0.55 kg")' }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'm', value: '0,55 kg', final: false }, { name: 'm', value: '0,55 kg', final: true }];
+      return out;
+    }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+  });
+
   test('a computation that throws is ignored and the model verdict stands', async () => {
     const id = q({ statement: circuit, solution: 'R = 500 Ω' });
     fake.next(...verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));

@@ -180,7 +180,7 @@ function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [Stat
  * only to its last printed digit. A plain print shows the float in full, and a value that prints short (0.5, 3) is exact.
  */
 export function roundsOutput(code: string | undefined): boolean {
-  return /\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fgeE]\b|:[^{}]*\.\d+[fgeE%]?\}|\bformat\s*\(/.test(code ?? '');
+  return /\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/.test(code ?? '');
 }
 
 /**
