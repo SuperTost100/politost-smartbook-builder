@@ -591,18 +591,19 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
 
 /**
  * The exercise check: the checker's blind solve and comparison (`solveAndCompare`), and the reviewer only when the checker
- * blocks on a model's word alone. A finding that code proved (a quote of the requested answer missing from the solution, a
- * recomputed number that differs) stands without a second opinion, so the reviewer, asked in one call, can clear only what
- * the checker merely said. Its verdict is then the one recorded.
+ * blocks on its word about the solution alone. Measured on 2026-11-19 (gpt-6.1-sol on 35 real defects and 6 blocked clean
+ * exercises), the reviewer cleared 3 of 5 false alarms about the solution and none of 14 real defects of that kind, but 2 of
+ * 3 real data defects (a ΔU equal to the tabulated ΔH, a screening constant Slater's rules contradict) and 2 of 13 that code
+ * had proved. So a finding that code proved (a quote of the requested answer missing from the solution, a recomputed number
+ * that differs) and a failed data check stand without a second opinion. When the reviewer is asked, in one call, its verdict
+ * is the one recorded.
  */
 export async function checkExercise(q: { statement: string; solution: string; language: string; profile?: SubjectProfile }, call: CheckCall, opts: { reviewer: boolean; progress?: (m: string) => void }) {
   const first = await solveAndCompare(q, 'checker', call);
   const v = verifyVerdict(first.answer, first.recomputed, first.consistency, q.solution);
   const checked = { ...v, ...first, reviewerAsked: false };
-  // A consistency program is the model's own reading of the data and may be wrong ("INCONSISTENT: torques" on a ladder in
-  // equilibrium), so its verdict stays the reviewer's to clear, as before.
   const proved = v.problems.some((p) => p.evidence === 'code' && p.severity !== 'minor') || !!first.recomputed?.mismatches.length;
-  if (v.ok || proved || !opts.reviewer) return checked;
+  if (v.ok || proved || v.data || !opts.reviewer) return checked;
   opts.progress?.('Asking the reviewer for a second opinion');
   const { data, route } = await call('reviewer', verifyPrompt({ ...q, items: true }), verifyItemsSchema, 'review');
   const recomputed = await recomputeFinalValues(data.computation, data.statedValues);

@@ -553,13 +553,13 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     assert.equal(blocked[0]![1].data, null, 'a disagreement is not a data problem');
   });
 
-  test('two models that agree on a problem whose data are impossible do not verify it: the reviewer is asked and one data blocker is added', async () => {
+  test('data the checker finds impossible are blocked without a second opinion: one data blocker is added', async () => {
     ctx.db.run(`UPDATE projects SET title = 'Fisica 1', subject = 'Fisica' WHERE id = ?`, P);
     const id = q({ statement: tensor, solution: 'L\'ellissoide è 3x²+3y²+12z²=1.' });
     const both = { independentAnswer: '3x²+3y²+12z²=1', wellPosed: false, wellPosedReason: 'I momenti principali violano la disuguaglianza triangolare.' };
-    fake.next(...check(both), review(both));
+    fake.next(...check(both));
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
-    assert.equal(fake.calls.length, 4, 'the three checker calls, then the reviewer: no program proved it');
+    assert.equal(fake.calls.length, 3, 'the data check stands: the reviewer cleared real data defects when it was asked');
     assert.match(fake.calls[0].prompt, /principal moments of inertia satisfy the triangle inequality/, 'a physics book gets the physics constraints');
     assert.equal(row(id).status, 'issue');
     assert.equal((r as { ok: boolean }).ok, false);
@@ -570,17 +570,16 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
   });
 
   test('in the real sandbox: an INCONSISTENT program and a crashing one block, a CONSISTENT one verifies', async () => {
-    // A failed or INCONSISTENT program is a model's reading, so the reviewer is asked; its own program keeps the block.
     const run = async (consistency: string, reviewed = false) => {
       const id = q({ statement: tensor, solution: 'L\'ellissoide è 3x²+3y²+12z²=1.' });
       fake.next(...check({ consistency }), ...(reviewed ? [review({ consistency })] : []));
       await questionVerify(ctx, startTask('question.verify', { questionId: id }));
       return { status: row(id).status, issues: issues(`question_id = '${id}'`).map((i) => `${i.severity} ${i.category}: ${i.message}`), checks: json<{ method: string; ok: boolean; detail: string }[]>(row(id).checks, []) };
     };
-    const bad = await run(triangle(3, 3, 12), true);
+    const bad = await run(triangle(3, 3, 12));
     assert.equal(bad.status, 'issue');
     assert.deepEqual(bad.issues, ['blocker data: The consistency check printed: INCONSISTENT: 12 > 3 + 3']);
-    const crashed = await run('import sympy\nprint("CONSISTENT")', true);
+    const crashed = await run('import sympy\nprint("CONSISTENT")');
     assert.equal(crashed.status, 'issue');
     assert.match(crashed.issues[0]!, /^blocker data: The consistency program failed: .*ModuleNotFoundError/);
     const calls = fake.calls.length;
@@ -591,17 +590,23 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     assert.deepEqual(fine.checks.find((c) => c.method === 'consistency'), { method: 'consistency', ok: true, detail: 'CONSISTENT' });
   });
 
-  test('a reviewer that finds the data fine clears the checker\'s doubt, even an INCONSISTENT program; one that gives no program keeps the checker\'s result', async () => {
+  test('a data blocker stays without a reviewer; a doubt about the solution alone goes to the reviewer, whose own data check also counts', async () => {
     const a = q({ statement: tensor });
-    fake.next(...check({ consistency: triangle(3, 3, 12) }), review({ consistency: triangle(3, 4, 5) }));
+    fake.next(...check({ consistency: triangle(3, 3, 12) }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
-    assert.equal(row(a).status, 'verified');
-    assert.equal(fake.calls.length, 4, 'a consistency program is a model\'s reading, so the reviewer is asked');
+    assert.equal(row(a).status, 'issue');
+    assert.equal(fake.calls.length, 3);
     const b = q({ statement: tensor });
-    fake.next(...check({ consistency: triangle(3, 3, 12) }), review({}));
+    const doubt = { problems: [{ kind: 'wrong-method' as const, message: 'Un passaggio non segue.', suggestion: 's' }] };
+    fake.next(...check(doubt), review({ consistency: triangle(3, 3, 12) }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
-    assert.equal(row(b).status, 'issue');
+    assert.equal(fake.calls.length, 7);
+    assert.equal(row(b).status, 'issue', 'the reviewer cleared the step but its program found the data inconsistent');
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.category), ['data']);
+    const c = q({ statement: tensor });
+    fake.next(...check(doubt), review({}));
+    await questionVerify(ctx, startTask('question.verify', { questionId: c }));
+    assert.equal(row(c).status, 'verified');
   });
 });
 
