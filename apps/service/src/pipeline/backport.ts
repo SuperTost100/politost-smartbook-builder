@@ -330,7 +330,8 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     const number = Number(/^chapters\/(\d+)/.exec(file)![1]);
     // No section holds the text before the first heading, so nothing maps it back: listed, so publishing does not drop it unseen.
     if (b.start !== t.start && e?.start !== t.start) add({ unit: `${file}#start`, kind: 'section', status: 'unmapped', reason: 'the text before the first section changed in the books' });
-    const hold = (unit: string, key: string) => kept.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key], why: 'is not back-ported, and a change the back-port makes elsewhere (a shared caption) would change it' });
+    // `mapped`: a pending unit is held only if the compile loop refuses it.
+    const hold = (unit: string, key: string, mapped = () => false) => kept.push({ name: unit, check: (after) => mapped() || sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key], why: 'is not back-ported, and a change the back-port makes elsewhere (a shared caption) would change it' });
     for (const key of new Set([...Object.keys(b.bodies), ...Object.keys(t.bodies)])) {
       const unit = `${file}#${key}`;
       if (!(key in b.bodies) || !(key in t.bodies)) { add({ unit, kind: 'section', status: 'unmapped', reason: key in b.bodies ? 'section removed in the books' : 'section added in the books' }); continue; }
@@ -341,7 +342,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
           kept.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key] });
           continue;
         }
-        if (was === undefined) { add({ unit, kind: 'section', status: 'unmapped', reason: 'section added in the books' }); continue; }
+        if (was === undefined) { add({ unit, kind: 'section', status: 'unmapped', reason: 'section added in the books' }); hold(unit, key); continue; }
         if (foldImages(b.bodies[key]) !== foldImages(was)) {
           add({ unit, kind: 'section', status: 'refused', reason: 'changed in the builder since the publish, and in the books' });
           kept.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key] });
@@ -377,6 +378,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       if (r.text !== src) changes.unshift({ kind: 'section', nodeId, markdown: r.text });
       const onlyCaption = changes.every((c) => c.kind === 'asset');
       const u = add({ unit, kind: onlyCaption ? 'caption' : 'section', status: 'mapped', target: nodeId });
+      hold(unit, key, () => u.status === 'mapped');
       pending.push({
         unit: u, changes,
         check: (after) => foldImages(sectionsOf(text(after.files[file]) ?? '').bodies[key] ?? '') === foldImages(t.bodies[key]),
