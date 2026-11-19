@@ -760,8 +760,32 @@ export const verifySchema = z.object({
   consistency: codeString().describe('Python that recomputes from the STATEMENT alone every quantity the data fix twice or that must meet a constraint, and prints CONSISTENT or INCONSISTENT: <what>; empty only for a problem with no numeric data'),
 });
 
-export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile }) {
+/** One item the statement asks for, as the exercise check lists it (`itemProblems` checks it in code). */
+const checkedItem = z.object({
+  request: z.string().describe("the words of the statement that ask for this item"),
+  answer: z.string().describe('your own answer to this item, reached from the statement alone'),
+  quote: z.string().describe('the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX; empty when it states none'),
+  stated: z.boolean().describe('the quote states the answer in the form the item asks for'),
+  matches: z.boolean().describe("the given solution's answer to this item equals yours"),
+});
+export const verifyItemsSchema = verifySchema.extend({ items: z.array(checkedItem).min(1) });
+export type CheckedItem = z.infer<typeof checkedItem>;
+
+const ITEMS_RULE = (language: string) => `First list the ITEMS: every result the statement asks for, one per lettered or numbered part and one per request inside a part (calcolare, determinare, scrivere, bilanciare, dimostrare, stabilire se, classificare, indicare, trovare, studiare). A request to explain or justify (motivare, giustificare, spiegare) belongs to the item it justifies. Solve each item yourself from the statement before you read the given solution. For each item return:
+- request: the words of the statement that ask for it;
+- answer: your own answer, concise;
+- quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage). Empty when the solution never states an answer to it;
+- stated: true only when the quote states the answer in the form the item asks for. An equation the statement asks to write or balance is written out whole, with its coefficients; a requested value is written with its unit; a yes-or-no question gets its yes or no in words; a requested classification or name is given; a requested count or total is written as one number. An answer that is only implied, mentioned in passing or left for the reader to assemble from earlier lines or from parts is not stated;
+- matches: true when the given solution's answer to this item equals yours.
+The code reads the items: an item with no quote, a quote that is not in the solution, or stated false is an answer the solution never gives. Write requests and answers in ${languageName(language)}.
+
+`;
+
+export function verifyPrompt(p: { language: string; statement: string; solution: string; profile?: SubjectProfile; items?: boolean; allValues?: boolean }) {
   const profile = p.profile ?? SUBJECT_PROFILES.other;
+  const values = p.allValues
+    ? 'statedValues lists every numeric value the GIVEN SOLUTION states, intermediate and final, in the order it states them, each with a short name and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). computation is a short Python program, math module only, no input and no files, that computes every one of those values from the data in the STATEMENT, never from the given solution (do not type a number of the solution into it), and prints one line per value, "name = value unit", with the same names, the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it.'
+    : 'computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ").';
   return {
     system: `You are an independent examiner checking a textbook problem. First solve it yourself from the statement alone, then compare with the given solution. Report only what a student would get wrong or be confused by: a wrong number or unit, an answer the statement asks for that the solution never states, a step that does not follow, a missing hypothesis (${profile.hypotheses}) that changes the answer, a statement that lacks information. Do not report rigor or wording you would merely put differently, and do not complain about style.`,
     prompt: `STATEMENT:
@@ -770,7 +794,7 @@ ${p.statement}
 GIVEN SOLUTION:
 ${p.solution}
 
-Return JSON: independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with kind, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right. The kind is one of:
+${p.items ? ITEMS_RULE(p.language) : ''}Return JSON: ${p.items ? 'items (as above), ' : ''}independentAnswer (your final results, concise), resultsAgree (true when every final result of the given solution equals yours, regardless of how it is argued), agrees (true only if additionally the reasoning has no major gap), problems (each with kind, message and a concrete suggested correction, written in ${languageName(p.language)}). Empty problems when everything is right. The kind is one of:
 - wrong-value: a number in the solution or its answer is wrong (for example 1,002·10⁻¹⁰ m where the data give 1,001·10⁻¹⁰ m).
 - wrong-unit: a result has a wrong or missing unit (for example "Q = 450R J", which is not in joules).
 - answer-missing: something the statement explicitly asks for is never stated in the solution (for example it asks for the balanced equation and the solution never writes it). Use it only when the statement asks for that item in so many words.
@@ -782,11 +806,124 @@ Return JSON: independentAnswer (your final results, concise), resultsAgree (true
 
 The text may contain {{formula:@key}} or {{formula:key}}, which point to a numbered formula of the book, and links whose target starts with ref: (for example [Serie di funzioni](ref:section/...)), which point to another part of the book. The reader shows them as links: they are cross-references, not placeholders, and not problems.
 
-Also, only when the final answer is one or more numbers with a unit or a plain number (circuits, kinematics, stoichiometry and the like): computation is a short Python program, math module only, no input and no files, that computes those final values from the data in the STATEMENT, not from the given solution. It prints one line per final value, "name = value unit", with the value as a plain number in SI base units (4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s) and the unit symbol after it. statedValues lists the same values as the GIVEN SOLUTION states them, each with the name used in the printed line and the value as written, in plain text with its unit and without LaTeX (for example "4.7 kΩ"). For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.
+Also, only when the ${p.allValues ? 'solution states numbers' : 'final answer is one or more numbers with a unit or a plain number'} (circuits, kinematics, stoichiometry and the like): ${values} For every other answer (an expression, a function, an interval, a limit, a proof, a choice among options) leave computation empty and statedValues an empty list.
 
 Before you trust the solution, check the statement itself. Its data must be consistent and possible, for example: ${profile.constraints}. If the data admit no answer, or more than one, the problem is not well posed, even when the given solution says so itself or quietly uses other numbers.
 
 Also return: wellPosed (false when the data are inconsistent, impossible or insufficient), wellPosedReason (one sentence), dataProblems (each problem in one sentence, in ${languageName(p.language)}; also list each place where the GIVEN SOLUTION uses a number that differs from the statement's data), and consistency: a short Python program, standard library only (math, fractions; no sympy, no numpy), no input and no files, that recomputes from the STATEMENT data alone every quantity the data determine in two ways or that must satisfy a constraint, and prints exactly one last line, CONSISTENT or INCONSISTENT: <what>. Compare floating-point values with a tolerance that fits the precision of the data. Leave consistency empty only for a problem with no numeric data.`,
+  };
+}
+
+/** The KINDS paragraph of the exercise check, shared by its prompts. */
+const PROBLEM_KIND_LINES = `- wrong-value: a number in the solution or its answer is wrong (for example 1,002·10⁻¹⁰ m where the data give 1,001·10⁻¹⁰ m).
+- wrong-unit: a result has a wrong or missing unit (for example "Q = 450R J", which is not in joules).
+- answer-missing: something the statement explicitly asks for is never stated in the solution.
+- inconsistent-statement: the data contradict each other, or the problem has no solution as posed (for example a massless, frictionless piston at rest with different pressures on its two sides).
+- wrong-method: a step is mathematically or physically wrong (for example a law applied outside its hypotheses, or an equality that does not hold), even when the final result is right; also an explanation that names one cause and leaves out another that matters as much, so that a student learns a wrong reason.
+- rigor: a hypothesis or a check an expert would state, which does not change the result (for example "say that x ≠ −3").
+- wording: phrasing, notation or presentation.
+- other: anything else.`;
+
+const CROSS_REFERENCES = 'The text may contain {{formula:@key}} or {{formula:key}}, which point to a numbered formula of the book, and links whose target starts with ref: (for example [Serie di funzioni](ref:section/...)), which point to another part of the book. The reader shows them as links: they are cross-references, not placeholders, and not problems.';
+
+/** The blind solve of the exercise check: the statement only, never the solution. */
+export const solveSchema = z.object({
+  items: z.array(z.object({
+    request: z.string().describe('the words of the statement that ask for this item'),
+    answer: z.string().describe('your answer to this item'),
+  })).min(1),
+  computation: codeString().optional().describe('Python that computes every numeric answer and intermediate quantity from the statement, or empty'),
+  wellPosed: z.boolean().describe('the data of the STATEMENT are consistent and possible, and they determine the requested answer'),
+  wellPosedReason: z.string().describe('one sentence: why the data determine exactly one answer, or why they do not'),
+  dataProblems: z.array(z.string()).describe('each inconsistency or impossibility in the statement data; empty when none'),
+  consistency: codeString().describe('Python that recomputes from the STATEMENT alone every quantity the data fix twice or that must meet a constraint, and prints CONSISTENT or INCONSISTENT: <what>; empty only for a problem with no numeric data'),
+});
+export type SolveAnswer = z.infer<typeof solveSchema>;
+
+export function solvePrompt(p: { language: string; statement: string; profile?: SubjectProfile }) {
+  const profile = p.profile ?? SUBJECT_PROFILES.other;
+  return {
+    system: `You are an examiner who solves a textbook problem from its statement alone, carefully and completely, as a reference against which a student's or a textbook's solution will be checked. Mind the hypotheses (${profile.hypotheses}).`,
+    prompt: `STATEMENT:
+${p.statement}
+
+${CROSS_REFERENCES}
+
+Return JSON with:
+- items: every result the statement asks for, one per lettered or numbered part and one per request inside a part (calcolare, determinare, scrivere, bilanciare, dimostrare, stabilire se, classificare, indicare, trovare, studiare). A request that asks two things is two items ("limitata superiormente e/o inferiormente" is one item for each bound, "iniettiva e suriettiva" one for each property). A request to explain or justify (motivare, giustificare, spiegare) belongs to the item it justifies. For each item: request (the words of the statement that ask for it) and answer (your answer, concise, in ${languageName(p.language)}: a value with its unit, a whole equation, an expression, a set, yes or no with the reason in a few words, a classification).
+- computation: only when some answer is a number (circuits, kinematics, stoichiometry and the like), a short Python program, math module only, no input and no files, that computes from the statement data every numeric answer and every intermediate quantity a full solution would state on the way (amounts, partial results, the values substituted into the final formula). It prints one line per value, "name = value unit", with a short descriptive name, the value as a plain number and after it the unit that number is in (SI base units where they exist: 4700 ohm, not 4.7 kohm; 0.0032 A, not 3.2 mA; kg, m, s; a concentration as mol/L). Empty for every other kind of answer.
+- The data check. The data must be consistent and possible, for example: ${profile.constraints}. The situation must also be possible as the statement describes it (a massless, frictionless piston cannot stay at rest with different pressures on its two sides), and every hypothesis the answer depends on must be stated or implied: a work or heat that depends on the path needs the path, and a process whose work or heat is asked must say whether it is reversible when the answer depends on it. A datum or result that is a known tabulated quantity of a real substance or reaction (a standard enthalpy or energy of a named reaction, a molar mass, a physical constant) must agree with its usual value within the precision given; one that does not is wrong data. wellPosed is false when the data are inconsistent, impossible, or do not determine one answer; wellPosedReason is one sentence; dataProblems lists each problem in one sentence, in ${languageName(p.language)}; consistency is a short Python program, standard library only (math, fractions; no sympy, no numpy), no input and no files, that recomputes from the data every quantity they determine in two ways or that must satisfy a constraint, and prints exactly one last line, CONSISTENT or INCONSISTENT: <what>. Compare floating-point values with a tolerance that fits the precision of the data. Leave consistency empty only for a problem with no numeric data.`,
+  };
+}
+
+/** The comparison of the exercise check: the statement, the blind answers and the given solution. */
+export const compareSchema = z.object({
+  items: z.array(checkedItem).min(1),
+  resultsAgree: z.boolean().describe('every result of the given solution equals the right answer'),
+  agrees: z.boolean().describe('results match and the reasoning has no major gap'),
+  problems: z.array(verifyProblem),
+  statedValues: z.array(z.object({ name: z.string(), value: z.string(), final: z.boolean() })).describe('every number the given solution obtains by computation, intermediate or final'),
+  computation: codeString().optional().describe('Python that recomputes every stated value the way the solution obtains it, or empty'),
+  dataProblems: z.array(z.string()).describe('each place where the given solution uses a number that differs from the statement data; empty when none'),
+});
+export type CompareAnswer = z.infer<typeof compareSchema>;
+
+export function comparePrompt(p: { language: string; statement: string; solution: string; answers: { request: string; answer: string }[]; printed: string; profile?: SubjectProfile }) {
+  const profile = p.profile ?? SUBJECT_PROFILES.other;
+  return {
+    system: `You are an independent examiner checking a textbook solution against a reference solution of the same problem. Report only what a student would get wrong or be confused by: a wrong number or unit, an answer the statement asks for that the solution never states, a step that does not follow, a missing hypothesis (${profile.hypotheses}) that changes the answer. Do not report rigor or wording you would merely put differently, and do not complain about style.`,
+    prompt: `STATEMENT:
+${p.statement}
+
+REFERENCE ANSWERS (solved from the statement alone):
+${p.answers.map((a, i) => `${i + 1}. ${a.request}\n   ${a.answer}`).join('\n')}
+
+REFERENCE COMPUTATION (Python, from the statement data) printed:
+${p.printed.trim() || '(nothing)'}
+
+GIVEN SOLUTION:
+${p.solution}
+
+${CROSS_REFERENCES}
+
+Return JSON with:
+- items: the reference items, in the same order. For each: request and answer as given (if you find a reference answer wrong, correct it here and say why in one problem of kind other); quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage), empty when the solution never states an answer to it; stated: true only when the quote states the answer in the form the item asks for (an equation the statement asks to write or balance is written out whole with its coefficients; a requested value is written with its unit; a yes-or-no question gets its yes or no in words; a requested classification or name is given; a requested count or total is written as one number; an answer that is only implied, mentioned in passing or left for the reader to assemble from earlier lines or from parts is not stated); matches: true when the given solution's answer to this item equals the reference answer. The code reads the items: an item with no quote, a quote that is not in the solution, or stated false is an answer the solution never gives.
+- resultsAgree (true when every result of the given solution equals the reference), agrees (true only if additionally the reasoning has no major gap), problems (each with kind, message and a concrete suggested correction, in ${languageName(p.language)}), empty when everything is right. Read every step of the given solution, not only its results: an intermediate value, an equality or a sign that does not hold is a problem even when the final result is right. A value rounded to the digits it shows is right when it is within one unit of its last digit (339 N for 339,7 N): do not report it. The kind is one of:
+${PROBLEM_KIND_LINES}
+- statedValues: every number the given solution obtains by computation, intermediate or final, in the order it states them: name, value (as written, in plain text with its unit and without LaTeX, for example "4.7 kΩ") and final (true for the answer to an item). For a final value whose quantity the reference computation printed, use the printed name. Empty when the solution computes no number.
+- computation: when statedValues is not empty, a short Python program, math module only, no input and no files, that recomputes every value of statedValues the way the solution obtains it: from the statement data and from the values the solution states before it (so a rounded value the solution carries forward is used as rounded), never by typing the value itself. It prints one line per value, "name = value unit", with the same names, the value as a plain number and after it the unit that number is in (SI base units where they exist: 4700 ohm, not 4.7 kohm; kg, m, s; a concentration as mol/L). Otherwise empty.
+- dataProblems: each place where the GIVEN SOLUTION uses a number that differs from the statement's data, in one sentence; empty when none.`,
+  };
+}
+
+/** The step audit of the exercise check: every step of the given solution worked out again. */
+export const stepAuditSchema = z.object({
+  steps: z.array(z.object({
+    quote: z.string().describe('the step, copied character for character from the given solution'),
+    work: z.string().describe('your own computation of this step from the statement and the steps before it'),
+    holds: z.boolean(),
+    why: z.string().describe('when it does not hold, what is wrong; otherwise empty'),
+  })),
+});
+export type StepAudit = z.infer<typeof stepAuditSchema>;
+
+export function stepAuditPrompt(p: { language: string; statement: string; solution: string }) {
+  return {
+    system: 'You check a worked solution of a textbook exercise step by step, redoing each step yourself before comparing it with what the solution wrote.',
+    prompt: `STATEMENT:
+${p.statement}
+
+GIVEN SOLUTION:
+${p.solution}
+
+${CROSS_REFERENCES}
+
+Return JSON with steps: every step the given solution writes, in order: each equality, inequality, substitution, sign, derivative, integral, limit, interval, count and each claim a conclusion rests on, one step per entry. For each:
+- quote: its exact words, copied character for character with their LaTeX;
+- work: the result you get when you carry out that step yourself from the statement and the steps before it (the value of the integral or the limit, the expression after the substitution, the sign);
+- holds: whether the step as written agrees with your work;
+- why: when it does not hold, what is wrong, in one sentence in ${languageName(p.language)}; otherwise empty.
+A value rounded to the digits it shows holds when it is within one unit of its last digit (339 N for 339,7 N holds). Wording and missing justifications are not your concern here, only whether each step is true.`,
   };
 }
 

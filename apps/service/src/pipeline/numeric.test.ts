@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { describe, test } from 'node:test';
-import { combineRecomputes, compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
+import { compareValues, mismatchMessage, parseQuantity, readMismatches, recomputeFinalValues, runConsistency } from './numeric.ts';
 import type { PythonResult } from './python.ts';
 
 const ran = (stdout: string, ok = true): (() => Promise<PythonResult>) => async () => ({ ok, stdout, version: 'test' });
@@ -55,40 +55,37 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
     assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V')!.complete, false);
     assert.equal(compareValues([{ name: 'a', value: '1.00 V' }, { name: 'p', value: '2.00 atm' }], 'a = 1 V\np = 3 atm')!.complete, false, 'a unit it cannot read leaves that value unchecked');
   });
+});
 
-  test('with two programs a mismatch needs both; with one, that one decides', () => {
-    const c = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
-    const bad = { compared: [c], mismatches: [c], complete: true };
-    const good = { compared: [c], mismatches: [], complete: true };
-    assert.equal(combineRecomputes(bad, bad)!.mismatches.length, 1);
-    assert.equal(combineRecomputes(good, good)!.complete, true);
-    for (const [x, y] of [[bad, good], [good, bad]]) {
-      const r = combineRecomputes(x, y)!;
-      assert.equal(r.mismatches.length, 0, 'one program alone does not block');
-      assert.equal(r.complete, false, 'and two programs that disagree do not settle the results either');
-    }
-    assert.equal(combineRecomputes(bad, null), bad);
-    assert.equal(combineRecomputes(null, bad), bad);
-    assert.equal(combineRecomputes(null, null), null);
-    // Each program disputes a different value: neither dispute is confirmed.
-    const a = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
-    const b = { name: 'b', stated: '2.00 V', computed: '2.5 V' };
-    assert.deepEqual(combineRecomputes({ compared: [a, b], mismatches: [a], complete: true }, { compared: [a, b], mismatches: [b], complete: true })!.mismatches, []);
-    // Two results stated with the same value, each compared by one program only, are told apart by name.
-    const a1 = { name: 'a', stated: '1.00 V', computed: '1.5 V' };
-    const b1 = { name: 'b', stated: '1.00 V', computed: '1.5 V' };
-    assert.deepEqual(combineRecomputes({ compared: [a1], mismatches: [a1], complete: false }, { compared: [b1], mismatches: [b1], complete: false })!.mismatches, []);
-    // Programs that name one result differently do not confirm each other, and do not settle it: the model's verdict decides.
-    const p = { name: 'p2', stated: '140 kPa', computed: '170000 Pa' };
-    const q = { name: 'pressione', stated: '140 kPa', computed: '170000 Pa' };
-    const r = combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [q], mismatches: [q], complete: true })!;
-    assert.deepEqual([r.mismatches.length, r.complete], [0, false]);
-    assert.equal(combineRecomputes({ compared: [p], mismatches: [p], complete: true }, { compared: [{ ...p, name: 'p_2' }], mismatches: [{ ...p, name: 'p_2' }], complete: true })!.mismatches.length, 1, 'p_2 and p2 are one name');
-    // The checker compared only a; the reviewer compared a and b and disputes b, which the checker never looked at.
-    const a2 = { name: 'a', stated: '1.00 V', computed: '1.00 V' };
-    const b2 = { name: 'b', stated: '2.00 V', computed: '2.50 V' };
-    const partial = combineRecomputes({ compared: [a2], mismatches: [], complete: false }, { compared: [a2, b2], mismatches: [b2], complete: true })!;
-    assert.deepEqual([partial.mismatches.length, partial.complete], [0, false], 'not a blocker, and not settled as agreeing either');
+describe('the step and final checks of the exercise check (18 November)', () => {
+  test('a program that prints fewer digits than the solution is compared at its own precision', () => {
+    // Chimica 01252ddb and 4d3131a0: the step program printed 0.002801 kg and 79.958 %.
+    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002801 kg')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'resa', value: '79.9578 %' }], 'resa = 79.958 %')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002901 kg')!.mismatches.length, 1);
+  });
+
+  test('a sum written out states what follows its last equals sign', () => {
+    // Chimica 81d43345: "2+2+6+1 = 11" was read as 2.
+    assert.equal(parseQuantity('2+2+6+1 = 11')!.base, 11);
+    assert.equal(compareValues([{ name: 'e', value: '2+2+6+1 = 11' }], 'e = 11')!.mismatches.length, 0);
+    assert.equal(parseQuantity('2 +2+6+1'), null, 'a sum is not a unit');
+  });
+
+  test('a name printed again with another value is not compared, and by name no lone value is paired with another', () => {
+    // Analisi 2 e7bc7a76: a loop printed "f = 0", "f = -8", "f = -8" for three points.
+    assert.equal(compareValues([{ name: 'f', value: '-8' }], 'f = 0\nf = -8.0\nf = -8.0'), null);
+    assert.equal(compareValues([{ name: 'f', value: '-8' }], 'f = -8.0\nf = -8.0')!.mismatches.length, 0, 'the same value printed twice is one value');
+    // Analisi 2 08f04def: the volume was paired with the only line printed, the Jacobian.
+    assert.equal(compareValues([{ name: 'volume', value: '25.13' }], 'jacobiano = 6', { byName: true }), null);
+    assert.equal(compareValues([{ name: 'volume', value: '25.13' }], 'jacobiano = 6')!.mismatches.length, 1, 'without byName the old pairing stands');
+  });
+
+  test('a relative tolerance gives a final value the room of the rounding the solution carried', () => {
+    // Chimica 4d3131a0: 79,94 % from the rounded 14,01 g, against 79,958 % computed without rounding.
+    assert.equal(compareValues([{ name: 'resa', value: '79,94 %' }], 'resa = 79.9578 %')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'resa', value: '79,94 %' }], 'resa = 79.9578 %', { relative: 1e-3 })!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'resa', value: '79,74 %' }], 'resa = 79.9578 %', { relative: 1e-3 })!.mismatches.length, 1);
   });
 });
 
