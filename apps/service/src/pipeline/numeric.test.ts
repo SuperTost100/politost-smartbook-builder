@@ -60,11 +60,15 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
 describe('the step and final checks of the exercise check (18 November)', () => {
   test('a program that prints fewer digits than the solution is compared at its own precision', () => {
     // Chimica 01252ddb and 4d3131a0: the step program printed 0.002801 kg and 79.958 %.
+    // A program that rounds what it prints: within the last printed digit is no mismatch, but proves nothing either.
     const rounded = { rounded: true };
-    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002801 kg', rounded)!.mismatches.length, 0);
-    assert.equal(compareValues([{ name: 'resa', value: '79.9578 %' }], 'resa = 79.958 %', rounded)!.mismatches.length, 0);
-    assert.equal(compareValues([{ name: 'x', value: '1.23' }], 'x = 1.2', rounded)!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002801 kg', rounded), null);
+    assert.equal(compareValues([{ name: 'resa', value: '79.9578 %' }], 'resa = 79.958 %', rounded), null);
+    assert.equal(compareValues([{ name: 'x', value: '1.23' }], 'x = 1.2', rounded), null);
+    assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg\nother = 0.123', rounded), null, 'a plain print in a program that also rounds is not a match');
     assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002901 kg', rounded)!.mismatches.length, 1);
+    const settled = compareValues([{ name: 'a', value: '1.000 V' }, { name: 'm', value: '2.80068 g' }], 'a = 1.0 V\nm = 0.002801 kg', rounded)!;
+    assert.deepEqual([settled.mismatches.length, settled.complete], [0, false], 'the uncompared value leaves the results unsettled');
     // A program that prints plainly shows a float in full: a short print is an exact value, with no room from its last digit.
     assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg')!.mismatches.length, 1);
     assert.equal(compareValues([{ name: 'n', value: '3.4' }], 'n = 3')!.mismatches.length, 1);

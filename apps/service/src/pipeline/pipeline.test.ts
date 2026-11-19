@@ -792,6 +792,15 @@ describe('15i. the check lists the requested items with a quote of the solution,
     assert.equal(row(id).status, 'issue');
   });
 
+  test('an item listed twice by the comparison does not stand in for the one it left out', async () => {
+    const id = q(balance);
+    const quote = 'Il controllo degli atomi dà coefficienti bilanciati.';
+    fake.next(...check({ asked: [{ request: 'Bilancia l\u2019equazione', answer: '…' }, { request: 'Indica i coefficienti', answer: '2, 6, 10, 1, 6, 10' }], items: [item({ quote }), item({ quote })] }), review({ items: [item({ quote: '' })] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(fake.calls.length, 4, 'the reviewer is asked');
+    assert.equal(row(id).status, 'issue');
+  });
+
   test('an answer named only in passing goes to the reviewer, whose own item table decides', async () => {
     const quote = 'Il controllo degli atomi dà coefficienti bilanciati.';
     const kept = q(balance);

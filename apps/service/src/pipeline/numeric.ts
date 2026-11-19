@@ -149,12 +149,16 @@ function inSiUnits(q: Quantity): boolean {
 
 function compareReading(stated: Quantity, printed: Printed, relative: number): 'match' | 'mismatch' | 'skip' {
   const scale = stated.factor;
-  if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : differs(stated, printed.value, scale, printed.step, relative) ? 'mismatch' : 'match';
+  // The printed precision can only keep a value from being a mismatch, never make it a match: a value that agrees only
+  // within the last printed digit of a rounding program may be a plain print of an exact value (0.5 for 0.55), so it is
+  // left uncompared and the results are not settled by it.
+  const verdict = (s: Quantity, sc: number) => !differs(s, printed.value, sc, 0, relative) ? 'match' : differs(s, printed.value, sc, printed.step, relative) ? 'mismatch' : 'skip';
+  if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : verdict(stated, scale);
   // The program was told to print SI base units, so an unmarked value is read as one.
   if (!inSiUnits(stated)) return 'skip';
-  if (!differs(stated, printed.value, scale, printed.step, relative)) return 'match';
-  if (scale === 1) return 'mismatch';
-  return differs({ ...stated, base: stated.asWritten, factor: 1 }, printed.value, 1, printed.step, relative) ? 'mismatch' : 'skip';
+  const first = verdict(stated, scale);
+  if (first !== 'mismatch' || scale === 1) return first;
+  return verdict({ ...stated, base: stated.asWritten, factor: 1 }, 1) === 'mismatch' ? 'mismatch' : 'skip';
 }
 
 function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [StatedValue, Printed][] {

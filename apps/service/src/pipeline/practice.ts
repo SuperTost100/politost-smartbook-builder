@@ -589,7 +589,9 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   // An item the blind solve listed and the comparison left out was never checked: a doubt for the reviewer.
   const said = new Set(cmp.items.map((i) => itemKey(i.request)));
   const unmatched = solve.items.filter((i) => !said.has(itemKey(i.request)));
-  const skipped = cmp.items.length >= solve.items.length ? [] : unmatched.length ? unmatched : solve.items.slice(cmp.items.length);
+  // Counted by distinct requests, so an item listed twice does not stand in for one left out. Requests are often reworded
+  // between the calls, so a missing one is found by text when it can be, and otherwise the last ones count as left out.
+  const skipped = said.size >= solve.items.length ? [] : unmatched.length ? unmatched : solve.items.slice(said.size);
   const answer: VerifyAnswer & { items: CheckedItem[] } = {
     independentAnswer: cmp.items.map((i) => `${i.request.trim()}: ${i.answer.trim()}`).join('; '),
     resultsAgree: cmp.resultsAgree, agrees: cmp.agrees, items: cmp.items,
