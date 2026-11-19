@@ -1,7 +1,7 @@
 // Practice: authentic exam questions cleaned from page transcriptions, generated exercises to topic targets,
 // and an independent check of every solution.
 import { changedWords, formatModelText, formatterHandles, lintQuestionText, stripDifficultyDecoration } from '@smartbuilder/content';
-import { subjectProfileOf, type Question } from '@smartbuilder/domain';
+import { subjectProfileOf, type Question, type SubjectProfile } from '@smartbuilder/domain';
 import { z } from 'zod';
 import type { AppContext } from '../context.ts';
 import { json, newId, now } from '../db/db.ts';
@@ -9,10 +9,10 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyPrompt, verifySchema, type ProblemKind } from './prompts.ts';
+import { comparePrompt, compareSchema, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { combineRecomputes, mismatchMessage, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { compareValues, mismatchMessage, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
@@ -454,6 +454,61 @@ export function problemSeverity(kind: ProblemKind): 'major' | 'minor' {
   return kind === 'rigor' || kind === 'wording' || kind === 'other' ? 'minor' : 'major';
 }
 
+/** A problem of the exercise check. `evidence` says whether code found it (a quote missing from the solution) or only a model said so. */
+export interface CheckProblem { kind: ProblemKind; message: string; suggestion: string; evidence: 'code' | 'model'; item?: boolean }
+
+/** Text as the quote check compares it: without markup, spacing, braces and the variants of dashes and quote marks. */
+function quoteKey(text: string): string {
+  return text.normalize('NFKC')
+    .replace(/\\(?:left|right|displaystyle|textstyle|[bB]igg?[lr]?)(?![a-zA-Z])/g, '')
+    .replace(/\\(?:mathrm|text|textbf|mathbf|operatorname|boldsymbol)(?![a-zA-Z])/g, '')
+    .replace(/\\[dt]frac(?![a-zA-Z])/g, '\\frac')
+    .replace(/\\[,;:! ]/g, '').replace(/\{,\}/g, ',')
+    .replace(/[−–—]/g, '-').replace(/[‘’`´]/g, "'").replace(/[«»“”]/g, '"')
+    .replace(/[\s$*{}~]/g, '').toLowerCase();
+}
+
+/**
+ * True when the quote occurs in the solution once markup and spacing are set aside. A quote may skip text with an ellipsis:
+ * its pieces must then occur in order.
+ */
+export function quoteFound(quote: string, solution: string): boolean {
+  const hay = quoteKey(solution);
+  const pieces = quote.split(/…|\.\.\./).map(quoteKey).filter(Boolean);
+  if (!pieces.length) return false;
+  let from = 0;
+  for (const piece of pieces) {
+    const at = hay.indexOf(piece, from);
+    if (at < 0) return false;
+    from = at + piece.length;
+  }
+  return true;
+}
+
+/**
+ * The problems the item table shows. An item whose answer the solution never states is answer-missing, whatever the model
+ * says elsewhere: set in code when the quote is empty or not in the solution, on the model's word when the quote does not
+ * state the answer in the form the item asks for. An item whose answer differs from the independent one is a wrong value.
+ */
+export function itemProblems(items: CheckedItem[], solution: string): CheckProblem[] {
+  const out: CheckProblem[] = [];
+  for (const it of items) {
+    const what = `"${truncate(it.request.trim().replace(/\s+/g, ' '), 160)}"`;
+    const quote = it.quote.trim();
+    const answer = truncate(it.answer.trim(), 300);
+    if (!quote || !quoteFound(quote, solution)) {
+      out.push({ kind: 'answer-missing', evidence: 'code', message: `The solution never states the answer to ${what}.`, suggestion: `State it explicitly${answer ? `: ${answer}` : ''}.` });
+    } else if (!it.stated) {
+      out.push({ kind: 'answer-missing', evidence: 'model', message: `The solution does not state the answer to ${what} in the form asked: it only says "${truncate(quote, 200)}".`, suggestion: `Write the answer out${answer ? `: ${answer}` : ''}.` });
+    }
+    if (!it.matches) {
+      // The recompute never clears it: nothing ties the item to the values it compared, and the answer may not be a number.
+      out.push({ kind: 'wrong-value', evidence: 'model', item: true, message: `The answer to ${what} differs from the independent one: the solution says "${truncate(quote || '(nothing)', 200)}", the check gets ${answer}.`, suggestion: 'Compare both answers and correct the solution, or accept the issue if the check is wrong.' });
+    }
+  }
+  return out;
+}
+
 /**
  * The verdict of the exercise check. A question is verified only when the two solutions agree, no listed problem is major
  * (`problemSeverity`), the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that
@@ -462,18 +517,121 @@ export function problemSeverity(kind: ProblemKind): 'major' | 'minor' {
  * The Python recompute settles the numbers: a mismatch it finds is a different result whatever the model says, and when it
  * compared every stated value without a mismatch the results agree and a wrong-value problem is dropped. Fisica E5.3 (339
  * against 339,7 N) was blocked on the model's word while the recompute matched all four values. `problems` is what is left,
- * each with its severity.
+ * each with its severity. With an item table (`items`), its problems (`itemProblems`) join the model's.
  */
-export function verifyVerdict(d: VerifyAnswer, numeric: NumericCheck | null, consistency: ConsistencyCheck | null) {
+export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numeric: NumericCheck | null, consistency: ConsistencyCheck | null, solution = '') {
   const settled = !!numeric?.complete && !numeric.mismatches.length;
   const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
-  const problems = d.problems.filter((p) => !(settled && p.kind === 'wrong-value')).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
+  const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })), ...(d.items ? itemProblems(d.items, solution) : [])];
+  const problems = listed.filter((p) => !(settled && p.kind === 'wrong-value' && p.evidence === 'model' && !p.item)).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
   // The model's `agrees` covers its results and its reasoning: once the recompute settled the results, or the model named what
   // it disagrees with as problems, the kinds of those problems decide.
-  const agrees = d.agrees || (settled && !d.resultsAgree) || d.problems.length > 0;
+  const agrees = d.agrees || (settled && !d.resultsAgree) || listed.length > 0;
   const data = dataFailure(d, consistency);
   const ok = agrees && resultsAgree && !problems.some((p) => p.severity !== 'minor') && !data;
   return { ok, resultsAgree, data, problems };
+}
+
+/**
+ * The final-value check and the step check as one: every mismatch of either counts, once per name. A step mismatch is dropped
+ * only when the blind program confirms the stated value within its last digit (`confirmed`): the step program may then use
+ * another sign convention (ω′ printed negative for a rotation the solution calls anticlockwise and positive) or label a value
+ * in mol/m³ as mol/L. The results are settled when the blind program compared every final value and every stated value was
+ * compared by one of the two programs.
+ */
+function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: string[], hasFinals: boolean): NumericCheck | null {
+  const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
+  const stepsLeft = steps && { ...steps, mismatches: steps.mismatches.filter((m) => !right.has(m.name)) };
+  if (!finals && !stepsLeft) return null;
+  const named = (list: Comparison[]) => new Set(list.map((m) => m.name));
+  const compared = named(finals?.compared ?? []);
+  const wrong = named(finals?.mismatches ?? []);
+  const all = [...(finals?.compared ?? []), ...(stepsLeft?.compared ?? []).filter((c) => !compared.has(c.name))];
+  const seen = named(all);
+  // Settled only when the blind program compared every final value (the step program follows the solution's own numbers,
+  // so its match proves nothing about the answer) and every stated value was compared by one of the two, so a model's
+  // objection to a value neither could read still stands.
+  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (hasFinals ? !!finals?.complete : true) && stated.every((n) => seen.has(n)) };
+}
+
+/** A request as the item check matches it between the two calls: letters and digits only. */
+const itemKey = (request: string) => request.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
+
+/** One model call of the exercise check: the service passes `runRole`, the measurement harness a cached one. */
+export type CheckCall = <T>(role: 'checker' | 'reviewer', prompt: { system: string; prompt: string }, schema: z.ZodType<T>, tag: string) => Promise<{ data: T; route: { model: string } }>;
+
+/**
+ * The exercise check in three calls of one role. The first solves the exercise from the statement alone, so it cannot read
+ * the given answer charitably, and writes the Python that computes its numbers and checks the data. The second lists the
+ * requested items against the given solution, with a quote of the solution for each, and every number the solution
+ * computes. The third redoes every step of the solution: in the same call as the rest, Sonnet passed a wrong sign in
+ * Φ(R) = −∫ GM/s² ds and a wrong term of a sequence. The numbers are settled by the Python recompute, the items by
+ * `itemProblems`, and a step the audit finds false counts only when its quote is in the solution.
+ */
+export async function solveAndCompare(q: { statement: string; solution: string; language: string; profile?: SubjectProfile }, role: 'checker' | 'reviewer', call: CheckCall) {
+  const solved = await call(role, solvePrompt({ language: q.language, statement: q.statement, profile: q.profile }), solveSchema, 'solve');
+  const solve = solved.data;
+  const [printed, consistency] = await Promise.all([printedValues(solve.computation), runConsistency(solve.consistency)]);
+  // The comparison and the step audit read the solution independently of each other, so they run together.
+  const [{ data: cmp, route }, { data: audit }] = await Promise.all([
+    call(role, comparePrompt({ language: q.language, statement: q.statement, solution: q.solution, answers: solve.items, printed, profile: q.profile }), compareSchema, 'compare'),
+    call(role, stepAuditPrompt({ language: q.language, statement: q.statement, solution: q.solution }), stepAuditSchema, 'steps'),
+  ]);
+  // Two recomputes: each final value against the blind program, and every stated value against the step program, which
+  // follows the solution's own rounded values so that a wrong line shows and a carried rounding does not.
+  const steps = await printedValues(cmp.computation);
+  // A name listed again with the same value is that value restated, final when any of its listings says so. Listings of
+  // one name with different values stay apart, each with its own mark.
+  const same = (a: { name: string; value: string }, b: { name: string; value: string }) => a.name.trim() === b.name.trim() && a.value.trim() === b.value.trim();
+  const stated = cmp.statedValues.filter((v, i, all) => all.findIndex((w) => same(w, v)) === i)
+    .map((v) => ({ ...v, final: cmp.statedValues.some((w) => same(w, v) && w.final) }));
+  const finals = stated.filter((v) => v.final);
+  // The blind program computes without the solution's rounded intermediate values, so a final value gets 0.1 % more room;
+  // the step check catches a smaller error in the line where it is made.
+  const blind = { byName: true, rounded: roundsOutput(solve.computation) };
+  const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
+  const stepCheck = stated.length ? compareValues(stated, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
+  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, blind) : null, stated.map((v) => v.name), finals.length > 0);
+  // An item the blind solve listed and the comparison left out was never checked: a doubt for the reviewer.
+  const said = new Set(cmp.items.map((i) => itemKey(i.request)));
+  const unmatched = solve.items.filter((i) => !said.has(itemKey(i.request)));
+  // Counted by distinct requests, so an item listed twice does not stand in for one left out. Requests are often reworded
+  // between the calls, so a missing one is found by text when it can be, and otherwise the last ones count as left out.
+  const skipped = said.size >= solve.items.length ? [] : unmatched.length ? unmatched : solve.items.slice(said.size);
+  const answer: VerifyAnswer & { items: CheckedItem[] } = {
+    independentAnswer: cmp.items.map((i) => `${i.request.trim()}: ${i.answer.trim()}`).join('; '),
+    resultsAgree: cmp.resultsAgree, agrees: cmp.agrees, items: cmp.items,
+    // A line that does not hold is a wrong step; a quote that is not in the solution was made up and is dropped.
+    problems: [...cmp.problems, ...skipped.map((i) => ({ kind: 'answer-missing' as const, message: `The check found no answer to "${truncate(i.request.trim(), 160)}" in the solution: the comparison left this item out.`, suggestion: `State it explicitly: ${truncate(i.answer.trim(), 300)}.` })), ...audit.steps.filter((x) => !x.holds && x.quote.trim() && quoteFound(x.quote, q.solution)).map((x) => ({ kind: 'wrong-method' as const, message: `"${truncate(x.quote.trim(), 200)}" does not hold: ${x.why.trim()}`, suggestion: 'Correct this line and what follows from it.' }))],
+    wellPosed: solve.wellPosed, wellPosedReason: solve.wellPosedReason, dataProblems: [...solve.dataProblems, ...cmp.dataProblems],
+    consistency: solve.consistency,
+  };
+  return { answer, recomputed, consistency, model: route.model };
+}
+
+/**
+ * The exercise check: the checker's blind solve and comparison (`solveAndCompare`), and the reviewer only when the checker
+ * blocks on its word about the solution alone. Measured on 2026-11-19 (gpt-6.1-sol on 35 real defects and 6 blocked clean
+ * exercises), the reviewer cleared 3 of 5 false alarms about the solution and none of 14 real defects of that kind, but 2 of
+ * 3 real data defects (a ΔU equal to the tabulated ΔH, a screening constant Slater's rules contradict) and 2 of 13 that code
+ * had proved. So a finding that code proved (a quote of the requested answer missing from the solution, a recomputed number
+ * that differs) and a failed data check stand without a second opinion. When the reviewer is asked, in one call, its verdict
+ * is the one recorded.
+ */
+export async function checkExercise(q: { statement: string; solution: string; language: string; profile?: SubjectProfile }, call: CheckCall, opts: { reviewer: boolean; progress?: (m: string) => void }) {
+  const first = await solveAndCompare(q, 'checker', call);
+  const v = verifyVerdict(first.answer, first.recomputed, first.consistency, q.solution);
+  const checked = { ...v, ...first, reviewerAsked: false };
+  const proved = v.problems.some((p) => p.evidence === 'code' && p.severity !== 'minor') || !!first.recomputed?.mismatches.length;
+  if (v.ok || proved || v.data || !opts.reviewer) return checked;
+  opts.progress?.('Asking the reviewer for a second opinion');
+  const { data, route } = await call('reviewer', verifyPrompt({ ...q, items: true }), verifyItemsSchema, 'review');
+  // Only its own program settles its numbers: the checker's found no mismatch in the values it listed, which on the
+  // held-out set did not include a wrong term inside an expression (√13 changed to √16) that the reviewer reported.
+  const recomputed = await recomputeFinalValues(data.computation, data.statedValues);
+  // Its consistency program is its verdict on the data; with no program, the checker's result stands.
+  const consistency = (await runConsistency(data.consistency)) ?? first.consistency;
+  return { ...verifyVerdict(data, recomputed, consistency, q.solution), answer: data, recomputed, consistency, model: route.model, reviewerAsked: true };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
@@ -485,35 +643,16 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   // question since: a skipped fix records the rev it left (the formatter may have changed the layout, which keeps the checks).
   if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r && (r as { rev?: number }).rev === q.rev)) return { skipped: 'the fix changed no words or numbers' };
   const project = loadProject(ctx, q.projectId);
-  const check = (role: 'checker' | 'reviewer') => runRole(ctx, {
-    role, ...verifyPrompt({ language: project.language, statement: q.statement, solution: q.solution, profile: subjectProfileOf(project) }), schema: verifySchema,
-    projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  });
-  // A cheap first check; the reviewer is asked only when it finds something, and its verdict is the one recorded.
-  // A numeric final answer is recomputed, and the statement's data are checked, in the sandbox from the programs the checker
-  // returned, with no extra model call.
-  let { data, route } = await check('checker');
-  let recomputed = await recomputeFinalValues(data.computation, data.statedValues);
-  let consistency = await runConsistency(data.consistency);
-  const suspicious = (d: typeof data, r: NumericCheck | null, c: ConsistencyCheck | null) => {
-    const v = verifyVerdict(d, r, c);
-    return !v.resultsAgree || v.problems.some((p) => p.severity !== 'minor') || !!v.data;
-  };
-  if (suspicious(data, recomputed, consistency) && ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model) {
-    t.progress('Asking the reviewer for a second opinion');
-    ({ data, route } = await check('reviewer'));
-    // A reviewer that gave no usable program does not erase the checker's mismatch; with both programs, a mismatch needs both.
-    recomputed = combineRecomputes(recomputed, await recomputeFinalValues(data.computation, data.statedValues));
-    // Its consistency program is its verdict on the data; with no program, the checker's result stands.
-    consistency = (await runConsistency(data.consistency)) ?? consistency;
-  }
+  const call: CheckCall = async (role, prompt, schema) => runRole(ctx, { role, ...prompt, schema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
+  const { ok, resultsAgree, data: badData, problems, answer: data, recomputed, consistency, model } = await checkExercise(
+    { statement: q.statement, solution: q.solution, language: project.language, profile: subjectProfileOf(project) }, call,
+    { reviewer: ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model, progress: t.progress });
   const mismatches = recomputed?.mismatches ?? [];
-  const { ok, resultsAgree, data: badData, problems } = verifyVerdict(data, recomputed, consistency);
   // A verified question gets no issue: its minor notes stay in the check's detail.
   const notes = ok && problems.length ? ` Minor notes: ${truncate(problems.map((p) => p.message.trim()).join(' '), 1000)}` : '';
   const checks = [
     ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric' && c.method !== 'consistency'),
-    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}${notes}`, model: route.model },
+    { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}${notes}`, model },
     ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
     { method: 'consistency' as const, ok: !badData, detail: badData ?? consistency?.detail ?? 'No numeric data to check; the statement was judged well posed.' },
   ];

@@ -8,7 +8,7 @@ export interface StatedValue { name: string; value: string }
 
 /** A number as written in the solution: its value in SI base units, the unit, and how many significant figures it shows. */
 interface Quantity { base: number; asWritten: number; factor: number; unit: string; digits: number; exponent: number; alt?: Quantity }
-interface Printed { name: string; value: number; unit: string | null; text: string }
+interface Printed { name: string; value: number; unit: string | null; text: string; step: number }
 
 export interface Comparison { name: string; stated: string; computed: string }
 /** `complete` is true when every stated value was compared with a printed one: none was left out for a unit this file cannot read. */
@@ -55,7 +55,8 @@ const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^
 /** Splits a unit into a prefix factor and a base unit. A unit this does not recognise (m/s, mol/L, kg·m²) stays whole with factor 1. */
 function splitUnit(raw: string): { factor: number; unit: string } {
   if (COUNT_NOUN.test(raw.trim())) return { factor: 1, unit: '' };
-  const unit = raw.replace(/\s+/g, '').replace(/\.$/, '');
+  // Units written apart (kg m/s) are a product, as kg·m/s is: joined into one word they would read as an unknown unit.
+  const unit = raw.trim().replace(/\.$/, '').replace(/\s*×\s*|\s+/g, '×');
   // A percentage is a plain number written a hundred times larger: 50% and 0.5 are the same value.
   if (unit === '%') return { factor: 0.01, unit: '' };
   if (BASE_UNITS.has(unit)) return { factor: 1, unit };
@@ -66,6 +67,8 @@ function splitUnit(raw: string): { factor: number; unit: string } {
 
 /** True for an empty unit and for units made only of the ones above, alone or combined (m/s, mol/L, kg·m2). */
 function knownUnit(unit: string): boolean {
+  // A sum or an equation is not a unit: "2+2+6+1 = 11" would otherwise read as 2.
+  if (/[=+]|(?:^|[\s×/·*(])\d/.test(unit)) return false;
   return unit.split(/[^\p{L}\u00b0%]+/u).filter(Boolean).every((t) => BASE_UNITS.has(t) || OTHER_UNITS.has(t) || (PREFIXES[t[0] ?? ''] !== undefined && BASE_UNITS.has(t.slice(1))))
     && !/^[/^]/.test(unit);
 }
@@ -82,7 +85,8 @@ function sigFigs(mantissa: string): { digits: number; exponent: number } {
 }
 
 export function parseQuantity(text: string): Quantity | null {
-  const m = NUMBER.exec(plain(text));
+  // "2+2+6+1 = 11" states 11: the value is what follows the last equals sign.
+  const m = NUMBER.exec(plain(text).split('=').at(-1)!.trim());
   if (!m) return null;
   const [, sign, mantissa, tenPower, ePower, rest] = m;
   const shift = Number(tenPower ?? ePower ?? 0);
@@ -99,7 +103,7 @@ export function parseQuantity(text: string): Quantity | null {
 
 const NAME_VALUE = /^\s*(.+?)\s*[=:]\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*(.*)$/;
 
-function parsePrinted(stdout: string): Printed[] {
+function parsePrinted(stdout: string, rounded: boolean): Printed[] {
   const out: Printed[] = [];
   for (const line of stdout.split('\n').slice(0, MAX_PRINTED_VALUES)) {
     const m = NAME_VALUE.exec(plain(line));
@@ -108,22 +112,32 @@ function parsePrinted(stdout: string): Printed[] {
     if (!Number.isFinite(value)) continue;
     const { factor, unit } = splitUnit(m[3] ?? '');
     if (!knownUnit(unit)) continue;
-    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim() });
+    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step: rounded ? lastDigit(m[2]!) * factor : 0 });
   }
   return out;
 }
 
+/** The value of one unit in the last digit a number is printed with: 0.002801 gives 1e-6, 2.5e-3 gives 1e-4, 1500 gives 1. */
+function lastDigit(printed: string): number {
+  const [mantissa = '', power = '0'] = printed.toLowerCase().split('e');
+  const decimals = mantissa.split('.')[1]?.length ?? 0;
+  return 10 ** (Number(power) - decimals);
+}
+
 const key = (name: string) => plain(name).toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
-/** True when the printed value differs from the stated one by more than one unit of the stated last digit. */
-function differs(stated: Quantity, computed: number, scale: number): boolean {
-  const tolerance = Math.abs(scale) * 10 ** (stated.exponent - stated.digits + 1);
+/**
+ * True when the printed value differs from the stated one by more than one unit of the stated last digit, or of the printed
+ * one when the program printed fewer digits (0.002801 kg against 2.80068 g).
+ */
+function differs(stated: Quantity, computed: number, scale: number, printedStep = 0, relative = 0): boolean {
+  const tolerance = Math.max(Math.abs(scale) * 10 ** (stated.exponent - stated.digits + 1), printedStep, relative * Math.abs(stated.base));
   return Math.abs(computed - stated.base) > Math.max(tolerance, 1e-12 * Math.abs(stated.base)) * (1 + 1e-9);
 }
 
 /** 'skip' means the two cannot be compared with confidence: another unit, or an unmarked value that fits only the number as written in a prefixed unit. */
-function compare(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'skip' {
-  const verdicts = [compareReading(stated, printed), ...(stated.alt ? [compareReading(stated.alt, printed)] : [])];
+function compare(stated: Quantity, printed: Printed, relative: number): 'match' | 'mismatch' | 'skip' {
+  const verdicts = [compareReading(stated, printed, relative), ...(stated.alt ? [compareReading(stated.alt, printed, relative)] : [])];
   return verdicts.includes('match') ? 'match' : verdicts.every((v) => v === 'mismatch') ? 'mismatch' : 'skip';
 }
 
@@ -133,38 +147,60 @@ function inSiUnits(q: Quantity): boolean {
   return q.unit.split(/[^\p{L}\u00b0%]+/u).filter(Boolean).every((t) => SI_UNITS.has(t));
 }
 
-function compareReading(stated: Quantity, printed: Printed): 'match' | 'mismatch' | 'skip' {
+function compareReading(stated: Quantity, printed: Printed, relative: number): 'match' | 'mismatch' | 'skip' {
   const scale = stated.factor;
-  if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : differs(stated, printed.value, scale) ? 'mismatch' : 'match';
+  // The printed precision can only keep a value from being a mismatch, never make it a match: a value that agrees only
+  // within the last printed digit of a rounding program may be a plain print of an exact value (0.5 for 0.55), so it is
+  // left uncompared and the results are not settled by it.
+  const verdict = (s: Quantity, sc: number) => !differs(s, printed.value, sc, 0, relative) ? 'match' : differs(s, printed.value, sc, printed.step, relative) ? 'mismatch' : 'skip';
+  if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : verdict(stated, scale);
   // The program was told to print SI base units, so an unmarked value is read as one.
   if (!inSiUnits(stated)) return 'skip';
-  if (!differs(stated, printed.value, scale)) return 'match';
-  if (scale === 1) return 'mismatch';
-  return differs({ ...stated, base: stated.asWritten, factor: 1 }, printed.value, 1) ? 'mismatch' : 'skip';
+  const first = verdict(stated, scale);
+  if (first !== 'mismatch' || scale === 1) return first;
+  return verdict({ ...stated, base: stated.asWritten, factor: 1 }, 1) === 'mismatch' ? 'mismatch' : 'skip';
 }
 
-function pair(stated: StatedValue[], printed: Printed[]): [StatedValue, Printed][] {
+function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [StatedValue, Printed][] {
   const pairs: [StatedValue, Printed][] = [];
-  const used = new Set<Printed>();
+  // A name printed again with another value (a loop over three points printing "f = ..." each time) names no one value.
+  const ambiguous = new Set(printed.filter((p) => printed.some((o) => key(o.name) === key(p.name) && o.value !== p.value)).map((p) => key(p.name)));
+  const used = new Set<Printed>(printed.filter((p) => ambiguous.has(key(p.name))));
+  // A name stated with two different values (an intermediate 0.50 kg and a final 0.55 kg under one name) cannot tie a
+  // printed line to either listing, so neither is compared.
+  const twice = new Set(stated.filter((s) => stated.some((o) => key(o.name) === key(s.name) && o.value.trim() !== s.value.trim())).map((s) => key(s.name)));
   for (const s of stated) {
+    if (twice.has(key(s.name))) continue;
     const p = printed.find((x) => !used.has(x) && key(x.name) === key(s.name) && key(s.name) !== '');
     if (p) { pairs.push([s, p]); used.add(p); }
   }
   // One value on each side needs no name to match.
-  if (!pairs.length && stated.length === 1 && printed.length === 1) pairs.push([stated[0]!, printed[0]!]);
+  if (!byName && !pairs.length && stated.length === 1 && printed.length === 1) pairs.push([stated[0]!, printed[0]!]);
   return pairs;
 }
 
-/** Compares the printed values with the stated ones. Null when nothing could be compared. */
-export function compareValues(stated: StatedValue[], stdout: string): NumericCheck | null {
+/**
+ * True when a program rounds or formats the numbers it prints (round(x, 4), "%.3f", f"{x:.4g}"), so a printed value is known
+ * only to its last printed digit. A plain print shows the float in full, and a value that prints short (0.5, 3) is exact.
+ */
+export function roundsOutput(code: string | undefined): boolean {
+  return /\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/.test(code ?? '');
+}
+
+/**
+ * Compares the printed values with the stated ones. Null when nothing could be compared. `relative` widens the tolerance to
+ * that fraction of the value; `byName` pairs values only by name, never a lone stated value with a lone printed one;
+ * `rounded` (see `roundsOutput`) widens it to the last printed digit.
+ */
+export function compareValues(stated: StatedValue[], stdout: string, opts: { relative?: number; byName?: boolean; rounded?: boolean } = {}): NumericCheck | null {
   const parsed = stated.flatMap((s) => { const q = parseQuantity(s.value); return q ? [{ s, q }] : []; });
   if (!parsed.length) return null;
-  const printed = parsePrinted(stdout);
+  const printed = parsePrinted(stdout, !!opts.rounded);
   const compared: Comparison[] = [];
   const mismatches: Comparison[] = [];
-  for (const [s, p] of pair(parsed.map((x) => x.s), printed)) {
+  for (const [s, p] of pair(parsed.map((x) => x.s), printed, !!opts.byName)) {
     const q = parsed.find((x) => x.s === s)!.q;
-    const verdict = compare(q, p);
+    const verdict = compare(q, p, opts.relative ?? 0);
     if (verdict === 'skip') continue;
     const c = { name: s.name, stated: s.value.trim(), computed: p.text.replace(/^.*?[=:]\s*/, '') };
     compared.push(c);
@@ -189,21 +225,18 @@ export async function recomputeFinalValues(computation: string | undefined, stat
     return null;
   }
   if (!result.ok || !result.stdout.trim()) return null;
-  return compareValues(stated, result.stdout);
+  return compareValues(stated, result.stdout, { rounded: roundsOutput(computation) });
 }
 
-/**
- * The recompute that decides, when the checker and the reviewer may each have run one. With both, a mismatch counts only when
- * both programs dispute the value of the same name. Two programs that disagree prove nothing about the solution, so the result
- * is not complete and the model's verdict on the results stands. Each program compares the values its own model listed, so the
- * results are complete only when both compared all of theirs. With one program, that one decides.
- */
-export function combineRecomputes(checker: NumericCheck | null, reviewer: NumericCheck | null): NumericCheck | null {
-  if (!checker || !reviewer) return reviewer ?? checker;
-  const named = (list: Comparison[], m: Comparison) => list.some((c) => key(c.name) === key(m.name));
-  const confirmed = reviewer.mismatches.filter((m) => named(checker.mismatches, m));
-  const disputed = reviewer.mismatches.length + checker.mismatches.length > 2 * confirmed.length;
-  return { ...reviewer, mismatches: confirmed, complete: reviewer.complete && checker.complete && !disputed };
+/** What a computation program printed, or '' when there is none or it failed. Its lines are read by `compareValues`. */
+export async function printedValues(computation: string | undefined, run: (code: string, timeoutMs: number) => Promise<PythonResult> = runPython): Promise<string> {
+  if (!computation?.trim()) return '';
+  try {
+    const result = await run(computation, 15_000);
+    return result.ok ? result.stdout : '';
+  } catch {
+    return '';
+  }
 }
 
 /**
