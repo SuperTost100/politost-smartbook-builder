@@ -514,6 +514,20 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
   });
 
+  test('a name listed with two different values keeps each value\'s own mark', async () => {
+    // The intermediate 9,02587 is not final; the final, wrongly written 9,10, is. Marking the first listing final would
+    // check 9,02587 against the blind 9,02498 and never look at 9,10.
+    const id = q({ statement: 'Quanti atomi?', solution: 'N ≈ 9,02587 × 10^23, cioè 9,10 × 10^23.' });
+    fake.next(...check({ computation: 'print("N = 9.02498e23")', stepProgram: 'print("N = 9.02587e23")' }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'N', value: '9,02587 × 10^23', final: false }, { name: 'N', value: '9,10 × 10^23', final: true }];
+      return out;
+    }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal((r as { mismatches: number }).mismatches, 1, '9,10 against 9,02498 is a mismatch of the final value');
+    assert.match(issues(`question_id = '${id}'`)[0]!.message, /9,10 × 10\^23 in the solution/);
+  });
+
   test('a computation that throws is ignored and the model verdict stands', async () => {
     const id = q({ statement: circuit, solution: 'R = 500 Ω' });
     fake.next(...verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));
