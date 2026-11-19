@@ -12,7 +12,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { comparePrompt, compareSchema, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { compareValues, mismatchMessage, parseQuantity, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { compareValues, mismatchMessage, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
@@ -455,7 +455,7 @@ export function problemSeverity(kind: ProblemKind): 'major' | 'minor' {
 }
 
 /** A problem of the exercise check. `evidence` says whether code found it (a quote missing from the solution) or only a model said so. */
-export interface CheckProblem { kind: ProblemKind; message: string; suggestion: string; evidence: 'code' | 'model'; numeric?: boolean }
+export interface CheckProblem { kind: ProblemKind; message: string; suggestion: string; evidence: 'code' | 'model'; item?: boolean }
 
 /** Text as the quote check compares it: without markup, spacing, braces and the variants of dashes and quote marks. */
 function quoteKey(text: string): string {
@@ -502,8 +502,8 @@ export function itemProblems(items: CheckedItem[], solution: string): CheckProbl
       out.push({ kind: 'answer-missing', evidence: 'model', message: `The solution does not state the answer to ${what} in the form asked: it only says "${truncate(quote, 200)}".`, suggestion: `Write the answer out${answer ? `: ${answer}` : ''}.` });
     }
     if (!it.matches) {
-      // Only an item whose answer is a number can be settled by the recompute; a classification that differs stays.
-      out.push({ kind: 'wrong-value', evidence: 'model', numeric: !!parseQuantity(it.answer), message: `The answer to ${what} differs from the independent one: the solution says "${truncate(quote || '(nothing)', 200)}", the check gets ${answer}.`, suggestion: 'Compare both answers and correct the solution, or accept the issue if the check is wrong.' });
+      // The recompute never clears it: nothing ties the item to the values it compared, and the answer may not be a number.
+      out.push({ kind: 'wrong-value', evidence: 'model', item: true, message: `The answer to ${what} differs from the independent one: the solution says "${truncate(quote || '(nothing)', 200)}", the check gets ${answer}.`, suggestion: 'Compare both answers and correct the solution, or accept the issue if the check is wrong.' });
     }
   }
   return out;
@@ -523,7 +523,7 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
   const settled = !!numeric?.complete && !numeric.mismatches.length;
   const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
   const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })), ...(d.items ? itemProblems(d.items, solution) : [])];
-  const problems = listed.filter((p) => !(settled && p.kind === 'wrong-value' && p.evidence === 'model' && p.numeric !== false)).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
+  const problems = listed.filter((p) => !(settled && p.kind === 'wrong-value' && p.evidence === 'model' && !p.item)).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
   // The model's `agrees` covers its results and its reasoning: once the recompute settled the results, or the model named what
   // it disagrees with as problems, the kinds of those problems decide.
   const agrees = d.agrees || (settled && !d.resultsAgree) || listed.length > 0;
