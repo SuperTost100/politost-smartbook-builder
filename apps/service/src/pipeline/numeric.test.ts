@@ -81,6 +81,13 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(compareValues([{ name: 'volume', value: '25.13' }], 'jacobiano = 6')!.mismatches.length, 1, 'without byName the old pairing stands');
   });
 
+  test('a unit written apart is the same product as one written with a dot', () => {
+    // Chimica bba65124 (#142 CH-5): p = 6,615e-24 kg m/s against 6,6165e-24 was never compared.
+    assert.equal(compareValues([{ name: 'p', value: '6.615e-24 kg m/s' }], 'p = 6.6165e-24 kg m/s')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'p', value: '6.6165e-24 kg·m/s' }], 'p = 6.61648e-24 kg m/s')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'c', value: '0.0154 mol L^-1' }], 'c = 0.0153846 mol/L'), null, 'mol L^-1 and mol/L are written differently, so not compared');
+  });
+
   test('a relative tolerance gives a final value the room of the rounding the solution carried', () => {
     // Chimica 4d3131a0: 79,94 % from the rounded 14,01 g, against 79,958 % computed without rounding.
     assert.equal(compareValues([{ name: 'resa', value: '79,94 %' }], 'resa = 79.9578 %')!.mismatches.length, 1);

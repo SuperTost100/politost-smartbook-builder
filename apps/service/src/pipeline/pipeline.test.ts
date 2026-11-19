@@ -483,6 +483,15 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /G is 0\.002 S by the computation and 0,005 S in the solution/);
   });
 
+  test('a last digit off by three units blocks: the 0.1 % room of the final check does not clear what the step check found', async () => {
+    // Injected into Fisica 15ce7430: Q2 = ΔU + W2 = 6235,5 J written as 6235,8 J.
+    const id = q({ statement: 'Calcola Q2.', solution: 'Q2 = 6235,8 J' });
+    fake.next(...check({ computation: 'print("Q2 = 6235.5 J")', statedValues: [{ name: 'Q2', value: '6235,8 J' }] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+    assert.match(issues(`question_id = '${id}'`)[0]!.message, /Q2 is 6235\.5 J by the computation and 6235,8 J in the solution/);
+  });
+
   test('a computation that throws is ignored and the model verdict stands', async () => {
     const id = q({ statement: circuit, solution: 'R = 500 Ω' });
     fake.next(...verdict({ computation: 'print(1 / 0)', statedValues: [{ name: 'R_eq', value: '500 Ω' }] }));
@@ -3542,6 +3551,16 @@ describe('independent samples, the sweep the author asks for, repeats merged in 
     done(first);
     assert.deepEqual([first.samples, first.sampleModels, first.chapterRead], [2, ['claude-sonnet-5-5', 'claude-sonnet-5-5'], undefined]);
     assert.equal(sweepDue(ctx, P, 'c1', ['c1', 's1'], heads(r1)), true, 'the chapter still needs a read on the reviewer model');
+  });
+
+  test('a chapter longer than the reviewer reads is not recorded as read whole', async () => {
+    samples(2);
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', `${'Una frase lunga del capitolo. '.repeat(4200)}`);
+    fake.next(answer({ issues: [] }), answer({ issues: [] }), crossNone);
+    const r = await review();
+    done(r);
+    assert.deepEqual([r.samples, r.chapterRead], [2, undefined]);
   });
 
   test('only a review run started with the sweep asks for it; the review at the end of a generate run never does', () => {

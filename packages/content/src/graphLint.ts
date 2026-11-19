@@ -198,7 +198,10 @@ function checkReading(claim: Claim, pts: Point[]): string | null {
       if (Math.abs(r - claim.value) > 1e-3 * claim.value) miss(`point (${x}, ${y}) is at distance ${r.toPrecision(4)}, the label says ${claim.src}`);
     } else if (claim.kind === 'ray') {
       const th = Math.atan2(y, x);
-      if (Math.hypot(x, y) > 1e-9 && Math.abs(th - claim.value) > 1e-3) miss(`point (${x}, ${y}) has angle ${th.toPrecision(4)}, the label says ${claim.src}`);
+      // atan2 gives (−π, π]: a label's 3π/2 is the same direction as −π/2.
+      const turn = 2 * Math.PI;
+      const off = Math.abs((((th - claim.value) % turn) + turn + Math.PI) % turn - Math.PI);
+      if (Math.hypot(x, y) > 1e-9 && off > 1e-3) miss(`point (${x}, ${y}) has angle ${th.toPrecision(4)}, the label says ${claim.src}`);
     } else {
       const e = claim.kind === 'fn' ? claim.evaluate(x) : claim.value;
       if (!isNum(e)) continue;

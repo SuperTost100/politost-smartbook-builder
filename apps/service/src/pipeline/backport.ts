@@ -53,8 +53,8 @@ export interface BackportPlan {
 
 const text = (v: string | Uint8Array | undefined) => (v === undefined ? undefined : typeof v === 'string' ? v : Buffer.from(v).toString('utf8'));
 
-/** A chapter file split into its front matter, the `## pN | title` headings and the body under each. */
-function sectionsOf(md: string): { front: string; titles: Record<string, string>; bodies: Record<string, string> } {
+/** A chapter file split into its front matter, the text before the first heading, the `## pN | title` headings and the body under each. */
+function sectionsOf(md: string): { front: string; start: string; titles: Record<string, string>; bodies: Record<string, string> } {
   const front = /^---\n[\s\S]*?\n---\n/.exec(md)?.[0] ?? '';
   const parts = md.slice(front.length).split(/^## (p\d+) \| (.*)$/m);
   const titles: Record<string, string> = {};
@@ -63,7 +63,8 @@ function sectionsOf(md: string): { front: string; titles: Record<string, string>
     titles[parts[i]] = parts[i + 1];
     bodies[parts[i]] = (parts[i + 2] ?? '').trim();
   }
-  return { front, titles, bodies };
+  // Blank lines around it do not count; the indentation of its first line does (four spaces make a code block).
+  return { front, start: parts[0].replace(/^\n+|\s+$/g, ''), titles, bodies };
 }
 
 interface ExerciseParts { attrs: string; statement: string; hint: string; solution: string }
@@ -284,7 +285,8 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const files = outlineDiff || formulaDiff ? new Set<string>() : new Set([...Object.keys(base.files), ...Object.keys(target)]);
   // Units the books left as published but the builder changed since: the back-port must leave them as the builder has them,
   // including through a figure caption that two sections share.
-  const kept: { name: string; check: (after: CompiledBook) => boolean }[] = [];
+  // A unit the back-port refuses or cannot map keeps the builder's text too, with its own reason (`why`).
+  const kept: { name: string; check: (after: CompiledBook) => boolean; why?: string }[] = [];
   // Exercises are numbered by their place, so one added or removed in the builder since the publish shifts the numbers of
   // the others, also when the books did not touch the exercise files.
   const exerciseIds = (md: string | undefined) => Object.keys(exercisesOf(md ?? '')).sort().join();
@@ -326,6 +328,9 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     const t = sectionsOf(now);
     const e = published === undefined ? undefined : sectionsOf(published);
     const number = Number(/^chapters\/(\d+)/.exec(file)![1]);
+    // No section holds the text before the first heading, so nothing maps it back: listed, so publishing does not drop it unseen.
+    if (b.start !== t.start && e?.start !== t.start) add({ unit: `${file}#start`, kind: 'section', status: 'unmapped', reason: 'the text before the first section changed in the books' });
+    const hold = (unit: string, key: string) => kept.push({ name: unit, check: (after) => sectionsOf(text(after.files[file]) ?? '').bodies[key] === b.bodies[key], why: 'is not back-ported, and a change the back-port makes elsewhere (a shared caption) would change it' });
     for (const key of new Set([...Object.keys(b.bodies), ...Object.keys(t.bodies)])) {
       const unit = `${file}#${key}`;
       if (!(key in b.bodies) || !(key in t.bodies)) { add({ unit, kind: 'section', status: 'unmapped', reason: key in b.bodies ? 'section removed in the books' : 'section added in the books' }); continue; }
@@ -343,7 +348,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
           continue;
         }
         const added = [...newLines(was, t.bodies[key], (l) => /^#{1,6}\s/.test(l)), ...newFormulaIds(was, t.bodies[key])];
-        if (added.length) { add({ unit, kind: 'section', status: 'refused', reason: `adds what the export does not have, which shifts numbers or headings: ${added.join(', ')}` }); continue; }
+        if (added.length) { add({ unit, kind: 'section', status: 'refused', reason: `adds what the export does not have, which shifts numbers or headings: ${added.join(', ')}` }); hold(unit, key); continue; }
       }
       if (foldImages(b.bodies[key]) === foldImages(t.bodies[key])) {
         add({ unit, kind: 'caption', status: 'compiler-owned', reason: 'the compiler now writes super- and subscripts in captions' });
@@ -368,7 +373,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
       }).join('\n');
       const r = transfer(src, b.bodies[key], tBody, inv);
       problems.push(...r.problems);
-      if (problems.length) { add({ unit, kind: 'section', status: 'unmapped', reason: problems.join('; '), target: nodeId }); continue; }
+      if (problems.length) { add({ unit, kind: 'section', status: 'unmapped', reason: problems.join('; '), target: nodeId }); hold(unit, key); continue; }
       if (r.text !== src) changes.unshift({ kind: 'section', nodeId, markdown: r.text });
       const onlyCaption = changes.every((c) => c.kind === 'asset');
       const u = add({ unit, kind: onlyCaption ? 'caption' : 'section', status: 'mapped', target: nodeId });
@@ -442,13 +447,18 @@ export function planBackport(input: BookInput, target: Record<string, string | U
     for (const id of new Set([...b.keys(), ...t.keys()])) {
       const unit = `grafici.json#${id}`;
       if (JSON.stringify(b.get(id)) === JSON.stringify(t.get(id))) { stable.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(t.get(id)) }); continue; }
+      // The builder holds the books graph as the formatter writes it (back-ported, then saved formatted): nothing to carry over.
+      const asFormatted = (g: Record<string, unknown> | undefined) => JSON.stringify(g && formatGraphPayload(g, { language: input.meta.language }));
+      if (b.get(id) && asFormatted(t.get(id)) === JSON.stringify(b.get(id))) {
+        add({ unit, kind: 'graph', status: 'compiler-owned', reason: 'the builder holds the books graph as the graph formatter writes it' });
+        continue;
+      }
       if (e) {
         if (JSON.stringify(e.get(id)) === JSON.stringify(t.get(id))) { // not edited in the books
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
           continue;
         }
         // A builder change that is only the graph formatter's (normalize-graphs) is no conflict with an edit in the books.
-        const asFormatted = (g: Record<string, unknown> | undefined) => JSON.stringify(g && formatGraphPayload(g, { language: input.meta.language }));
         if (asFormatted(b.get(id)) !== asFormatted(e.get(id))) {
           add({ unit, kind: 'graph', status: 'refused', reason: 'changed in the builder since the publish, and in the books' });
           kept.push({ name: unit, check: (after) => JSON.stringify(byId(text(after.files['grafici.json']) ?? '[]').get(id)) === JSON.stringify(b.get(id)) });
@@ -507,7 +517,7 @@ export function planBackport(input: BookInput, target: Record<string, string | U
   const broken = stable.find((x) => !x.check(after));
   if (broken) bookRefusal ??= `${broken.name} matches the books now and would no longer match`;
   const changed = kept.find((x) => !x.check(after));
-  if (changed) bookRefusal ??= `${changed.name} was changed in the builder since the publish, and the back-port would change it too`;
+  if (changed) bookRefusal ??= `${changed.name} ${changed.why ?? 'was changed in the builder since the publish, and the back-port would change it too'}`;
   if (bookRefusal) {
     for (const p of pending) if (p.unit.status === 'mapped') Object.assign(p.unit, { status: 'refused', reason: 'the book was refused as a whole' });
     after = base;

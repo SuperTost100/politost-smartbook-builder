@@ -55,7 +55,8 @@ const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^
 /** Splits a unit into a prefix factor and a base unit. A unit this does not recognise (m/s, mol/L, kg·m²) stays whole with factor 1. */
 function splitUnit(raw: string): { factor: number; unit: string } {
   if (COUNT_NOUN.test(raw.trim())) return { factor: 1, unit: '' };
-  const unit = raw.replace(/\s+/g, '').replace(/\.$/, '');
+  // Units written apart (kg m/s) are a product, as kg·m/s is: joined into one word they would read as an unknown unit.
+  const unit = raw.trim().replace(/\.$/, '').replace(/\s*×\s*|\s+/g, '×');
   // A percentage is a plain number written a hundred times larger: 50% and 0.5 are the same value.
   if (unit === '%') return { factor: 0.01, unit: '' };
   if (BASE_UNITS.has(unit)) return { factor: 1, unit };

@@ -532,17 +532,19 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
 }
 
 /**
- * The final-value check and the step check as one: every mismatch of either counts, except a step mismatch on a quantity
- * the blind program printed and found right (`confirmed`): the step program may use another sign convention (ω′ printed
- * negative for a rotation the solution calls anticlockwise and positive) or label a value in mol/m³ as mol/L. The results are
- * settled when the final values (or, with none, the steps) were all compared.
+ * The final-value check and the step check as one: every mismatch of either counts, once per name. A step mismatch is dropped
+ * only when the blind program confirms the stated value within its last digit (`confirmed`): the step program may then use
+ * another sign convention (ω′ printed negative for a rotation the solution calls anticlockwise and positive) or label a value
+ * in mol/m³ as mol/L. The results are settled when the final values (or, with none, the steps) were all compared.
  */
 function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null): NumericCheck | null {
   const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
   const stepsLeft = steps && { ...steps, mismatches: steps.mismatches.filter((m) => !right.has(m.name)) };
   if (!finals || !stepsLeft) return finals ?? stepsLeft;
-  const seen = new Set(finals.compared.map((m) => m.name));
-  return { compared: [...finals.compared, ...stepsLeft.compared.filter((c) => !seen.has(c.name))], mismatches: [...finals.mismatches, ...stepsLeft.mismatches.filter((m) => !seen.has(m.name))], complete: finals.complete };
+  const named = (list: Comparison[]) => new Set(list.map((m) => m.name));
+  const compared = named(finals.compared);
+  const wrong = named(finals.mismatches);
+  return { compared: [...finals.compared, ...stepsLeft.compared.filter((c) => !compared.has(c.name))], mismatches: [...finals.mismatches, ...stepsLeft.mismatches.filter((m) => !wrong.has(m.name))], complete: finals.complete };
 }
 
 /** One model call of the exercise check: the service passes `runRole`, the measurement harness a cached one. */
@@ -575,7 +577,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   // the step check catches a smaller error in the line where it is made.
   const finalCheck = finals.length ? compareValues(finals, printed, { relative: 1e-3, byName: true }) : null;
   const stepCheck = stated.length ? compareValues(stated, steps, { byName: true }) : null;
-  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, { relative: 1e-3, byName: true }) : null);
+  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, { byName: true }) : null);
   const answer: VerifyAnswer & { items: CheckedItem[] } = {
     independentAnswer: cmp.items.map((i) => `${i.request.trim()}: ${i.answer.trim()}`).join('; '),
     resultsAgree: cmp.resultsAgree, agrees: cmp.agrees, items: cmp.items,
