@@ -428,3 +428,22 @@ test('checkFunctionGraph lets through a branch drawn on part of a shared x grid,
   assert.match(lines([null, null, null, 1]).detail, /undefined on most of the domain/, 'one point of four');
   assert.match(lines(grid.map((k) => (k < 100 || k > 300 ? k : null))).detail, /undefined on most of the domain/, 'two short runs with a hole in the middle');
 });
+
+test('sampleGraph refuses bars that the y window does not show, and bars drawn with numeric traces', async () => {
+  const { sampleGraph } = await import('./verify.ts');
+  const base = { id: 'e', title: 'E', xDomain: [0, 2] as [number, number], yDomain: [5, 10] as [number, number], xLabel: 'x', yLabel: 'y' };
+  assert.match(sampleGraph({ ...base, traces: [{ kind: 'bars', label: 'b', bars: [{ category: 'A', value: 1 }] }] }).detail, /no bar reaches the visible window/);
+  assert.equal(sampleGraph({ ...base, traces: [{ kind: 'bars', label: 'b', bars: [{ category: 'A', value: 1 }, { category: 'B', value: 20 }] }] }).ok, true, 'a bar that crosses the window shows');
+  const mixed = sampleGraph({ ...base, traces: [{ kind: 'bars', label: 'b', bars: [{ category: 'A', value: 7 }] }, { kind: 'function', label: 'f', fn: '6 + x' }] });
+  assert.equal(mixed.ok, false);
+  assert.match(mixed.detail, /bars sit on a category axis/);
+});
+
+test('compareExpected gives no verdict on an expression not affine in its constants, even where it is undefined at C = 0', async () => {
+  const { compareExpected } = await import('./verify.ts');
+  const xs = [1, 2, 3, 4, 5, 6];
+  assert.equal(compareExpected('1/(C*x)', xs, xs.map((x) => 1 / (2 * x)), 1), null);
+  // An x the trace does not draw (y null) says nothing: C*x overflows there at C = 2, but the drawn points still fail the fit.
+  assert.equal(compareExpected('C*x', [...xs, 1e308], [...xs.map((x) => x * x), null], 1)!.ok, false);
+  assert.equal(compareExpected('C + log(x)', [-5, -4, -3, -2, -1], [1, 2, 3, 4, 5], 10)!.ok, false, 'affine and undefined where drawn');
+});

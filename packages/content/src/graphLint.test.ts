@@ -166,3 +166,11 @@ test('warnings for what the reader shows differently: raw notation, dropped keys
   assert.deepEqual(found([tr('f(y)=y·(y−1), g(t)=1, y(0)=1/2')], onT), [], 'a function of y beside g(t) names the axis variable');
   assert.deepEqual(found([tr('y = 2x')], { xaxis: { title: 'Velocità v (m/s)' }, yaxis: { title: 'y' } }), [], 'only x and t name an axis variable');
 });
+
+test('a ray label reads its angle modulo a full turn', () => {
+  // The negative y axis, where atan2 gives −π/2.
+  const ys = [0, -0.5, -1, -1.5, -2];
+  const ray = (theta: string) => raw([{ type: 'scatter', mode: 'lines', name: `semiretta θ = ${theta}`, x: ys.map(() => 0), y: ys }], { xaxis: { title: 'x', range: [-3, 3] }, yaxis: { title: 'y', range: [-3, 3] } });
+  assert.deepEqual(codes(ray('4.71238898038469')), [], 'θ = 3π/2 and atan2\'s −π/2 are the same direction');
+  assert.deepEqual(codes(ray('1.5707963267949')), ['label-mismatch'], 'the opposite direction still differs');
+});

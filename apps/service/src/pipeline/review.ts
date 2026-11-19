@@ -37,6 +37,8 @@ export function severityAfterOpinion(f: { severity: Severity; category?: string 
 
 /** One problem a reviewer raised about a passage. A merged finding keeps one per distinct problem its members raised. */
 interface Point { severity: Severity; category?: string; quote: string; message: string; suggestion: string }
+/** The most text of a chapter one reviewer call reads. */
+const CHAPTER_MAX = 120_000;
 const flatText = (s: string) => s.replace(/\[\[[^\]]*\]\]/g, ' ').replace(/\s+/g, ' ').trim();
 /** Where a quote sits in its block, as a character range of the whitespace-normalised block (the whole block when the quote holds it). */
 function spanIn(quote: string, block: string): [number, number] {
@@ -276,10 +278,15 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
     ].filter(Boolean).join('\n\n');
   };
 
-  const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }, role: 'reviewer' | 'crossReviewer' = 'reviewer') => runRole(ctx, {
-    role, ...reviewPrompt({ language: project.language, notation, examSymbols: symbols, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, 120_000), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled, profile: subjectProfileOf(project) }),
-    schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
-  });
+  // A chapter cut to fit the prompt was not read whole, so the read does not count as one (chapterRead).
+  let truncated = false;
+  const review = (p: { text: string; evidence: string; objectives: string; changes: string; handled: string }, role: 'reviewer' | 'crossReviewer' = 'reviewer') => {
+    truncated ||= p.text.length > CHAPTER_MAX;
+    return runRole(ctx, {
+      role, ...reviewPrompt({ language: project.language, notation, examSymbols: symbols, program: programText, chapterTitle: chapter.title, chapter: truncate(p.text, CHAPTER_MAX), evidence: truncate(p.evidence, 40_000), objectives: p.objectives, changes: p.changes, handled: p.handled, profile: subjectProfileOf(project) }),
+      schema: reviewSchema, projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
+    });
+  };
   const objectivesOf = (list: typeof chapter.sections) => list.map((s) => `[${s.id}] ${s.title}: ${s.objectives.join('; ')}`).join('\n');
   const raw: Finding[] = [];
   let model: string | undefined;
@@ -413,7 +420,7 @@ export async function chapterReview(ctx: AppContext, t: TaskContext): Promise<Re
   return {
     issues: opinion.kept.length, dropped: opinion.dropped.length, lowered: opinion.lowered, ...(merged ? { merged } : {}), checked: opinion.checked,
     skippedSettled, outOfScope, ...(minorsDropped ? { minorsDropped } : {}), mode: sweep ? 'sweep' : mode, full, ...(sweep ? { sweep } : {}), samples,
-    ...(sampleModels.length ? { sampleModels } : {}), ...(sampleModels.length && !onFallback ? { chapterRead: true } : {}), ...(crossModel !== undefined ? { crossModel } : {}), compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model, ...standing(),
+    ...(sampleModels.length ? { sampleModels } : {}), ...(sampleModels.length && !onFallback && !truncated ? { chapterRead: true } : {}), ...(crossModel !== undefined ? { crossModel } : {}), compileIssues: compileIssues.length, reviewed, model, verifier: opinion.model, ...standing(),
   };
 }
 

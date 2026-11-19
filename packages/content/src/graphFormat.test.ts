@@ -161,6 +161,8 @@ test('an axis Plotly would label with SI suffixes, or a log axis, gets ticks in 
   assert.deepEqual(n.xaxis!.tickvals, [2, 5, 10, 20]);
   const small = ticks({ xaxis: { title: 'x', type: 'log', range: [-1, 0] } });
   assert.deepEqual(small.xaxis!.ticktext, ['0,1', '0,2', '0,5', '1']);
+  const tiny = ticks({ xaxis: { title: 'x', type: 'log', range: [-120, -119] } });
+  assert.deepEqual(tiny.xaxis!.ticktext, ['1·10⁻¹²⁰', '2·10⁻¹²⁰', '5·10⁻¹²⁰', '1·10⁻¹¹⁹'], 'beyond 20 decimals a tick is written with its power of ten');
   const fromData = ticks({ yaxis: { title: 'p' } }, [line('p', '#C2410C', [0, 1], [0, 70000])]);
   assert.deepEqual(fromData.yaxis!.ticktext, ['0', '20 000', '40 000', '60 000'], 'no range: the data\'s extent');
   const english = formatGraphPayload(plot([line('f', '#C2410C', [0, 1], [0, 1])], { yaxis: { range: [0, 450000] } }), { language: 'en' }).config.layout as Record<string, { ticktext?: string[] }>;

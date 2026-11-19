@@ -195,14 +195,15 @@ export async function recomputeFinalValues(computation: string | undefined, stat
 /**
  * The recompute that decides, when the checker and the reviewer may each have run one. With both, a mismatch counts only when
  * both programs dispute the value of the same name. Two programs that disagree prove nothing about the solution, so the result
- * is not complete and the model's verdict on the results stands. With one program, that one decides.
+ * is not complete and the model's verdict on the results stands. Each program compares the values its own model listed, so the
+ * results are complete only when both compared all of theirs. With one program, that one decides.
  */
 export function combineRecomputes(checker: NumericCheck | null, reviewer: NumericCheck | null): NumericCheck | null {
   if (!checker || !reviewer) return reviewer ?? checker;
   const named = (list: Comparison[], m: Comparison) => list.some((c) => key(c.name) === key(m.name));
   const confirmed = reviewer.mismatches.filter((m) => named(checker.mismatches, m));
   const disputed = reviewer.mismatches.length + checker.mismatches.length > 2 * confirmed.length;
-  return { ...reviewer, mismatches: confirmed, complete: reviewer.complete && !disputed };
+  return { ...reviewer, mismatches: confirmed, complete: reviewer.complete && checker.complete && !disputed };
 }
 
 /**

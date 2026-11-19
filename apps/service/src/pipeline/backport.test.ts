@@ -312,6 +312,38 @@ describe('planBackport against the published export', () => {
     assert.deepEqual(plan.changes, []);
   });
 
+  test('a caption fixed in the books is refused when it would change a section refused for adding a heading', () => {
+    const input = book();
+    input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
+    // The books change the caption in p1 and add a heading to p2, which is refused; the asset row would change p2 anyway.
+    const target = published(input, { [CH]: (s) => s.replace('Moto con aₓ costante"', 'Moto con aₓ costante nel tempo"').replace('Per la velocità', '### Rimandi\n\nPer la velocità') });
+    const plan = planBackport(input, target, { published: pubOf(input) });
+    assert.match(plan.bookRefusal ?? '', /#p2 /);
+    assert.deepEqual(plan.changes, []);
+  });
+
+  test('a graph back-ported and saved formatted is the books graph, not a conflict, when the book is published again', () => {
+    const raw = { id: 'parabola', title: 'Moto accelerato', type: 'plotly', config: { data: [{ x: [0, 1, 2], y: [0, 0.5, 2], name: 's(t)', mode: 'lines' }], layout: { xaxis: { title: 't' }, yaxis: { title: 's' } } } };
+    const atPublish = book();
+    atPublish.enrichments[0].payload = raw;
+    const target = published(atPublish, { 'grafici.json': (s) => s.replace('"s(t)"', '"s = 0.5*t^2"') });
+    const now = book();
+    now.enrichments[0].payload = formatGraphPayload(JSON.parse(str(target['grafici.json']))[0], { language: 'it' });
+    const plan = planBackport(now, target, { published: compileBook(atPublish).files });
+    assert.equal(statusOf(plan, 'grafici.json#parabola'), 'compiler-owned');
+    assert.equal(plan.bookRefusal, null);
+  });
+
+  test('text added before the first section of a chapter is unmapped, so it is never lost unseen', () => {
+    const input = book();
+    const target = published(input, { [CH]: (s) => s.replace('\n## p1 |', '\nUna premessa scritta a mano.\n\n## p1 |') });
+    const plan = planBackport(input, target, { published: pubOf(input) });
+    assert.equal(statusOf(plan, `${CH}#start`), 'unmapped');
+    // A line before the first section that the books then indent, which makes it a code block: also a change.
+    const opening = (line: string) => published(input, { [CH]: (s) => s.replace('\n## p1 |', `\n${line}\n\n## p1 |`) });
+    assert.equal(statusOf(planBackport(input, opening('    Una premessa.'), { published: opening('Una premessa.') }), `${CH}#start`), 'unmapped');
+  });
+
   test('a caption fixed in the books is refused when it would change a section the builder edited since the publish', () => {
     const input = book();
     input.chapters[0].sections[1].markdown = `${S2}\n\n:::image{src="assets/fig.svg" alt="Spazio e tempo"}\n:::`;
