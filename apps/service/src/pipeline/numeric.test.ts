@@ -104,6 +104,14 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(compareValues([{ name: 'c', value: '0.0154 mol L^-1' }], 'c = 0.0153846 mol/L'), null, 'mol L^-1 and mol/L are written differently, so not compared');
   });
 
+  test('a name stated with two different values is not compared, whatever the program printed', () => {
+    const both = [{ name: 'm', value: '0.50 kg' }, { name: 'm', value: '0.55 kg' }];
+    assert.equal(compareValues(both, 'm = 0.55 kg'), null, 'one printed line could belong to either listing');
+    assert.equal(compareValues(both, 'm = 0.55 kg\nm = 0.55 kg'), null);
+    const settled = compareValues([...both, { name: 'v', value: '2.0 m/s' }], 'm = 0.55 kg\nv = 2.0 m/s')!;
+    assert.deepEqual([settled.mismatches.length, settled.complete], [0, false]);
+  });
+
   test('a relative tolerance gives a final value the room of the rounding the solution carried', () => {
     // Chimica 4d3131a0: 79,94 % from the rounded 14,01 g, against 79,958 % computed without rounding.
     assert.equal(compareValues([{ name: 'resa', value: '79,94 %' }], 'resa = 79.9578 %')!.mismatches.length, 1);

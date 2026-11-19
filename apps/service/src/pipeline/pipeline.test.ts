@@ -526,6 +526,14 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.equal((r as { mismatches: number }).mismatches, 1, '9,10 against 9,02498 is a mismatch of the final value');
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /9,10 × 10\^23 in the solution/);
+    // Both programs print only the final value: neither listing can be tied to it, so nothing blocks on the numbers.
+    const right = q({ statement: 'Calcola m.', solution: 'Prima m = 0,50 kg, poi m = 0,55 kg.' });
+    fake.next(...check({ computation: 'print("m = 0.55 kg")' }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'm', value: '0,50 kg', final: false }, { name: 'm', value: '0,55 kg', final: true }];
+      return out;
+    }));
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: right })) as { ok: boolean }).ok, true);
   });
 
   test('a computation that throws is ignored and the model verdict stands', async () => {

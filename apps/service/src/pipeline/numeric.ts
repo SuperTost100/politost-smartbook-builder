@@ -166,7 +166,11 @@ function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [Stat
   // A name printed again with another value (a loop over three points printing "f = ..." each time) names no one value.
   const ambiguous = new Set(printed.filter((p) => printed.some((o) => key(o.name) === key(p.name) && o.value !== p.value)).map((p) => key(p.name)));
   const used = new Set<Printed>(printed.filter((p) => ambiguous.has(key(p.name))));
+  // A name stated with two different values (an intermediate 0.50 kg and a final 0.55 kg under one name) cannot tie a
+  // printed line to either listing, so neither is compared.
+  const twice = new Set(stated.filter((s) => stated.some((o) => key(o.name) === key(s.name) && o.value.trim() !== s.value.trim())).map((s) => key(s.name)));
   for (const s of stated) {
+    if (twice.has(key(s.name))) continue;
     const p = printed.find((x) => !used.has(x) && key(x.name) === key(s.name) && key(s.name) !== '');
     if (p) { pairs.push([s, p]); used.add(p); }
   }
