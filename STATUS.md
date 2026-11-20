@@ -1,6 +1,6 @@
 # Status
 
-Smart Builder 0.5.1 alpha, as of 13 November 2026.
+Smart Builder 0.6.0 alpha, as of 20 November 2026.
 
 ## What works today
 
@@ -81,6 +81,28 @@ These changes came from five validation notes on three exam solutions, where "Fi
 - **The end-of-proof sign is read as one symbol.** `∎` and `$\square$` (also `\blacksquare`, `\Box`, `\qed`) no longer count as a changed word.
 - **Validate closes the notes it no longer finds.** A `compile:` note whose finding is gone after a hand edit becomes fixed the next time you press Validate or export, so it stops holding back **Approve and export**.
 
+## What 0.6.0 added
+
+The four published books (Analisi 1, Fisica 1, Chimica di base and Analisi Matematica 2) had needed corrections by hand in the books repository (issue #128). This release makes the builder catch and fix those defects itself.
+
+- **Lint rules from the audit of the published books.** They come with content-core 0.6.0 (#129).
+- **Graphs.** A graph is drawn from a typed spec that quotes the section it illustrates, and it is linted from its data. Curves are broken at real jumps, an independent call checks each graph and a failed one is retried once. Text, colours and ticks are formatted in code (#130, #134, #136, #138, #143).
+- **Review.** Each chapter is reviewed by several independent calls, and findings that repeat are merged in code. The sweep after the fixes is now an explicit choice (#133, #137, #140).
+- **The exercise check was rebuilt** (#132, #139, #142, #147, #149, #150):
+  - Three checker calls per exercise: a blind solve from the statement only, the requested items each with an exact quote from the solution, and a step audit.
+  - Code decides. A missing quote is a missing answer, and Python recomputes every number the solution states.
+  - Inconsistent data block an exercise. A mismatch gets one reconcile call, guarded in code, and one defect files one issue.
+  - A figure placeholder in a solution is flagged in code.
+  - The check knows the forms an answer must take: a graph described in full, a region named with its boundaries, a hypothesis written out.
+- **How well it catches defects.** On a labelled set of real and injected defects, run with the real configuration (Sonnet as checker, gpt-6.1-sol as reviewer), it caught 38 of 38 real defects of the first set, 14 of 14 from the re-check and 108 of 108 injected ones, and blocked 1 of 129 clean exercises.
+- **Fix.** A fix whose check fails is undone, and its issues reopen with the reason. The editor says for each problem whether the text has it and leaves correct text alone. A retry after an undone fix is written by the exercise writer's model, with the reason (#139, #149, #151). Every rewrite of a question is kept in a history.
+- **Publishing.** `npm run publish-book` writes a book into politost-books through the export gate, with a manifest. `npm run backport` brings hand fixes from the books repository back into the builder, and only what the folder changed since its export (#131, #135, #141, #146).
+- **cli-funnel 1.0.0** (#148).
+
+**On the four books.** All 929 exercises and exam questions were checked again with the new check, and 38 were flagged. Every real defect among them was corrected by the builder's own fix and passed the check afterwards. The books were republished from the builder (politost-books PR #35) with no hand edit of an exercise.
+
+**Known and open.** The reviewer model's weekly limit can pause the second opinion. Chimica still writes some formulas with plain digits. Boxes for definitions and theorems and a new exam section are the next round.
+
 ## Decisions that still explain the design
 
 - **Antigravity is a fallback.** Gemini through Antigravity took 4 to 5 minutes and about 90k input tokens per call, because the CLI runs a whole agent each time. Batch roles default to GPT-6-Luna.
@@ -117,7 +139,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 238 content tests (236 pass and 2 are skipped because they need two real books that are not in the repository) and 933 service tests. `npm run test:e2e` runs 221 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 294 content tests (292 pass and 2 are skipped because they need two real books that are not in the repository) and 1,091 service tests. `npm run test:e2e` runs 221 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 
@@ -129,7 +151,7 @@ The figure renderers have a snapshot test, and every code block in the drawing c
 | TypeScript | 7.0 |
 | Fastify | 5.12 |
 | React, Vite | 19.3 and 8.3 |
-| content-core | 0.5.1 |
+| content-core | 0.6.0 |
 | KaTeX | 0.19 |
 | cli-funnel | 1.0.0 |
 | numbl | 0.4.22 (the reader pins the same version) |

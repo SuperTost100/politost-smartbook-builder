@@ -279,7 +279,7 @@ test('writePublish refuses a folder that changed after the plan was made', async
 test('validate-all lists only the findings a book did not have when it was published', () => {
   const folder = join(books, 'books', 'fisica-1');
   mkdirSync(join(folder, 'chapters'), { recursive: true });
-  writeFileSync(join(folder, 'ptsb.json'), JSON.stringify({ producer: 'politost-smart-builder/0.5.1-alpha' }));
+  writeFileSync(join(folder, 'ptsb.json'), JSON.stringify({ producer: 'politost-smart-builder/0.6.0-alpha' }));
   writeFileSync(join(folder, 'chapters', '01-moto.md'), '---\nchapter: 1\ntitle: Moto\n---\n\n## p1 | Velocità\n\nLa velocità media è il rapporto tra spazio e tempo.\\nIl resto segue.\n');
   // A folder the builder did not make is not read.
   mkdirSync(join(books, 'books', 'esempio'));
