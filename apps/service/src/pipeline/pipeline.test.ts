@@ -978,6 +978,7 @@ describe('15m. a consistency program that fails while both calls found the data 
     assert.deepEqual(await recheckConsistency(measured, 'print("INCONSISTENT: V")', first, answering('program-wrong', ''), run('')), first, 'with measured data an empty correction keeps the failure');
     assert.equal(measuredData(measured), true);
     assert.equal(measuredData('Una massa di $m = 50$ g e $v_m = 10$ m/s.'), true);
+    assert.equal(measuredData('Masse (g): 12, 15, 20. Temperature [K]: 300, 310.'), true, 'a unit that heads the values');
     assert.equal(measuredData(statement), false);
     assert.equal(measuredData('Determinare il raggio della serie $\\sum \\frac{n+1}{2^n}x^n$ per 3 valori.'), false);
     assert.equal((await recheckConsistency(statement, 'x', first, answering('program-wrong', 'print("CONSISTENT")'), run('CONSISTENT\n')))?.verdict, 'consistent');

@@ -681,9 +681,11 @@ export async function reconcileMismatches(
   return out;
 }
 
-/** True when the statement gives a number with a unit (2,0 L, 1,20 atm, 450 J), as `parseQuantity` reads one. */
+/** True when the statement gives a number with a unit (2,0 L, 1,20 atm, 450 J) or heads values with one (Masse (g)), as `parseQuantity` reads units. */
 export function measuredData(statement: string): boolean {
   const text = statement.replace(/\\(?:mathrm|text|operatorname)\{([^}]*)\}/g, '$1').replace(/\{,\}/g, ',').replace(/\\[,;: !]|~|\$/g, ' ');
+  // A unit may also head a list of values: "Masse (g): 12, 15", "T [K]".
+  if ([...text.matchAll(/[([]\s*([^\s()[\]\d]+(?:\s*\/\s*[^\s()[\]\d]+)?)\s*[)\]]/g)].some((m) => !!parseQuantity(`1 ${m[1]}`)?.unit)) return true;
   return [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*([^\s\d.,;:()]+(?:\s*\/\s*[^\s\d$.,;:()]+)?)/g)].some((m) => !!parseQuantity(`${m[1]} ${m[2]}`)?.unit);
 }
 
