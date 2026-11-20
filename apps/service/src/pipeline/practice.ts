@@ -9,7 +9,7 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { comparePrompt, compareSchema, reconcilePrompt, reconcileSchema, type MismatchCause, type ReconcileAnswer, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
+import { comparePrompt, compareSchema, consistencyRecheckPrompt, consistencyRecheckSchema, type ConsistencyRecheck, reconcilePrompt, reconcileSchema, type MismatchCause, type ReconcileAnswer, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
 import { compareValues, mismatchMessage, parseQuantity, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
@@ -681,6 +681,34 @@ export async function reconcileMismatches(
   return out;
 }
 
+/**
+ * The second look at a consistency program that printed INCONSISTENT, crashed or printed no verdict, asked only when the
+ * blind solve said the data determine one answer and neither call listed a data problem. In the Analisi 2 re-check of
+ * 2026-11-20, three correct series exercises were blocked this way (a sum of 7/3, an indeterminate series, a radius of 2).
+ * The code decides: the failure is cleared only when the cause is the program and its correction runs and prints
+ * CONSISTENT, or when the statement has no numeric data to check (the correction is then empty, as the solve prompt allows).
+ * Everything else, a failed call included, keeps the first result.
+ */
+export async function recheckConsistency(
+  statement: string,
+  code: string,
+  first: ConsistencyCheck,
+  ask: (prompt: { system: string; prompt: string }) => Promise<{ data: ConsistencyRecheck }>,
+  run: (code: string, timeoutMs: number) => Promise<PythonResult> = runPython,
+): Promise<ConsistencyCheck | null> {
+  let data: ConsistencyRecheck;
+  try {
+    ({ data } = await ask(consistencyRecheckPrompt({ statement, code, result: first.detail })));
+  } catch (err) {
+    if ((err as Error)?.name === 'AbortError') throw err;
+    return first;
+  }
+  if (data.cause !== 'program-wrong') return first;
+  if (!data.consistency.trim()) return null;
+  const again = await runConsistency(data.consistency, run);
+  return again?.verdict === 'consistent' ? { verdict: 'consistent', detail: truncate(`${again.detail} (corrected program; the first was wrong: ${data.why.trim()})`, 400) } : first;
+}
+
 /** A request as the item check matches it between the two calls: letters and digits only. */
 const itemKey = (request: string) => request.toLowerCase().replace(/[^\p{L}\p{N}]/gu, '');
 
@@ -698,12 +726,17 @@ export type CheckCall = <T>(role: 'checker' | 'reviewer', prompt: { system: stri
 export async function solveAndCompare(q: { statement: string; solution: string; language: string; profile?: SubjectProfile }, role: 'checker' | 'reviewer', call: CheckCall) {
   const solved = await call(role, solvePrompt({ language: q.language, statement: q.statement, profile: q.profile }), solveSchema, 'solve');
   const solve = solved.data;
-  const [printed, consistency] = await Promise.all([printedValues(solve.computation), runConsistency(solve.consistency)]);
+  const [printed, firstConsistency] = await Promise.all([printedValues(solve.computation), runConsistency(solve.consistency)]);
   // The comparison and the step audit read the solution independently of each other, so they run together.
   const [{ data: cmp, route }, { data: audit }] = await Promise.all([
     call(role, comparePrompt({ language: q.language, statement: q.statement, solution: q.solution, answers: solve.items, printed, profile: q.profile }), compareSchema, 'compare'),
     call(role, stepAuditPrompt({ language: q.language, statement: q.statement, solution: q.solution }), stepAuditSchema, 'steps'),
   ]);
+  // A consistency program that fails while both calls found the data fine gets a second look, which may correct it.
+  const doubted = (firstConsistency?.verdict === 'inconsistent' || firstConsistency?.verdict === 'failed') && solve.wellPosed && !solve.dataProblems.length && !cmp.dataProblems.length;
+  const consistency = doubted
+    ? await recheckConsistency(q.statement, solve.consistency, firstConsistency!, (prompt) => call(role, prompt, consistencyRecheckSchema, 'consistency'))
+    : firstConsistency;
   // Two recomputes: each final value against the blind program, and every stated value against the step program, which
   // follows the solution's own rounded values so that a wrong line shows and a carried rounding does not.
   const steps = await printedValues(cmp.computation);

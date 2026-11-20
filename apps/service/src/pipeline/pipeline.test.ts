@@ -12,7 +12,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, recheckConsistency, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
@@ -617,9 +617,11 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
   });
 
   test('in the real sandbox: an INCONSISTENT program and a crashing one block, a CONSISTENT one verifies', async () => {
-    const run = async (consistency: string, reviewed = false) => {
+    // A failing program meets the second look (the data were judged fine), which here confirms the data are wrong.
+    const dataWrong = answer({ cause: 'data-wrong', why: '12 > 3 + 3.', consistency: '' });
+    const run = async (consistency: string, reviewed = false, failing = true) => {
       const id = q({ statement: tensor, solution: 'L\'ellissoide è 3x²+3y²+12z²=1.' });
-      fake.next(...check({ consistency }), ...(reviewed ? [review({ consistency })] : []));
+      fake.next(...check({ consistency }), ...(failing ? [dataWrong] : []), ...(reviewed ? [review({ consistency })] : []));
       await questionVerify(ctx, startTask('question.verify', { questionId: id }));
       return { status: row(id).status, issues: issues(`question_id = '${id}'`).map((i) => `${i.severity} ${i.category}: ${i.message}`), checks: json<{ method: string; ok: boolean; detail: string }[]>(row(id).checks, []) };
     };
@@ -630,7 +632,7 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
     assert.equal(crashed.status, 'issue');
     assert.match(crashed.issues[0]!, /^blocker data: The consistency program failed: .*ModuleNotFoundError/);
     const calls = fake.calls.length;
-    const fine = await run(triangle(3, 4, 5));
+    const fine = await run(triangle(3, 4, 5), false, false);
     assert.equal(fake.calls.length, calls + 3, 'nothing suspicious: no second opinion');
     assert.equal(fine.status, 'verified');
     assert.deepEqual(fine.issues, []);
@@ -639,15 +641,15 @@ describe('15c. the exercise check asks whether the problem is well posed', () =>
 
   test('a data blocker stays without a reviewer; a doubt about the solution alone goes to the reviewer, whose own data check also counts', async () => {
     const a = q({ statement: tensor });
-    fake.next(...check({ consistency: triangle(3, 3, 12) }));
+    fake.next(...check({ consistency: triangle(3, 3, 12) }), answer({ cause: 'data-wrong', why: '12 > 3 + 3.', consistency: '' }));
     await questionVerify(ctx, startTask('question.verify', { questionId: a }));
     assert.equal(row(a).status, 'issue');
-    assert.equal(fake.calls.length, 3);
+    assert.equal(fake.calls.length, 4, 'the second look at the program confirms the data are wrong; the reviewer is not asked');
     const b = q({ statement: tensor });
     const doubt = { problems: [{ kind: 'wrong-method' as const, message: 'Un passaggio non segue.', suggestion: 's' }] };
     fake.next(...check(doubt), review({ consistency: triangle(3, 3, 12) }));
     await questionVerify(ctx, startTask('question.verify', { questionId: b }));
-    assert.equal(fake.calls.length, 7);
+    assert.equal(fake.calls.length, 8);
     assert.equal(row(b).status, 'issue', 'the reviewer cleared the step but its program found the data inconsistent');
     assert.deepEqual(issues(`question_id = '${b}'`).map((i) => i.category), ['data']);
     const c = q({ statement: tensor });
@@ -960,6 +962,33 @@ describe('15j. a recompute mismatch gets one reconcile step, decided in code', (
   });
 });
 
+describe('15m. a consistency program that fails while both calls found the data fine gets a second look', () => {
+  // Analisi 2 c570fdd8, 2026-11-20: a correct sum of 7/3, and the program printed INCONSISTENT.
+  const statement = 'Calcolare $\\sum_{n=1}^{\\infty}\\left(\\frac{3}{n(n+1)}-2\\left(\\frac14\\right)^n\\right)$.';
+  const first = { verdict: 'inconsistent' as const, detail: 'INCONSISTENT: somma' };
+  const answering = (cause: string, consistency: string) => async () => ({ data: { cause, why: 'Il programma controlla il risultato, non i dati.', consistency } as never });
+  const run = (stdout: string, ok = true) => async () => ({ ok, stdout, version: 'test' });
+
+  test('cleared only when the program is the cause and its correction prints CONSISTENT, or the statement has no data to check', async () => {
+    assert.deepEqual(await recheckConsistency(statement, 'print("INCONSISTENT: somma")', first, answering('data-wrong', ''), run('')), first);
+    assert.equal(await recheckConsistency(statement, 'print("INCONSISTENT: somma")', first, answering('program-wrong', ''), run('')), null, 'no numeric data: no program, as the solve prompt allows');
+    assert.equal((await recheckConsistency(statement, 'x', first, answering('program-wrong', 'print("CONSISTENT")'), run('CONSISTENT\n')))?.verdict, 'consistent');
+    assert.deepEqual(await recheckConsistency(statement, 'x', first, answering('program-wrong', 'print("INCONSISTENT: ancora")'), run('INCONSISTENT: ancora\n')), first, 'a correction that still fails keeps the first result');
+    assert.deepEqual(await recheckConsistency(statement, 'x', first, async () => { throw new Error('provider down'); }, run('')), first);
+  });
+
+  test('in the handler: asked only when the data were judged fine; a data problem the model lists keeps the block with no extra call', async () => {
+    const id = q({ statement, solution: 'Il risultato è $\\frac73$.' });
+    fake.next(...check({ consistency: 'print("INCONSISTENT: somma")' }), answer({ cause: 'program-wrong', why: 'Il programma controlla il risultato.', consistency: '' }));
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: id })) as { ok: boolean }).ok, true);
+    assert.equal(fake.calls.length, 4);
+    const bad = q({ statement, solution: 'Il risultato è $\\frac73$.' });
+    fake.next(...check({ consistency: 'print("INCONSISTENT: somma")', dataProblems: ['I dati si contraddicono.'] }));
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: bad })) as { ok: boolean }).ok, false);
+    assert.equal(fake.calls.length, 7, 'no second look when a call listed a data problem');
+  });
+});
+
 describe('15k. one defect, one issue', () => {
   // Chimica 036788d3, 2026-11-20: four issues for one precipitate never named.
   const statement = 'Si mescolano nitrato d\'argento e cloruro di sodio. Scrivi l\'equazione ionica netta. Indica il precipitato e gli ioni spettatori.';
@@ -986,8 +1015,11 @@ describe('15k. one defect, one issue', () => {
     const problems = itemProblems(items, solution);
     assert.equal(differentResultBlocker(false, [], items, problems, solution), false);
     assert.equal(differentResultBlocker(true, [], items, problems, solution), false);
-    const differs = [items[0]!, { ...items[1]!, quote: 'Gli ioni Na+ e NO3- si eliminano.', stated: true }];
-    assert.equal(differentResultBlocker(false, [], differs.map((i, n) => (n === 0 ? { ...i, matches: false } : i)), itemProblems(differs, solution), solution), true, 'a stated answer that differs');
+    // One item missing and another stated: the blocker follows whether the stated one differs.
+    const statedAnswer = { ...items[0]!, matches: true };
+    const withMissing = (matches: boolean) => [{ ...statedAnswer, matches }, items[1]!];
+    assert.equal(differentResultBlocker(false, [], withMissing(true), itemProblems(withMissing(true), solution), solution), false);
+    assert.equal(differentResultBlocker(false, [], withMissing(false), itemProblems(withMissing(false), solution), solution), true, 'a stated answer that differs');
     assert.equal(differentResultBlocker(false, [{ name: 'x', stated: '1', computed: '2' }], items, problems, solution), true, 'a numeric mismatch');
     // A quote of correct partial work (the addends of a total never written) states no answer, so it differs from none.
     const partial = [items[0]!, { ...items[1]!, quote: 'Gli ioni Na+ e NO3- si eliminano.', stated: false, matches: false }];

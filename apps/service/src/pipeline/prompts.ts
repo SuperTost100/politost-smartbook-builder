@@ -944,6 +944,36 @@ For every program with a mismatch whose cause is not solution-wrong, return the 
   };
 }
 
+/** The second look at a consistency program that failed while both calls of the check found the data fine. */
+export const consistencyRecheckSchema = z.object({
+  cause: z.enum(['data-wrong', 'program-wrong']),
+  why: z.string().describe('one sentence: what is inconsistent in the data, or what is wrong in the program'),
+  consistency: codeString().describe('for program-wrong, the corrected program; empty when the statement has no numeric data to check'),
+});
+export type ConsistencyRecheck = z.infer<typeof consistencyRecheckSchema>;
+
+export function consistencyRecheckPrompt(p: { statement: string; code: string; result: string }) {
+  return {
+    system: 'You check whether a program that tests the data of a textbook problem found a real inconsistency, or is wrong itself. You are strict: data that contradict each other or are physically impossible stay wrong.',
+    prompt: `STATEMENT:
+${p.statement}
+
+${CROSS_REFERENCES}
+
+PROGRAM (it should recompute from the statement data every quantity they fix twice or that must meet a constraint, and print CONSISTENT or INCONSISTENT: <what> as its last line):
+${p.code.trim()}
+
+RESULT:
+${p.result.trim()}
+
+Decide the cause and return it:
+- data-wrong: the data of the statement really contradict each other, are impossible, or disagree with a known tabulated value, as the program says.
+- program-wrong: the data are fine and the program is wrong: a wrong formula, a crash, a tolerance tighter than the precision of the data, or a test of something that is not a constraint of the data (the answer to the problem itself, a property of the result).
+
+For program-wrong, return in consistency the corrected program, standard library only (math, fractions), no input and no files, that checks the same constraints of the data and prints CONSISTENT or INCONSISTENT: <what> as its last line. Leave it empty only when the statement has no numeric data to check (a series, a limit or a function given by its formula).`,
+  };
+}
+
 /** The step audit of the exercise check: every step of the given solution worked out again. */
 export const stepAuditSchema = z.object({
   steps: z.array(z.object({
