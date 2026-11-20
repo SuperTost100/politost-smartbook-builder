@@ -1020,7 +1020,11 @@ describe('15l. the editor leaves correct text alone', () => {
   test('a rewrite for two problems, one of them not in the text: only the other is fixed, and the first stays open with the reason', async () => {
     const id = q({ ...text, status: 'issue' });
     const [a, b] = [blocker(id, 'DeltaV is 0.0035 L by the computation and 3.5 L in the solution.'), blocker(id, 'Il lavoro vale −4,2 L·atm, non −4,3.')];
-    fake.next(answer({ statement: text.statement, hint: '', solution: text.solution.replace('w=', 'w = '), problems: [notThere, { number: 2, inText: true, why: '' }] }));
+    // The problems are numbered in the order the issues are read, so the answer takes the numbers from the prompt.
+    fake.next((input: { prompt: string }) => {
+      const n = (re: RegExp) => Number(new RegExp(`^(\\d+)\\. ${re.source}`, 'm').exec(input.prompt)![1]);
+      return answer({ statement: text.statement, hint: '', solution: text.solution.replace('w=', 'w = '), problems: [{ ...notThere, number: n(/DeltaV/) }, { number: n(/Il lavoro/), inText: true, why: '' }] })();
+    });
     const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
     assert.deepEqual((r as { fixed: string[] }).fixed, [b]);
     assert.equal(issues(`id = '${a}'`)[0]!.status, 'open');
