@@ -606,7 +606,7 @@ export interface Reconciled { name: string; program: OpenMismatch['program']; ca
 function numbersIn(text: string): number[] {
   // 2{,}3\cdot10^{-7} and 2,3 × 10^-7 are the one number 2.3e-7, as a program writes it.
   const sci = text.replace(/\s*(?:\\cdot|\\times|×|·)\s*10\s*\^\s*\{?\s*([-+−]?\d+)\s*\}?/g, (_, e: string) => `e${e.replace('−', '-')}`);
-  return [...sci.replace(/\{,\}/g, ',').replace(/(\d),(\d)/g, '$1.$2').matchAll(/\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g)].map((m) => Number(m[0])).filter(Number.isFinite);
+  return [...sci.replace(/\{,\}/g, ',').replace(/(\d),(\d)/g, '$1.$2').matchAll(/(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?/g)].map((m) => Number(m[0])).filter(Number.isFinite);
 }
 const sameNumber = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
 const powerOfTen = (x: number) => x > 0 && sameNumber(10 ** Math.round(Math.log10(x)), x);
@@ -681,6 +681,12 @@ export async function reconcileMismatches(
   return out;
 }
 
+/** True when the statement gives a number with a unit (2,0 L, 1,20 atm, 450 J), as `parseQuantity` reads one. */
+export function measuredData(statement: string): boolean {
+  const text = statement.replace(/\\(?:mathrm|text|operatorname)\{([^}]*)\}/g, '$1').replace(/\{,\}/g, ',').replace(/\\[,;: !]|~|\$/g, ' ');
+  return [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*([^\s\d.,;:()]+(?:\s*\/\s*[^\s\d$.,;:()]+)?)/g)].some((m) => !!parseQuantity(`${m[1]} ${m[2]}`)?.unit);
+}
+
 /**
  * The second look at a consistency program that printed INCONSISTENT, crashed or printed no verdict, asked only when the
  * blind solve said the data determine one answer and neither call listed a data problem. In the Analisi 2 re-check of
@@ -704,7 +710,9 @@ export async function recheckConsistency(
     return first;
   }
   if (data.cause !== 'program-wrong') return first;
-  if (!data.consistency.trim()) return null;
+  // No program is right only for a statement with no measured data (a series, a limit): one with a value and a unit keeps
+  // the failure unless a corrected program shows the data consistent.
+  if (!data.consistency.trim()) return measuredData(statement) ? first : null;
   const again = await runConsistency(data.consistency, run);
   return again?.verdict === 'consistent' ? { verdict: 'consistent', detail: truncate(`${again.detail} (corrected program; the first was wrong: ${data.why.trim()})`, 400) } : first;
 }

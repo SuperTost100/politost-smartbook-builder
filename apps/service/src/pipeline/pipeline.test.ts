@@ -12,7 +12,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, recheckConsistency, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, recheckConsistency, measuredData, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
@@ -906,6 +906,8 @@ describe('15j. a recompute mismatch gets one reconcile step, decided in code', (
     assert.equal(correctionRefused('E0 = 0.340\nc = 4.99e-3', 'E0 = 0.337\nc = 4.99e-3', nernst, t2), null);
     // A datum in scientific notation is one number, as the program writes it.
     assert.equal(correctionRefused('', 'k = 2.3e-7', nernst, { ...t2, statement: 'Con $k = 2{,}3\\cdot10^{-7}\\,\\mathrm{s^{-1}}$.' }), null);
+    // A literal that starts with a decimal point is the number it writes: .1 types the stated 0.1.
+    assert.equal(correctionRefused('v = 2 / 5', 'print("DeltaV =", .1, "L")', { name: 'DeltaV', stated: '0.1 L', computed: '0.4 L' }, { statement: 'Si dividono $2\\,\\mathrm{L}$ in $5$ parti uguali.', solution: '' }), 'the corrected program types the stated value 0.1');
     // A stated zero may not be typed either.
     assert.equal(correctionRefused('dv = 5.5 - 2.0', 'print("DeltaV =", 0, "L")', { name: 'DeltaV', stated: '0 L', computed: '3.5 L' }, texts), 'the corrected program types the stated value 0');
     // A stated value the statement itself gives may be typed: it is a datum.
@@ -971,7 +973,13 @@ describe('15m. a consistency program that fails while both calls found the data 
 
   test('cleared only when the program is the cause and its correction prints CONSISTENT, or the statement has no data to check', async () => {
     assert.deepEqual(await recheckConsistency(statement, 'print("INCONSISTENT: somma")', first, answering('data-wrong', ''), run('')), first);
-    assert.equal(await recheckConsistency(statement, 'print("INCONSISTENT: somma")', first, answering('program-wrong', ''), run('')), null, 'no numeric data: no program, as the solve prompt allows');
+    assert.equal(await recheckConsistency(statement, 'print("INCONSISTENT: somma")', first, answering('program-wrong', ''), run('')), null, 'no measured data: no program, as the solve prompt allows');
+    const measured = 'Un gas si espande da $2{,}0\\,\\mathrm{L}$ a $5{,}5\\,\\mathrm{L}$ contro $1{,}20\\,\\mathrm{atm}$.';
+    assert.deepEqual(await recheckConsistency(measured, 'print("INCONSISTENT: V")', first, answering('program-wrong', ''), run('')), first, 'with measured data an empty correction keeps the failure');
+    assert.equal(measuredData(measured), true);
+    assert.equal(measuredData('Una massa di $m = 50$ g e $v_m = 10$ m/s.'), true);
+    assert.equal(measuredData(statement), false);
+    assert.equal(measuredData('Determinare il raggio della serie $\\sum \\frac{n+1}{2^n}x^n$ per 3 valori.'), false);
     assert.equal((await recheckConsistency(statement, 'x', first, answering('program-wrong', 'print("CONSISTENT")'), run('CONSISTENT\n')))?.verdict, 'consistent');
     assert.deepEqual(await recheckConsistency(statement, 'x', first, answering('program-wrong', 'print("INCONSISTENT: ancora")'), run('INCONSISTENT: ancora\n')), first, 'a correction that still fails keeps the first result');
     assert.deepEqual(await recheckConsistency(statement, 'x', first, async () => { throw new Error('provider down'); }, run('')), first);
