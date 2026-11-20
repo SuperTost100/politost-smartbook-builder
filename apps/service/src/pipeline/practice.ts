@@ -711,15 +711,15 @@ export function measuredData(statement: string): boolean {
   return [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*([^\s\d.,;:()]+(?:\s*\/\s*[^\s\d$.,;:()]+)?)/g)].some((m) => !!parseQuantity(`${m[1]} ${m[2]}`)?.unit);
 }
 
-/** True when two quotes of the solution are the same passage, or one is part of the other. */
-function sameQuote(a: string, b: string): boolean {
-  const [x, y] = [quoteKey(a), quoteKey(b)];
-  return !!x && !!y && (x.includes(y) || y.includes(x));
+/** True when the reviewer's quote adds nothing to the checker's: the same passage, or a part of it. */
+function noNewWords(checker: string, reviewer: string): boolean {
+  const [x, y] = [quoteKey(checker), quoteKey(reviewer)];
+  return !!x && !!y && x.includes(y);
 }
 
 /**
  * The checker's item-level answer-missing problems the reviewer did not clear. The reviewer clears one only with its own
- * item for the same request, marked stated, whose quote is in the solution and is not the passage the checker already
+ * item for the same request, marked stated, whose quote is in the solution and adds words to the passage the checker
  * judged as not stating the answer. Measured on 2026-11-20, gpt-6.1-sol cleared a hypothesis never written (Chimica
  * d353e14e) and a graph given in one sentence (Analisi 1) on its word alone.
  */
@@ -727,8 +727,9 @@ export function unclearedMissing(problems: CheckProblem[], checkerItems: Checked
   return problems.filter((p) => p.item && p.kind === 'answer-missing' && p.request).filter((p) => {
     const key = itemKey(p.request!);
     const mine = checkerItems.find((i) => itemKey(i.request) === key);
-    const theirs = (reviewerItems ?? []).find((i) => { const k = itemKey(i.request); return k === key || (!!k && (k.includes(key) || key.includes(k))); });
-    const cleared = !!theirs && theirs.stated && !!theirs.quote.trim() && quoteFound(theirs.quote, solution) && !(mine?.quote.trim() && sameQuote(mine.quote, theirs.quote));
+    // The same request only: "Calcola la massa" is not "Calcola la massa molare". A reworded request leaves the finding.
+    const theirs = (reviewerItems ?? []).filter((i) => itemKey(i.request) === key);
+    const cleared = theirs.length === 1 && theirs[0]!.stated && !!theirs[0]!.quote.trim() && quoteFound(theirs[0]!.quote, solution) && !(mine?.quote.trim() && noNewWords(mine.quote, theirs[0]!.quote));
     return !cleared;
   }).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
 }
@@ -806,11 +807,15 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
   // A value the step program types instead of computing (Chimica bba65124: it printed the solution's p = 6,615e-24 as a
   // literal) matches by construction, so it is compared with the blind program, which computed it from the statement.
-  const typed = new Set(stated.filter((v) => typedValue(cmp.computation ?? '', v.value, q.statement) !== null).map((v) => v.name));
+  // Only an intermediate value printed as a literal counts: a final one is compared with the blind program anyway, and a
+  // number used inside a formula is not the value printed. One the blind program cannot pair keeps its step comparison.
+  const printedLines = (cmp.computation ?? '').split('\n').filter((l) => /\bprint\s*\(/.test(l)).join('\n');
+  const candidates = stated.filter((v) => !v.final && typedValue(printedLines, v.value, q.statement) !== null);
+  const fromBlind = candidates.length ? compareValues(candidates, printed, blind) : null;
+  const typed = new Set((fromBlind?.compared ?? []).map((c) => c.name));
   const confirmed = stated.length ? compareValues(stated, printed, blind) : null;
   const computedStep = stated.filter((v) => !typed.has(v.name));
   const ownStep = computedStep.length ? compareValues(computedStep, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
-  const fromBlind = typed.size ? compareValues(stated.filter((v) => typed.has(v.name)), printed, blind) : null;
   const stepCheck = ownStep || fromBlind ? { compared: [...(ownStep?.compared ?? []), ...(fromBlind?.compared ?? [])], mismatches: [...(ownStep?.mismatches ?? []), ...(fromBlind?.mismatches ?? [])], complete: false } : null;
   // A mismatch left after the merge gets one reconcile call, which may show that a program measured the value differently.
   // Not when the data check fails: the question is blocked anyway, and data that do not fix one answer (Fisica 41d80bd6: which

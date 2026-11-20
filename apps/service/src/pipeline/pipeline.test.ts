@@ -1024,6 +1024,9 @@ describe('15n. an answer not given in the form asked stays caught', () => {
     assert.equal(clears({ stated: true, quote: 'Un grafico che non c’è.' }), false, 'a quote that is not in the solution');
     assert.equal(clears({ stated: false, quote: '[figure: Grafico simmetrico' }), false, 'not stated');
     assert.equal(clears({ stated: true, quote: '[figure: Grafico simmetrico rispetto all’asse verticale' }), true, 'other words, found, stated');
+    assert.equal(clears({ stated: true, quote: 'Minimi in $x=\\pm1$.\n\n### (d)' }), true, 'the checker\'s passage extended with more words');
+    assert.equal(clears({ stated: true, quote: 'Minimi' }), false, 'a part of the checker\'s passage');
+    assert.equal(clears({ stated: true, quote: '[figure: Grafico simmetrico', request: 'Tracciare un grafico qualitativo di $f$ e di $g$.' }), false, 'another request, even one that contains this one');
     assert.equal(unclearedMissing(problems, [graph], undefined, solution).length, 1, 'no item table: the finding stands');
   });
 
@@ -1057,6 +1060,16 @@ describe('15o. a value the step program types is checked against the blind progr
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.equal((r as { mismatches: number }).mismatches, 1, '6,6168e-24 computed against 6,615e-24 stated');
     assert.match(fake.calls[3]!.prompt, /- p: blind printed/);
+  });
+
+  test('a number used inside a formula is not a typed value, and a value the blind program cannot pair keeps its step comparison', async () => {
+    const id = q({ statement: 'Una sfera ha diametro doppio del raggio. Calcola il diametro.', solution: 'Il raggio è $r = 3\\,\\mathrm{m}$, il diametro $d = 7{,}0\\,\\mathrm{m}$.' });
+    fake.next(...check({ computation: 'print("altro = 1 m")', stepProgram: 'r = 3\nprint("d =", 2*r, "m")', statedValues: [{ name: 'd', value: '7,0 m' }] }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: { final: boolean }[] }).statedValues[0]!.final = false;
+      return out;
+    }), stands);
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: id })) as { mismatches: number }).mismatches, 1, 'the step program\'s 6 m against the stated 7,0 m');
   });
 
   test('a pressure in atm is compared with a program that prints atm', async () => {
