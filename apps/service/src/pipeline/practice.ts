@@ -632,7 +632,7 @@ export function typedValue(code: string, stated: string, statement: string): num
   if (!q) return null;
   const inStatement = numbersIn(statement);
   const typed = numbersIn(code);
-  return [q.asWritten, ...(q.alt ? [q.alt.asWritten] : [])].map(Math.abs).find((v) => typed.some((t) => sameNumber(t, v)) && !inStatement.some((t) => sameNumber(t, v))) ?? null;
+  return [q, ...q.alt].map((reading) => Math.abs(reading.asWritten)).find((v) => typed.some((t) => sameNumber(t, v)) && !inStatement.some((t) => sameNumber(t, v))) ?? null;
 }
 
 /**
@@ -958,6 +958,9 @@ function failureSummary(d: VerifyAnswer, problems: ReturnType<typeof verifyVerdi
   return truncate(parts.length ? parts.join('; ') : 'the independent check does not agree with the solution', 800);
 }
 
+/** How an undone fix begins the resolution of the issues it reopens. `questionRevise` reads it to make the next attempt stronger. */
+const UNDONE_FIX = 'The AI fix was undone because the check after it failed: ';
+
 /** What `questionRevise` returns when it saved a rewrite: the issues it closed, the question's origin and status before, and its rev after. */
 interface FixResult { revised: true; fixed: string[]; origin: Question['origin']; status: Question['status']; rev: number }
 
@@ -966,7 +969,8 @@ interface FixResult { revised: true; fixed: string[]; origin: Question['origin']
  * (from `question_revisions`), and the issues the fix closed open again with the reason. Only the fix's own rewrite is undone:
  * when the question changed after it (any edit bumps its rev), the check was not queued after a fix, or the fix's result is
  * of an older shape, this returns null and the failed check files its issues as usual. The reopened issues wait for the
- * author, so a failed fix is never retried on its own.
+ * author, so a failed fix is never retried on its own. When the author asks for the fix again, `questionRevise` sees the
+ * reason on the issues and writes the next attempt with the exercise writer's route.
  */
 function undoFix(ctx: AppContext, t: TaskContext, q: Question, reason: string) {
   const fix = Object.entries(t.deps).find(([key]) => key.startsWith('qfix:'))?.[1] as Partial<FixResult> | null | undefined;
@@ -983,7 +987,7 @@ function undoFix(ctx: AppContext, t: TaskContext, q: Question, reason: string) {
     if (!changed) return { stale: true };
     recordQuestionRevision(ctx, q.id, q, before, { origin: 'restored', taskId: t.task.id });
     const reopened = fixed.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'fixed' AND id IN (${fixed.map(() => '?').join(',')})`, ...fixed).map((r) => r.id) : [];
-    if (reopened.length) ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${reopened.map(() => '?').join(',')})`, `The AI fix was undone because the check after it failed: ${reason}`, ...reopened);
+    if (reopened.length) ctx.db.run(`UPDATE review_issues SET status = 'open', resolution = ? WHERE id IN (${reopened.map(() => '?').join(',')})`, `${UNDONE_FIX}${reason}`, ...reopened);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, reopened);
     return { ok: false, restored: true, reopened: reopened.length };
@@ -1019,11 +1023,17 @@ const REVISE_RULES = `- The corrected text reads as if it had always been right:
 - Keep every formula reference ({{formula:@key}} or {{formula:key}}) and every ref: link as it is, unless a problem is about that reference.
 - Return problems: one entry per listed problem, with its number, inText and why.`;
 
-/** The editor's prompt for one exercise and its problems. `keyList` lists the book's formula keys when a problem needs them. */
-export function revisePrompt(language: string, issues: { message: string; suggestion: string }[], q: QuestionText, keyList = '') {
+/**
+ * The editor's prompt for one exercise and its problems. `keyList` lists the book's formula keys when a problem needs them.
+ * `undone` holds the reasons an earlier rewrite for these problems was undone by the check after it.
+ */
+export function revisePrompt(language: string, issues: { message: string; suggestion: string }[], q: QuestionText, keyList = '', undone: string[] = []) {
+  const earlier = undone.length
+    ? `\n\nEARLIER ATTEMPT:\nAn earlier rewrite for these problems was discarded because the check after it failed: ${undone.join(' Also: ')}\nThe text below is the text before that rewrite. Fix the listed problems without that fault.`
+    : '';
   return {
     system: `You correct a textbook exercise in ${language === 'it' ? 'Italian' : language}. Fix exactly the reported problems; keep everything else.\n\n${REVISE_RULES}\n\n${formatRules(language)}`,
-    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}${keyList}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution, and problems.`,
+    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}${keyList}${earlier}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution, and problems.`,
   };
 }
 
@@ -1036,7 +1046,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   let q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
-  const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string; quote: string }>(`SELECT id, message, suggestion, source, category, severity, status, quote FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, rowid`, ...ids) : [];
+  const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string; quote: string; resolution: string }>(`SELECT id, message, suggestion, source, category, severity, status, quote, resolution FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, rowid`, ...ids) : [];
   // The issues may be gone (a relint of the chapter deletes open lint rows): with nothing left to fix the editor must not run and save its answer as a draft.
   if (ids.length && !selected.length) return { skipped: 'the requested issues are gone', rev: q.rev };
   const project = loadProject(ctx, q.projectId);
@@ -1063,9 +1073,13 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   const keyList = issues.some((i) => ruleOf(i.category) === 'formula-ref-unknown')
     ? `\n\nNUMBERED FORMULAS OF THE BOOK (key: label):\n${bookFormulaKeys(ctx, q.projectId, undefined, inBook).map((k) => `${k.key}: ${k.label}`).join('\n') || '(none)'}\nFor an unknown formula reference, point {{formula:@key}} at one of these keys only when that formula states the same result. Otherwise replace the reference with plain words.`
     : '';
+  // A fix the check undid failed on the editor's route once already: the next attempt is written by the route that writes
+  // exercises, with the reason it was undone. The issues keep that resolution until a fix closes them, so every further
+  // attempt the author asks for goes the same way.
+  const undone = [...new Set(issues.filter((i) => i.resolution.startsWith(UNDONE_FIX)).map((i) => i.resolution.slice(UNDONE_FIX.length).trim()))];
   const { data, route } = await runRole(ctx, {
-    role: 'editor',
-    ...revisePrompt(project.language, issues, q, keyList),
+    role: undone.length ? 'exercises' : 'editor',
+    ...revisePrompt(project.language, issues, q, keyList, undone),
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix of formatting findings may change line breaks, spacing and markup, never a word or a number.

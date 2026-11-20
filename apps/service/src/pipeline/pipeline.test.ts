@@ -1059,6 +1059,8 @@ describe('15o. a value the step program types is checked against the blind progr
     assert.ok(Math.abs(typedValue('print("p =", 6.615e-24, "kg m/s")', '6,615 × 10^-24 kg m/s', 'Un elettrone accelerato da 150 V.')! - 6.615e-24) < 1e-30);
     assert.equal(typedValue('p = (2*m*K)**0.5\nprint("p =", p)', '6,615 × 10^-24 kg m/s', 'Un elettrone accelerato da 150 V.'), null);
     assert.equal(typedValue('print("V =", 150, "V")', '150 V', 'Un elettrone accelerato da 150 V.'), null, 'a datum of the statement');
+    assert.equal(typedValue('print("f_min =", 2.43656)', '2e-3', 'Trova il minimo di f.'), null, 'a rounded copy of 2·e − 3 is not the stated value');
+    assert.ok(Math.abs(typedValue(`print("f_min =", ${2 * Math.E - 3})`, '2e-3', 'Trova il minimo di f.')! - (2 * Math.E - 3)) < 1e-9, 'the reading 2·e − 3 typed as a literal');
   });
 
   test('in the handler: Chimica bba65124, the step program prints the solution\'s p as a literal and the blind one computes it', async () => {
@@ -1260,6 +1262,38 @@ describe('15g. a fix whose check fails is undone; a data issue on a statement th
     assert.equal(i!.status, 'open');
     assert.match(i!.resolution, /^The AI fix was undone because the check after it failed: Ora il risultato è 9,03, ma è 9,02; the independent solution reaches a different result: 9,03/);
     assert.deepEqual(history(id).map((r) => [r.origin, r.solution]), [['revised', 'Sono 9,03 atomi.'], ['restored', 'Sono 9,02 atomi.']]);
+  });
+
+  test('after an undone fix, the next attempts are written by the exercises route and told once why the last one was undone', async () => {
+    ctx.saveSettings({ routes: { ...DEFAULT_ROUTES, exercises: { primary: { provider: 'claude', model: 'claude-sonnet-5-5', effort: 'medium' } } } });
+    const routes = ctx.settings().routes;
+    const id = q({ status: 'issue', solution: 'Sono 9,02 atomi.' });
+    const iid = blocker(id);
+    const attempt = async (steps: ReturnType<typeof check>) => {
+      const from = fake.calls.length;
+      const out = await fixThenCheck(id, [iid], { statement: 'Calcola il limite.', hint: '', solution: 'Sono 9,03 atomi.' }, steps);
+      return { ...out, call: fake.calls[from]! };
+    };
+    const first = await attempt(fails());
+    assert.equal(first.call.selection.model, routes.editor.primary.model);
+    assert.equal(first.call.selection.effort, routes.editor.primary.effort);
+    assert.doesNotMatch(first.call.prompt, /EARLIER ATTEMPT/);
+    assert.equal((first.checked as { restored?: boolean }).restored, true);
+
+    const second = await attempt(fails());
+    assert.equal(second.call.selection.model, 'claude-sonnet-5-5', 'the second attempt goes to the exercises route');
+    const reason = 'Ora il risultato è 9,03, ma è 9,02; the independent solution reaches a different result: 9,03';
+    assert.equal(second.call.prompt.split(reason).length, 2, 'the reason the fix was undone is in the prompt once');
+    assert.match(second.call.prompt, /An earlier rewrite for these problems was discarded because the check after it failed: Ora il risultato/);
+    assert.match(second.call.prompt, /The text below is the text before that rewrite\./);
+    assert.match(second.call.system!, /reads as if it had always been right/);
+    assert.deepEqual(second.checked, { ok: false, restored: true, reopened: 1 }, 'a failed second attempt is undone and reopens the issue as well');
+
+    const third = await attempt(passes());
+    assert.equal(third.call.selection.model, 'claude-sonnet-5-5', 'every further attempt goes to the exercises route too');
+    assert.equal(issues(`id = '${iid}'`)[0]!.resolution, 'Rewritten by claude-sonnet-5-5', 'the resolution names the model that wrote the fix');
+    assert.equal(row(id).status, 'verified');
+    assert.equal(fake.steps.length, 0, 'nothing ran on its own after the undone fixes');
   });
 
   test('once: the same check run again on the restored text does not undo anything more', async () => {

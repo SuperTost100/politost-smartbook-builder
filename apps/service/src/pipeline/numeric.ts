@@ -6,8 +6,11 @@ import { runPython, type PythonResult } from './python.ts';
 
 export interface StatedValue { name: string; value: string }
 
-/** A number as written in the solution: its value in SI base units, the unit, and how many significant figures it shows. */
-interface Quantity { base: number; asWritten: number; factor: number; unit: string; digits: number; exponent: number; alt?: Quantity }
+/**
+ * A number as written in the solution: its value in SI base units, the unit, and how many significant figures it shows.
+ * `alt` holds the other readings of a number written ambiguously (1,500; 2e-3), each a full quantity.
+ */
+interface Quantity { base: number; asWritten: number; factor: number; unit: string; digits: number; exponent: number; alt: Quantity[] }
 interface Printed { name: string; value: number; unit: string | null; text: string; step: number }
 
 export interface Comparison { name: string; stated: string; computed: string }
@@ -50,7 +53,7 @@ function plain(text: string): string {
     .replace(/\\[,;: !]|[$~{}]/g, '').replace(/[−–]/g, '-').replace(/\s+/g, ' ').trim();
 }
 
-const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^\s*([-+]?\d+))|(?:[eE]([-+]?\d+)))?\s*(.*)$/;
+const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^\s*([-+]?\d+))|(?:([eE])([-+]?\d+)))?\s*(.*)$/;
 
 /** Splits a unit into a prefix factor and a base unit. A unit this does not recognise (m/s, mol/L, kg·m²) stays whole with factor 1. */
 function splitUnit(raw: string): { factor: number; unit: string } {
@@ -88,16 +91,26 @@ export function parseQuantity(text: string): Quantity | null {
   // "2+2+6+1 = 11" states 11: the value is what follows the last equals sign.
   const m = NUMBER.exec(plain(text).split('=').at(-1)!.trim());
   if (!m) return null;
-  const [, sign, mantissa, tenPower, ePower, rest] = m;
+  const [, sign, mantissa, tenPower, eLetter, ePower, rest] = m;
   const shift = Number(tenPower ?? ePower ?? 0);
   const asWritten = Number(`${sign}${mantissa!.replace(',', '.')}`) * 10 ** shift;
   if (!Number.isFinite(asWritten)) return null;
   const { factor, unit } = splitUnit(rest ?? '');
   if (!knownUnit(unit)) return null;
   const { digits, exponent } = sigFigs(mantissa!);
-  const quantity: Quantity = { base: asWritten * factor, asWritten, factor, unit, digits, exponent: exponent + shift };
+  const quantity: Quantity = { base: asWritten * factor, asWritten, factor, unit, digits, exponent: exponent + shift, alt: [] };
   // 1,500 and 1.500 are one and a half or fifteen hundred, depending on the language. Both readings are kept.
-  if (/^[1-9]\d{0,2}[.,]\d{3}$/.test(mantissa!)) quantity.alt = parseQuantity(text.replace(/(\d)[.,](\d{3})(?!\d)/, '$1$2')) ?? undefined;
+  if (/^[1-9]\d{0,2}[.,]\d{3}$/.test(mantissa!)) {
+    const other = parseQuantity(text.replace(/(\d)[.,](\d{3})(?!\d)/, '$1$2'));
+    if (other) quantity.alt.push(other, ...other.alt);
+  }
+  // The books write a power of ten as 10^{-3}, so 2e-3 in a solution is as likely 2·e − 3 (Euler's number) as 0,002: a
+  // signed integer after a lowercase e is read both ways.
+  if (eLetter === 'e' && /^[-+]/.test(ePower!)) {
+    const euler = Number(`${sign}${mantissa!.replace(',', '.')}`) * Math.E + Number(ePower);
+    // An exact expression has no last digit of its own, so it is compared to six significant figures.
+    if (euler !== 0) quantity.alt.push({ base: euler * factor, asWritten: euler, factor, unit, digits: 6, exponent: Math.floor(Math.log10(Math.abs(euler))), alt: [] });
+  }
   return quantity;
 }
 
@@ -137,7 +150,7 @@ function differs(stated: Quantity, computed: number, scale: number, printedStep 
 
 /** 'skip' means the two cannot be compared with confidence: another unit, or an unmarked value that fits only the number as written in a prefixed unit. */
 function compare(stated: Quantity, printed: Printed, relative: number): 'match' | 'mismatch' | 'skip' {
-  const verdicts = [compareReading(stated, printed, relative), ...(stated.alt ? [compareReading(stated.alt, printed, relative)] : [])];
+  const verdicts = [stated, ...stated.alt].map((reading) => compareReading(reading, printed, relative));
   return verdicts.includes('match') ? 'match' : verdicts.every((v) => v === 'mismatch') ? 'mismatch' : 'skip';
 }
 
