@@ -27,13 +27,13 @@ Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost1
 |---|---|---|
 | Claude Code | `claude` then `/login` | Section text and blocker fixes (Sonnet), the second opinion on every review finding (Sonnet), the cross review of each chapter next to GPT-6-Sol (Opus), the outline once per book (Opus), outside research (Sonnet) |
 | Codex | `codex login` | Everything routine on GPT-6-Luna: classification, page reading, exercises, introductions, non-blocker fixes, first solution checks. GPT-6-Sol reviews chapters, draws figures (the illustrator) and gives a second opinion when a solution check finds a problem |
-| Antigravity | `agy` | Fallback for classification and the local evidence reader (Gemini Flash) |
+| Antigravity | `agy` (version 1.5.0 or newer) | Fallback for classification and the local evidence reader (Gemini Flash) |
 | Cursor Agent | `cursor-agent login` | Nothing by default |
 
 Each job (a *role*) has a primary model and a fallback, and you change them under **Connections**. The defaults spend the expensive models only where a student would notice: Sonnet writes the section text and fixes blockers in it, and fixes change only the paragraphs involved. Everything else runs on GPT-6-Luna, with GPT-6-Sol as a second opinion. A few rules behind the defaults:
 
 - The reviewer should come from a different vendor than the writer, so it does not share the writer's blind spots. The same goes for the second opinion and the reviewer.
-- Reading pages needs a model that accepts images (Claude or Codex).
+- Reading pages needs a model that accepts images (Claude, Codex or Antigravity).
 - Calls through Cursor to Claude models are billed at API prices, so use Claude Code for those.
 - When a subscription hits its limit, the task waits and resumes after the reset, or switches to the role's fallback. Nothing is lost. A provider that reported a limit gets no further calls until its reset, and the Connections screen shows the usage windows of Codex.
 - A book can stay on Claude whatever happens: *When Claude usage runs out* in Book setup removes the fallback of every role that starts on Claude for that book, so its tasks wait for the reset.

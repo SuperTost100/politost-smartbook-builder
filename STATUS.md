@@ -131,7 +131,7 @@ The figure renderers have a snapshot test, and every code block in the drawing c
 | React, Vite | 19.3 and 8.3 |
 | content-core | 0.5.1 |
 | KaTeX | 0.19 |
-| cli-funnel | 0.9.1 |
+| cli-funnel | 1.0.0 |
 | numbl | 0.4.22 (the reader pins the same version) |
 | MuPDF | 1.28 |
 | Pyodide | 314.0 |
@@ -141,7 +141,7 @@ The figure renderers have a snapshot test, and every code block in the drawing c
 
 The Typst packages and Python wheels of drawn figures are pinned by SHA-256 in `scripts/fetch-figure-packages.mjs` and updated together with the compiler.
 
-Model calls go through cli-funnel. When an answer fails validation on Claude Code or Codex, the repair turn continues the same conversation and sends only the problems. Claude Code and Codex report their limits with a reset time, which sets how long a provider stays out of first place and how long the queue waits, and Codex's usage windows are read at most once a minute.
+Model calls go through cli-funnel. When an answer fails validation on Claude Code, Codex or Antigravity, the repair turn continues the same conversation and sends only the problems. Antigravity runs over agy's ACP server (agy 1.5.0 or newer), so it reads images and is asked for JSON in the prompt instead of through `--json-schema`. Claude Code and Codex report their limits with a reset time, which sets how long a provider stays out of first place and how long the queue waits, and Codex's usage windows are read at most once a minute.
 
 ## Independent reviews
 
