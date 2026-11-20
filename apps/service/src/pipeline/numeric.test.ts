@@ -157,6 +157,18 @@ describe('comparing recomputed values with the stated ones', () => {
     assert.equal(compareValues([{ name: 'F', value: '1,500 N' }], 'F = 2000 N')!.mismatches.length, 1);
   });
 
+  test('2e-3 is read as 0,002 and as 2·e − 3 (the Analisi 1 minimum of 20 November), and only a value that fits neither is a mismatch', () => {
+    const fMin = (printed: string) => compareValues([{ name: 'f_min', value: '2e-3' }], `f_min = ${printed}`)!;
+    assert.equal(fMin('2.43656365691809').mismatches.length, 0);
+    assert.equal(fMin('0.002').mismatches.length, 0);
+    assert.deepEqual(fMin('5').mismatches, [{ name: 'f_min', stated: '2e-3', computed: '5' }]);
+    assert.equal(compareValues([{ name: 'x', value: '-2e+1' }], `x = ${-2 * Math.E + 1}`)!.mismatches.length, 0, 'the sign belongs to the mantissa');
+    assert.equal(compareValues([{ name: 'n', value: '6.02e23 mol' }], 'n = 6.02e23 mol')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'n', value: '6.02e23 mol' }], 'n = 7e23 mol')!.mismatches.length, 1);
+    assert.deepEqual(parseQuantity('6.02e23 mol')!.alt, [], 'without a sign after it, e is only a power of ten');
+    assert.deepEqual(parseQuantity('2E-3')!.alt, [], 'a capital E is only a power of ten');
+  });
+
   test('a stated zero keeps its decimal places and its prefix', () => {
     assert.equal(compareValues([{ name: 'I', value: '0.00 mA' }], 'I = 0.9 A')!.mismatches.length, 1, '0.00 mA is zero to a hundredth of a milliamp');
     assert.equal(compareValues([{ name: 'I', value: '0.00 mA' }], 'I = 0.000004 A')!.mismatches.length, 0);

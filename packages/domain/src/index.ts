@@ -18,7 +18,7 @@ export const ROLE_LABELS: Record<Role, { label: string; help: string }> = {
   planner: { label: 'Plan the book', help: 'Builds the common index. Runs once per outline.' },
   writer: { label: 'Write sections', help: 'The explanations of each section, and fixes of blocker issues in them. The text students read most; use your best writer here.' },
   editor: { label: 'Edit and fix', help: 'Chapter introductions, formatting repairs, fixes of non-blocker issues, exercise corrections, topic map, graphs and Python examples.' },
-  exercises: { label: 'Write exercises', help: 'Generated exercises and missing official solutions. Every one is checked afterwards.' },
+  exercises: { label: 'Write exercises', help: 'Generated exercises, missing official solutions, and a new attempt at an exercise fix that the check undid. Every one is checked afterwards.' },
   checker: { label: 'Check solutions', help: 'First, cheap check of every exercise solution. Disagreements go to the reviewer for a second opinion.' },
   reviewer: { label: 'Review', help: 'Independent check of drafts and solutions. Prefer a different vendor from the writer.' },
   crossReviewer: { label: 'Cross review', help: 'One more read of a whole chapter next to the reviewer\'s, in the first review and in the sweep after its fixes. Prefer a different vendor from the reviewer: Opus finds broken sentences, blocks and references the reviewer misses, but few maths errors, so it adds to the reviewer and does not replace it.' },
