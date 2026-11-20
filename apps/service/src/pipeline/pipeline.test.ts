@@ -1027,6 +1027,14 @@ describe('15n. an answer not given in the form asked stays caught', () => {
     assert.equal(clears({ stated: true, quote: 'Minimi in $x=\\pm1$.\n\n### (d)' }), true, 'the checker\'s passage extended with more words');
     assert.equal(clears({ stated: true, quote: 'Minimi' }), false, 'a part of the checker\'s passage');
     assert.equal(clears({ stated: true, quote: '[figure: Grafico simmetrico', request: 'Tracciare un grafico qualitativo di $f$ e di $g$.' }), false, 'another request, even one that contains this one');
+    // Chimica f3781eb8: one request answered as two items that together cover it.
+    const sol = 'Il rapporto tra ioni alluminio e ioni solfato è $2:3$. Il totale è $2+3+12=17$ atomi per unità formula.';
+    const whole: CheckedItem = { request: 'b) Indicare il rapporto tra gli ioni presenti nell’unità formula e il numero totale di atomi contenuti in essa.', answer: '2:3; 17', quote: 'Il totale è $2+3+12=17$ atomi per unità formula.', stated: false, matches: true };
+    const [m2] = itemProblems([whole], sol);
+    const split = [{ ...whole, request: 'Indicare il rapporto tra gli ioni presenti nell’unità formula', quote: 'Il rapporto tra ioni alluminio e ioni solfato è $2:3$.', stated: true }, { ...whole, request: 'il numero totale di atomi contenuti in essa.', stated: true }];
+    assert.equal(unclearedMissing([m2!], [whole], split, sol).length, 0, 'parts that cover the request, each stated and found');
+    assert.equal(unclearedMissing([m2!], [whole], [split[1]!], sol).length, 1, 'one part alone does not cover it');
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, { ...split[1]!, stated: false }], sol).length, 1, 'every part must be stated');
     assert.equal(unclearedMissing(problems, [graph], undefined, solution).length, 1, 'no item table: the finding stands');
   });
 

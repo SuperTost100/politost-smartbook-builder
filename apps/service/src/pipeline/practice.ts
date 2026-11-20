@@ -727,9 +727,15 @@ export function unclearedMissing(problems: CheckProblem[], checkerItems: Checked
   return problems.filter((p) => p.item && p.kind === 'answer-missing' && p.request).filter((p) => {
     const key = itemKey(p.request!);
     const mine = checkerItems.find((i) => itemKey(i.request) === key);
-    // The same request only: "Calcola la massa" is not "Calcola la massa molare". A reworded request leaves the finding.
-    const theirs = (reviewerItems ?? []).filter((i) => itemKey(i.request) === key);
-    const cleared = theirs.length === 1 && theirs[0]!.stated && !!theirs[0]!.quote.trim() && quoteFound(theirs[0]!.quote, solution) && !(mine?.quote.trim() && noNewWords(mine.quote, theirs[0]!.quote));
+    // The same request, or the same request split into parts that together cover nearly all of it (Chimica f3781eb8: "il
+    // rapporto tra gli ioni … e il numero totale di atomi" answered as two items). "Calcola la massa" is not
+    // "Calcola la massa molare": a part that covers too little, or a reworded request, leaves the finding.
+    const same = (reviewerItems ?? []).filter((i) => itemKey(i.request) === key);
+    const parts = (reviewerItems ?? []).filter((i) => { const k = itemKey(i.request); return !!k && k !== key && key.includes(k); });
+    const covered = parts.reduce((n, i) => n + itemKey(i.request).length, 0) >= 0.85 * key.length;
+    const theirs = same.length === 1 ? same : parts.length >= 2 && covered ? parts : [];
+    const shown = (i: CheckedItem) => i.stated && !!i.quote.trim() && quoteFound(i.quote, solution);
+    const cleared = theirs.length > 0 && theirs.every(shown) && theirs.some((i) => !(mine?.quote.trim() && noNewWords(mine.quote, i.quote)));
     return !cleared;
   }).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
 }
