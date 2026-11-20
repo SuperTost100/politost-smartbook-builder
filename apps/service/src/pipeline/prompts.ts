@@ -771,11 +771,27 @@ const checkedItem = z.object({
 export const verifyItemsSchema = verifySchema.extend({ items: z.array(checkedItem).min(1) });
 export type CheckedItem = z.infer<typeof checkedItem>;
 
+/**
+ * What "stated in the form asked" means, item by item, shared by the comparison and the reviewer. The forms come from the
+ * real defects of the evaluation set and the 2026-11-20 re-checks: a graph given in one sentence or as a "[figure: …]"
+ * placeholder, a set given by inequalities alone, a differentiability study that only names a corner point, a hypothesis
+ * left implied, a length with no unit. A question cannot hold a figure, so a graph is answered by a full description.
+ */
+const STATED_FORMS = `The forms:
+  - an equation the statement asks to write or balance is written out whole, with its coefficients;
+  - a requested value is written with its unit, also a length or another quantity with an unusual unit; a pure number, an angle in radians or steradians, and a zero need none;
+  - a yes-or-no question gets its yes or no in words; a request to study a property at a point (differentiability, continuity) gets the sentence that says whether the property holds there: naming the kind of point (angoloso, cuspide, salto) does not say it;
+  - a requested classification or name is given; a requested count or total is written as one number; a requested set or interval is written as a set or an interval;
+  - a request to formulate a hypothesis, to comment on a result or to explain gets sentences that do so explicitly for that item; a conclusion from which the reader could infer them is not stated;
+  - a request to draw, trace or sketch a graph cannot be met by a figure here, so it is stated only by a description written for that item that names every feature a sketch shows: the domain and the behaviour at its ends (limits, asymptotes), where the function increases and decreases, its local extrema, and its special points (cusps, corners, jumps, excluded points, zeros where they matter); one or two sentences that name only some of them, or a bracketed placeholder such as [figure: …], are not stated;
+  - a request to represent a set in the plane is stated only by words that name its shape and its boundaries (the left half of the annulus between radii 1 and 4, boundary included); inequalities or a set in polar form alone are not a representation.
+An answer that is only implied, mentioned in passing or left for the reader to assemble from earlier lines or from parts is not stated;`;
+
 const ITEMS_RULE = (language: string) => `First list the ITEMS: every result the statement asks for, one per lettered or numbered part and one per request inside a part (calcolare, determinare, scrivere, bilanciare, dimostrare, stabilire se, classificare, indicare, trovare, studiare). A request to explain or justify (motivare, giustificare, spiegare) belongs to the item it justifies. Solve each item yourself from the statement before you read the given solution. For each item return:
 - request: the words of the statement that ask for it;
 - answer: your own answer, concise;
-- quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage). Empty when the solution never states an answer to it;
-- stated: true only when the quote states the answer in the form the item asks for. An equation the statement asks to write or balance is written out whole, with its coefficients; a requested value is written with its unit; a yes-or-no question gets its yes or no in words; a requested classification or name is given; a requested count or total is written as one number. An answer that is only implied, mentioned in passing or left for the reader to assemble from earlier lines or from parts is not stated;
+- quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage; for a description of a graph or a region, the whole description). Empty when the solution never states an answer to it;
+- stated: true only when the quote states the answer in the form the item asks for. ${STATED_FORMS}
 - matches: true when the given solution's answer to this item equals yours.
 The code reads the items: an item with no quote, a quote that is not in the solution, or stated false is an answer the solution never gives. Write requests and answers in ${languageName(language)}.
 
@@ -887,7 +903,7 @@ ${p.solution}
 ${CROSS_REFERENCES}
 
 Return JSON with:
-- items: the reference items, in the same order. For each: request and answer as given (if you find a reference answer wrong, correct it here and say why in one problem of kind other); quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage), empty when the solution never states an answer to it; stated: true only when the quote states the answer in the form the item asks for (an equation the statement asks to write or balance is written out whole with its coefficients; a requested value is written with its unit; a yes-or-no question gets its yes or no in words; a requested classification or name is given; a requested count or total is written as one number; an answer that is only implied, mentioned in passing or left for the reader to assemble from earlier lines or from parts is not stated); matches: true when the given solution's answer to this item equals the reference answer. The code reads the items: an item with no quote, a quote that is not in the solution, or stated false is an answer the solution never gives.
+- items: the reference items, in the same order. For each: request and answer as given (if you find a reference answer wrong, correct it here and say why in one problem of kind other); quote: the exact words of the GIVEN SOLUTION that state its answer to this item, copied character for character with their LaTeX (at most about 200 characters, one contiguous passage; for a description of a graph or a region, the whole description), empty when the solution never states an answer to it; stated: true only when the quote states the answer in the form the item asks for. ${STATED_FORMS} matches: true when the given solution's answer to this item equals the reference answer. The code reads the items: an item with no quote, a quote that is not in the solution, or stated false is an answer the solution never gives.
 - resultsAgree (true when every result of the given solution equals the reference), agrees (true only if additionally the reasoning has no major gap), problems (each with kind, message and a concrete suggested correction, in ${languageName(p.language)}), empty when everything is right. Read every step of the given solution, not only its results: an intermediate value, an equality or a sign that does not hold is a problem even when the final result is right. A value rounded to the digits it shows is right when it is within one unit of its last digit (339 N for 339,7 N): do not report it. The kind is one of:
 ${PROBLEM_KIND_LINES}
 - statedValues: every number the given solution obtains by computation, intermediate or final, in the order it states them: name, value (as written, in plain text with its unit and without LaTeX, for example "4.7 kΩ") and final (true for the answer to an item). For a final value whose quantity the reference computation printed, use the printed name. Empty when the solution computes no number.
@@ -996,7 +1012,7 @@ ${p.solution}
 
 ${CROSS_REFERENCES}
 
-Return JSON with steps: every step the given solution writes, in order: each equality, inequality, substitution, sign, derivative, integral, limit, interval, count and each claim a conclusion rests on, one step per entry. For each:
+Return JSON with steps: every step the given solution writes, in order: each equality, inequality, substitution, sign, derivative, integral, limit, interval, count and each claim a conclusion rests on, one step per entry. Each sentence of a description of a graph or of a region is a step too (an asymptote, a limit, where it increases, a point it passes through): check that what it says is true, not only that it is plausible. For each:
 - quote: its exact words, copied character for character with their LaTeX;
 - work: the result you get when you carry out that step yourself from the statement and the steps before it (the value of the integral or the limit, the expression after the substitution, the sign);
 - holds: whether the step as written agrees with your work;

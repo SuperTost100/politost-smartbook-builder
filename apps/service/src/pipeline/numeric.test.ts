@@ -20,7 +20,8 @@ describe('parsing a stated value', () => {
     assert.equal(parseQuantity('(0, +\\infty)'), null);
     assert.equal(parseQuantity('3/4'), null, 'a fraction');
     assert.equal(parseQuantity('2π'), null, 'a multiple of pi');
-    assert.equal(parseQuantity('760 mmHg'), null, 'a unit it does not know');
+    assert.equal(parseQuantity('14 psi'), null, 'a unit it does not know');
+    assert.equal(parseQuantity('760 mmHg')!.unit, 'mmHg', 'a pressure unit compared only with the same unit');
   });
 });
 
@@ -53,7 +54,7 @@ describe('counts and last digits (the exercise re-check of 17 November)', () => 
   test('complete only when every stated number was compared', () => {
     assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V\nb = 2 V')!.complete, true);
     assert.equal(compareValues([{ name: 'a', value: '1 V' }, { name: 'b', value: '2 V' }], 'a = 1 V')!.complete, false);
-    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }, { name: 'p', value: '2.00 atm' }], 'a = 1 V\np = 3 atm')!.complete, false, 'a unit it cannot read leaves that value unchecked');
+    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }, { name: 'p', value: '2.00 psi' }], 'a = 1 V\np = 3 psi')!.complete, false, 'a unit it cannot read leaves that value unchecked');
   });
 });
 

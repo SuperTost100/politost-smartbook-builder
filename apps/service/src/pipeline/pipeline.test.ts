@@ -12,7 +12,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, recheckConsistency, measuredData, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, recheckConsistency, measuredData, placeholderProblems, unclearedMissing, typedValue, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
@@ -851,7 +851,7 @@ describe('15i. the check lists the requested items with a quote of the solution,
     assert.equal(row(id).status, 'issue');
   });
 
-  test('an answer named only in passing goes to the reviewer, whose own item table decides', async () => {
+  test('an answer named only in passing goes to the reviewer, which clears it only by quoting other words that state it', async () => {
     const quote = 'Il controllo degli atomi dà coefficienti bilanciati.';
     const kept = q(balance);
     fake.next(...check({ items: [item({ quote, stated: false })] }), review({ items: [item({ quote, stated: false })] }));
@@ -859,10 +859,14 @@ describe('15i. the check lists the requested items with a quote of the solution,
     assert.equal(fake.calls.length, 4);
     assert.equal(row(kept).status, 'issue');
     assert.match(issues(`question_id = '${kept}'`)[0]!.message, /does not state the answer to "Bilancia l\u2019equazione" in the form asked/);
-    const cleared = q(balance);
+    const same = q(balance);
     fake.next(...check({ items: [item({ quote, stated: false })] }), review({ items: [item({ quote })] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: same }));
+    assert.equal(row(same).status, 'issue', 'the reviewer calls the same words stated: the finding stands');
+    const cleared = q(balance);
+    fake.next(...check({ items: [item({ quote, stated: false })] }), review({ items: [item({ quote: 'Si pongono $2$ unità di $\\mathrm{Ca_3(PO_4)_2}$' })] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: cleared }));
-    assert.equal(row(cleared).status, 'verified');
+    assert.equal(row(cleared).status, 'verified', 'other words of the solution, stated');
   });
 
   test('the blind solve never sees the solution; a step the audit finds false blocks only when its quote is in the solution', async () => {
@@ -995,6 +999,94 @@ describe('15m. a consistency program that fails while both calls found the data 
     fake.next(...check({ consistency: 'print("INCONSISTENT: somma")', dataProblems: ['I dati si contraddicono.'] }));
     assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: bad })) as { ok: boolean }).ok, false);
     assert.equal(fake.calls.length, 7, 'no second look when a call listed a data problem');
+  });
+});
+
+describe('15n. an answer not given in the form asked stays caught', () => {
+  // Analisi 1 6122b037: item (d) asks for a qualitative graph; the solution has the transcriber's placeholder.
+  const solution = '### (c)\n\nMinimi in $x=\\pm1$.\n\n### (d)\n\n[figure: Grafico simmetrico rispetto all’asse verticale, con due minimi]';
+  const graph: CheckedItem = { request: 'Tracciare un grafico qualitativo di $f$.', answer: 'Due rami simmetrici…', quote: 'Minimi in $x=\\pm1$.', stated: false, matches: true };
+
+  test('a figure placeholder in the solution is a code-proved missing answer', () => {
+    assert.deepEqual(placeholderProblems(solution).map((p) => [p.kind, p.evidence]), [['answer-missing', 'code']]);
+    assert.match(placeholderProblems(solution)[0]!.message, /\[figure: Grafico simmetrico/);
+    assert.deepEqual(placeholderProblems('Il grafico [vedi sopra] è simmetrico.'), []);
+    const v = verifyVerdict({ ...posed, independentAnswer: '-', resultsAgree: true, agrees: true, problems: [] }, null, null, solution);
+    assert.equal(v.ok, false);
+  });
+
+  test('the reviewer clears a missing answer only with its own quote of other words, stated, and found in the solution', () => {
+    const [missing] = itemProblems([graph], solution);
+    const problems = [{ ...missing!, severity: 'major' as const }];
+    const clears = (r: Partial<CheckedItem>) => !unclearedMissing(problems, [graph], [{ ...graph, ...r }], solution).length;
+    assert.equal(clears({ stated: true }), false, 'the same quote the checker judged as not stating it');
+    assert.equal(clears({ stated: true, quote: '' }), false, 'no quote');
+    assert.equal(clears({ stated: true, quote: 'Un grafico che non c’è.' }), false, 'a quote that is not in the solution');
+    assert.equal(clears({ stated: false, quote: '[figure: Grafico simmetrico' }), false, 'not stated');
+    assert.equal(clears({ stated: true, quote: '[figure: Grafico simmetrico rispetto all’asse verticale' }), true, 'other words, found, stated');
+    assert.equal(clears({ stated: true, quote: 'Minimi in $x=\\pm1$.\n\n### (d)' }), true, 'the checker\'s passage extended with more words');
+    assert.equal(clears({ stated: true, quote: 'Minimi' }), false, 'a part of the checker\'s passage');
+    assert.equal(clears({ stated: true, quote: '[figure: Grafico simmetrico', request: 'Tracciare un grafico qualitativo di $f$ e di $g$.' }), false, 'another request, even one that contains this one');
+    // Chimica f3781eb8: one request answered as two items that together cover it.
+    const sol = 'Il rapporto tra ioni alluminio e ioni solfato è $2:3$. Il totale è $2+3+12=17$ atomi per unità formula.';
+    const whole: CheckedItem = { request: 'b) Indicare il rapporto tra gli ioni presenti nell’unità formula e il numero totale di atomi contenuti in essa.', answer: '2:3; 17', quote: 'Il totale è $2+3+12=17$ atomi per unità formula.', stated: false, matches: true };
+    const [m2] = itemProblems([whole], sol);
+    const split = [{ ...whole, request: 'Indicare il rapporto tra gli ioni presenti nell’unità formula', quote: 'Il rapporto tra ioni alluminio e ioni solfato è $2:3$.', stated: true }, { ...whole, request: 'il numero totale di atomi contenuti in essa.', stated: true }];
+    assert.equal(unclearedMissing([m2!], [whole], split, sol).length, 0, 'parts that cover the request, each stated and found');
+    assert.equal(unclearedMissing([m2!], [whole], [split[1]!], sol).length, 1, 'one part alone does not cover it');
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, { ...split[1]!, stated: false }], sol).length, 1, 'every part must be stated');
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, split[0]!], sol).length, 1, 'the same part twice covers it once');
+    const half = { ...split[0]!, request: 'Indicare il rapporto tra gli ioni' };
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, half], sol).length, 1, 'an overlapping part adds nothing');
+    assert.equal(unclearedMissing(problems, [graph], undefined, solution).length, 1, 'no item table: the finding stands');
+  });
+
+  test('in the handler: the reviewer saying "stated" without other words does not clear it', async () => {
+    const statement = 'Sia $f(x)=x^4-2x^2$. (d) Tracciare un grafico qualitativo di $f$.';
+    const sol = 'Minimi in $x=\\pm1$. Il grafico ha due minimi.';
+    const item: CheckedItem = { ...graph, quote: 'Il grafico ha due minimi.' };
+    const id = q({ statement, solution: sol });
+    fake.next(...check({ items: [item] }), review({ items: [{ ...item, stated: true }] }));
+    await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal(fake.calls.length, 4, 'the reviewer is asked');
+    assert.equal(row(id).status, 'issue');
+    assert.deepEqual(issues(`question_id = '${id}'`).map((i) => i.message), ['The solution does not state the answer to "Tracciare un grafico qualitativo di $f$." in the form asked: it only says "Il grafico ha due minimi.".']);
+  });
+});
+
+describe('15o. a value the step program types is checked against the blind program', () => {
+  test('typedValue finds the stated number written into a program, unless the statement gives it', () => {
+    assert.ok(Math.abs(typedValue('print("p =", 6.615e-24, "kg m/s")', '6,615 × 10^-24 kg m/s', 'Un elettrone accelerato da 150 V.')! - 6.615e-24) < 1e-30);
+    assert.equal(typedValue('p = (2*m*K)**0.5\nprint("p =", p)', '6,615 × 10^-24 kg m/s', 'Un elettrone accelerato da 150 V.'), null);
+    assert.equal(typedValue('print("V =", 150, "V")', '150 V', 'Un elettrone accelerato da 150 V.'), null, 'a datum of the statement');
+  });
+
+  test('in the handler: Chimica bba65124, the step program prints the solution\'s p as a literal and the blind one computes it', async () => {
+    const id = q({ statement: 'Un elettrone è accelerato da 150 V. Calcola la quantità di moto.', solution: 'Si ha $p = 6{,}615\\cdot10^{-24}\\,\\mathrm{kg\\,m/s}$.' });
+    fake.next(...check({ computation: 'print("p =", (2*9.109e-31*1.602e-19*150)**0.5, "kg m/s")', stepProgram: 'print("p =", 6.615e-24, "kg m/s")', statedValues: [{ name: 'p', value: '6,615 × 10^-24 kg m/s' }] }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: { final: boolean }[] }).statedValues[0]!.final = false;
+      return out;
+    }), stands);
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal((r as { mismatches: number }).mismatches, 1, '6,6168e-24 computed against 6,615e-24 stated');
+    assert.match(fake.calls[3]!.prompt, /- p: blind printed/);
+  });
+
+  test('a number used inside a formula is not a typed value, and a value the blind program cannot pair keeps its step comparison', async () => {
+    const id = q({ statement: 'Una sfera ha diametro doppio del raggio. Calcola il diametro.', solution: 'Il raggio è $r = 3\\,\\mathrm{m}$, il diametro $d = 7{,}0\\,\\mathrm{m}$.' });
+    fake.next(...check({ computation: 'print("altro = 1 m")', stepProgram: 'r = 3\nprint("d =", 2*r, "m")', statedValues: [{ name: 'd', value: '7,0 m' }] }).map((step) => (input: { prompt: string }) => {
+      const out = step(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: { final: boolean }[] }).statedValues[0]!.final = false;
+      return out;
+    }), stands);
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: id })) as { mismatches: number }).mismatches, 1, 'the step program\'s 6 m against the stated 7,0 m');
+  });
+
+  test('a pressure in atm is compared with a program that prints atm', async () => {
+    const id = q({ statement: 'Calcola la pressione finale.', solution: '$P_f = 0{,}4107\\,\\mathrm{atm}$' });
+    fake.next(...check({ computation: 'print("P finale =", 1.00*(0.175/0.500)*(350/298), "atm")', statedValues: [{ name: 'P finale', value: '0,4107 atm' }] }), stands);
+    assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: id })) as { mismatches: number }).mismatches, 1);
   });
 });
 
