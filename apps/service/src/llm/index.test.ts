@@ -443,7 +443,7 @@ describe('image routing', () => {
   const png = Buffer.from('fakepng');
 
   test('primary that cannot read images is skipped for a fallback that can', async () => {
-    useRoutes('vision', { provider: 'antigravity', model: 'g' }, { provider: 'codex', model: 'gpt-6-luna' });
+    useRoutes('vision', { provider: 'agent', model: 'x' }, { provider: 'codex', model: 'gpt-6-luna' });
     fake.next(() => ({ text: 'page' }));
     const out = await runRole(kit.ctx, { ...base, role: 'vision', images: [png] });
     assert.equal(out.route.provider, 'codex');
@@ -452,13 +452,13 @@ describe('image routing', () => {
   });
 
   test('no route can read images: TaskError(input) before any call', async () => {
-    useRoutes('vision', { provider: 'antigravity', model: 'g' }, { provider: 'agent', model: 'x' });
+    useRoutes('vision', { provider: 'agent', model: 'x' }, { provider: 'agent', model: 'y' });
     await assert.rejects(runRole(kit.ctx, { ...base, role: 'vision', images: [png] }), (e: unknown) => e instanceof TaskError && e.kind === 'input');
     assert.equal(fake.calls.length, 0);
   });
 
   test('image-capable primary keeps its place; a non-image fallback is not used', async () => {
-    useRoutes('vision', { provider: 'claude', model: 'm' }, { provider: 'antigravity', model: 'g' });
+    useRoutes('vision', { provider: 'claude', model: 'm' }, { provider: 'agent', model: 'x' });
     fake.next(() => new Error('rate limit hit'));
     await assert.rejects(runRole(kit.ctx, { ...base, role: 'vision', images: [png] }), (e: unknown) => e instanceof TaskError && e.kind === 'quota');
     assert.equal(fake.calls.length, 1);
@@ -884,7 +884,7 @@ describe('a conversation that continues after the first answer', () => {
   });
 
   test('a route that cannot read images refuses a follow-up with images before any call', async () => {
-    setRoutes({ writer: { primary: route('antigravity') } });
+    setRoutes({ writer: { primary: route('agent') } });
     fake.next(() => ({ text: 'draft' }));
     const talk = await openRole(kit.ctx, { ...base, role: 'writer' });
     await assert.rejects(talk.send('look', { images: [png] }), (e: unknown) => e instanceof FollowUpError && e.kind === 'input');

@@ -61,7 +61,7 @@ export class FakeFunnel implements FunnelLike {
     claude: { displayName: 'Claude Code', capabilities: caps(true, 'native', ['none', 'supervised', 'accept-edits', 'auto', 'full']) },
     codex: { displayName: 'Codex', capabilities: caps(true, 'native', ['none', 'supervised', 'accept-edits', 'auto', 'full']) },
     agent: { displayName: 'Cursor Agent', capabilities: caps(false, 'prompt') },
-    antigravity: { displayName: 'Antigravity', capabilities: caps(false) },
+    antigravity: { displayName: 'Antigravity', capabilities: caps(true, 'prompt') },
   };
   installed: Record<string, boolean> = { claude: true, codex: true, agent: false, antigravity: true };
   loggedIn: Record<string, boolean> = { claude: true, codex: true, agent: false, antigravity: false };
