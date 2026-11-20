@@ -550,6 +550,21 @@ export function differentResultBlocker(resultsAgree: boolean, mismatches: Compar
   return !missing || differs;
 }
 
+/** A bracketed note that stands for a picture: "[figure: …]", as the page transcription writes one, or "[grafico: …]". */
+const PLACEHOLDER = /\[\s*(?:figure|figura|immagine|grafico|graph|image|disegno|diagram|diagramma)\s*:[^\]\n]*\]?/gi;
+
+/**
+ * A figure placeholder in a solution is a defect found in code: the reader shows the bracketed note as text, and the answer
+ * it stands for (a graph, a drawing) is never given. Six verified Analisi 1 solutions carried one after the 2026-11-20 re-check.
+ */
+export function placeholderProblems(solution: string): CheckProblem[] {
+  return [...solution.matchAll(PLACEHOLDER)].map((m) => ({
+    kind: 'answer-missing' as const, evidence: 'code' as const,
+    message: `The solution has a figure placeholder instead of the answer it stands for: "${truncate(m[0].trim(), 200)}".`,
+    suggestion: 'Replace it with the answer in words: for a graph, a description that names every feature a sketch would show.',
+  }));
+}
+
 /**
  * The verdict of the exercise check. A question is verified only when the two solutions agree, no listed problem is major
  * (`problemSeverity`), the numeric recompute found no mismatch, and the statement's data pass (`dataFailure`). Two models that
@@ -565,7 +580,7 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
   const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
   const fromItems = d.items ? itemProblems(d.items, solution) : [];
   const requests = (d.items ?? []).map((i) => i.request);
-  const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })).filter((p) => !restates(p, fromItems, requests)), ...fromItems];
+  const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })).filter((p) => !restates(p, fromItems, requests)), ...fromItems, ...placeholderProblems(solution)];
   const problems = listed.filter((p) => !(settled && p.kind === 'wrong-value' && p.evidence === 'model' && !p.item)).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
   // The model's `agrees` covers its results and its reasoning: once the recompute settled the results, or the model named what
   // it disagrees with as problems, the kinds of those problems decide.
@@ -598,7 +613,7 @@ function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, co
 }
 
 /** A recomputed value that differs from the solution's, and the program that printed it: the blind one or the step one. */
-export type OpenMismatch = Comparison & { program: 'blind' | 'steps' };
+export type OpenMismatch = Comparison & { program: 'blind' | 'steps'; relative?: number };
 /** What the reconcile step decided about one mismatch: `cleared` when a corrected program reached the solution's value. */
 export interface Reconciled { name: string; program: OpenMismatch['program']; cause: MismatchCause | 'unexplained'; why: string; cleared: boolean; computed?: string; refused?: string }
 
@@ -611,6 +626,15 @@ function numbersIn(text: string): number[] {
 const sameNumber = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
 const powerOfTen = (x: number) => x > 0 && sameNumber(10 ** Math.round(Math.log10(x)), x);
 
+/** The stated value's number when the program types it as a literal and the statement does not give it, or null. */
+export function typedValue(code: string, stated: string, statement: string): number | null {
+  const q = parseQuantity(stated);
+  if (!q) return null;
+  const inStatement = numbersIn(statement);
+  const typed = numbersIn(code);
+  return [q.asWritten, ...(q.alt ? [q.alt.asWritten] : [])].map(Math.abs).find((v) => typed.some((t) => sameNumber(t, v)) && !inStatement.some((t) => sameNumber(t, v))) ?? null;
+}
+
 /**
  * Why a corrected program may not clear a mismatch, or null when it may. It may not type the value it checks (the solution's
  * wrong number would then match by construction) unless the statement gives that number, and every number it adds to the
@@ -618,12 +642,10 @@ const powerOfTen = (x: number) => x > 0 && sameNumber(10 ** Math.round(Math.log1
  * of ten (a change of unit). A program that adds 3.4999 to land on the solution's 3.5 is refused.
  */
 export function correctionRefused(before: string, after: string, mismatch: Comparison, texts: { statement: string; solution: string }): string | null {
-  const stated = parseQuantity(mismatch.stated);
+  const own = typedValue(after, mismatch.stated, texts.statement);
+  if (own !== null) return `the corrected program types the stated value ${own}`;
   const inStatement = numbersIn(texts.statement);
   const typed = numbersIn(after);
-  const values = stated ? [stated.asWritten, ...(stated.alt ? [stated.alt.asWritten] : [])].map(Math.abs) : [];
-  const own = values.find((v) => typed.some((t) => sameNumber(t, v)) && !inStatement.some((t) => sameNumber(t, v)));
-  if (own !== undefined) return `the corrected program types the stated value ${own}`;
   const known = [...numbersIn(before), ...inStatement, ...numbersIn(texts.solution)];
   const added = typed.find((t) => !known.some((k) => sameNumber(k, t)) && !powerOfTen(t));
   return added === undefined ? null : `the corrected program adds the number ${added}, which neither text gives`;
@@ -674,7 +696,7 @@ export async function reconcileMismatches(
     if (!outputs.has(m.program)) outputs.set(m.program, await printedValues(code, run));
     const printed = outputs.get(m.program)!;
     const value = stated.filter((s) => s.name === m.name && s.value.trim() === m.stated);
-    const again = printed && value.length ? compareValues(value, printed, { byName: true, rounded: roundsOutput(code), relative: programs[m.program].relative }) : null;
+    const again = printed && value.length ? compareValues(value, printed, { byName: true, rounded: roundsOutput(code), relative: m.relative ?? programs[m.program].relative }) : null;
     const cleared = !!again?.compared.length && !again.mismatches.length;
     out.push({ ...base, cleared, ...(cleared ? { computed: again!.compared[0]!.computed } : { refused: again?.mismatches.length ? `the corrected program still prints ${again.mismatches[0]!.computed}` : 'the corrected program printed no comparable value' }) });
   }
@@ -687,6 +709,28 @@ export function measuredData(statement: string): boolean {
   // A unit may also head a list of values: "Masse (g): 12, 15", "T [K]".
   if ([...text.matchAll(/[([]\s*([^\s()[\]\d]+(?:\s*\/\s*[^\s()[\]\d]+)?)\s*[)\]]/g)].some((m) => !!parseQuantity(`1 ${m[1]}`)?.unit)) return true;
   return [...text.matchAll(/(\d+(?:[.,]\d+)?)\s*([^\s\d.,;:()]+(?:\s*\/\s*[^\s\d$.,;:()]+)?)/g)].some((m) => !!parseQuantity(`${m[1]} ${m[2]}`)?.unit);
+}
+
+/** True when two quotes of the solution are the same passage, or one is part of the other. */
+function sameQuote(a: string, b: string): boolean {
+  const [x, y] = [quoteKey(a), quoteKey(b)];
+  return !!x && !!y && (x.includes(y) || y.includes(x));
+}
+
+/**
+ * The checker's item-level answer-missing problems the reviewer did not clear. The reviewer clears one only with its own
+ * item for the same request, marked stated, whose quote is in the solution and is not the passage the checker already
+ * judged as not stating the answer. Measured on 2026-11-20, gpt-6.1-sol cleared a hypothesis never written (Chimica
+ * d353e14e) and a graph given in one sentence (Analisi 1) on its word alone.
+ */
+export function unclearedMissing(problems: CheckProblem[], checkerItems: CheckedItem[], reviewerItems: CheckedItem[] | undefined, solution: string): (CheckProblem & { severity: 'major' | 'minor' })[] {
+  return problems.filter((p) => p.item && p.kind === 'answer-missing' && p.request).filter((p) => {
+    const key = itemKey(p.request!);
+    const mine = checkerItems.find((i) => itemKey(i.request) === key);
+    const theirs = (reviewerItems ?? []).find((i) => { const k = itemKey(i.request); return k === key || (!!k && (k.includes(key) || key.includes(k))); });
+    const cleared = !!theirs && theirs.stated && !!theirs.quote.trim() && quoteFound(theirs.quote, solution) && !(mine?.quote.trim() && sameQuote(mine.quote, theirs.quote));
+    return !cleared;
+  }).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
 }
 
 /**
@@ -760,8 +804,14 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   // the step check catches a smaller error in the line where it is made.
   const blind = { byName: true, rounded: roundsOutput(solve.computation) };
   const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
-  const stepCheck = stated.length ? compareValues(stated, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
+  // A value the step program types instead of computing (Chimica bba65124: it printed the solution's p = 6,615e-24 as a
+  // literal) matches by construction, so it is compared with the blind program, which computed it from the statement.
+  const typed = new Set(stated.filter((v) => typedValue(cmp.computation ?? '', v.value, q.statement) !== null).map((v) => v.name));
   const confirmed = stated.length ? compareValues(stated, printed, blind) : null;
+  const computedStep = stated.filter((v) => !typed.has(v.name));
+  const ownStep = computedStep.length ? compareValues(computedStep, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
+  const fromBlind = typed.size ? compareValues(stated.filter((v) => typed.has(v.name)), printed, blind) : null;
+  const stepCheck = ownStep || fromBlind ? { compared: [...(ownStep?.compared ?? []), ...(fromBlind?.compared ?? [])], mismatches: [...(ownStep?.mismatches ?? []), ...(fromBlind?.mismatches ?? [])], complete: false } : null;
   // A mismatch left after the merge gets one reconcile call, which may show that a program measured the value differently.
   // Not when the data check fails: the question is blocked anyway, and data that do not fix one answer (Fisica 41d80bd6: which
   // end of the rod is hit) let the reconcile rewrite the blind program to the solution's choice and drop the evidence.
@@ -769,7 +819,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
   const open: OpenMismatch[] = [
     ...(finalCheck?.mismatches ?? []).map((m) => ({ ...m, program: 'blind' as const })),
-    ...(stepCheck?.mismatches ?? []).filter((m) => !right.has(m.name)).map((m) => ({ ...m, program: 'steps' as const })),
+    ...(stepCheck?.mismatches ?? []).filter((m) => typed.has(m.name) || !right.has(m.name)).map((m) => ({ ...m, ...(typed.has(m.name) ? { program: 'blind' as const, relative: 0 } : { program: 'steps' as const }) })),
   ];
   const reconciled = open.length && !badData
     ? await reconcileMismatches({ statement: q.statement, solution: q.solution }, open, {
@@ -777,7 +827,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
       steps: { code: cmp.computation ?? '', output: steps },
     }, stated, (prompt) => call(role, prompt, reconcileSchema, 'reconcile'))
     : [];
-  const keep = (check: NumericCheck | null, program: OpenMismatch['program']) => check && { ...check, mismatches: check.mismatches.filter((m) => !reconciled.some((r) => r.cleared && r.program === program && r.name === m.name)) };
+  const keep = (check: NumericCheck | null, program: OpenMismatch['program']) => check && { ...check, mismatches: check.mismatches.filter((m) => !reconciled.some((r) => r.cleared && r.program === (typed.has(m.name) && program === 'steps' ? 'blind' : program) && r.name === m.name)) };
   const merged = mergeChecks(keep(finalCheck, 'blind'), keep(stepCheck, 'steps'), confirmed, stated.map((v) => v.name), finals.length > 0);
   // A cleared value is shown as the corrected program printed it, so a passing check never lists 0.0035 L against 3.5 L.
   const shown = (c: Comparison) => ({ ...c, computed: reconciled.find((r) => r.cleared && r.name === c.name)?.computed ?? c.computed });
@@ -821,7 +871,14 @@ export async function checkExercise(q: { statement: string; solution: string; la
   const recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   // Its consistency program is its verdict on the data; with no program, the checker's result stands.
   const consistency = (await runConsistency(data.consistency)) ?? first.consistency;
-  return { ...verifyVerdict(data, recomputed, consistency, q.solution), answer: data, recomputed, consistency, reconciled: first.reconciled, model: route.model, reviewerAsked: true };
+  const second = verifyVerdict(data, recomputed, consistency, q.solution);
+  // An answer the checker found not stated in the form asked stands unless the reviewer quotes other words that state it.
+  const kept = unclearedMissing(v.problems, first.answer.items, data.items, q.solution)
+    .filter((p) => !second.problems.some((r) => r.item && r.kind === 'answer-missing' && r.request && itemKey(r.request) === itemKey(p.request!)));
+  const problems = [...second.problems, ...kept];
+  const ok = second.ok && !kept.length;
+  // reviewerOk and missingKept tell the measurement harness what the reviewer said and what the rule kept.
+  return { ...second, ok, problems, answer: data, recomputed, consistency, reconciled: first.reconciled, model: route.model, reviewerAsked: true, missingKept: kept.length, reviewerOk: second.ok };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
@@ -965,7 +1022,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
   if (!r) return { skipped: true };
   let q = rowToQuestion(r);
   const ids = (t.task.input.issueIds as string[]) ?? [];
-  const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string; quote: string }>(`SELECT id, message, suggestion, source, category, severity, status, quote FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')})`, ...ids) : [];
+  const selected = ids.length ? ctx.db.all<{ id: string; message: string; suggestion: string; source: string; category: string; severity: string; status: string; quote: string }>(`SELECT id, message, suggestion, source, category, severity, status, quote FROM review_issues WHERE id IN (${ids.map(() => '?').join(',')}) ORDER BY created_at, rowid`, ...ids) : [];
   // The issues may be gone (a relint of the chapter deletes open lint rows): with nothing left to fix the editor must not run and save its answer as a draft.
   if (ids.length && !selected.length) return { skipped: 'the requested issues are gone', rev: q.rev };
   const project = loadProject(ctx, q.projectId);

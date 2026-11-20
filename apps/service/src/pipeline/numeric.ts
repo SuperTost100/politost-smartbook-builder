@@ -32,8 +32,8 @@ const MU = '\u03bc';
 const OHM = '\u03a9';
 const PREFIXES: Record<string, number> = { G: 1e9, M: 1e6, k: 1e3, c: 1e-2, m: 1e-3, [MU]: 1e-6, u: 1e-6, n: 1e-9, p: 1e-12 };
 const BASE_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'g', 'mol', 'K', 'C', 'S', 'T', 'L', 'l', 'B', 'bar']);
-// Units that take no prefix here. A unit with any other word in it (atm, mmHg, pi) is not compared.
-const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u00b0C']);
+// Units that take no prefix here, compared only with a value printed in the same unit. A unit with any other word in it (pi) is not compared.
+const OTHER_UNITS = new Set(['rad', 'deg', 'min', 'h', 'eV', '%', '\u00b0', '\u00b0C', 'atm', 'mmHg', 'Torr']);
 // Units whose value in the solution is the SI value once the prefix is applied. min, h, L, bar, deg, km/h and mol/L are not: an unmarked printed value cannot be read against them.
 const SI_UNITS = new Set([OHM, 'A', 'V', 'W', 'F', 'H', 'Hz', 'J', 'N', 'Pa', 'm', 's', 'mol', 'K', 'C', 'S', 'T', 'rad', 'kg']);
 const MAX_PRINTED_VALUES = 50;
