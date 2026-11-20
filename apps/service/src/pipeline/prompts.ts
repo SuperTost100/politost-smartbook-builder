@@ -896,6 +896,84 @@ ${PROBLEM_KIND_LINES}
   };
 }
 
+/**
+ * Why a recomputed value differs from the solution's: the solution is wrong, or the program printed another unit or scale,
+ * used another convention or tabulated constant, or is wrong itself. `reconcileMismatches` reads it in code.
+ */
+export const MISMATCH_CAUSES = ['solution-wrong', 'unit-or-scale', 'convention', 'program-wrong'] as const;
+export type MismatchCause = (typeof MISMATCH_CAUSES)[number];
+
+/** The reconcile step of the exercise check, asked only when a recomputed value differs from the solution's. */
+export const reconcileSchema = z.object({
+  mismatches: z.array(z.object({
+    name: z.string().describe('the name of the value, as listed under MISMATCHES'),
+    cause: z.enum(MISMATCH_CAUSES),
+    why: z.string().describe('one sentence: what makes the two values differ'),
+  })),
+  programs: z.array(z.object({
+    program: z.string().describe('the program name, as given under PROGRAMS'),
+    code: codeString().describe('the corrected program; empty to keep it as it is'),
+  })),
+});
+export type ReconcileAnswer = z.infer<typeof reconcileSchema>;
+
+export function reconcilePrompt(p: { statement: string; solution: string; programs: { name: string; role: string; code: string; output: string }[]; mismatches: { name: string; program: string; computed: string; stated: string }[] }) {
+  return {
+    system: 'You check whether a value recomputed by a Python program really differs from the value a textbook solution states, or whether the program measured it differently. You are strict: a solution that is wrong stays wrong, however small the difference.',
+    prompt: `STATEMENT:
+${p.statement}
+
+GIVEN SOLUTION:
+${p.solution}
+
+${CROSS_REFERENCES}
+
+PROGRAMS:
+${p.programs.map((x) => `--- ${x.name} (${x.role})\n${x.code.trim()}\n--- it printed:\n${x.output.trim() || '(nothing)'}`).join('\n\n')}
+
+MISMATCHES (the code compared the printed value with the value the solution states, within one unit of its last digit):
+${p.mismatches.map((m) => `- ${m.name}: ${m.program} printed ${m.computed}; the solution states ${m.stated}`).join('\n')}
+
+For each mismatch, find why the two values differ and return its cause:
+- solution-wrong: the solution's value is wrong (a slip, a wrong formula, a wrong datum, a rounding carried from an earlier rounded value that moves the result), or you cannot tell. This is the answer whenever the program computed the same quantity from the statement data in the same units with the same constants.
+- unit-or-scale: the program printed the value in another unit or scale than its label says or than the solution uses (m³ for L, J/mol for kJ/mol, a percentage as a fraction).
+- convention: the program used another convention than the solution (a sign convention, a reference state, another form of the same answer) or another tabulated constant that the STATEMENT does not give (a standard potential, a molar mass, R, g), and the solution's constant is an accepted tabulated value. A constant the solution uses that is not an accepted value is solution-wrong.
+- program-wrong: the program computes another quantity or makes a mistake of its own.
+
+For every program with a mismatch whose cause is not solution-wrong, return the corrected program: the same program with only that cause removed (print in the solution's unit, use the solution's convention or its tabulated constant, fix the program's own mistake), still computing from the statement data, and printing the same names in the format "name = value unit". Never type a value of the solution that the program is meant to check, and never make the program print a number because the solution states it. Leave the code empty for a program you keep as it is.`,
+  };
+}
+
+/** The second look at a consistency program that failed while both calls of the check found the data fine. */
+export const consistencyRecheckSchema = z.object({
+  cause: z.enum(['data-wrong', 'program-wrong']),
+  why: z.string().describe('one sentence: what is inconsistent in the data, or what is wrong in the program'),
+  consistency: codeString().describe('for program-wrong, the corrected program; empty when the statement has no numeric data to check'),
+});
+export type ConsistencyRecheck = z.infer<typeof consistencyRecheckSchema>;
+
+export function consistencyRecheckPrompt(p: { statement: string; code: string; result: string }) {
+  return {
+    system: 'You check whether a program that tests the data of a textbook problem found a real inconsistency, or is wrong itself. You are strict: data that contradict each other or are physically impossible stay wrong.',
+    prompt: `STATEMENT:
+${p.statement}
+
+${CROSS_REFERENCES}
+
+PROGRAM (it should recompute from the statement data every quantity they fix twice or that must meet a constraint, and print CONSISTENT or INCONSISTENT: <what> as its last line):
+${p.code.trim()}
+
+RESULT:
+${p.result.trim()}
+
+Decide the cause and return it:
+- data-wrong: the data of the statement really contradict each other, are impossible, or disagree with a known tabulated value, as the program says.
+- program-wrong: the data are fine and the program is wrong: a wrong formula, a crash, a tolerance tighter than the precision of the data, or a test of something that is not a constraint of the data (the answer to the problem itself, a property of the result).
+
+For program-wrong, return in consistency the corrected program, standard library only (math, fractions), no input and no files, that checks the same constraints of the data and prints CONSISTENT or INCONSISTENT: <what> as its last line. Leave it empty only when the statement has no numeric data to check (a series, a limit or a function given by its formula).`,
+  };
+}
+
 /** The step audit of the exercise check: every step of the given solution worked out again. */
 export const stepAuditSchema = z.object({
   steps: z.array(z.object({
