@@ -1035,6 +1035,9 @@ describe('15n. an answer not given in the form asked stays caught', () => {
     assert.equal(unclearedMissing([m2!], [whole], split, sol).length, 0, 'parts that cover the request, each stated and found');
     assert.equal(unclearedMissing([m2!], [whole], [split[1]!], sol).length, 1, 'one part alone does not cover it');
     assert.equal(unclearedMissing([m2!], [whole], [split[0]!, { ...split[1]!, stated: false }], sol).length, 1, 'every part must be stated');
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, split[0]!], sol).length, 1, 'the same part twice covers it once');
+    const half = { ...split[0]!, request: 'Indicare il rapporto tra gli ioni' };
+    assert.equal(unclearedMissing([m2!], [whole], [split[0]!, half], sol).length, 1, 'an overlapping part adds nothing');
     assert.equal(unclearedMissing(problems, [graph], undefined, solution).length, 1, 'no item table: the finding stands');
   });
 

@@ -732,7 +732,10 @@ export function unclearedMissing(problems: CheckProblem[], checkerItems: Checked
     // "Calcola la massa molare": a part that covers too little, or a reworded request, leaves the finding.
     const same = (reviewerItems ?? []).filter((i) => itemKey(i.request) === key);
     const parts = (reviewerItems ?? []).filter((i) => { const k = itemKey(i.request); return !!k && k !== key && key.includes(k); });
-    const covered = parts.reduce((n, i) => n + itemKey(i.request).length, 0) >= 0.85 * key.length;
+    // Each position of the request counts once, so a part listed twice or two overlapping parts do not add up.
+    const marked = new Array<boolean>(key.length).fill(false);
+    for (const i of parts) { const k = itemKey(i.request); const at = key.indexOf(k); for (let j = at; j < at + k.length; j++) marked[j] = true; }
+    const covered = marked.filter(Boolean).length >= 0.85 * key.length;
     const theirs = same.length === 1 ? same : parts.length >= 2 && covered ? parts : [];
     const shown = (i: CheckedItem) => i.stated && !!i.quote.trim() && quoteFound(i.quote, solution);
     const cleared = theirs.length > 0 && theirs.every(shown) && theirs.some((i) => !(mine?.quote.trim() && noNewWords(mine.quote, i.quote)));
