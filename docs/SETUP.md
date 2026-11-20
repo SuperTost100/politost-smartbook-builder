@@ -33,7 +33,7 @@ Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost1
 Each job (a *role*) has a primary model and a fallback, and you change them under **Connections**. The defaults spend the expensive models only where a student would notice: Sonnet writes the section text and fixes blockers in it, and fixes change only the paragraphs involved. Everything else runs on GPT-6-Luna, with GPT-6-Sol as a second opinion. A few rules behind the defaults:
 
 - The reviewer should come from a different vendor than the writer, so it does not share the writer's blind spots. The same goes for the second opinion and the reviewer.
-- Reading pages needs a model that accepts images (Claude or Codex).
+- Reading pages needs a model that accepts images (Claude, Codex or Antigravity).
 - Calls through Cursor to Claude models are billed at API prices, so use Claude Code for those.
 - When a subscription hits its limit, the task waits and resumes after the reset, or switches to the role's fallback. Nothing is lost. A provider that reported a limit gets no further calls until its reset, and the Connections screen shows the usage windows of Codex.
 - A book can stay on Claude whatever happens: *When Claude usage runs out* in Book setup removes the fallback of every role that starts on Claude for that book, so its tasks wait for the reset.

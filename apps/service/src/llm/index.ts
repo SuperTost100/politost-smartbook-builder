@@ -174,7 +174,7 @@ async function startConversation<T>(ctx: AppContext, opts: RunRoleOptions<T>): P
   if (!needsImages) candidates = [primary, ...(fallback ? [fallback] : [])];
   else if (canImages(primary)) candidates = [primary, ...(fallback && canImages(fallback) ? [fallback] : [])];
   else if (fallback && canImages(fallback)) candidates = [fallback];
-  else throw new TaskError(`The "${opts.role}" route (${primary.provider}/${primary.model}) cannot read images and there is no fallback that can.`, 'input', 'In Settings, pick a vision-capable model (Claude or Codex) for this role.');
+  else throw new TaskError(`The "${opts.role}" route (${primary.provider}/${primary.model}) cannot read images and there is no fallback that can.`, 'input', 'In Settings, pick a vision-capable model (Claude, Codex or Antigravity) for this role.');
 
   if (opts.web) {
     candidates = candidates.filter(canWeb);
@@ -342,8 +342,9 @@ function replayPrompt(firstPrompt: string, lastAnswer: string, message: string):
 
 /**
  * One conversation with the model of one route. The first turn and every later turn go through callOnce, so they share the
- * timeout, the abort signal, the private homes and the usage rows. A live session gets only the new message. Other providers
- * would replay the whole conversation (Antigravity took twice as long), so they get the prompt and the last answer again in a new one.
+ * timeout, the abort signal, the private homes and the usage rows. A live session (Claude Code, Codex and, since cli-funnel 1.0,
+ * Antigravity) gets only the new message. A provider without one would replay the whole conversation, so it gets the prompt and
+ * the last answer again in a new one.
  */
 class Conversation {
   private sessionId: string | undefined;
