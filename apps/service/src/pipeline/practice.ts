@@ -9,10 +9,11 @@ import { transcribePage } from '../evidence/index.ts';
 import { searchPages } from '../extract/index.ts';
 import { runRole } from '../llm/index.ts';
 import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
-import { comparePrompt, compareSchema, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
+import { comparePrompt, compareSchema, reconcilePrompt, reconcileSchema, type MismatchCause, type ReconcileAnswer, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { compareValues, mismatchMessage, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { compareValues, mismatchMessage, parseQuantity, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { runPython, type PythonResult } from './python.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
 import { getQuestion, questionsChanged, recordQuestionRevision, type QuestionText } from '../repo/questions.ts';
@@ -455,7 +456,8 @@ export function problemSeverity(kind: ProblemKind): 'major' | 'minor' {
 }
 
 /** A problem of the exercise check. `evidence` says whether code found it (a quote missing from the solution) or only a model said so. */
-export interface CheckProblem { kind: ProblemKind; message: string; suggestion: string; evidence: 'code' | 'model'; item?: boolean }
+/** `item` marks a problem the item table set, and `request` names its item. */
+export interface CheckProblem { kind: ProblemKind; message: string; suggestion: string; evidence: 'code' | 'model'; item?: boolean; request?: string }
 
 /** Text as the quote check compares it: without markup, spacing, braces and the variants of dashes and quote marks. */
 function quoteKey(text: string): string {
@@ -497,16 +499,52 @@ export function itemProblems(items: CheckedItem[], solution: string): CheckProbl
     const quote = it.quote.trim();
     const answer = truncate(it.answer.trim(), 300);
     if (!quote || !quoteFound(quote, solution)) {
-      out.push({ kind: 'answer-missing', evidence: 'code', message: `The solution never states the answer to ${what}.`, suggestion: `State it explicitly${answer ? `: ${answer}` : ''}.` });
-    } else if (!it.stated) {
-      out.push({ kind: 'answer-missing', evidence: 'model', message: `The solution does not state the answer to ${what} in the form asked: it only says "${truncate(quote, 200)}".`, suggestion: `Write the answer out${answer ? `: ${answer}` : ''}.` });
+      // An answer never stated cannot also differ: one issue says it, with the check's answer as the suggestion.
+      out.push({ kind: 'answer-missing', evidence: 'code', item: true, request: it.request, message: `The solution never states the answer to ${what}.`, suggestion: `State it explicitly${answer ? `: ${answer}` : ''}.` });
+      continue;
+    }
+    if (!it.stated) {
+      out.push({ kind: 'answer-missing', evidence: 'model', item: true, request: it.request, message: `The solution does not state the answer to ${what} in the form asked: it only says "${truncate(quote, 200)}".`, suggestion: `Write the answer out${answer ? `: ${answer}` : ''}.` });
     }
     if (!it.matches) {
       // The recompute never clears it: nothing ties the item to the values it compared, and the answer may not be a number.
-      out.push({ kind: 'wrong-value', evidence: 'model', item: true, message: `The answer to ${what} differs from the independent one: the solution says "${truncate(quote || '(nothing)', 200)}", the check gets ${answer}.`, suggestion: 'Compare both answers and correct the solution, or accept the issue if the check is wrong.' });
+      out.push({ kind: 'wrong-value', evidence: 'model', item: true, request: it.request, message: `The answer to ${what} differs from the independent one: the solution says "${truncate(quote, 200)}", the check gets ${answer}.`, suggestion: 'Compare both answers and correct the solution, or accept the issue if the check is wrong.' });
     }
   }
   return out;
+}
+
+/** The words of a text that can name an item: five letters or more, accents dropped, cut to six letters (precipitato, precipitate). */
+function stems(text: string): Set<string> {
+  return new Set(text.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').match(/\p{L}{5,}/gu)?.map((w) => w.slice(0, 6)) ?? []);
+}
+
+/**
+ * True when a problem the model listed says what a problem of the item table already says: same kind, and its message uses
+ * a word of that item's request that no other request uses ("La soluzione non indica esplicitamente il precipitato" and the
+ * item "Indica il precipitato"). The item's problem stays, so the verdict does not change; the editor gets one problem.
+ */
+export function restates(p: CheckProblem, fromItems: CheckProblem[], requests: string[]): boolean {
+  if (p.item) return false;
+  const words = stems(p.message);
+  return fromItems.some((c) => {
+    if (c.kind !== p.kind || !c.request) return false;
+    const others = requests.filter((r) => r !== c.request).flatMap((r) => [...stems(r)]);
+    return [...stems(c.request)].some((w) => !others.includes(w) && words.has(w));
+  });
+}
+
+/**
+ * Whether a check whose results differ needs its own "different result" blocker. It does when the recompute found a
+ * mismatch (the blocker names the numbers), or when a stated answer differs from the check's. When the only difference is
+ * an answer the solution never states, or does not state in the form asked, that item already has its issue.
+ */
+export function differentResultBlocker(resultsAgree: boolean, mismatches: Comparison[], items: CheckedItem[] | undefined, problems: CheckProblem[], solution: string): boolean {
+  if (resultsAgree) return false;
+  if (mismatches.length || !items?.length) return true;
+  const missing = problems.some((p) => p.item && p.kind === 'answer-missing');
+  const differs = items.some((i) => !i.matches && i.quote.trim() && quoteFound(i.quote, solution));
+  return !missing || differs;
 }
 
 /**
@@ -522,7 +560,9 @@ export function itemProblems(items: CheckedItem[], solution: string): CheckProbl
 export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numeric: NumericCheck | null, consistency: ConsistencyCheck | null, solution = '') {
   const settled = !!numeric?.complete && !numeric.mismatches.length;
   const resultsAgree = numeric?.mismatches.length ? false : settled || d.resultsAgree;
-  const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })), ...(d.items ? itemProblems(d.items, solution) : [])];
+  const fromItems = d.items ? itemProblems(d.items, solution) : [];
+  const requests = (d.items ?? []).map((i) => i.request);
+  const listed: CheckProblem[] = [...d.problems.map((p) => ({ ...p, evidence: 'model' as const })).filter((p) => !restates(p, fromItems, requests)), ...fromItems];
   const problems = listed.filter((p) => !(settled && p.kind === 'wrong-value' && p.evidence === 'model' && !p.item)).map((p) => ({ ...p, severity: problemSeverity(p.kind) }));
   // The model's `agrees` covers its results and its reasoning: once the recompute settled the results, or the model named what
   // it disagrees with as problems, the kinds of those problems decide.
@@ -552,6 +592,79 @@ function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, co
   // so its match proves nothing about the answer) and every stated value was compared by one of the two, so a model's
   // objection to a value neither could read still stands.
   return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (hasFinals ? !!finals?.complete : true) && stated.every((n) => seen.has(n)) };
+}
+
+/** A recomputed value that differs from the solution's, and the program that printed it: the blind one or the step one. */
+export type OpenMismatch = Comparison & { program: 'blind' | 'steps' };
+/** What the reconcile step decided about one mismatch: `cleared` when a corrected program reached the solution's value. */
+export interface Reconciled { name: string; program: OpenMismatch['program']; cause: MismatchCause | 'unexplained'; why: string; cleared: boolean; refused?: string }
+
+/** The numbers written in a text or a program, as values: 0,337 and 0.337 alike, a minus sign dropped. */
+function numbersIn(text: string): number[] {
+  return [...text.replace(/\{,\}/g, ',').replace(/(\d),(\d)/g, '$1.$2').matchAll(/\d+(?:\.\d+)?(?:[eE][-+]?\d+)?/g)].map((m) => Number(m[0])).filter(Number.isFinite);
+}
+const sameNumber = (a: number, b: number) => Math.abs(a - b) <= 1e-9 * Math.max(Math.abs(a), Math.abs(b));
+const powerOfTen = (x: number) => x > 0 && sameNumber(10 ** Math.round(Math.log10(x)), x);
+
+/**
+ * Why a corrected program may not clear a mismatch, or null when it may. It may not type the value it checks (the solution's
+ * wrong number would then match by construction) unless the statement gives that number, and every number it adds to the
+ * program it corrects must come from the statement or the solution (a tabulated constant the solution uses), or be a power
+ * of ten (a change of unit). A program that adds 3.4999 to land on the solution's 3.5 is refused.
+ */
+export function correctionRefused(before: string, after: string, mismatch: Comparison, texts: { statement: string; solution: string }): string | null {
+  const stated = parseQuantity(mismatch.stated);
+  const inStatement = numbersIn(texts.statement);
+  const typed = numbersIn(after);
+  const values = stated ? [stated.asWritten, ...(stated.alt ? [stated.alt.asWritten] : [])].map(Math.abs) : [];
+  const own = values.find((v) => v !== 0 && typed.some((t) => sameNumber(t, v)) && !inStatement.some((t) => sameNumber(t, v)));
+  if (own !== undefined) return `the corrected program types the stated value ${own}`;
+  const known = [...numbersIn(before), ...inStatement, ...numbersIn(texts.solution)];
+  const added = typed.find((t) => !known.some((k) => sameNumber(k, t)) && !powerOfTen(t));
+  return added === undefined ? null : `the corrected program adds the number ${added}, which neither text gives`;
+}
+
+/**
+ * The reconcile step of the exercise check, asked only when a recomputed value differs from the solution's. In the Chimica
+ * re-check of 2026-11-20, three correct exercises were blocked this way: a program printed ΔV in m³ under the label L, one
+ * printed J/mol under kJ/mol, and the blind one assumed E° = 0,340 V where the solution used the tabulated 0,337 V. One call
+ * names the cause of each mismatch and corrects the programs. The code decides: a mismatch is cleared only when its cause is
+ * not the solution, the corrected program passes `correctionRefused`, runs, and prints the solution's value within the same
+ * tolerance; every other mismatch stands as proved.
+ */
+export async function reconcileMismatches(
+  texts: { statement: string; solution: string },
+  open: OpenMismatch[],
+  programs: Record<OpenMismatch['program'], { code: string; output: string; relative?: number }>,
+  stated: { name: string; value: string }[],
+  ask: (prompt: { system: string; prompt: string }) => Promise<{ data: ReconcileAnswer }>,
+  run: (code: string, timeoutMs: number) => Promise<PythonResult> = runPython,
+): Promise<Reconciled[]> {
+  const used = (['blind', 'steps'] as const).filter((p) => open.some((m) => m.program === p));
+  const { data } = await ask(reconcilePrompt({
+    ...texts,
+    programs: used.map((p) => ({ name: p, role: p === 'blind' ? 'written from the statement alone' : 'written to redo the solution step by step', code: programs[p].code, output: programs[p].output })),
+    mismatches: open.map((m) => ({ name: m.name, program: m.program, computed: m.computed, stated: m.stated })),
+  }));
+  const outputs = new Map<string, string | null>();
+  const out: Reconciled[] = [];
+  for (const m of open) {
+    // A name listed under both programs comes back as "x (blind)" and "x (steps)".
+    const said = data.mismatches.find((x) => x.name.trim() === `${m.name.trim()} (${m.program})`) ?? data.mismatches.find((x) => x.name.trim() === m.name.trim());
+    const base = { name: m.name, program: m.program, cause: said?.cause ?? 'unexplained' as const, why: said?.why.trim() ?? '', cleared: false };
+    if (!said || said.cause === 'solution-wrong') { out.push(base); continue; }
+    const code = data.programs.find((x) => x.program.trim() === m.program)?.code ?? '';
+    if (!code.trim()) { out.push({ ...base, refused: 'no corrected program' }); continue; }
+    const refused = correctionRefused(programs[m.program].code, code, m, texts);
+    if (refused) { out.push({ ...base, refused }); continue; }
+    if (!outputs.has(m.program)) outputs.set(m.program, await printedValues(code, run));
+    const printed = outputs.get(m.program)!;
+    const value = stated.filter((s) => s.name === m.name && s.value.trim() === m.stated);
+    const again = printed && value.length ? compareValues(value, printed, { byName: true, rounded: roundsOutput(code), relative: programs[m.program].relative }) : null;
+    const cleared = !!again?.compared.length && !again.mismatches.length;
+    out.push({ ...base, cleared, ...(cleared ? {} : { refused: again?.mismatches.length ? `the corrected program still prints ${again.mismatches[0]!.computed}` : 'the corrected program printed no comparable value' }) });
+  }
+  return out;
 }
 
 /** A request as the item check matches it between the two calls: letters and digits only. */
@@ -591,7 +704,24 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
   const blind = { byName: true, rounded: roundsOutput(solve.computation) };
   const finalCheck = finals.length ? compareValues(finals, printed, { ...blind, relative: 1e-3 }) : null;
   const stepCheck = stated.length ? compareValues(stated, steps, { byName: true, rounded: roundsOutput(cmp.computation) }) : null;
-  const recomputed = mergeChecks(finalCheck, stepCheck, stated.length ? compareValues(stated, printed, blind) : null, stated.map((v) => v.name), finals.length > 0);
+  const confirmed = stated.length ? compareValues(stated, printed, blind) : null;
+  // A mismatch left after the merge gets one reconcile call, which may show that a program measured the value differently.
+  // Not when the data check fails: the question is blocked anyway, and data that do not fix one answer (Fisica 41d80bd6: which
+  // end of the rod is hit) let the reconcile rewrite the blind program to the solution's choice and drop the evidence.
+  const badData = dataFailure({ wellPosed: solve.wellPosed, wellPosedReason: solve.wellPosedReason, dataProblems: [...solve.dataProblems, ...cmp.dataProblems] }, consistency);
+  const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
+  const open: OpenMismatch[] = [
+    ...(finalCheck?.mismatches ?? []).map((m) => ({ ...m, program: 'blind' as const })),
+    ...(stepCheck?.mismatches ?? []).filter((m) => !right.has(m.name)).map((m) => ({ ...m, program: 'steps' as const })),
+  ];
+  const reconciled = open.length && !badData
+    ? await reconcileMismatches({ statement: q.statement, solution: q.solution }, open, {
+      blind: { code: solve.computation ?? '', output: printed, relative: 1e-3 },
+      steps: { code: cmp.computation ?? '', output: steps },
+    }, stated, (prompt) => call(role, prompt, reconcileSchema, 'reconcile'))
+    : [];
+  const keep = (check: NumericCheck | null, program: OpenMismatch['program']) => check && { ...check, mismatches: check.mismatches.filter((m) => !reconciled.some((r) => r.cleared && r.program === program && r.name === m.name)) };
+  const recomputed = mergeChecks(keep(finalCheck, 'blind'), keep(stepCheck, 'steps'), confirmed, stated.map((v) => v.name), finals.length > 0);
   // An item the blind solve listed and the comparison left out was never checked: a doubt for the reviewer.
   const said = new Set(cmp.items.map((i) => itemKey(i.request)));
   const unmatched = solve.items.filter((i) => !said.has(itemKey(i.request)));
@@ -606,7 +736,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
     wellPosed: solve.wellPosed, wellPosedReason: solve.wellPosedReason, dataProblems: [...solve.dataProblems, ...cmp.dataProblems],
     consistency: solve.consistency,
   };
-  return { answer, recomputed, consistency, model: route.model };
+  return { answer, recomputed, consistency, reconciled, model: route.model };
 }
 
 /**
@@ -631,7 +761,7 @@ export async function checkExercise(q: { statement: string; solution: string; la
   const recomputed = await recomputeFinalValues(data.computation, data.statedValues);
   // Its consistency program is its verdict on the data; with no program, the checker's result stands.
   const consistency = (await runConsistency(data.consistency)) ?? first.consistency;
-  return { ...verifyVerdict(data, recomputed, consistency, q.solution), answer: data, recomputed, consistency, model: route.model, reviewerAsked: true };
+  return { ...verifyVerdict(data, recomputed, consistency, q.solution), answer: data, recomputed, consistency, reconciled: first.reconciled, model: route.model, reviewerAsked: true };
 }
 
 export async function questionVerify(ctx: AppContext, t: TaskContext) {
@@ -644,16 +774,17 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
   if (Object.entries(t.deps).some(([key, r]) => key.startsWith('qfix:') && !!r && typeof r === 'object' && 'skipped' in r && (r as { rev?: number }).rev === q.rev)) return { skipped: 'the fix changed no words or numbers' };
   const project = loadProject(ctx, q.projectId);
   const call: CheckCall = async (role, prompt, schema) => runRole(ctx, { role, ...prompt, schema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal });
-  const { ok, resultsAgree, data: badData, problems, answer: data, recomputed, consistency, model } = await checkExercise(
+  const { ok, resultsAgree, data: badData, problems, answer: data, recomputed, consistency, reconciled, model } = await checkExercise(
     { statement: q.statement, solution: q.solution, language: project.language, profile: subjectProfileOf(project) }, call,
     { reviewer: ctx.settings().routes.checker.primary.model !== ctx.settings().routes.reviewer.primary.model, progress: t.progress });
   const mismatches = recomputed?.mismatches ?? [];
+  const cleared = reconciled.filter((r) => r.cleared);
   // A verified question gets no issue: its minor notes stay in the check's detail.
   const notes = ok && problems.length ? ` Minor notes: ${truncate(problems.map((p) => p.message.trim()).join(' '), 1000)}` : '';
   const checks = [
     ...q.checks.filter((c) => c.method !== 'independent-solve' && c.method !== 'numeric' && c.method !== 'consistency'),
     { method: 'independent-solve' as const, ok, detail: `Independent result: ${truncate(data.independentAnswer, 400)}${notes}`, model },
-    ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}` }] : []),
+    ...(recomputed ? [{ method: 'numeric' as const, ok: !mismatches.length, detail: `Recomputed in Python: ${recomputed.compared.map((c) => `${c.name} ${c.computed} (solution: ${c.stated})`).join('; ')}${cleared.length ? `. Differences explained and recomputed: ${cleared.map((r) => `${r.name} (${r.cause}: ${truncate(r.why, 200)})`).join('; ')}` : ''}` }] : []),
     { method: 'consistency' as const, ok: !badData, detail: badData ?? consistency?.detail ?? 'No numeric data to check; the statement was judged well posed.' },
   ];
   if (!ok) {
@@ -671,7 +802,7 @@ export async function questionVerify(ctx: AppContext, t: TaskContext) {
     if (!ok) for (const p of problems) addIssue(ctx, q, p.severity, 'solution', p.message, p.suggestion);
     // A known disagreement with the independent answer blocks export. Only a different result blocks approval; the listed
     // problems are major at most.
-    if (!resultsAgree) {
+    if (differentResultBlocker(resultsAgree, mismatches, (data as { items?: CheckedItem[] }).items, problems, q.solution)) {
       const found = mismatches.length
         ? mismatchMessage(mismatches)
         : `The independent solution reaches a different result: ${data.independentAnswer}`;
@@ -741,7 +872,32 @@ function stillOpen(ctx: AppContext, ids: string[]): string[] {
   return ids.length ? ctx.db.all<{ id: string }>(`SELECT id FROM review_issues WHERE status = 'open' AND id IN (${ids.map(() => '?').join(',')})`, ...ids).map((r) => r.id) : [];
 }
 
-export const questionReviseSchema = z.object({ statement: z.string(), hint: z.string(), solution: z.string() });
+export const questionReviseSchema = z.object({
+  statement: z.string(), hint: z.string(), solution: z.string(),
+  // Optional so that an answer without it reads as "every problem was fixed", as before.
+  problems: z.array(z.object({
+    number: z.number().int().describe('the number of the problem in the list'),
+    inText: z.boolean().describe('the text really has this problem; false when it is already right on that point'),
+    why: z.string().describe('when inText is false, one sentence saying why the text is right; otherwise empty'),
+  })).optional(),
+});
+
+/** The rules the editor of an exercise follows, beyond fixing the listed problems. */
+const REVISE_RULES = `- The corrected text reads as if it had always been right: never mention the correction, the check, the problem, or the earlier value (no "the correct value is 3,5 L, not 0,0035 L").
+- Some problems come from an automatic check that can be wrong (a program that printed a value in another unit, or used another tabulated constant). Before you change anything for a problem, verify it against the text. When a problem says a number differs from a recomputation, redo that calculation yourself from the statement and the constants the solution uses: if you get the solution's value, the text is right. When the text is already right on that point, change nothing for that problem, and say so in problems with inText false.
+- Keep every formula reference ({{formula:@key}} or {{formula:key}}) and every ref: link as it is, unless a problem is about that reference.
+- Return problems: one entry per listed problem, with its number, inText and why.`;
+
+/** The editor's prompt for one exercise and its problems. `keyList` lists the book's formula keys when a problem needs them. */
+export function revisePrompt(language: string, issues: { message: string; suggestion: string }[], q: QuestionText, keyList = '') {
+  return {
+    system: `You correct a textbook exercise in ${language === 'it' ? 'Italian' : language}. Fix exactly the reported problems; keep everything else.\n\n${REVISE_RULES}\n\n${formatRules(language)}`,
+    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}${keyList}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution, and problems.`,
+  };
+}
+
+/** The {{formula:…}} references of a text. */
+const formulaRefs = (text: string) => text.match(/\{\{formula:[^}]*\}\}/g) ?? [];
 
 /** Rewrites an exercise for its open issues. Authentic questions keep their statement unless an issue says it is wrong. */
 export async function questionRevise(ctx: AppContext, t: TaskContext) {
@@ -778,8 +934,7 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
     : '';
   const { data, route } = await runRole(ctx, {
     role: 'editor',
-    system: `You correct a textbook exercise in ${project.language === 'it' ? 'Italian' : project.language}. Fix exactly the reported problems; keep everything else.\n\n${formatRules(project.language)}`,
-    prompt: `PROBLEMS:\n${issues.map((i, n) => `${n + 1}. ${i.message} Suggested fix: ${i.suggestion}`).join('\n')}${keyList}\n\nSTATEMENT:\n${q.statement}\n\nHINT:\n${q.hint}\n\nSOLUTION:\n${q.solution}\n\nReturn JSON with the corrected statement, hint and solution.`,
+    ...revisePrompt(project.language, issues, q, keyList),
     schema: questionReviseSchema, projectId: q.projectId, runId: t.task.runId, taskId: t.task.id, signal: t.signal,
   });
   // A fix of formatting findings may change line breaks, spacing and markup, never a word or a number.
@@ -793,6 +948,29 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       issuesChanged(ctx, q.projectId, open);
     });
     return { skipped: 'the repair changed words or numbers', rev: q.rev };
+  }
+  // A problem the editor found is not in the text stays open with its reason, and is never marked fixed: a check that
+  // passes after the fix deletes it, one that fails files it again. When the editor changed nothing at all, nothing is
+  // saved and the check queued after the fix does not run (it would see the same text), so the question keeps its issues.
+  const notInText = new Map((data.problems ?? []).filter((p) => !p.inText && issues[p.number - 1]).map((p) => [issues[p.number - 1]!.id, p.why.trim()]));
+  const same = layout(q.statement) === layout(data.statement) && layout(q.hint) === layout(data.hint) && layout(q.solution) === layout(data.solution);
+  const dropped = formulaRefs(`${q.statement}\n${q.hint}\n${q.solution}`).filter((r) => !`${data.statement}\n${data.hint}\n${data.solution}`.includes(r));
+  const refAsked = issues.some((i) => /formula/i.test(`${i.category} ${i.message}`));
+  const refused = issues.length && same ? 'The AI fix changed nothing'
+    : dropped.length && !refAsked ? `The AI fix was not applied: it removed the formula reference ${dropped[0]}, which no problem is about`
+      : null;
+  if (refused || (issues.length && notInText.size === issues.length)) {
+    ctx.db.tx(() => {
+      const open = stillOpen(ctx, issues.map((i) => i.id));
+      for (const id of open) {
+        const why = notInText.get(id);
+        const resolution = why && (same || !refused) ? `The AI fix found the text already right on this point and changed nothing for it: ${why}` : refused ?? 'The AI fix changed nothing for this problem.';
+        ctx.db.run('UPDATE review_issues SET resolution = ? WHERE id = ?', resolution, id);
+      }
+      issuesChanged(ctx, q.projectId, open);
+    });
+    // A rewrite that says every problem was already right is not applied, whatever it changed.
+    return { skipped: refused ?? 'the editor found every problem already right', rev: q.rev };
   }
   // The author must be able to see that the paper's printed solution was changed, and how. The question turns "adapted" (below), which the Practice screen shows.
   const corrected = q.origin === 'authentic' && changedWords(q.solution, data.solution) !== null;
@@ -813,10 +991,12 @@ export async function questionRevise(ctx: AppContext, t: TaskContext) {
       return { stale: true };
     }
     recordQuestionRevision(ctx, q.id, q, after, { origin: 'revised', model: route.model, taskId: t.task.id });
-    if (open.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${open.map(() => '?').join(',')})`, resolution, ...open);
+    const fixed = open.filter((id) => !notInText.has(id));
+    if (fixed.length) ctx.db.run(`UPDATE review_issues SET status = 'fixed', resolution = ? WHERE id IN (${fixed.map(() => '?').join(',')})`, resolution, ...fixed);
+    for (const id of open.filter((x) => notInText.has(x))) ctx.db.run('UPDATE review_issues SET resolution = ? WHERE id = ?', `The AI fix found the text already right on this point and changed nothing for it: ${notInText.get(id)}`, id);
     questionsChanged(ctx, q.projectId, [q.id]);
     issuesChanged(ctx, q.projectId, open);
-    const result: FixResult = { revised: true, fixed: open, origin: q.origin, status: q.status, rev: q.rev + 1 };
+    const result: FixResult = { revised: true, fixed, origin: q.origin, status: q.status, rev: q.rev + 1 };
     return result;
   });
 }

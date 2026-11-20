@@ -12,7 +12,7 @@ import { resolveDataPath } from '../config.ts';
 import type { AppContext } from '../context.ts';
 import { commitAiRevision, sectionDraft } from './draft.ts';
 import { chapterEnrich, enrichGraph, enrichIde, saveEnrichment } from './enrich.ts';
-import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, type VerifyAnswer } from './practice.ts';
+import { chapterPractice, practiceDone, practiceGenerate, questionImport, questionRevise, questionVerify, sessionImport, sessionImportKey, sessionGivesWay, problemSeverity, quoteFound, itemProblems, verifyVerdict, correctionRefused, reconcileMismatches, restates, differentResultBlocker, type CheckProblem, type OpenMismatch, type VerifyAnswer } from './practice.ts';
 import { labelResources, resourceIndex, resourceQuestions, topicsMap } from './prepare.ts';
 import { chapterReview, mergeRepeats, sectionRevise } from './review.ts';
 import { sectionFigures } from './figures.ts';
@@ -68,6 +68,8 @@ const check = (v: Verdict) => {
   };
   return [step, step, step];
 };
+/** The reconcile step's answer when it explains no mismatch: every one stands. */
+const stands = answer({ mismatches: [], programs: [] });
 /** The reviewer's answer: one call with the item table, as `verifyPrompt` asks it. */
 const review = (v: Verdict) => (input: { prompt: string }) => {
   const data = { ...posed, independentAnswer: '1', resultsAgree: true, agrees: true, problems: [], ...v, items: itemsOf(v, input.prompt) };
@@ -458,10 +460,11 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
 
   test('a mismatch blocks without a second opinion, and the blocker names both numbers', async () => {
     const id = q({ statement: circuit, solution: 'R = 5 kΩ' });
-    fake.next(...verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] }));
+    fake.next(...verdict({ computation: program, statedValues: [{ name: 'R_eq', value: '5.0 kΩ' }] }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
-    assert.equal(fake.calls.length, 3, 'the code proved it, so the reviewer is not asked');
+    assert.equal(fake.calls.length, 4, 'the code proved it: the reconcile step is asked, the reviewer is not');
+    assert.match(fake.calls[3]!.prompt, /MISMATCHES[^\n]*\n- R_eq: blind printed 500\.0 ohm; the solution states 5\.0 kΩ/);
     assert.equal(row(id).status, 'issue');
     const [issue] = issues(`question_id = '${id}'`);
     assert.equal(issue.severity, 'blocker');
@@ -477,7 +480,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
       // The comparison lists the intermediate conductance too, as not final.
       if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues.unshift({ name: 'G', value: '0,005 S', final: false });
       return out;
-    }));
+    }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 2, mismatches: 1 });
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /G is 0\.002 S by the computation and 0,005 S in the solution/);
@@ -486,7 +489,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
   test('a last digit off by three units blocks: the 0.1 % room of the final check does not clear what the step check found', async () => {
     // Injected into Fisica 15ce7430: Q2 = ΔU + W2 = 6235,5 J written as 6235,8 J.
     const id = q({ statement: 'Calcola Q2.', solution: 'Q2 = 6235,8 J' });
-    fake.next(...check({ computation: 'print("Q2 = 6235.5 J")', statedValues: [{ name: 'Q2', value: '6235,8 J' }] }));
+    fake.next(...check({ computation: 'print("Q2 = 6235.5 J")', statedValues: [{ name: 'Q2', value: '6235,8 J' }] }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /Q2 is 6235\.5 J by the computation and 6235,8 J in the solution/);
@@ -509,7 +512,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
       const out = step(input);
       if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'm', value: '0,55 kg', final: false }, { name: 'm', value: '0,55 kg', final: true }];
       return out;
-    }));
+    }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
   });
@@ -522,7 +525,7 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
       const out = step(input);
       if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'N', value: '9,02587 × 10^23', final: false }, { name: 'N', value: '9,10 × 10^23', final: true }];
       return out;
-    }));
+    }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.equal((r as { mismatches: number }).mismatches, 1, '9,10 against 9,02498 is a mismatch of the final value');
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /9,10 × 10\^23 in the solution/);
@@ -689,7 +692,7 @@ describe('15f. the Python recompute settles numbers, and a verified question fil
   test('a real mismatch still blocks (Fisica 6e84f71e, 170 against 140 kPa)', async () => {
     const program = 'p2 = 200000 + 0.5*1000*(2**2 - 8**2)\nprint(f"p2 = {p2} Pa")';
     const id = q({ statement: 'Bernoulli: calcola p2.', solution: 'p2 = 140 kPa' });
-    fake.next(...verdict({ computation: program, statedValues: [{ name: 'p2', value: '140 kPa' }] }));
+    fake.next(...verdict({ computation: program, statedValues: [{ name: 'p2', value: '140 kPa' }] }), stands);
     const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
     assert.deepEqual(r, { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
     assert.match(issues(`question_id = '${id}'`)[0]!.message, /p2 is 170000\.0 Pa by the computation and 140 kPa in the solution/);
@@ -876,6 +879,163 @@ describe('15i. the check lists the requested items with a quote of the solution,
     fake.next(...check({ steps: [{ ...wrong, quote: '$\\Phi(R)=+GM/R$' }] }));
     await questionVerify(ctx, startTask('question.verify', { questionId: made }));
     assert.equal(row(made).status, 'verified', 'a step the solution does not contain was made up');
+  });
+});
+
+describe('15j. a recompute mismatch gets one reconcile step, decided in code', () => {
+  // Chimica bdab177b, 2026-11-20: a program printed ΔV in m³ under the label L.
+  const texts = { statement: 'Un gas si espande da $2{,}0\\,\\mathrm{L}$ a $5{,}5\\,\\mathrm{L}$ contro $1{,}20\\,\\mathrm{atm}$. Calcola $\\Delta U$ ($q = 450\\,\\mathrm{J}$).', solution: 'La variazione di volume è $\\Delta V=3{,}5\\,\\mathrm{L}$; $\\Delta U=24{,}4\\,\\mathrm{J}$.' };
+  const blind = 'dV = 5.5 - 2.0\nprint("DeltaV =", dV*1e-3, "L")';
+  const open: OpenMismatch[] = [{ name: 'DeltaV', stated: '3.5 L', computed: '0.0035 L', program: 'blind' }];
+  const stated = [{ name: 'DeltaV', value: '3.5 L' }];
+  const programs = { blind: { code: blind, output: 'DeltaV = 0.0035 L', relative: 1e-3 }, steps: { code: '', output: '' } };
+  const ran: string[] = [];
+  const run = (stdout: string) => async (code: string) => { ran.push(code); return { ok: true, stdout, version: 'test' }; };
+  const answering = (cause: string, code: string) => async () => ({ data: { mismatches: [{ name: 'DeltaV', cause, why: 'Il programma stampa m³ con l\'etichetta L.' }], programs: [{ program: 'blind', code }] } as never });
+
+  test('a corrected program may not type the value it checks, nor add a number neither text gives; a change of unit and a constant of the solution are allowed', () => {
+    const m = open[0]!;
+    assert.equal(correctionRefused(blind, 'print("DeltaV =", 3.5, "L")', m, texts), 'the corrected program types the stated value 3.5');
+    assert.equal(correctionRefused(blind, 'dV = 5.5 - 2.0 + 0.0002\nprint("DeltaV =", dV, "L")', m, texts), 'the corrected program adds the number 0.0002, which neither text gives');
+    assert.equal(correctionRefused(blind, 'dV = 5.5 - 2.0\nprint("DeltaV =", dV*1e-3*1000, "L")', m, texts), null, 'a power of ten is a change of unit');
+    // Chimica f9d7a036: E° = 0,337 V is in the solution, not in the statement.
+    const nernst = { name: 'E', stated: '0.269 V', computed: '0.2719 V' };
+    const t2 = { statement: 'Calcola la f.e.m. con [Cu2+] = 4,99·10^-3 M.', solution: '$E = 0{,}337 - \\frac{0{,}0592}{2}\\log(1/4{,}99\\cdot10^{-3}) = 0{,}269\\ \\mathrm{V}$' };
+    assert.equal(correctionRefused('E0 = 0.340\nc = 4.99e-3', 'E0 = 0.337\nc = 4.99e-3', nernst, t2), null);
+    // A stated value the statement itself gives may be typed: it is a datum.
+    assert.equal(correctionRefused('', 'x = 5.5', { name: 'x', stated: '5.5 L', computed: '0.0055 L' }, texts), null);
+  });
+
+  test('a mismatch is cleared only when its cause is not the solution and the corrected program prints the solution\'s value', async () => {
+    const fixed = 'dV = 5.5 - 2.0\nprint("DeltaV =", dV, "L")';
+    assert.deepEqual((await reconcileMismatches(texts, open, programs, stated, answering('unit-or-scale', fixed), run('DeltaV = 3.5 L'))).map((r) => [r.cause, r.cleared]), [['unit-or-scale', true]]);
+    ran.length = 0;
+    assert.deepEqual((await reconcileMismatches(texts, open, programs, stated, answering('solution-wrong', fixed), run('DeltaV = 3.5 L'))).map((r) => [r.cause, r.cleared]), [['solution-wrong', false]]);
+    assert.deepEqual(ran, [], 'a solution the model calls wrong stays proved; nothing runs');
+    const still = await reconcileMismatches(texts, open, programs, stated, answering('program-wrong', fixed), run('DeltaV = 3.3 L'));
+    assert.deepEqual(still.map((r) => [r.cleared, r.refused]), [[false, 'the corrected program still prints 3.3 L']]);
+    const typed = await reconcileMismatches(texts, open, programs, stated, answering('unit-or-scale', 'print("DeltaV = 3.5 L")'), run('DeltaV = 3.5 L'));
+    assert.deepEqual(typed.map((r) => [r.cleared, r.refused]), [[false, 'the corrected program types the stated value 3.5']]);
+    const both: OpenMismatch[] = [open[0]!, { ...open[0]!, program: 'steps' }];
+    const named = async () => ({ data: { mismatches: [{ name: 'DeltaV (blind)', cause: 'unit-or-scale', why: 'm³.' }, { name: 'DeltaV (steps)', cause: 'solution-wrong', why: 'x' }], programs: [{ program: 'blind', code: fixed }] } as never });
+    const twice = await reconcileMismatches(texts, both, { ...programs, steps: { code: blind, output: 'DeltaV = 0.0035 L' } }, stated, named, run('DeltaV = 3.5 L'));
+    assert.deepEqual(twice.map((r) => [r.program, r.cause, r.cleared]), [['blind', 'unit-or-scale', true], ['steps', 'solution-wrong', false]], 'a name listed under both programs is told apart by the program');
+    const silent = await reconcileMismatches(texts, open, programs, stated, async () => ({ data: { mismatches: [], programs: [] } as never }), run(''));
+    assert.deepEqual(silent.map((r) => [r.cause, r.cleared]), [['unexplained', false]], 'a mismatch the answer does not explain stands');
+  });
+
+  test('in the handler: a value printed in another scale is reconciled and the exercise is verified; the numeric check says why', async () => {
+    const id = q(texts);
+    const reconcile = answer({ mismatches: [{ name: 'DeltaV', cause: 'unit-or-scale', why: 'Il programma stampa m³ con l\'etichetta L.' }], programs: ['blind', 'steps'].map((program) => ({ program, code: 'dV = 5.5 - 2.0\nprint("DeltaV =", dV, "L")' })) });
+    // The helper gives one program as both the blind and the step program, so the mismatch is listed under both.
+    fake.next(...check({ computation: blind, statedValues: [{ name: 'DeltaV', value: '3,5 L' }] }), reconcile);
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: true, problems: 0, recomputed: 1, mismatches: 0 });
+    assert.equal(row(id).status, 'verified');
+    assert.match(json<{ method: string; detail: string }[]>(row(id).checks, []).find((c) => c.method === 'numeric')!.detail, /Differences explained and recomputed: DeltaV \(unit-or-scale: /);
+    // The same answer for a solution whose value is really wrong: the corrected program still disagrees, so it blocks.
+    const wrong = q({ ...texts, solution: texts.solution.replace('3{,}5', '3{,}9') });
+    fake.next(...check({ computation: blind, statedValues: [{ name: 'DeltaV', value: '3,9 L' }] }), reconcile);
+    assert.deepEqual(await questionVerify(ctx, startTask('question.verify', { questionId: wrong })), { ok: false, problems: 0, recomputed: 1, mismatches: 1 });
+  });
+
+  test('no reconcile when the data check fails: the mismatch may come from data that do not fix one answer, and it stays', async () => {
+    // Fisica 41d80bd6: the statement does not say which end of the rod is hit; reconciled, the blind program took the solution's side.
+    const id = q(texts);
+    fake.next(...check({ computation: blind, statedValues: [{ name: 'DeltaV', value: '3,5 L' }], wellPosed: false, wellPosedReason: 'Il verso non è determinato.' }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.equal((r as { mismatches: number }).mismatches, 1);
+    assert.equal(fake.calls.length, 3, 'no reconcile call');
+  });
+});
+
+describe('15k. one defect, one issue', () => {
+  // Chimica 036788d3, 2026-11-20: four issues for one precipitate never named.
+  const statement = 'Si mescolano nitrato d\'argento e cloruro di sodio. Scrivi l\'equazione ionica netta. Indica il precipitato e gli ioni spettatori.';
+  const solution = 'L\'equazione ionica netta è $\\mathrm{Ag^+ + Cl^- \\rightarrow AgCl(s)}$. Gli ioni Na+ e NO3- si eliminano.';
+  const items: CheckedItem[] = [
+    { request: 'Scrivi l\'equazione ionica netta', answer: 'Ag+ + Cl- → AgCl(s)', quote: 'L\'equazione ionica netta è $\\mathrm{Ag^+ + Cl^- \\rightarrow AgCl(s)}$', stated: true, matches: true },
+    { request: 'Indica il precipitato', answer: 'AgCl', quote: '', stated: false, matches: false },
+  ];
+  const missing: CheckProblem = { kind: 'answer-missing', evidence: 'model', message: 'La soluzione non indica esplicitamente il precipitato.', suggestion: 's' };
+
+  test('an answer never stated is one problem, and the model\'s problem that says the same is dropped; another one stays', () => {
+    const fromItems = itemProblems(items, solution);
+    assert.deepEqual(fromItems.map((p) => [p.kind, p.evidence]), [['answer-missing', 'code']], 'no second problem saying it "differs: (nothing)"');
+    const requests = items.map((i) => i.request);
+    assert.equal(restates(missing, fromItems, requests), true);
+    assert.equal(restates({ ...missing, kind: 'wrong-method' }, fromItems, requests), false, 'another kind is another problem');
+    assert.equal(restates({ ...missing, message: 'Gli ioni spettatori non sono nominati.' }, fromItems, requests), false, 'another item');
+    assert.equal(restates({ ...missing, message: 'La soluzione non scrive l\'equazione ionica netta.' }, fromItems, requests), false, 'a word shared by two requests names neither');
+  });
+
+  test('the "different result" blocker is filed only when a result differs, not for an answer that is missing', () => {
+    const problems = itemProblems(items, solution);
+    assert.equal(differentResultBlocker(false, [], items, problems, solution), false);
+    assert.equal(differentResultBlocker(true, [], items, problems, solution), false);
+    const differs = [items[0]!, { ...items[1]!, quote: 'Gli ioni Na+ e NO3- si eliminano.', stated: true }];
+    assert.equal(differentResultBlocker(false, [], differs.map((i, n) => (n === 0 ? { ...i, matches: false } : i)), itemProblems(differs, solution), solution), true, 'a stated answer that differs');
+    assert.equal(differentResultBlocker(false, [{ name: 'x', stated: '1', computed: '2' }], items, problems, solution), true, 'a numeric mismatch');
+    assert.equal(differentResultBlocker(false, [], undefined, [], solution), true, 'no item table: the model\'s word');
+  });
+
+  test('in the handler: one issue for the precipitate, and the verdict does not change', async () => {
+    const id = q({ statement, solution });
+    fake.next(...check({ items, resultsAgree: false, agrees: false, problems: [missing] }));
+    const r = await questionVerify(ctx, startTask('question.verify', { questionId: id }));
+    assert.deepEqual(r, { ok: false, problems: 1 });
+    assert.deepEqual(issues(`question_id = '${id}'`).map((i) => [i.severity, i.message]), [['major', 'The solution never states the answer to "Indica il precipitato".']]);
+  });
+});
+
+describe('15l. the editor leaves correct text alone', () => {
+  const blocker = (qid: string, message: string) => {
+    const id = newId();
+    ctx.db.insert('review_issues', { id, project_id: P, node_id: null, question_id: qid, rev_id: null, source: 'verification', severity: 'blocker', category: 'solution', quote: '', message, suggestion: 's', status: 'open', resolution: '', created_at: now() });
+    return id;
+  };
+  const text = { statement: 'Calcola $\\Delta U$.', solution: 'Il lavoro è {{formula:@lavoro-di-espansione}}: $w=-4{,}2\\,\\mathrm{L\\,atm}$, $\\Delta V=3{,}5\\,\\mathrm{L}$.' };
+  const notThere = { number: 1, inText: false, why: 'ΔV = 3,5 L è giusto: 0,0035 è lo stesso valore in m³.' };
+
+  test('a problem the editor finds is not in the text: nothing is saved, the issue stays open with the reason, and the check after the fix does not run', async () => {
+    const id = q({ ...text, status: 'issue' });
+    const iid = blocker(id, 'Recomputing the final values in Python gives a different result: DeltaV is 0.0035 L by the computation and 3.5 L in the solution.');
+    fake.next(answer({ ...text, hint: '', problems: [notThere] }));
+    const runId = newId();
+    const fix = startTask('question.revise', { questionId: id, issueIds: [iid] }, { runId, key: `qfix:${id}:1` });
+    const fixed = await questionRevise(ctx, fix);
+    assert.deepEqual(fixed, { skipped: 'The AI fix changed nothing', rev: 1 });
+    assert.equal(row(id).status, 'issue');
+    assert.equal(row(id).rev, 1);
+    const [i] = issues(`id = '${iid}'`);
+    assert.equal(i.status, 'open');
+    assert.match(i.resolution, /^The AI fix found the text already right on this point and changed nothing for it: ΔV = 3,5 L è giusto/);
+    const verify = startTask('question.verify', { questionId: id }, { runId, key: `qverify:${id}:1` });
+    verify.deps = { [fix.task.key]: fixed };
+    assert.deepEqual(await questionVerify(ctx, verify), { skipped: 'the fix changed no words or numbers' });
+    assert.equal(fake.calls.length, 1, 'no check: the question keeps its open issue for the author');
+    assert.match(fake.calls[0]!.system ?? '', /never mention the correction, the check/);
+  });
+
+  test('a rewrite for two problems, one of them not in the text: only the other is fixed, and the first stays open with the reason', async () => {
+    const id = q({ ...text, status: 'issue' });
+    const [a, b] = [blocker(id, 'DeltaV is 0.0035 L by the computation and 3.5 L in the solution.'), blocker(id, 'Il lavoro vale −4,2 L·atm, non −4,3.')];
+    fake.next(answer({ statement: text.statement, hint: '', solution: text.solution.replace('w=', 'w = '), problems: [notThere, { number: 2, inText: true, why: '' }] }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [a, b] }));
+    assert.deepEqual((r as { fixed: string[] }).fixed, [b]);
+    assert.equal(issues(`id = '${a}'`)[0]!.status, 'open');
+    assert.match(issues(`id = '${a}'`)[0]!.resolution, /^The AI fix found the text already right on this point and changed nothing for it: ΔV = 3,5 L/);
+    assert.equal(issues(`id = '${b}'`)[0]!.status, 'fixed');
+  });
+
+  test('a rewrite that drops a formula reference no problem is about is not applied', async () => {
+    const id = q({ ...text, status: 'issue' });
+    const iid = blocker(id, 'Il lavoro vale −4,2 L·atm, non −4,3.');
+    fake.next(answer({ statement: text.statement, hint: '', solution: text.solution.replace('{{formula:@lavoro-di-espansione}}', '$w=-P\\Delta V$') }));
+    const r = await questionRevise(ctx, startTask('question.revise', { questionId: id, issueIds: [iid] }));
+    assert.deepEqual(r, { skipped: 'The AI fix was not applied: it removed the formula reference {{formula:@lavoro-di-espansione}}, which no problem is about', rev: 1 });
+    assert.equal(row(id).solution, text.solution);
+    assert.equal(issues(`id = '${iid}'`)[0]!.status, 'open');
   });
 });
 
