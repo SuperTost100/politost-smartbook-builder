@@ -46,7 +46,8 @@ function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
 }
 
 /**
- * Native <dialog>: the browser traps focus, closes on Esc and returns focus to the opener.
+ * Native <dialog>: the browser traps focus and closes on Esc. Focus goes back to the control that opened it however it
+ * closes: Escape, the close button, a footer button or a click outside.
  * The component only mounts the dialog content while open.
  */
 export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape, inertBody }: DialogProps) {
@@ -55,11 +56,23 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
   const closeRef = useRef(onClose);
   closeRef.current = onClose;
 
+  // The control that opened the dialog. The browser gives focus back to it on close only while focus is inside the
+  // dialog, and a click on the backdrop can move it out first, so the component gives it back itself.
+  const opener = useRef<HTMLElement | null>(null);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
-    if (open && !el.open) el.showModal();
-    if (!open && el.open) el.close();
+    if (open && !el.open) {
+      opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      el.showModal();
+    }
+    if (!open && el.open) {
+      el.close();
+      const at = document.activeElement;
+      const lost = !at || at === document.body || at.contains(el);
+      if (lost && opener.current?.isConnected) opener.current.focus();
+      opener.current = null;
+    }
   }, [open]);
 
   if (!open) return <dialog ref={ref} className="ui-dialog" hidden />;
@@ -73,7 +86,12 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       onClose={() => closeRef.current()}
       onKeyDown={wrapFocus}
       onCancel={(e) => { e.preventDefault(); if (!holdEscape) closeRef.current(); }}
-      onMouseDown={(e) => { if (e.target === e.currentTarget && !holdEscape) closeRef.current(); }}
+      onMouseDown={(e) => {
+        if (e.target !== e.currentTarget) return;
+        // A click on the backdrop must not move focus to the page behind it.
+        e.preventDefault();
+        if (!holdEscape) closeRef.current();
+      }}
     >
       <div className="ui-dialog__head">
         <h2 id={titleId} className="ui-panel-title">{title}</h2>

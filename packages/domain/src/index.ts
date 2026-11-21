@@ -485,6 +485,8 @@ export interface Enrichment {
   checkedRevisionId: string | null;
   /** Lint findings of this graph's payload the author has not accepted, with their "code:trace" key. Empty for a lab example. */
   lintOpen: { key: string; code: string; trace?: string; detail: string }[];
+  /** Lint findings of this graph's payload that are accepted, shaped as `lintOpen`. "Stop accepting" sends their keys back. */
+  lintAcceptedFindings: { key: string; code: string; trace?: string; detail: string }[];
   createdAt: string;
 }
 
@@ -539,7 +541,10 @@ export interface UsageRow {
   provider: string;
   model: string;
   role: string;
+  /** Every call made, failed ones included. */
   calls: number;
+  /** Calls that gave no answer, stopped calls excluded, as in ProviderUsage. */
+  failed: number;
   inputTokens: number | null;
   outputTokens: number | null;
   /** Part of the input tokens that came from the provider's cache, as far as calls reported it. Null when none did. */

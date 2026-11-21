@@ -117,6 +117,50 @@ test.describe('Book setup', () => {
     await other.close();
   });
 
+  test('a field another tab saved since this form loaded is not overwritten without asking', async ({ page }) => {
+    const kept = await keepBook(page);
+    const other = await page.context().newPage();
+    await mockApi(other);
+    await keepBook(other, undefined, kept);
+    await page.goto('/books/p1/settings');
+    await other.goto('/books/p1/settings');
+    await expect(other.getByLabel('Audience')).toHaveValue(String(kept.book.audience));
+
+    await page.getByLabel('Audience').fill('Primo tab');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+
+    await other.getByLabel('Audience').fill('Secondo tab');
+    await other.getByRole('textbox', { name: 'Goals' }).fill('Orale facoltativo');
+    const save = other.getByRole('button', { name: 'Save setup' });
+    await save.click();
+    const dialog = other.getByRole('dialog', { name: 'This field was saved elsewhere' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByRole('row', { name: /Audience/ })).toHaveText(/Audience\s*Primo tab\s*Secondo tab/);
+    expect(kept.patches).toHaveLength(1);
+
+    // Reload takes the saved value for that field only and saves nothing; focus goes back to Save setup.
+    await dialog.getByRole('button', { name: 'Reload' }).click();
+    await expect(dialog).toBeHidden();
+    await expect(save).toBeFocused();
+    await expect(other.getByLabel('Audience')).toHaveValue('Primo tab');
+    await expect(other.getByRole('textbox', { name: 'Goals' })).toHaveValue('Orale facoltativo');
+    expect(kept.patches).toHaveLength(1);
+
+    // Keep mine saves over it.
+    await page.goto('/books/p1/settings');
+    await page.getByLabel('Audience').fill('Terzo valore');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+    await other.getByLabel('Audience').fill('Mio valore');
+    await save.click();
+    await dialog.getByRole('button', { name: 'Keep mine' }).click();
+    await expect(other.getByText('Book setup saved')).toBeVisible();
+    expect(kept.patches.at(-1)).toEqual({ audience: 'Mio valore', goals: 'Orale facoltativo' });
+    expect(kept.book.audience).toBe('Mio valore');
+    await other.close();
+  });
+
   test('the inferred area can be pinned, and Automatic takes the pin away', async ({ page }) => {
     const { book, patches } = await keepBook(page);
     await page.goto('/books/p1/settings');
@@ -646,6 +690,28 @@ test.describe('Review: the Run review dialog', () => {
     await expect(dialog).toBeHidden();
     await expect(opener).toBeFocused();
   });
+
+  test('a click outside, the close button and Cancel return focus to Run review as Escape does', async ({ page }) => {
+    await reviewData(page, []);
+    await page.unroute(/\/api\/projects\/p1$/);
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, { ...mockData().projects[0], activeRun: null, review: { clean: true, openSerious: 0, reviewedAt: ago(3), sweepsDue: 1 } }));
+    await page.goto('/books/p1/review');
+    const opener = page.getByRole('button', { name: 'Run review' }).first();
+    const dialog = page.getByRole('dialog', { name: 'Run review' });
+    const ways: [string, () => Promise<void>][] = [
+      ['outside', () => page.mouse.click(5, 450)],
+      ['close button', () => dialog.getByRole('button', { name: 'Close', exact: true }).click()],
+      ['Cancel', () => dialog.getByRole('button', { name: 'Cancel', exact: true }).last().click()],
+    ];
+    for (const [way, close] of ways) {
+      await opener.focus();
+      await page.keyboard.press('Enter');
+      await expect(dialog).toBeVisible();
+      await close();
+      await expect(dialog, way).toBeHidden();
+      await expect(opener, way).toBeFocused();
+    }
+  });
 });
 
 test.describe('Extras: graphs', () => {
@@ -653,13 +719,14 @@ test.describe('Extras: graphs', () => {
     id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', status: 'verified', checks: [{ method: 'numeric', ok: true, detail: 'Sampled 2 function(s).' }],
     payload: { id: 'rc', title: 'Corrente nel circuito RC', type: 'plotly', config: { data: [] } }, lintAccepted: [], spec: null, checkedRevisionId: null, createdAt: ago(10),
     lintOpen: [{ key: 'raw-notation:', code: 'raw-notation', detail: 'y axis title "Corrente i_C (A)" shows "_C" as written' }, { key: 'placeholder:Seno', code: 'placeholder', trace: 'Seno', detail: 'the label looks like a placeholder' }],
+    lintAcceptedFindings: [] as { key: string; code: string; trace?: string; detail: string }[],
   };
 
   test('Accept anyway lists the lint findings it accepts, as the export report words them', async ({ page }) => {
     await mockApi(page);
     const patches: unknown[] = [];
     await page.route(/\/api\/projects\/p1\/enrichments$/, (route) => answer(route, [graph]));
-    await page.route(/\/api\/enrichments\/g1$/, (route) => { patches.push(route.request().postDataJSON()); return answer(route, { ...graph, lintOpen: [] }); });
+    await page.route(/\/api\/enrichments\/g1$/, (route) => { patches.push(route.request().postDataJSON()); return answer(route, { ...graph, lintOpen: [], lintAcceptedFindings: graph.lintOpen }); });
     await page.goto('/books/p1/extras?tab=graphs');
     const card = page.getByRole('article').filter({ hasText: 'Corrente nel circuito RC' });
     await expect(card.getByText('Accept them only if the graph is right as it is.')).toBeVisible();
@@ -669,6 +736,36 @@ test.describe('Extras: graphs', () => {
     await card.getByRole('button', { name: 'Accept anyway' }).click();
     await expect(page.getByText('Accepted', { exact: true })).toBeVisible();
     expect(patches).toEqual([{ payload: graph.payload, acceptLint: true }]);
+  });
+
+  test('an accepted finding is marked accepted, and Stop accepting opens it again with focus kept on the card', async ({ page }) => {
+    await mockApi(page);
+    // The graph as the service keeps it: Accept anyway moves every open finding to the accepted list, Stop accepting moves one back.
+    let stored = { ...graph };
+    const patches: { acceptLint?: boolean; stopAccepting?: string[] }[] = [];
+    await page.route(/\/api\/projects\/p1\/enrichments$/, (route) => answer(route, [stored]));
+    await page.route(/\/api\/enrichments\/g1$/, (route) => {
+      const body = route.request().postDataJSON() as { acceptLint?: boolean; stopAccepting?: string[] };
+      patches.push({ acceptLint: body.acceptLint, stopAccepting: body.stopAccepting });
+      const all = [...stored.lintOpen, ...stored.lintAcceptedFindings];
+      const accepted = body.acceptLint ? all : stored.lintAcceptedFindings.filter((f) => !body.stopAccepting?.includes(f.key));
+      stored = { ...stored, lintAcceptedFindings: accepted, lintOpen: all.filter((f) => !accepted.includes(f)) };
+      return answer(route, stored);
+    });
+    await page.goto('/books/p1/extras?tab=graphs');
+    const card = page.getByRole('article').filter({ hasText: 'Corrente nel circuito RC' });
+    await card.getByRole('button', { name: 'Accept anyway' }).focus();
+    await page.keyboard.press('Enter');
+    const accepted = card.getByRole('listitem').filter({ hasText: 'raw-notation' });
+    await expect(accepted).toContainText('accepted');
+    await expect(card.getByRole('button', { name: 'Accept anyway' })).toHaveCount(0);
+    await expect(card.getByRole('button', { name: 'Stop accepting' })).toHaveCount(2);
+    await expect(card.getByRole('button', { name: 'Stop accepting' }).first()).toBeFocused();
+    await accepted.getByRole('button', { name: 'Stop accepting' }).click();
+    await expect(card.getByRole('button', { name: 'Accept anyway' })).toBeFocused();
+    await expect(card.getByRole('listitem').filter({ hasText: 'raw-notation' })).not.toContainText('accepted');
+    await expect(card.getByRole('listitem').filter({ hasText: 'placeholder' })).toContainText('accepted');
+    expect(patches).toEqual([{ acceptLint: true, stopAccepting: undefined }, { acceptLint: undefined, stopAccepting: ['raw-notation:'] }]);
   });
 
   test('at 375 px the tabs stay on one row with the selected one in view', async ({ page }) => {

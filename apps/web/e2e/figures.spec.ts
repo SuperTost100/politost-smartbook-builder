@@ -293,6 +293,19 @@ test.describe('figure dialog, the discard question and focus', () => {
     await expect(dialog.getByLabel('Caption')).toBeFocused();
     await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia non salvata');
   });
+
+  test('Remove figure moves focus to Keep when it asks, and Keep gives it back to Remove figure', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    const remove = dialog.getByRole('button', { name: 'Remove figure' });
+    await remove.focus();
+    await page.keyboard.press('Enter');
+    await expect(dialog.getByText('Remove this figure from the section?')).toBeVisible();
+    await expect(dialog.getByRole('button', { name: 'Keep', exact: true })).toBeFocused();
+    await page.keyboard.press('Enter');
+    await expect(dialog.getByText('Remove this figure from the section?')).toBeHidden();
+    await expect(remove).toBeFocused();
+  });
 });
 
 test.describe('figure dialog, alt text', () => {

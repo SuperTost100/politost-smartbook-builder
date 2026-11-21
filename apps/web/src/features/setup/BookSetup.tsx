@@ -7,8 +7,9 @@ import { qk, useProject } from '../../lib/queries';
 import { slugify } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
+import { Dialog } from '../../components/Dialog';
 import { ProgramCard } from './ProgramCard';
-import { changedFields, splitAuthors, wholeNumberIn, type SetupValues } from './form';
+import { changedFields, compareStored, fieldValue, setupValues, splitAuthors, wholeNumberIn, withFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -32,6 +33,30 @@ const KIND_LABEL: Record<FigureKind, string> = {
   plot: 'function plots', structure: 'molecule structures', levels: 'energy-level diagrams', orbitals: 'orbital boxes', cell: 'electrochemical cells', periodic: 'periodic table highlights', drawing: 'drawings (circuits, diagrams, sketches)', photo: 'photos',
 };
 const upper = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
+
+/** The name of each field as the form labels it, for the dialog that lists fields saved elsewhere. */
+const FIELD_LABEL: Record<FieldKey, string> = {
+  title: 'Title', subject: 'Subject', slug: 'Slug', authors: 'Authors', language: 'Book language', audience: 'Audience', goals: 'Goals',
+  'options.subjectArea': 'Subject area', 'options.outsideMaterial': 'Use verified outside material', 'options.ide': 'IDE examples', 'options.labLanguage': 'Lab language',
+  'options.graphs': 'Graphs', 'options.figures': 'Figures', 'options.figurePolicy': 'How many figures', 'options.circuitSymbols': 'Circuit symbols',
+  'options.offProgram': 'Sections outside the course program', 'options.outlineGate': 'Outline approval gate', 'options.firstChapterGate': 'First-chapter approval gate',
+  'options.exercisesPerTopic': 'Exercises per topic', 'options.exercisesPerHotTopic': 'Exercises per high-priority topic', 'options.noClaudeFallback': 'When Claude usage runs out',
+  'options.reviewSamples': 'Reviewer reads per chapter', 'options.chapterScope': 'Chapters in scope', 'options.selfCheck': 'Self-check',
+};
+const CHOICE_LABEL: Partial<Record<FieldKey, Record<string, string>>> = {
+  language: { it: 'Italian', en: 'English' }, 'options.labLanguage': { python: 'Python', matlab: 'MATLAB' }, 'options.figurePolicy': { helpful: 'Where they help', generous: 'Generous' },
+  'options.circuitSymbols': { american: 'American', european: 'European' }, 'options.offProgram': { delete: 'Remove off-program sections', mark: 'Keep them with a note' },
+  'options.noClaudeFallback': { false: 'Continue on the fallback model', true: 'Pause until it resets' }, 'options.subjectArea': AREA_LABEL,
+};
+function shown(key: FieldKey, v: unknown): string {
+  if (key === 'options.subjectArea' && (v === undefined || v === null)) return 'Automatic';
+  const choice = CHOICE_LABEL[key]?.[String(v)];
+  if (choice) return choice;
+  if (typeof v === 'boolean') return v ? 'On' : 'Off';
+  if (Array.isArray(v)) return v.length ? v.join(', ') : 'None';
+  const text = String(v ?? '').trim();
+  return text ? (text.length > 120 ? `${text.slice(0, 120)}…` : text) : 'Empty';
+}
 
 function Resistor({ kind }: { kind: 'american' | 'european' }) {
   return (
@@ -91,11 +116,31 @@ export default function BookSetup() {
     const options = { ...DEFAULT_OPTIONS, ...p.options };
     setOpts(options);
     setNumText(numberTexts(options));
-    // Read the way the form saves it, so a field left alone compares equal: a stored "Doe, Jane" shows as two names and is
-    // sent only when the author edits the field.
-    loadedValues.current = { title: p.title.trim(), subject: p.subject.trim(), slug: p.slug, authors: splitAuthors(p.authors.join(', ')), language: p.language.trim(), audience: p.audience, goals: p.goals, options };
+    loadedValues.current = setupValues(p, DEFAULT_OPTIONS);
     setLoaded(true);
   }, [editing, project.data, loaded]);
+
+  /** Puts the given fields of `v` in the form, and in the baseline it compares with, as if the form had loaded them. */
+  const fill = (v: SetupValues, keys: readonly FieldKey[]) => {
+    for (const k of keys) {
+      const value = fieldValue(v, k);
+      if (k === 'title') setTitle(v.title);
+      else if (k === 'subject') setSubject(v.subject);
+      else if (k === 'slug') { setSlug(v.slug); setSlugTouched(true); }
+      else if (k === 'authors') setAuthors(v.authors.join(', '));
+      else if (k === 'language') { if (v.language === 'it' || v.language === 'en') setLang(v.language); else { setLang('other'); setOtherLang(v.language); } }
+      else if (k === 'audience') setAudience(v.audience);
+      else if (k === 'goals') setGoals(v.goals);
+      else {
+        const o = k.slice(8) as keyof BookOptions;
+        setOpts((cur) => ({ ...cur, [o]: value }));
+        if (o in NUMBERS) setNumText((t) => ({ ...t, [o]: String(value) }));
+      }
+    }
+    loadedValues.current = withFields(loadedValues.current!, v, keys);
+  };
+  // Fields saved elsewhere since this form loaded that the form changed too. The save waits for the author's choice.
+  const [conflict, setConflict] = useState<{ fields: StaleField[]; stored: SetupValues; patch: SetupPatch } | null>(null);
 
   const onTitle = (v: string) => { setTitle(v); if (!slugTouched) setSlug(slugify(v)); };
   const set = <K extends keyof BookOptions>(k: K, v: BookOptions[K]) => setOpts((o) => ({ ...o, [k]: v }));
@@ -127,10 +172,10 @@ export default function BookSetup() {
   const slugValid = /^[a-z0-9-]+$/.test(slug) && slug.length > 0;
   const valid = title.trim() && subject.trim() && slugValid && language.length >= 2 && numbersValid;
 
+  const body: ProjectInput = { title: title.trim(), subject: subject.trim(), slug, authors: authorList, language, audience, goals, options: opts };
   const save = useMutation({
-    mutationFn: async () => {
-      const body: ProjectInput = { title: title.trim(), subject: subject.trim(), slug, authors: authorList, language, audience, goals, options: opts };
-      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: changedFields(loadedValues.current!, { ...body, options: opts }) });
+    mutationFn: async (patch?: SetupPatch) => {
+      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: patch ?? {} });
       return api('POST /api/projects', { body });
     },
     onSuccess: (p) => {
@@ -142,7 +187,29 @@ export default function BookSetup() {
     onError: (e) => setError(errorText(e)),
   });
 
-  const submit = (e: FormEvent) => { e.preventDefault(); setError(null); if (valid) save.mutate(); };
+  // Before an edit is saved, the form reads the stored book: a field this form changed that another tab saved since it loaded
+  // is not overwritten without asking, and the other fields saved since are taken over.
+  // shortcut: the check and the save are two requests, so a save landing between them is not caught; fine for one author.
+  const check = useMutation({
+    mutationFn: () => api('GET /api/projects/:id', { params: { id: id! } }),
+    onSuccess: (p) => {
+      const patch = changedFields(loadedValues.current!, body);
+      const stored = setupValues(p, DEFAULT_OPTIONS);
+      const { stale, refreshed } = compareStored(loadedValues.current!, stored, patch);
+      fill(stored, refreshed);
+      if (stale.length) setConflict({ fields: stale, stored, patch });
+      else save.mutate(patch);
+    },
+    onError: (e) => setError(errorText(e)),
+  });
+  const submit = (e: FormEvent) => {
+    e.preventDefault(); setError(null);
+    // Save stays enabled while the stored book is read, so it keeps focus and gets it back when the dialog closes.
+    if (!valid || check.isPending) return;
+    if (editing) check.mutate(); else save.mutate(undefined);
+  };
+  const keepMine = () => { const c = conflict!; setConflict(null); save.mutate(c.patch); };
+  const reload = () => { const c = conflict!; setConflict(null); fill(c.stored, c.fields.map((f) => f.key)); };
 
   if (editing && project.isLoading) return <div className="ui-page ui-page--narrow"><div className="ui-skeleton" style={{ height: 300 }} /></div>;
   if (editing && project.error) return <div className="ui-page ui-page--narrow"><div className="ui-banner ui-banner--danger" role="alert">{errorText(project.error)}</div></div>;
@@ -303,6 +370,31 @@ export default function BookSetup() {
         <button type="button" className="ui-btn" onClick={() => navigate(editing ? `/books/${id}/sources` : '/')}>Cancel</button>
         {!valid && <span className="ui-muted su-why">{!title.trim() ? 'Add a title.' : !subject.trim() ? 'Add a subject.' : !slugValid ? 'Fix the slug.' : !numbersValid ? 'Fix the number marked above.' : 'Add a language.'}</span>}
       </div>
+
+      <Dialog
+        open={!!conflict}
+        onClose={() => setConflict(null)}
+        title={conflict?.fields.length === 1 ? 'This field was saved elsewhere' : 'These fields were saved elsewhere'}
+        footer={
+          <>
+            <button type="button" className="ui-btn" onClick={() => setConflict(null)}>Cancel</button>
+            <button type="button" className="ui-btn" onClick={reload}>Reload</button>
+            <button type="button" className="ui-btn ui-btn--accent" onClick={keepMine}>Keep mine</button>
+          </>
+        }
+      >
+        {conflict?.fields.length === 1
+          ? <p>Another tab or window saved this field after you opened Book setup. Keep mine saves your value over the saved one. Reload puts the saved value in the form and keeps your other changes.</p>
+          : <p>Another tab or window saved these fields after you opened Book setup. Keep mine saves your values over the saved ones. Reload puts the saved values in the form and keeps your other changes.</p>}
+        <div className="ui-table-wrap">
+          <table className="ui-table su-conflict">
+            <thead><tr><th>Field</th><th>Saved now</th><th>Yours</th></tr></thead>
+            <tbody>
+              {conflict?.fields.map((f) => <tr key={f.key}><th scope="row">{FIELD_LABEL[f.key]}</th><td className="ui-wrap">{shown(f.key, f.stored)}</td><td className="ui-wrap">{shown(f.key, f.mine)}</td></tr>)}
+            </tbody>
+          </table>
+        </div>
+      </Dialog>
     </form>
   );
 }

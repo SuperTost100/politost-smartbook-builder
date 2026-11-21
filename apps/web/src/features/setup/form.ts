@@ -32,3 +32,44 @@ export function changedFields(loaded: SetupValues, current: SetupValues): SetupP
   if (Object.keys(options).length) patch.options = options;
   return patch as SetupPatch;
 }
+
+/** The book as the form shows it, read the way the form saves it, so a field left alone compares equal. */
+export function setupValues(p: Omit<ProjectInput, 'options'> & { options: Partial<BookOptions> }, defaults: BookOptions): SetupValues {
+  // A stored "Doe, Jane" shows as two names and is sent only when the author edits the field.
+  return { title: p.title.trim(), subject: p.subject.trim(), slug: p.slug, authors: splitAuthors(p.authors.join(', ')), language: p.language.trim(), audience: p.audience, goals: p.goals, options: { ...defaults, ...p.options } };
+}
+
+/** A field of the form: a top-level key, or `options.<key>`. */
+export type FieldKey = Exclude<keyof SetupValues, 'options'> | `options.${keyof BookOptions}`;
+
+export const fieldValue = (v: SetupValues | SetupPatch, key: FieldKey): unknown =>
+  key.startsWith('options.') ? (v.options as Record<string, unknown> | undefined)?.[key.slice(8)] : (v as Record<string, unknown>)[key];
+
+const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
+  ...Object.keys(v).filter((k) => k !== 'options') as FieldKey[],
+  ...Object.keys(v.options ?? {}).map((k) => `options.${k}` as FieldKey),
+];
+
+export interface StaleField { key: FieldKey; stored: unknown; mine: unknown }
+
+/**
+ * What the stored book changed since the form loaded it. `stale` are the fields this form changed too, which a save would
+ * overwrite without the author knowing; `refreshed` are the others, which the form can take over as they are.
+ */
+export function compareStored(loaded: SetupValues, stored: SetupValues, patch: SetupPatch): { stale: StaleField[]; refreshed: FieldKey[] } {
+  const mine = new Set(keysOf(patch));
+  const differ = (k: FieldKey) => !same(fieldValue(loaded, k) ?? null, fieldValue(stored, k) ?? null);
+  const stale = [...mine].filter(differ).map((key) => ({ key, stored: fieldValue(stored, key), mine: fieldValue(patch, key) }));
+  const refreshed = [...new Set([...keysOf(loaded), ...keysOf(stored)])].filter((k) => !mine.has(k) && differ(k));
+  return { stale, refreshed };
+}
+
+/** `base` with the given fields taken from `from`. */
+export function withFields(base: SetupValues, from: SetupValues, keys: readonly FieldKey[]): SetupValues {
+  const out: SetupValues = { ...base, options: { ...base.options } };
+  for (const k of keys) {
+    if (k.startsWith('options.')) (out.options as Record<string, unknown>)[k.slice(8)] = fieldValue(from, k);
+    else (out as Record<string, unknown>)[k] = fieldValue(from, k);
+  }
+  return out;
+}
