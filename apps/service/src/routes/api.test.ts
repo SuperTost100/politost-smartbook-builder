@@ -911,6 +911,27 @@ describe('review fixes (server)', () => {
     assert.equal(saved.status, 'issue');
   });
 
+  it('6f. a card that still shows the raw trace name stops the formatted acceptance too', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-unaccept-stale'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('y = x'), trace('y = x^2')], layout: {} } };
+    // Another tab's save stored both forms of the key.
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'verified', checks: [], lint_accepted: ['duplicate:y = x^2', 'duplicate:y = x²'], created_at: now() });
+    const stopped = (await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: ['duplicate:y = x^2'] })).body;
+    assert.ok(stopped.lintOpen.some((f: { key: string }) => f.key.startsWith('duplicate:')), 'the duplicate is open again');
+    assert.ok(!stopped.lintAccepted.some((k: string) => k.startsWith('duplicate:')));
+  });
+
+  it('6g. Stop accepting is refused for a lab example, which it would send back to draft', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('ide-unaccept'));
+    const eid = newId();
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'ide', payload: { code: 'print(1)' }, status: 'verified', checks: [{ method: 'run', ok: true, detail: 'ok' }], created_at: now() });
+    assert.equal((await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: [] })).status, 400);
+    const row = t.ctx.db.get<{ status: string }>('SELECT status FROM enrichments WHERE id = ?', eid)!;
+    assert.equal(row.status, 'verified');
+  });
+
   it('7. the generate route forwards scope.nodeIds', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('node-scope'));
     await t.req('POST', `/api/projects/${p.id}/runs`, { kind: 'generate', scope: { nodeIds: ['s3'] } });

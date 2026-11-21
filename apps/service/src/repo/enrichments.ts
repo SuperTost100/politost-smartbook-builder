@@ -55,9 +55,9 @@ export function updateEnrichmentPayload(ctx: AppContext, id: string, edit: Recor
     const checked = checkFunctionGraph(payload);
     const fresh = opts.acceptLint ? lintGraph(payload).map(lintKey) : [];
     // A finding accepted on "y = x^2" stays accepted on the "y = x²" the formatter writes.
-    // A stopped key also drops the stored key it was formatted from ("y = x^2" for "y = x²"), or the next save would
-    // format that one again and bring the acceptance back.
-    const dropped = new Set(opts.stopAccepting ?? []);
+    // A stopped key is matched in both forms, as written and as the formatter writes it ("y = x^2" and "y = x²"): a stored
+    // key in either form would otherwise bring the acceptance back on the next save.
+    const dropped = new Set(formatLintKeys(opts.stopAccepting ?? [], { language }));
     const stillAccepted = cur.lintAccepted.filter((k) => !formatLintKeys([k], { language }).some((f) => dropped.has(f)));
     const accepted = [...new Set([...formatLintKeys(stillAccepted, { language }), ...fresh])].filter((k) => !dropped.has(k));
     const lint = graphLintCheck(payload, accepted);

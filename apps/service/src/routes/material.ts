@@ -110,6 +110,8 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
     const body = parse(z.object({ payload: z.record(z.string(), z.unknown()).optional(), acceptLint: z.boolean().optional(), stopAccepting: z.array(z.string()).max(100).optional() })
       .refine((b) => b.payload || b.stopAccepting, { message: 'Send the payload, or the findings to stop accepting.' }), req.body);
     const cur = getEnrichment(ctx, idParam(req, 'eid'));
+    // Only a graph has lint findings to accept; on a lab example the update would only reset its checks.
+    if (body.stopAccepting && cur.kind !== 'graph') throw new HttpError(400, 'invalid', 'Only a graph has findings to stop accepting.');
     return updateEnrichmentPayload(ctx, cur.id, body.payload ?? cur.payload, { acceptLint: body.acceptLint, stopAccepting: body.stopAccepting });
   });
 

@@ -129,8 +129,9 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
   // author has not edited it, so the card does not count the formatter's changes as unsaved edits.
   const base = useRef(stored);
   useEffect(() => {
-    if (stored === base.current) return;
-    setText((t) => (t === base.current ? stored : t));
+    const before = base.current;
+    if (stored === before) return;
+    setText((t) => (t === before ? stored : t));
     base.current = stored;
   }, [stored]);
   const [confirm, setConfirm] = useState(false);
