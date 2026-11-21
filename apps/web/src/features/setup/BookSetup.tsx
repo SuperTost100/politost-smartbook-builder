@@ -144,7 +144,8 @@ export default function BookSetup() {
         const o = k.slice(8) as keyof BookOptions;
         const kept = (cur: BookOptions) => !!sent && !same(cur[o], sent.options[o]);
         setOpts((cur) => (kept(cur) ? cur : { ...cur, [o]: value }));
-        if (o in NUMBERS) setNumText((t) => (sent && t[o as NumberKey] !== String(sent.options[o]) ? t : { ...t, [o]: String(value) }));
+        // The text is compared by the number it holds ("02" is 2), as the option is, so the two never part.
+        if (o in NUMBERS) setNumText((t) => (sent && wholeNumberIn(t[o as NumberKey], NUMBERS[o as NumberKey][0], NUMBERS[o as NumberKey][1]) !== sent.options[o] ? t : { ...t, [o]: String(value) }));
       }
     }
     loadedValues.current = withFields(loadedValues.current!, v, keys);
