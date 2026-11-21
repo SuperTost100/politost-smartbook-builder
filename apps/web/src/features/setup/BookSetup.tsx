@@ -93,7 +93,7 @@ export default function BookSetup() {
     setNumText(numberTexts(options));
     // Read the way the form saves it, so a field left alone compares equal: a stored "Doe, Jane" shows as two names and is
     // sent only when the author edits the field.
-    loadedValues.current = { title: p.title.trim(), subject: p.subject.trim(), slug: p.slug, authors: splitAuthors(p.authors.join(', ')), language: p.language, audience: p.audience, goals: p.goals, options };
+    loadedValues.current = { title: p.title.trim(), subject: p.subject.trim(), slug: p.slug, authors: splitAuthors(p.authors.join(', ')), language: p.language.trim(), audience: p.audience, goals: p.goals, options };
     setLoaded(true);
   }, [editing, project.data, loaded]);
 

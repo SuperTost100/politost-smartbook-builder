@@ -37,7 +37,7 @@ function skippedRadio(el: HTMLElement, dialog: HTMLDialogElement) {
 function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
   if (e.key !== 'Tab' || e.defaultPrevented) return;
   const dialog = e.currentTarget;
-  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.closest('dialog') === dialog && el.tabIndex >= 0 && !el.hasAttribute('disabled') && !el.closest('[inert], fieldset:disabled') && el.getClientRects().length > 0 && !skippedRadio(el, dialog));
+  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.closest('dialog') === dialog && el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]') && el.getClientRects().length > 0 && !skippedRadio(el, dialog));
   const first = items[0];
   const last = items.at(-1);
   if (!first || !last) return;
