@@ -6,7 +6,7 @@ import type { Asset, ChapterView, Enrichment, QuestionCheck } from '@smartbuilde
 import { api, apiUrl, errorText } from '../../lib/api';
 import { figureNumber, imageFilename, mapSection } from '../../lib/blocks';
 import { qk, useManuscript } from '../../lib/queries';
-import { useBookId, useDocumentTitle } from '../../lib/hooks';
+import { useBookId, useDocumentTitle, useFocusWhenLost } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
@@ -29,6 +29,9 @@ export default function ExtrasPage() {
   const enr = useQuery({ queryKey: qk.enrichments(pid), queryFn: () => api('GET /api/projects/:id/enrichments', { params: { id: pid } }) });
   const ide = (enr.data ?? []).filter((e) => e.kind === 'ide');
   const graphs = (enr.data ?? []).filter((e) => e.kind === 'graph');
+  // A deleted card takes its Delete button with it, so focus goes to the selected tab, which reads the new count.
+  const selectedTab = useRef<HTMLButtonElement>(null);
+  useFocusWhenLost(selectedTab, `${ide.length}:${graphs.length}`);
 
   return (
     <div className="ui-page ui-page--wide">
@@ -40,7 +43,7 @@ export default function ExtrasPage() {
       </div>
       <div ref={tabList} className="ui-tabs" role="tablist" aria-label="Extras">
         {([['figures', `Figures (${placed.length})`], ['ide', `IDE examples (${ide.length})`], ['graphs', `Graphs (${graphs.length})`]] as const).map(([t, l]) => (
-          <button key={t} type="button" role="tab" className="ui-tab" aria-selected={tab === t} onClick={() => setParams({ tab: t }, { replace: true })}>{l}</button>
+          <button key={t} ref={tab === t ? selectedTab : undefined} type="button" role="tab" className="ui-tab" aria-selected={tab === t} onClick={() => setParams({ tab: t }, { replace: true })}>{l}</button>
         ))}
       </div>
       {tab === 'figures' && <Figures pid={pid} placed={placed} loading={assets.isLoading || manuscript.isLoading} error={assets.error ?? manuscript.error} />}
@@ -120,24 +123,53 @@ function EnrichmentList({ pid, items, loading, error, kind }: { pid: string; ite
 function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
   const qc = useQueryClient();
   const toast = useToast();
-  const [text, setText] = useState(JSON.stringify(e.payload, null, 2));
+  const stored = JSON.stringify(e.payload, null, 2);
+  const [text, setText] = useState(stored);
+  // A save or an accept stores the payload as the formatter writes it. The field follows the stored payload while the
+  // author has not edited it, so the card does not count the formatter's changes as unsaved edits.
+  const base = useRef(stored);
+  useEffect(() => {
+    const before = base.current;
+    if (stored === before) return;
+    setText((t) => (t === before ? stored : t));
+    base.current = stored;
+  }, [stored]);
   const [confirm, setConfirm] = useState(false);
   let parsed: Record<string, unknown> | null = null;
   let parseError: string | null = null;
   try { const v = JSON.parse(text) as unknown; if (v && typeof v === 'object' && !Array.isArray(v)) parsed = v as Record<string, unknown>; else parseError = 'The payload must be a JSON object.'; } catch (err) { parseError = (err as Error).message; }
-  const dirty = text !== JSON.stringify(e.payload, null, 2);
+  const dirty = text !== stored;
   const save = useMutation({
-    mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: parsed! } }),
-    onSuccess: () => { toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
+    mutationFn: (_sent: string) => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: parsed! } }),
+    // The field shows what was stored, formatted, so the card is not left with an unsaved edit. Text typed while the save
+    // was on its way stays.
+    onSuccess: (row, sent) => { const saved = JSON.stringify(row.payload, null, 2); base.current = saved; setText((t) => (t === sent ? saved : t)); toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
   // "Accept anyway" saves the stored graph again with all its lint findings accepted, warnings included, so it ships as it is.
   const accept = useMutation({
     mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: e.payload, acceptLint: true } }),
-    onSuccess: () => { toast('Accepted'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
+    onSuccess: () => { toast('Accepted'); setRefocus('Stop accepting'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
+  // "Stop accepting" takes one finding out of the accepted list, so it fails the graph and reaches the export report again.
+  // It sends no payload, so the service works on the graph as stored.
+  const stop = useMutation({
+    mutationFn: (key: string) => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { stopAccepting: [key] } }),
+    onSuccess: () => { toast('No longer accepted'); setRefocus('Accept anyway'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
+    onError: (er) => toast(errorText(er), { tone: 'danger' }),
+  });
+  // The button pressed goes away with the finding it moved, so focus goes to the button that undoes it once the card shows it.
+  const lintBox = useRef<HTMLDivElement>(null);
+  const [refocus, setRefocus] = useState<string | null>(null);
+  useEffect(() => {
+    if (!refocus) return;
+    const next = [...lintBox.current?.querySelectorAll('button') ?? []].find((b) => b.textContent === refocus);
+    if (next) { next.focus(); setRefocus(null); }
+  });
   const lintOpen = e.kind === 'graph' && e.lintOpen.length > 0;
+  const lintAccepted = e.kind === 'graph' && e.lintAcceptedFindings.length > 0;
+  const finding = (f: Enrichment['lintOpen'][number]) => <><strong>{f.code}</strong>{f.trace ? ` on "${f.trace}"` : ''}: {f.detail}</>;
   const remove = useMutation({
     mutationFn: () => api('DELETE /api/enrichments/:eid', { params: { eid: e.id } }),
     onSuccess: () => { toast('Deleted'); setConfirm(false); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
@@ -165,23 +197,30 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
           {e.kind === 'ide' && code && (<div><div className="ui-meta">Code preview</div><pre className="ui-pre ex-code">{code}</pre></div>)}
           {e.kind === 'graph' && <p className="ui-muted">Graphs are evaluated when the book is checked and drawn in the reader. Figures of origin plot appear on the Figures tab.</p>}
           <div><div className="ui-meta">Check results</div><Checks checks={e.checks} /></div>
-          {lintOpen && !dirty && (
-            <div className="ui-stack">
+          {(lintOpen || lintAccepted) && !dirty && (
+            <div ref={lintBox} className="ui-stack">
               <div>
                 <div className="ui-meta">Lint findings</div>
-                <p className="ui-muted ex-lint-hint">Accept them only if the graph is right as it is. Accepted findings stop failing the graph and leave the export report.</p>
+                {lintOpen && <p className="ui-muted ex-lint-hint">Accept them only if the graph is right as it is. Accepted findings stop failing the graph and leave the export report.</p>}
                 <ul className="ex-checks">
-                  {e.lintOpen.map((f) => <li key={f.key} className="is-warn"><Icon name="alert" size={13} /><span><strong>{f.code}</strong>{f.trace ? ` on "${f.trace}"` : ''}: {f.detail}</span></li>)}
+                  {e.lintOpen.map((f) => <li key={f.key} className="is-warn"><Icon name="alert" size={13} /><span>{finding(f)}</span></li>)}
+                  {e.lintAcceptedFindings.map((f) => (
+                    <li key={f.key} className="is-accepted">
+                      <Icon name="check" size={13} />
+                      <span><span className="ui-badge ex-accepted">accepted</span> {finding(f)}</span>
+                      <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost ex-unaccept" disabled={stop.isPending} onClick={() => stop.mutate(f.key)}>Stop accepting</button>
+                    </li>
+                  ))}
                 </ul>
               </div>
-              <div><button type="button" className="ui-btn ui-btn--sm" disabled={accept.isPending} onClick={() => accept.mutate()}>Accept anyway</button></div>
+              {lintOpen && <div><button type="button" className="ui-btn ui-btn--sm" disabled={accept.isPending} onClick={() => accept.mutate()}>Accept anyway</button></div>}
             </div>
           )}
         </div>
       </div>
       <div className="ui-row">
-        <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate()}>Save</button>
-        <button type="button" className="ui-btn ui-btn--sm" disabled={!dirty} onClick={() => setText(JSON.stringify(e.payload, null, 2))}>Revert</button>
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate(text)}>Save</button>
+        <button type="button" className="ui-btn ui-btn--sm" disabled={!dirty} onClick={() => setText(stored)}>Revert</button>
         <span className="ui-grow" />
         <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost ui-btn--danger" onClick={() => setConfirm(true)}><Icon name="trash" />Delete</button>
       </div>

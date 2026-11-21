@@ -7,6 +7,7 @@ import { api, apiUrl, ApiRequestError, errorText } from '../../lib/api';
 import { imageFilename } from '../../lib/blocks';
 import { timeAgo } from '../../lib/format';
 import { applySectionView, useAssets, useRun } from '../../lib/queries';
+import { useInlineConfirm } from '../../lib/hooks';
 import { Dialog } from '../../components/Dialog';
 import { Icon } from '../../components/Icon';
 import { SourceEditor } from '../../components/SourceEditor';
@@ -144,7 +145,8 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blo
   const [error, setError] = useState<string | null>(null);
   /** Why an image was refused: shown next to the button that chose it, because the general error line sits at the end of a dialog that scrolls. */
   const [replaceError, setReplaceError] = useState<string | null>(null);
-  const [removing, setRemoving] = useState(false);
+  const removeAsk = useInlineConfirm();
+  const removing = removeAsk.asking;
   /** The author asked to close with unsaved fields and is being asked whether to discard them. */
   const [leaving, setLeaving] = useState(false);
   /** A Render or a Replace already changed the figure in the book, so closing the dialog undoes nothing. */
@@ -234,7 +236,7 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blo
   const remove = useMutation({
     mutationFn: () => api('POST /api/projects/:id/sections/:nodeId/figures/:assetId/remove', { params: route, body: { baseRevId: details.headRevId, block: blockIndex } }),
     onSuccess: (sv) => { done(sv); toast('Figure removed. It stays in the section history.'); onClose(); },
-    onError: (e) => { setRemoving(false); setError(errorText(e)); },
+    onError: (e) => { removeAsk.dismiss(); setError(errorText(e)); },
   });
 
   const rendering = render.isPending;
@@ -308,9 +310,9 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blo
               <span className="ui-row">
                 <span className="ui-muted">Remove this figure from the section?</span>
                 <button type="button" className="ui-btn ui-btn--danger-solid ui-btn--sm" onClick={() => remove.mutate()} disabled={remove.isPending}>Remove figure</button>
-                <button type="button" className="ui-btn ui-btn--sm" onClick={() => setRemoving(false)}>Keep</button>
+                <button ref={removeAsk.keepRef} type="button" className="ui-btn ui-btn--sm" onClick={removeAsk.dismiss}>Keep</button>
               </span>
-            ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setRemoving(true)} disabled={busy}><Icon name="trash" />Remove figure</button>}
+            ) : <button ref={removeAsk.triggerRef} type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={removeAsk.ask} disabled={busy}><Icon name="trash" />Remove figure</button>}
           </div>
           <button type="button" className="ui-btn" onClick={requestClose}>{applied ? 'Close' : 'Cancel'}</button>
           <button type="button" className="ui-btn ui-btn--accent" onClick={() => save.mutate()} disabled={held || !dirty || altMissing}>{save.isPending ? <><span className="ui-spinner" />Saving…</> : 'Save figure'}</button>

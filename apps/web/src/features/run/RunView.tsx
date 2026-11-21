@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RunSummary, TaskRow, TaskState } from '@smartbuilder/domain';
 import { api, describeError } from '../../lib/api';
@@ -7,6 +7,7 @@ import { RUN_KIND_LABEL, TASK_STATE_LABEL, runTitle, TERMINAL_RUN, dateTime, plu
 import { Icon } from '../../components/Icon';
 import { ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
+import { useFocusWhenLost } from '../../lib/hooks';
 import './run.css';
 
 const STATE_ORDER: TaskState[] = ['waiting_for_user', 'running', 'retry_wait', 'queued', 'failed', 'interrupted', 'succeeded', 'skipped', 'cancelled'];
@@ -99,6 +100,9 @@ export function RunView({ projectId }: { projectId: string }) {
     for (const t of tasks) m.set(t.state, [...(m.get(t.state) ?? []), t]);
     return STATE_ORDER.filter((s) => m.has(s)).map((s) => ({ state: s, tasks: m.get(s)! }));
   }, [tasks]);
+  // Cancel, Continue and Skip go away with the state they act on, so focus moves to the run's title.
+  const titleRef = useRef<HTMLHeadingElement>(null);
+  useFocusWhenLost(titleRef, `${run?.id}:${run?.status}`);
 
   if (runs.isLoading) return <div className="rn-root"><div className="ui-skeleton" style={{ height: 120 }} /></div>;
 
@@ -132,7 +136,7 @@ export function RunView({ projectId }: { projectId: string }) {
         <div className="rn-head__top">
           <div>
             <div className="ui-meta">{run.id.slice(0, 8)} · started {timeAgo(run.createdAt)}</div>
-            <h2 className="ui-panel-title">{runTitle(run)}</h2>
+            <h2 ref={titleRef} tabIndex={-1} className="ui-panel-title rn-title">{runTitle(run)}</h2>
           </div>
           <span className={`ui-badge ui-badge--${statusTone(run) || 'neutral'}`}>{run.status === 'waiting' && run.waiting?.kind === 'quota' ? 'Waiting for quota' : statusLabel(run)}</span>
         </div>
@@ -230,7 +234,7 @@ export function RunView({ projectId }: { projectId: string }) {
                 {detail.data!.usage.map((u, i) => (
                   <tr key={i}>
                     <td className="ui-mono">{u.provider}</td><td className="ui-mono">{u.model}</td><td>{u.role}</td>
-                    <td className="ui-num">{u.calls}</td>
+                    <td className="ui-num rn-calls">{u.calls}{u.failed > 0 && <span className="ui-muted"> ({u.failed} failed)</span>}</td>
                     <td className={`ui-num${u.inputTokens === null ? ' ui-muted' : ''}`}>{tokenCount(u.inputTokens)}</td>
                     <td className={`ui-num${u.outputTokens === null ? ' ui-muted' : ''}`}>{tokenCount(u.outputTokens)}</td>
                   </tr>
@@ -239,6 +243,7 @@ export function RunView({ projectId }: { projectId: string }) {
             </table>
           </div>
         )}
+        {(detail.data?.usage ?? []).some((u) => u.failed > 0) && <p className="ui-field__hint">A failed call got no answer, for example because the model's CLI is not installed or the call timed out. Calls counts it too. A call you stopped is not counted as failed.</p>}
       </section>
 
       <section aria-label="Past runs" className="rn-section">

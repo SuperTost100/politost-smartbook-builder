@@ -438,6 +438,6 @@ export function graphLintCheck(payload: Record<string, unknown>, accepted: reado
   // A graph the builder just sampled had every visible step bisected, so a steep continuous curve there is not a joined jump.
   const findings = lintGraph(payload).filter((f) => !(opts.sampled && f.code === 'joined-jump'));
   const open = findings.filter((f) => f.severity === 'block' && !accepted.includes(lintKey(f)));
-  const line = (f: GraphLintFinding) => `${f.code}${f.trace ? ` ("${f.trace}")` : ''}: ${f.detail}${f.severity === 'warn' ? ' (warning)' : accepted.includes(lintKey(f)) ? ' (accepted by the author)' : ''}`;
+  const line = (f: GraphLintFinding) => `${f.code}${f.trace ? ` ("${f.trace}")` : ''}: ${f.detail}${accepted.includes(lintKey(f)) ? ' (accepted by the author)' : f.severity === 'warn' ? ' (warning)' : ''}`;
   return { method: 'lint', ok: open.length === 0, detail: findings.length ? findings.map(line).join('; ') : 'No problems in the data.', findings };
 }

@@ -1,16 +1,18 @@
-import { useEffect, useMemo, useState } from 'react';
+import { memo, useEffect, useMemo, useRef, useState } from 'react';
+import { renderInlineFragment } from '@politost/content-core';
 import { useSearchParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { Difficulty, Question, QuestionKind, QuestionOrigin, QuestionStatus, Topic } from '@smartbuilder/domain';
 import { api, errorText, isConflict } from '../../lib/api';
 import { qk, useManuscript, useProject, useQuestions, useTopics } from '../../lib/queries';
 import { plural } from '../../lib/format';
-import { useBookId, useDocumentTitle } from '../../lib/hooks';
+import { useBookId, useDocumentTitle, useFocusWhenLost } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { DifficultyTag } from '../../reader/DifficultyTag';
 import { ConfirmDialog } from '../../components/Dialog';
 import { LivePreview, SourceEditor } from '../../components/SourceEditor';
 import { useToast } from '../../components/Toast';
+import { statementPreview } from './preview';
 import './practice.css';
 
 const ORIGINS: QuestionOrigin[] = ['authentic', 'adapted', 'generated'];
@@ -18,7 +20,18 @@ const STATUSES: QuestionStatus[] = ['draft', 'verified', 'issue'];
 const DIFFS: Difficulty[] = ['facile', 'medio', 'difficile'];
 const STATUS_TONE: Record<QuestionStatus, string> = { draft: '', verified: 'success', issue: 'danger' };
 
-const excerpt = (s: string) => s.replace(/\$\$[\s\S]*?\$\$|\\\([\s\S]*?\\\)|\\\[[\s\S]*?\\\]|\$[^$]*\$/g, '…').replace(/[#*:{}]/g, '').replace(/\s+/g, ' ').trim().slice(0, 150);
+// The list renders each statement's formulas once: a question that comes back into the list, or a list that renders again on
+// a selection, reuses the HTML. shortcut: the cache only grows, which is a few hundred KB for a book of 1,000 questions.
+// A preview without a formula is shown as text, which skips the renderer for most statements of a book copied from exams.
+const previewHtml = new Map<string, string>();
+const StatementPreview = memo(function StatementPreview({ statement }: { statement: string }) {
+  const text = statementPreview(statement);
+  if (!text) return <span className="pr-item__text"><em className="ui-muted">Empty statement</em></span>;
+  if (!text.includes('$') && !text.includes('\\(')) return <span className="pr-item__text ui-serif">{text}</span>;
+  let html = previewHtml.get(text);
+  if (html === undefined) { html = renderInlineFragment(text); previewHtml.set(text, html); }
+  return <span className="pr-item__text ui-serif" dangerouslySetInnerHTML={{ __html: html }} />;
+});
 
 export default function PracticePage() {
   useDocumentTitle('Practice');
@@ -47,6 +60,18 @@ export default function PracticePage() {
 
   const setTab = (t: QuestionKind) => { const p = new URLSearchParams(params); p.set('tab', t); p.delete('q'); setParams(p, { replace: true }); };
   const select = (id: string | null) => { const p = new URLSearchParams(params); if (id) p.set('q', id); else p.delete('q'); setParams(p, { replace: true }); };
+  // Closing the editor puts focus back on its question in the list. A deleted question leaves the list too, so focus then
+  // goes to the tab, which reads the new count.
+  const tabRef = useRef<HTMLButtonElement>(null);
+  useFocusWhenLost(tabRef, all.length);
+  const lastSelected = useRef(selectedId);
+  useEffect(() => {
+    const was = lastSelected.current;
+    lastSelected.current = selectedId;
+    const at = document.activeElement;
+    if (!was || selectedId || (at && at !== document.body)) return;
+    (document.querySelector<HTMLElement>(`.pr-item[data-qid="${CSS.escape(was)}"]`) ?? tabRef.current)?.focus();
+  }, [selectedId]);
 
   const create = useMutation({
     mutationFn: () => api('POST /api/projects/:id/questions', { params: { id: pid }, body: { kind: tab, origin: 'adapted', statement: '', hint: '', solution: '', difficulty: 'medio', topicIds: topic ? [topic] : [] } }),
@@ -67,8 +92,8 @@ export default function PracticePage() {
       </div>
 
       <div className="ui-tabs" role="tablist" aria-label="Practice type">
-        <button type="button" role="tab" className="ui-tab" aria-selected={tab === 'exercise'} onClick={() => setTab('exercise')}>Exercises ({all.filter((q) => q.kind === 'exercise').length})</button>
-        <button type="button" role="tab" className="ui-tab" aria-selected={tab === 'exam'} onClick={() => setTab('exam')}>Exam practice ({all.filter((q) => q.kind === 'exam').length})</button>
+        <button ref={tab === 'exercise' ? tabRef : undefined} type="button" role="tab" className="ui-tab" aria-selected={tab === 'exercise'} onClick={() => setTab('exercise')}>Exercises ({all.filter((q) => q.kind === 'exercise').length})</button>
+        <button ref={tab === 'exam' ? tabRef : undefined} type="button" role="tab" className="ui-tab" aria-selected={tab === 'exam'} onClick={() => setTab('exam')}>Exam practice ({all.filter((q) => q.kind === 'exam').length})</button>
       </div>
 
       <Coverage questions={ofTab} topics={topicList} tab={tab} target={opts} onPick={(id) => setTopic(topic === id ? '' : id)} active={topic} />
@@ -109,7 +134,7 @@ export default function PracticePage() {
               const groups = tab === 'exam' && q.examGroup;
               return (
                 <li key={q.id}>
-                  <button type="button" className="pr-item" aria-current={q.id === selectedId} onClick={() => select(q.id)}>
+                  <button type="button" className="pr-item" data-qid={q.id} aria-current={q.id === selectedId} onClick={() => select(q.id)}>
                     <span className="pr-item__top">
                       <span className="ui-mono pr-item__id">{q.number ? `#${q.number}` : q.id.slice(0, 6)}</span>
                       <span className={`ui-badge ui-badge--${STATUS_TONE[q.status] || 'neutral'}`}>{q.status}</span>
@@ -117,7 +142,7 @@ export default function PracticePage() {
                       <DifficultyTag level={q.difficulty} />
                     </span>
                     {groups && <span className="ui-muted pr-item__group">{q.examGroup}</span>}
-                    <span className="pr-item__text ui-serif">{excerpt(q.statement) || <em className="ui-muted">Empty statement</em>}</span>
+                    <StatementPreview statement={q.statement} />
                     <span className="ui-muted pr-item__topics">{q.topicIds.map((id) => topicList.find((t) => t.id === id)?.name).filter(Boolean).join(' · ')}</span>
                   </button>
                 </li>
