@@ -2,16 +2,20 @@ import type { ProviderUsage, UsageRow, UsageSummary } from '@smartbuilder/domain
 import type { AppContext } from '../context.ts';
 import type { Rec } from './util.ts';
 
-/** Calls and summed tokens per provider, model and role. A total stays null when any call did not report that count, except the cached tokens, which are the sum of those that were reported. */
+/**
+ * Calls and summed tokens per provider, model and role. A total stays null when any call did not report that count, except
+ * the cached tokens, which are the sum of those that were reported. `failed` counts the calls that gave no answer (a CLI
+ * that is not installed, a timeout, a usage limit) and leaves out the ones the author stopped, as the usage summary does.
+ */
 export function usageForRun(ctx: AppContext, runId: string): UsageRow[] {
   return ctx.db.all<Rec>(`
-    SELECT provider, model, role, COUNT(*) AS calls,
+    SELECT provider, model, role, COUNT(*) AS calls, SUM(ok = 0 AND COALESCE(error_kind, '') != 'aborted') AS failed,
       CASE WHEN COUNT(input_tokens) = COUNT(*) THEN SUM(input_tokens) END AS input_tokens,
       CASE WHEN COUNT(output_tokens) = COUNT(*) THEN SUM(output_tokens) END AS output_tokens,
       SUM(cached_input_tokens) AS cached_input_tokens
     FROM usage WHERE run_id = ? GROUP BY provider, model, role ORDER BY provider, model, role`, runId)
     .map((r) => ({
-      provider: r.provider, model: r.model, role: r.role, calls: Number(r.calls),
+      provider: r.provider, model: r.model, role: r.role, calls: Number(r.calls), failed: Number(r.failed),
       inputTokens: r.input_tokens === null ? null : Number(r.input_tokens),
       outputTokens: r.output_tokens === null ? null : Number(r.output_tokens),
       cachedInputTokens: r.cached_input_tokens === null ? null : Number(r.cached_input_tokens),

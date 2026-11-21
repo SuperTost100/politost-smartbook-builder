@@ -1,4 +1,4 @@
-import { memo, useMemo, useState } from 'react';
+import { memo, useMemo } from 'react';
 import type { FormulaRef } from '@politost/content-core';
 import type { EvidenceNote, RunSummary } from '@smartbuilder/domain';
 import { SourceEditor, LivePreview } from '../../components/SourceEditor';
@@ -6,6 +6,7 @@ import { ContentFlow } from '../../reader/ContentFlow';
 import { ExerciseCard } from '../../reader/ExerciseCard';
 import { exercisesIn, formulaMap, prepareSnippet, previewSource } from '../../reader/render';
 import { BLOCK_LABEL, type MappedBlock } from '../../lib/blocks';
+import { useInlineConfirm } from '../../lib/hooks';
 import { CiteMark } from '../../components/CiteMark';
 import { Icon } from '../../components/Icon';
 import { AddFigure, type FigureTarget } from './AddFigure';
@@ -125,7 +126,7 @@ export const BlockView = memo(function BlockView(p: Props) {
 
 function BlockEditor({ block, edit, resolveAsset }: { block: MappedBlock; edit: BlockEdit; resolveAsset?: (src: string) => string | undefined }) {
   const { text, saving, blocked } = edit;
-  const [confirmDelete, setConfirmDelete] = useState(false);
+  const deleteAsk = useInlineConfirm();
   const empty = !text.trim();
   const unchanged = text === edit.baseText;
   const whyId = `ms-edit-why-${block.index}`;
@@ -140,13 +141,13 @@ function BlockEditor({ block, edit, resolveAsset }: { block: MappedBlock; edit: 
         {edit.addFigure && <AddFigure {...edit.addFigure} />}
         <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves and closes, <kbd className="ui-kbd">Esc</kbd> closes. Edits save when you pause.</span>
         <span className="ui-grow" />
-        {confirmDelete ? (
+        {deleteAsk.asking ? (
           <>
             <span className="ui-muted">Remove this block?</span>
             <button type="button" className="ui-btn ui-btn--danger-solid ui-btn--sm" onClick={edit.onDelete} disabled={saving || blocked}>Remove block</button>
-            <button type="button" className="ui-btn ui-btn--sm" onClick={() => setConfirmDelete(false)}>Keep</button>
+            <button ref={deleteAsk.keepRef} type="button" className="ui-btn ui-btn--sm" onClick={deleteAsk.dismiss}>Keep</button>
           </>
-        ) : <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={() => setConfirmDelete(true)} disabled={blocked}><Icon name="trash" />Delete block</button>}
+        ) : <button ref={deleteAsk.triggerRef} type="button" className="ui-btn ui-btn--ghost ui-btn--danger ui-btn--sm" onClick={deleteAsk.ask} disabled={blocked}><Icon name="trash" />Delete block</button>}
       </div>
       {blocked && <p id={whyId} className="ui-muted">Saving is paused: the section changed while you were editing. Choose how to continue in the notice above the text.</p>}
     </div>

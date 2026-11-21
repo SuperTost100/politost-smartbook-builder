@@ -733,6 +733,11 @@ describe('runs', () => {
     }
     t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, input_tokens, output_tokens, cached_input_tokens, ms, ok, created_at) VALUES (?, ?, 'claude', 'c', 'planner', 1, 2, 1, 1, 1, ?)`, p.id, runId, now());
     assert.deepEqual(usageForRun(t.ctx, runId).map((u) => [u.provider, u.calls, u.inputTokens, u.outputTokens, u.cachedInputTokens]), [['claude', 1, 1, 2, 1], ['codex', 3, 60, null, null]]);
+    // A reviewer call to a CLI that is not installed is a failed call; one the author stopped is not.
+    t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, ms, ok, error_kind, created_at) VALUES (?, ?, 'agy', 'a', 'reviewer', 1, 0, 'unavailable', ?)`, p.id, runId, now());
+    t.ctx.db.run(`INSERT INTO usage (project_id, run_id, provider, model, role, ms, ok, error_kind, created_at) VALUES (?, ?, 'agy', 'a', 'reviewer', 1, 0, 'aborted', ?)`, p.id, runId, now());
+    assert.deepEqual(usageForRun(t.ctx, runId).map((u) => [u.provider, u.calls, u.failed]), [['agy', 2, 1], ['claude', 1, 0], ['codex', 3, 0]]);
+    t.ctx.db.run(`DELETE FROM usage WHERE provider = 'agy'`);
 
     const detail = (await t.req('GET', `/api/runs/${runId}`)).body;
     assert.equal(detail.tasks.length, 2);
@@ -866,6 +871,65 @@ describe('review fixes (server)', () => {
     const again = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: renamed })).body;
     assert.equal(again.status, 'issue');
     assert.match(again.checks[1].detail, /duplicate \("Boyle"\)/);
+  });
+
+  it('6d. an accepted graph finding is listed as accepted, and "Stop accepting" opens it again', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-unaccept'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    // A duplicate trace blocks; the raw "_C" in the axis title is a warning.
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('Charles'), trace('Gay-Lussac')], layout: { yaxis: { title: { text: 'Corrente i_C (A)' } } } } };
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'issue', checks: [], created_at: now() });
+    const accepted = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: twins, acceptLint: true })).body;
+    const keys = accepted.lintAcceptedFindings.map((f: { key: string }) => f.key);
+    assert.ok(keys.includes('duplicate:Gay-Lussac'));
+    assert.ok(keys.some((k: string) => k.startsWith('raw-notation:')), 'the warning is listed as accepted too');
+    assert.deepEqual(accepted.lintOpen, []);
+    assert.doesNotMatch(accepted.checks[1].detail, /\(warning\)/, 'an accepted warning reads as accepted in the check results');
+    // No payload: Stop accepting works on the graph as stored.
+    const reopened = (await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: ['duplicate:Gay-Lussac'] })).body;
+    assert.deepEqual(reopened.payload, accepted.payload);
+    assert.equal(reopened.status, 'issue');
+    assert.deepEqual(reopened.lintOpen.map((f: { key: string }) => f.key), ['duplicate:Gay-Lussac']);
+    assert.ok(!reopened.lintAccepted.includes('duplicate:Gay-Lussac'));
+    assert.ok(reopened.lintAcceptedFindings.some((f: { key: string }) => f.key.startsWith('raw-notation:')), 'the other acceptance stays');
+    assert.equal((await t.req('PATCH', `/api/enrichments/${eid}`, {})).status, 400, 'a patch with neither a payload nor findings is refused');
+  });
+
+  it('6e. Stop accepting holds after a later save when the acceptance was stored under the raw trace name', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-unaccept-raw'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('y = x'), trace('y = x^2')], layout: {} } };
+    // Accepted before the formatter wrote "x²": the stored key keeps the raw name.
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'verified', checks: [], lint_accepted: ['duplicate:y = x^2'], created_at: now() });
+    const stopped = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: twins, stopAccepting: ['duplicate:y = x²'] })).body;
+    const dup = (e: { lintOpen: { key: string }[] }) => e.lintOpen.map((f) => f.key).filter((k) => k.startsWith('duplicate:'));
+    assert.deepEqual(dup(stopped), ['duplicate:y = x²']);
+    const saved = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: stopped.payload })).body;
+    assert.deepEqual(dup(saved), ['duplicate:y = x²'], 'a later save does not bring the acceptance back');
+    assert.equal(saved.status, 'issue');
+  });
+
+  it('6f. a card that still shows the raw trace name stops the formatted acceptance too', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-unaccept-stale'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('y = x'), trace('y = x^2')], layout: {} } };
+    // Another tab's save stored both forms of the key.
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'verified', checks: [], lint_accepted: ['duplicate:y = x^2', 'duplicate:y = x²'], created_at: now() });
+    const stopped = (await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: ['duplicate:y = x^2'] })).body;
+    assert.ok(stopped.lintOpen.some((f: { key: string }) => f.key.startsWith('duplicate:')), 'the duplicate is open again');
+    assert.ok(!stopped.lintAccepted.some((k: string) => k.startsWith('duplicate:')));
+  });
+
+  it('6g. Stop accepting is refused for a lab example, which it would send back to draft', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('ide-unaccept'));
+    const eid = newId();
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'ide', payload: { code: 'print(1)' }, status: 'verified', checks: [{ method: 'run', ok: true, detail: 'ok' }], created_at: now() });
+    assert.equal((await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: [] })).status, 400);
+    const row = t.ctx.db.get<{ status: string }>('SELECT status FROM enrichments WHERE id = ?', eid)!;
+    assert.equal(row.status, 'verified');
   });
 
   it('7. the generate route forwards scope.nodeIds', async () => {

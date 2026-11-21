@@ -15,6 +15,11 @@
 .ex-nocheck { font-size: 13px; }
 .ex-checks .is-warn svg { color: var(--warning); }
 .ex-lint-hint { font-size: 13px; margin: 2px 0 6px; }
+.ex-checks .is-accepted { color: var(--ink-muted); flex-wrap: wrap; }
+.ex-checks .is-accepted svg { color: var(--ink-muted); }
+.ex-checks .is-accepted > span { flex: 1 1 240px; min-width: 0; }
+.ex-accepted { font-size: 11.5px; }
+.ex-unaccept { flex-shrink: 0; margin-left: 13px; }
 .ex-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
 .ex-enr { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .ex-enr__head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
