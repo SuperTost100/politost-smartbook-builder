@@ -74,6 +74,14 @@ export const RUN_KIND_LABEL: Record<RunSummary['kind'], string> = {
   align: 'Aligning book',
 };
 
+/** The name of a run on the run screen. A review run is named for what it was started for, when the service recorded it. */
+export function runTitle(run: Pick<RunSummary, 'kind' | 'reviewScope'>): string {
+  const scope = run.kind === 'review' ? run.reviewScope : null;
+  if (!scope) return RUN_KIND_LABEL[run.kind];
+  if ('exercises' in scope) return `Checking ${plural(scope.exercises, 'exercise')}`;
+  return { changed: 'Reviewing', sweep: 'Reviewing and sweeping', full: 'Full review', recheck: 'Second opinion' }[scope.mode];
+}
+
 export const TASK_STATE_LABEL: Record<TaskState, string> = {
   queued: 'Queued',
   running: 'Running',

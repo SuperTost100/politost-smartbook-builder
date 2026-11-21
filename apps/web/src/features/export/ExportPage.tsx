@@ -73,6 +73,8 @@ export default function ExportPage() {
   const exportsQ = useExports(pid);
   const issuesQ = useIssues(pid);
   const [report, setReport] = useState<ValidationReport | null>(null);
+  // The export just made, brought into view above the toasts that announce it.
+  const [made, setMade] = useState<string | null>(null);
 
   // `quiet`: the check that runs when the page opens shows its report without a toast.
   const validate = useMutation({
@@ -93,6 +95,7 @@ export default function ExportPage() {
     onSuccess: (row, approved) => {
       void qc.invalidateQueries({ queryKey: qk.exports(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) });
       setReport(row.report);
+      setMade(row.id);
       toast(approved ? 'Book approved and exported' : 'Draft exported', { action: { label: 'Download .ptsb', onClick: () => { window.location.href = apiUrl('GET /api/exports/:exportId/download', { params: { exportId: row.id } }); } } });
     },
     onError: (e) => toast(errorText(e), { tone: 'danger' }),
@@ -169,17 +172,21 @@ export default function ExportPage() {
         {exportsQ.isLoading && <div className="ui-skeleton" style={{ height: 80 }} />}
         {exportsQ.error && <div className="ui-banner ui-banner--danger" role="alert">{errorText(exportsQ.error)}</div>}
         {!exportsQ.isLoading && rows.length === 0 && <div className="ui-empty"><p className="ui-empty__text">No exports yet. Export a draft to open it in the reader.</p></div>}
-        <ul className="ex2-list">{rows.map((r, i) => <ExportItem key={r.id} row={r} latest={i === 0} />)}</ul>
+        <ul className="ex2-list">{rows.map((r, i) => <ExportItem key={r.id} row={r} latest={i === 0} reveal={r.id === made} />)}</ul>
       </section>
     </div>
   );
 }
 
 /** Only the newest export gets the accent button; older ones stay downloadable without competing with it. */
-function ExportItem({ row, latest }: { row: ExportRow; latest: boolean }) {
+function ExportItem({ row, latest, reveal }: { row: ExportRow; latest: boolean; reveal: boolean }) {
   const [copied, setCopied] = useState(false);
+  const ref = useRef<HTMLLIElement>(null);
+  useEffect(() => {
+    if (reveal) ref.current?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+  }, [reveal]);
   return (
-    <li className="ex2-item ui-card">
+    <li ref={ref} className="ex2-item ui-card">
       <div className="ex2-item__main">
         <div className="ui-row">
           <span className={`ui-badge ${row.approved ? 'ui-badge--success' : 'ui-badge--warning'}`}>{row.approved ? 'Approved' : 'Draft'}</span>

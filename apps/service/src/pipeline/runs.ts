@@ -1,6 +1,6 @@
 // Run planning: turns an author action into a task graph.
 import { createHash } from 'node:crypto';
-import type { OutlineSection, RunSummary } from '@smartbuilder/domain';
+import type { OutlineSection, ReviewScope, RunSummary } from '@smartbuilder/domain';
 import type { AppContext } from '../context.ts';
 import { now } from '../db/db.ts';
 import { HttpError } from '../server.ts';
@@ -108,7 +108,8 @@ export function startRun(ctx: AppContext, projectId: string, kind: RunSummary['k
             input: { chapterId: c.id, ...(scope.reviewMode ? { mode: scope.reviewMode } : scope.sweep ? { sweep: true } : {}) },
           }));
       if (!specs.length) throw new HttpError(409, 'nothing_to_review', 'There is nothing to review yet.', 'Approve the outline and generate at least one chapter.');
-      runId = ctx.queue.createRun(projectId, 'review', specs);
+      const reviewScope: ReviewScope = questionIds?.length ? { exercises: questionIds.length } : { mode: scope.reviewMode ?? (scope.sweep ? 'sweep' : 'changed') };
+      runId = ctx.queue.createRun(projectId, 'review', specs, { reviewScope });
       break;
     }
     case 'program': {

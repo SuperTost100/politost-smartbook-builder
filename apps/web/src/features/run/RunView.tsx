@@ -3,7 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
 import type { RunSummary, TaskRow, TaskState } from '@smartbuilder/domain';
 import { api, describeError } from '../../lib/api';
 import { qk, useProject, useRun, useRuns } from '../../lib/queries';
-import { RUN_KIND_LABEL, TASK_STATE_LABEL, TERMINAL_RUN, dateTime, plural, runCounts, timeAgo, tokenCount } from '../../lib/format';
+import { RUN_KIND_LABEL, TASK_STATE_LABEL, runTitle, TERMINAL_RUN, dateTime, plural, runCounts, timeAgo, tokenCount } from '../../lib/format';
 import { Icon } from '../../components/Icon';
 import { ConfirmDialog } from '../../components/Dialog';
 import { useToast } from '../../components/Toast';
@@ -132,7 +132,7 @@ export function RunView({ projectId }: { projectId: string }) {
         <div className="rn-head__top">
           <div>
             <div className="ui-meta">{run.id.slice(0, 8)} · started {timeAgo(run.createdAt)}</div>
-            <h2 className="ui-panel-title">{RUN_KIND_LABEL[run.kind]}</h2>
+            <h2 className="ui-panel-title">{runTitle(run)}</h2>
           </div>
           <span className={`ui-badge ui-badge--${statusTone(run) || 'neutral'}`}>{run.status === 'waiting' && run.waiting?.kind === 'quota' ? 'Waiting for quota' : statusLabel(run)}</span>
         </div>
@@ -247,7 +247,7 @@ export function RunView({ projectId }: { projectId: string }) {
           {list.map((r) => (
             <li key={r.id}>
               <button type="button" className="rn-run" aria-current={r.id === selectedId} onClick={() => setPicked(r.id)}>
-                <span>{RUN_KIND_LABEL[r.kind]}</span>
+                <span>{runTitle(r)}</span>
                 <span className={`ui-badge ui-badge--${statusTone(r) || 'neutral'}`}>{statusLabel(r)}</span>
                 <span className="ui-muted rn-run__time">{dateTime(r.createdAt)}</span>
               </button>

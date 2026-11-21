@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { splitBlocks } from '@smartbuilder/content/blocks';
@@ -20,6 +20,9 @@ export default function ExtrasPage() {
   const pid = useBookId();
   const [params, setParams] = useSearchParams();
   const tab = (['figures', 'ide', 'graphs'].includes(params.get('tab') ?? '') ? params.get('tab') : 'figures') as Tab;
+  // On a phone the tabs scroll sideways, so the selected one is brought into view.
+  const tabList = useRef<HTMLDivElement>(null);
+  useEffect(() => { tabList.current?.querySelector('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest', inline: 'nearest' }); }, [tab]);
   const assets = useQuery({ queryKey: qk.assets(pid), queryFn: () => api('GET /api/projects/:id/assets', { params: { id: pid } }) });
   const manuscript = useManuscript(pid);
   const placed = useMemo(() => placedFigures(manuscript.data ?? [], assets.data ?? []), [manuscript.data, assets.data]);
@@ -35,7 +38,7 @@ export default function ExtrasPage() {
           <p className="ui-lede">Figures, runnable code examples and graphs that go with the text.</p>
         </div>
       </div>
-      <div className="ui-tabs" role="tablist" aria-label="Extras">
+      <div ref={tabList} className="ui-tabs" role="tablist" aria-label="Extras">
         {([['figures', `Figures (${placed.length})`], ['ide', `IDE examples (${ide.length})`], ['graphs', `Graphs (${graphs.length})`]] as const).map(([t, l]) => (
           <button key={t} type="button" role="tab" className="ui-tab" aria-selected={tab === t} onClick={() => setParams({ tab: t }, { replace: true })}>{l}</button>
         ))}
@@ -164,7 +167,13 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
           <div><div className="ui-meta">Check results</div><Checks checks={e.checks} /></div>
           {lintOpen && !dirty && (
             <div className="ui-stack">
-              <p className="ui-muted">If the graph is right as it is (two curves that coincide on purpose, a warning that does not apply), accept its lint findings. They stop failing the graph and leave the export report.</p>
+              <div>
+                <div className="ui-meta">Lint findings</div>
+                <p className="ui-muted ex-lint-hint">Accept them only if the graph is right as it is. Accepted findings stop failing the graph and leave the export report.</p>
+                <ul className="ex-checks">
+                  {e.lintOpen.map((f) => <li key={f.key} className="is-warn"><Icon name="alert" size={13} /><span><strong>{f.code}</strong>{f.trace ? ` on "${f.trace}"` : ''}: {f.detail}</span></li>)}
+                </ul>
+              </div>
               <div><button type="button" className="ui-btn ui-btn--sm" disabled={accept.isPending} onClick={() => accept.mutate()}>Accept anyway</button></div>
             </div>
           )}
