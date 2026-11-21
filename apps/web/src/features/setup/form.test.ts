@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BookOptions } from '@smartbuilder/domain';
-import { changedFields, wholeNumberIn, type SetupValues } from './form.ts';
+import { changedFields, splitAuthors, wholeNumberIn, type SetupValues } from './form.ts';
 
 test('a number field takes whole numbers in its range and refuses the rest', () => {
   assert.equal(wholeNumberIn('3', 1, 5), 3);
@@ -25,4 +25,12 @@ test('going back to an automatic area is sent as null, and an area left alone is
   assert.deepEqual(changedFields(pinned, book), { options: { subjectArea: null } });
   assert.deepEqual(changedFields(book, pinned), { options: { subjectArea: 'physics' } });
   assert.deepEqual(changedFields(pinned, pinned), {});
+});
+
+test('authors are compared as the form saves them, so a stored name with a comma is not sent when the field is left alone', () => {
+  const stored = splitAuthors(['Doe, Jane', 'Rossi'].join(', '));
+  assert.deepEqual(stored, ['Doe', 'Jane', 'Rossi']);
+  const loaded = { ...book, authors: stored };
+  assert.deepEqual(changedFields(loaded, { ...loaded, authors: splitAuthors('Doe, Jane, Rossi') }), {});
+  assert.deepEqual(splitAuthors(' Ada ;\nBea,, '), ['Ada', 'Bea']);
 });

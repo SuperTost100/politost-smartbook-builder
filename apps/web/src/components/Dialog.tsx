@@ -18,10 +18,14 @@ interface DialogProps {
 
 const FOCUSABLE = 'a[href], button, input, textarea, select, summary, [tabindex], .cm-content';
 
-/** A radio that Tab skips: one of a group whose checked radio, or failing that its first one, is the one Tab stops on. */
-function skippedRadio(el: HTMLElement) {
+/**
+ * A radio that Tab skips: one of a group whose checked radio, or failing that its first enabled one, is the one Tab stops
+ * on. The group is the radios of the same name, form and dialog.
+ */
+function skippedRadio(el: HTMLElement, dialog: HTMLDialogElement) {
   if (!(el instanceof HTMLInputElement) || el.type !== 'radio' || !el.name || el.checked) return false;
-  const group = [...(el.form ?? el.ownerDocument).querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${CSS.escape(el.name)}"]`)];
+  const group = [...dialog.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${CSS.escape(el.name)}"]`)]
+    .filter((r) => r.form === el.form && r.closest('dialog') === dialog && !r.disabled);
   return group.some((r) => r.checked) || group[0] !== el;
 }
 
@@ -33,7 +37,7 @@ function skippedRadio(el: HTMLElement) {
 function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
   if (e.key !== 'Tab' || e.defaultPrevented) return;
   const dialog = e.currentTarget;
-  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.closest('dialog') === dialog && el.tabIndex >= 0 && !el.hasAttribute('disabled') && !el.closest('[inert], fieldset:disabled') && el.getClientRects().length > 0 && !skippedRadio(el));
+  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.closest('dialog') === dialog && el.tabIndex >= 0 && !el.hasAttribute('disabled') && !el.closest('[inert], fieldset:disabled') && el.getClientRects().length > 0 && !skippedRadio(el, dialog));
   const first = items[0];
   const last = items.at(-1);
   if (!first || !last) return;

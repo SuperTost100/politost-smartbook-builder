@@ -7,6 +7,9 @@ export function wholeNumberIn(text: string, lo: number, hi: number): number | nu
   return n >= lo && n <= hi ? n : null;
 }
 
+/** The author list as the form saves it: names split on commas, semicolons and new lines. */
+export const splitAuthors = (text: string) => text.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
+
 export type SetupValues = Omit<ProjectInput, 'options'> & { options: BookOptions };
 export type SetupPatch = Partial<Omit<ProjectInput, 'options'>> & { options?: BookOptionsPatch };
 

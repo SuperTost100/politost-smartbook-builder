@@ -8,7 +8,7 @@ import { slugify } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
 import { ProgramCard } from './ProgramCard';
-import { changedFields, wholeNumberIn, type SetupValues } from './form';
+import { changedFields, splitAuthors, wholeNumberIn, type SetupValues } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -91,7 +91,9 @@ export default function BookSetup() {
     const options = { ...DEFAULT_OPTIONS, ...p.options };
     setOpts(options);
     setNumText(numberTexts(options));
-    loadedValues.current = { title: p.title, subject: p.subject, slug: p.slug, authors: p.authors, language: p.language, audience: p.audience, goals: p.goals, options };
+    // Read the way the form saves it, so a field left alone compares equal: a stored "Doe, Jane" shows as two names and is
+    // sent only when the author edits the field.
+    loadedValues.current = { title: p.title.trim(), subject: p.subject.trim(), slug: p.slug, authors: splitAuthors(p.authors.join(', ')), language: p.language, audience: p.audience, goals: p.goals, options };
     setLoaded(true);
   }, [editing, project.data, loaded]);
 
@@ -121,7 +123,7 @@ export default function BookSetup() {
   const area: SubjectArea = opts.subjectArea ?? inferred;
   const profile = SUBJECT_PROFILES[area];
   const language = lang === 'other' ? otherLang.trim() : lang;
-  const authorList = authors.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
+  const authorList = splitAuthors(authors);
   const slugValid = /^[a-z0-9-]+$/.test(slug) && slug.length > 0;
   const valid = title.trim() && subject.trim() && slugValid && language.length >= 2 && numbersValid;
 
