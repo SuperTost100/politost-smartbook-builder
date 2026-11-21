@@ -12,18 +12,32 @@ interface DialogProps {
   className?: string;
   /** Escape and a click outside do nothing while this is set (work is running that a stray key must not abandon). The close button still works. */
   holdEscape?: boolean;
-  /** Tab and Shift+Tab wrap inside the dialog. The browser's own handling lets focus out to its toolbar from the last control. */
-  wrapTab?: boolean;
   /** Nothing in the body can be focused or clicked while this is set (the footer is asking a question that comes first). */
   inertBody?: boolean;
 }
 
 const FOCUSABLE = 'a[href], button, input, textarea, select, summary, [tabindex], .cm-content';
 
-/** Moves focus from the last control to the first (or the other way round), when Tab would leave the dialog. */
+/**
+ * A radio that Tab skips: one of a group whose checked radio, or failing that its first enabled one, is the one Tab stops
+ * on. The group is the radios of the same name, form and dialog.
+ */
+function skippedRadio(el: HTMLElement, dialog: HTMLDialogElement) {
+  if (!(el instanceof HTMLInputElement) || el.type !== 'radio' || !el.name || el.checked) return false;
+  const group = [...dialog.querySelectorAll<HTMLInputElement>(`input[type="radio"][name="${CSS.escape(el.name)}"]`)]
+    .filter((r) => r.form === el.form && r.closest('dialog') === dialog && !r.disabled);
+  return group.some((r) => r.checked) || group[0] !== el;
+}
+
+/**
+ * Moves focus from the last control to the first (or the other way round), when Tab would leave the dialog. A modal
+ * <dialog> keeps focus out of the page, but from its last control Tab moves to the browser's toolbar, or to the page's
+ * body where there is none.
+ */
 function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
-  if (e.key !== 'Tab') return;
-  const items = [...e.currentTarget.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.tabIndex >= 0 && !el.hasAttribute('disabled') && el.getClientRects().length > 0);
+  if (e.key !== 'Tab' || e.defaultPrevented) return;
+  const dialog = e.currentTarget;
+  const items = [...dialog.querySelectorAll<HTMLElement>(FOCUSABLE)].filter((el) => el.closest('dialog') === dialog && el.tabIndex >= 0 && !el.matches(':disabled') && !el.closest('[inert]') && el.getClientRects().length > 0 && !skippedRadio(el, dialog));
   const first = items[0];
   const last = items.at(-1);
   if (!first || !last) return;
@@ -35,7 +49,7 @@ function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
  * Native <dialog>: the browser traps focus, closes on Esc and returns focus to the opener.
  * The component only mounts the dialog content while open.
  */
-export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape, wrapTab, inertBody }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape, inertBody }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
@@ -57,7 +71,7 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       className={cls}
       aria-labelledby={titleId}
       onClose={() => closeRef.current()}
-      onKeyDown={wrapTab ? wrapFocus : undefined}
+      onKeyDown={wrapFocus}
       onCancel={(e) => { e.preventDefault(); if (!holdEscape) closeRef.current(); }}
       onMouseDown={(e) => { if (e.target === e.currentTarget && !holdEscape) closeRef.current(); }}
     >

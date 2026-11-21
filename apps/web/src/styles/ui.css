@@ -128,7 +128,9 @@
 .ui-table .ui-num { text-align: right; font-variant-numeric: tabular-nums; }
 
 /* In-page tabs and segmented choices: the reader's pill switcher. */
-.ui-tabs { display: inline-flex; align-self: flex-start; flex-wrap: wrap; gap: 2px; padding: 4px; border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--border); max-width: 100%; }
+/* Tabs that do not fit scroll sideways on one row, like the book tabs in the header. */
+.ui-tabs { display: inline-flex; align-self: flex-start; gap: 2px; padding: 4px; border-radius: var(--radius-pill); background: var(--surface); border: 1px solid var(--border); max-width: 100%; overflow-x: auto; scrollbar-width: none; min-height: fit-content; }
+.ui-tabs::-webkit-scrollbar { display: none; }
 .ui-tab { display: inline-flex; align-items: center; gap: var(--space-2); height: 30px; padding: 0 var(--space-4); border: 0; border-radius: var(--radius-pill); background: transparent; color: var(--ink-muted); font: 500 12px/16px var(--font-mono); letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; white-space: nowrap; transition: background-color 0.15s, color 0.15s; }
 .ui-tab:hover { color: var(--ink); background: var(--surface-raised); }
 .ui-tab[aria-selected='true'] { background: var(--accent-soft); color: var(--accent-text); }

@@ -483,8 +483,8 @@ export interface Enrichment {
   spec: Record<string, unknown> | null;
   /** The section revision the independent checker read when it last checked this graph, or null when it never did (or the author edited the graph since). */
   checkedRevisionId: string | null;
-  /** Lint findings of this graph's payload the author has not accepted, as "code:trace" keys. Empty for a lab example. */
-  lintOpen: string[];
+  /** Lint findings of this graph's payload the author has not accepted, with their "code:trace" key. Empty for a lab example. */
+  lintOpen: { key: string; code: string; trace?: string; detail: string }[];
   createdAt: string;
 }
 
@@ -508,7 +508,14 @@ export interface RunSummary {
   waiting: { taskId: string; reason: string; action: string; kind: 'author' | 'quota'; retryAt: string | null } | null;
   /** Finished tasks that report trouble in their result. A run with warnings is complete but not a plain success. */
   warnings: { taskId: string; label: string; message: string }[];
+  /**
+   * What a review run was started for: chapters read in one of the review modes (`changed` is a plain review), or exercises
+   * checked again. Null for other kinds and for review runs started before it was recorded. Optional so older fixtures still type.
+   */
+  reviewScope?: ReviewScope | null;
 }
+
+export type ReviewScope = { mode: 'changed' | 'sweep' | 'full' | 'recheck' } | { exercises: number };
 
 export interface TaskRow {
   id: string;

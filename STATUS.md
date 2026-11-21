@@ -98,6 +98,7 @@ The four published books (Analisi 1, Fisica 1, Chimica di base and Analisi Matem
 - **Fix.** A fix whose check fails is undone, and its issues reopen with the reason. The editor says for each problem whether the text has it and leaves correct text alone. A retry after an undone fix is written by the exercise writer's model, with the reason (#139, #149, #151). Every rewrite of a question is kept in a history.
 - **Publishing.** `npm run publish-book` writes a book into politost-books through the export gate, with a manifest. `npm run backport` brings hand fixes from the books repository back into the builder, and only what the folder changed since its export (#131, #135, #141, #146).
 - **cli-funnel 1.0.0** (#148).
+- **Small fixes from the release check** (#154). Book setup saves only the fields you changed, so a second tab no longer writes old values back, and its number fields refuse a value outside their range. "Accept anyway" on a graph lists the findings it accepts. The run screen names the kind of review. Tab stays inside every dialog.
 
 **On the four books.** All 929 exercises and exam questions were checked again with the new check, and 38 were flagged. Every real defect among them was corrected by the builder's own fix and passed the check afterwards. The books were republished from the builder (politost-books PR #35) with no hand edit of an exercise.
 
@@ -139,7 +140,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 294 content tests (292 pass and 2 are skipped because they need two real books that are not in the repository) and 1,091 service tests. `npm run test:e2e` runs 221 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 294 content tests (292 pass and 2 are skipped because they need two real books that are not in the repository) and 1,092 service tests and 6 web tests. `npm run test:e2e` runs 226 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 

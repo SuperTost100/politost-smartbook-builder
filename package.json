@@ -17,7 +17,7 @@
     "dev": "node scripts/dev.mjs",
     "doctor": "node --import tsx apps/service/src/bin/doctor.ts",
     "typecheck": "tsc -p packages/domain && tsc -p packages/content && tsc -p apps/service && tsc -p apps/web",
-    "test": "npm test -w @smartbuilder/content -w @smartbuilder/service",
+    "test": "npm test -w @smartbuilder/content -w @smartbuilder/service -w @smartbuilder/web",
     "test:e2e": "npm run test:e2e -w @smartbuilder/web",
     "backup": "node --import tsx apps/service/src/bin/backup.ts backup",
     "restore": "node --import tsx apps/service/src/bin/backup.ts restore",
