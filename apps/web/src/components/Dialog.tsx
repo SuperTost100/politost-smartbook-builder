@@ -14,6 +14,8 @@ interface DialogProps {
   holdEscape?: boolean;
   /** Nothing in the body can be focused or clicked while this is set (the footer is asking a question that comes first). */
   inertBody?: boolean;
+  /** Called first on Escape. Returning true means it was handled (an open question was answered), so the dialog stays open. */
+  onEscape?: () => boolean;
 }
 
 const FOCUSABLE = 'a[href], button, input, textarea, select, summary, [tabindex], .cm-content';
@@ -50,7 +52,7 @@ function wrapFocus(e: React.KeyboardEvent<HTMLDialogElement>) {
  * closes: Escape, the close button, a footer button or a click outside.
  * The component only mounts the dialog content while open.
  */
-export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape, inertBody }: DialogProps) {
+export function Dialog({ open, onClose, title, children, footer, variant = 'modal', className = '', holdEscape, inertBody, onEscape }: DialogProps) {
   const ref = useRef<HTMLDialogElement>(null);
   const titleId = useId();
   const closeRef = useRef(onClose);
@@ -85,7 +87,7 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       aria-labelledby={titleId}
       onClose={() => closeRef.current()}
       onKeyDown={wrapFocus}
-      onCancel={(e) => { e.preventDefault(); if (!holdEscape) closeRef.current(); }}
+      onCancel={(e) => { e.preventDefault(); if (onEscape?.()) return; if (!holdEscape) closeRef.current(); }}
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
         // A click on the backdrop must not move focus to the page behind it.

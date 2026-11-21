@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BookOptions } from '@smartbuilder/domain';
-import { changedFields, compareStored, splitAuthors, wholeNumberIn, withFields, type SetupValues } from './form.ts';
+import { changedFields, compareStored, splitAuthors, wholeNumberIn, withFields, withoutFields, type SetupValues } from './form.ts';
 
 test('a number field takes whole numbers in its range and refuses the rest', () => {
   assert.equal(wholeNumberIn('3', 1, 5), 3);
@@ -41,7 +41,7 @@ test('a field this form changed that was saved elsewhere since is stale; other f
   const { stale, refreshed } = compareStored(book, stored, patch);
   assert.deepEqual(stale, [{ key: 'audience', stored: 'Secondo tab', mine: 'Primo tab' }]);
   assert.deepEqual(refreshed.sort(), ['goals', 'options.reviewSamples']);
-  assert.deepEqual(compareStored(book, book, patch), { stale: [], refreshed: [] });
+  assert.deepEqual(compareStored(book, book, patch), { stale: [], settled: [], refreshed: [] });
 });
 
 test('an option this form changed and another tab changed too is stale, and an area cleared elsewhere counts', () => {
@@ -56,4 +56,29 @@ test('withFields takes only the named fields', () => {
   assert.equal(next.audience, 'Primo anno');
   assert.equal(next.options.ide, false);
   assert.equal(book.options.ide, true, 'the base is not changed');
+});
+
+test('a field both tabs saved with the same value is no conflict, and it is not sent again', () => {
+  const stored = { ...book, audience: 'identical again', options: { ...options, ide: false } };
+  const patch = changedFields(book, { ...book, audience: 'identical again', goals: 'Orale', options: { ...options, ide: false } });
+  const { stale, settled, refreshed } = compareStored(book, stored, patch);
+  assert.deepEqual(stale, []);
+  assert.deepEqual(settled.sort(), ['audience', 'options.ide']);
+  assert.deepEqual(refreshed, []);
+  assert.deepEqual(withoutFields(patch, settled), { goals: 'Orale' });
+});
+
+test('after a save the saved book is the baseline, so the next edit of the same field is no conflict', () => {
+  const saved = { ...book, goals: 'Primo salvataggio' };
+  const patch = changedFields(saved, { ...saved, goals: 'Secondo salvataggio' });
+  assert.deepEqual(compareStored(saved, saved, patch).stale, []);
+  // The baseline from before the save is what made the false conflict.
+  assert.deepEqual(compareStored(book, saved, patch).stale.map((f) => f.key), ['goals']);
+});
+
+test('an area cleared to Automatic in both tabs is settled', () => {
+  const pinned = { ...book, options: { ...options, subjectArea: 'physics' as const } };
+  const patch = changedFields(pinned, book);
+  assert.deepEqual(compareStored(pinned, book, patch).settled, ['options.subjectArea']);
+  assert.deepEqual(withoutFields(patch, ['options.subjectArea']), {});
 });

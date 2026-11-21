@@ -305,6 +305,15 @@ test.describe('figure dialog, the discard question and focus', () => {
     await page.keyboard.press('Enter');
     await expect(dialog.getByText('Remove this figure from the section?')).toBeHidden();
     await expect(remove).toBeFocused();
+    // Escape answers Keep first, and only a second Escape closes the dialog.
+    await page.keyboard.press('Enter');
+    await expect(dialog.getByRole('button', { name: 'Keep', exact: true })).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog.getByText('Remove this figure from the section?')).toBeHidden();
+    await expect(dialog).toBeVisible();
+    await expect(remove).toBeFocused();
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
   });
 });
 

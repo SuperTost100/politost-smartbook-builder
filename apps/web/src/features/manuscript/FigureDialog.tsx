@@ -293,6 +293,8 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blo
     <Dialog
       open
       onClose={requestClose}
+      // With "Remove this figure?" open, Escape answers Keep; a second Escape closes the dialog.
+      onEscape={() => { if (!removeAsk.asking) return false; removeAsk.dismiss(); return true; }}
       holdEscape={redrawing}
       inertBody={leaving}
       className="fd"

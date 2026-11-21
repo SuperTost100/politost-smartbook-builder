@@ -23,7 +23,7 @@
 .pr-item__group { font-size: 12.5px; }
 .pr-item__text { font-size: 15px; line-height: 1.45; overflow-wrap: anywhere; }
 .pr-item__topics { font-size: 12.5px; }
-.pr-editor { padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; position: sticky; top: calc(var(--bar-h) + 12px); max-height: calc(100vh - var(--bar-h) - 24px); overflow-y: auto; }
+.pr-editor { scroll-margin-top: calc(var(--bar-h) + 12px); padding: 16px; display: flex; flex-direction: column; gap: 14px; min-width: 0; position: sticky; top: calc(var(--bar-h) + 12px); max-height: calc(100vh - var(--bar-h) - 24px); overflow-y: auto; }
 .pr-editor__head { display: flex; gap: 8px; align-items: flex-start; }
 .pr-meta { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
 .pr-topics { border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--surface-raised); }

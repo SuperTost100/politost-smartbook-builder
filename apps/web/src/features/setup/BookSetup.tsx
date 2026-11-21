@@ -9,7 +9,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
 import { Dialog } from '../../components/Dialog';
 import { ProgramCard } from './ProgramCard';
-import { changedFields, compareStored, fieldValue, same, setupValues, splitAuthors, wholeNumberIn, withFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
+import { changedFields, compareStored, fieldValue, keysOf, same, setupValues, splitAuthors, wholeNumberIn, withFields, withoutFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -106,7 +106,8 @@ export default function BookSetup() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const p = project.data;
+    // A refetch on its way (the one a save starts) is waited for, so the form never loads a book older than the last save.
+    const p = project.isFetching ? undefined : project.data;
     if (!editing || !p || loaded) return;
     setTitle(p.title); setSubject(p.subject); setSlug(p.slug); setSlugTouched(true);
     setAuthors(p.authors.join(', '));
@@ -118,7 +119,7 @@ export default function BookSetup() {
     setNumText(numberTexts(options));
     loadedValues.current = setupValues(p, DEFAULT_OPTIONS);
     setLoaded(true);
-  }, [editing, project.data, loaded]);
+  }, [editing, project.data, project.isFetching, loaded]);
 
   /**
    * Puts the given fields of `v` in the form, and in the baseline it compares with, as if the form had loaded them. With
@@ -189,7 +190,11 @@ export default function BookSetup() {
       if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: patch ?? {} });
       return api('POST /api/projects', { body });
     },
-    onSuccess: (p) => {
+    onSuccess: (p, patch) => {
+      // The fields this save sent take the saved values as their baseline. The page can stay mounted after the save (Back
+      // before the next screen has loaded), and a later save must compare with what this save stored. Other fields keep
+      // theirs, so a value another tab saved meanwhile is still caught by the check.
+      if (editing && patch) loadedValues.current = withFields(loadedValues.current!, setupValues(p, DEFAULT_OPTIONS), keysOf(patch));
       void qc.invalidateQueries({ queryKey: qk.projects });
       void qc.invalidateQueries({ queryKey: qk.project(p.id) });
       toast(editing ? 'Book setup saved' : 'Book created');
@@ -207,10 +212,13 @@ export default function BookSetup() {
     onSuccess: (p, sent) => {
       const patch = changedFields(loadedValues.current!, sent);
       const stored = setupValues(p, DEFAULT_OPTIONS);
-      const { stale, refreshed } = compareStored(loadedValues.current!, stored, patch);
+      const { stale, settled, refreshed } = compareStored(loadedValues.current!, stored, patch);
       fill(stored, refreshed, sent);
-      if (stale.length) setConflict({ fields: stale, stored, patch });
-      else save.mutate(patch);
+      // A field another tab already saved with the author's value is neither asked about nor sent.
+      loadedValues.current = withFields(loadedValues.current!, stored, settled);
+      const toSend = withoutFields(patch, settled);
+      if (stale.length) setConflict({ fields: stale, stored, patch: toSend });
+      else save.mutate(toSend);
     },
     onError: (e) => setError(errorText(e)),
   });
@@ -223,7 +231,7 @@ export default function BookSetup() {
   const keepMine = () => { const c = conflict!; setConflict(null); save.mutate(c.patch); };
   const reload = () => { const c = conflict!; setConflict(null); fill(c.stored, c.fields.map((f) => f.key)); };
 
-  if (editing && project.isLoading) return <div className="ui-page ui-page--narrow"><div className="ui-skeleton" style={{ height: 300 }} /></div>;
+  if (editing && !loaded && !project.error) return <div className="ui-page ui-page--narrow"><div className="ui-skeleton" style={{ height: 300 }} /></div>;
   if (editing && project.error) return <div className="ui-page ui-page--narrow"><div className="ui-banner ui-banner--danger" role="alert">{errorText(project.error)}</div></div>;
 
   return (

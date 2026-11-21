@@ -45,7 +45,7 @@ export type FieldKey = Exclude<keyof SetupValues, 'options'> | `options.${keyof 
 export const fieldValue = (v: SetupValues | SetupPatch, key: FieldKey): unknown =>
   key.startsWith('options.') ? (v.options as Record<string, unknown> | undefined)?.[key.slice(8)] : (v as Record<string, unknown>)[key];
 
-const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
+export const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
   ...Object.keys(v).filter((k) => k !== 'options') as FieldKey[],
   ...Object.keys(v.options ?? {}).map((k) => `options.${k}` as FieldKey),
 ];
@@ -53,15 +53,29 @@ const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
 export interface StaleField { key: FieldKey; stored: unknown; mine: unknown }
 
 /**
- * What the stored book changed since the form loaded it. `stale` are the fields this form changed too, which a save would
- * overwrite without the author knowing; `refreshed` are the others, which the form can take over as they are.
+ * What the stored book changed since the form loaded it. `stale` are the fields this form changed too, to another value,
+ * which a save would overwrite without the author knowing. `settled` are fields this form changed to the value already
+ * stored: nothing to ask and nothing to send. `refreshed` are the others, which the form can take over as they are.
  */
-export function compareStored(loaded: SetupValues, stored: SetupValues, patch: SetupPatch): { stale: StaleField[]; refreshed: FieldKey[] } {
+export function compareStored(loaded: SetupValues, stored: SetupValues, patch: SetupPatch): { stale: StaleField[]; settled: FieldKey[]; refreshed: FieldKey[] } {
   const mine = new Set(keysOf(patch));
-  const differ = (k: FieldKey) => !same(fieldValue(loaded, k) ?? null, fieldValue(stored, k) ?? null);
-  const stale = [...mine].filter(differ).map((key) => ({ key, stored: fieldValue(stored, key), mine: fieldValue(patch, key) }));
-  const refreshed = [...new Set([...keysOf(loaded), ...keysOf(stored)])].filter((k) => !mine.has(k) && differ(k));
-  return { stale, refreshed };
+  const eq = (a: unknown, b: unknown) => same(a ?? null, b ?? null);
+  const moved = (k: FieldKey) => !eq(fieldValue(loaded, k), fieldValue(stored, k));
+  const settled = [...mine].filter((k) => eq(fieldValue(stored, k), fieldValue(patch, k)));
+  const stale = [...mine].filter((k) => moved(k) && !settled.includes(k)).map((key) => ({ key, stored: fieldValue(stored, key), mine: fieldValue(patch, key) }));
+  const refreshed = [...new Set([...keysOf(loaded), ...keysOf(stored)])].filter((k) => !mine.has(k) && moved(k));
+  return { stale, settled, refreshed };
+}
+
+/** `patch` without the given fields; an `options` left empty is dropped. */
+export function withoutFields(patch: SetupPatch, keys: readonly FieldKey[]): SetupPatch {
+  const out: Record<string, unknown> = { ...patch, ...(patch.options ? { options: { ...patch.options } } : {}) };
+  for (const k of keys) {
+    if (k.startsWith('options.')) delete (out.options as Record<string, unknown> | undefined)?.[k.slice(8)];
+    else delete out[k];
+  }
+  if (out.options && Object.keys(out.options).length === 0) delete out.options;
+  return out as SetupPatch;
 }
 
 /** `base` with the given fields taken from `from`. */
