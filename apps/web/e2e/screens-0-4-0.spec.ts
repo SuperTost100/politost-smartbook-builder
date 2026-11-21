@@ -193,6 +193,41 @@ test.describe('Book setup', () => {
     await other.close();
   });
 
+  test('one tab that saves, goes Back and saves the same field again gets no conflict', async ({ page }) => {
+    const kept = await keepBook(page);
+    await page.goto('/books/p1/settings');
+    const goals = page.getByRole('textbox', { name: 'Goals' });
+    await goals.fill('Primo salvataggio');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page).toHaveURL(/\/sources/);
+    await page.goBack();
+    await expect(goals).toHaveValue('Primo salvataggio');
+    await goals.fill('Secondo salvataggio');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page).toHaveURL(/\/sources/);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+    expect(kept.patches).toEqual([{ goals: 'Primo salvataggio' }, { goals: 'Secondo salvataggio' }]);
+  });
+
+  test('a field both tabs saved with the same value is no conflict and is not sent again', async ({ page }) => {
+    const kept = await keepBook(page);
+    const other = await page.context().newPage();
+    await mockApi(other);
+    await keepBook(other, undefined, kept);
+    await page.goto('/books/p1/settings');
+    await other.goto('/books/p1/settings');
+    await expect(other.getByLabel('Audience')).toHaveValue(String(kept.book.audience));
+    await page.getByLabel('Audience').fill('identical again');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+    await other.getByLabel('Audience').fill('identical again');
+    await other.getByRole('textbox', { name: 'Goals' }).fill('Solo gli obiettivi');
+    await other.getByRole('button', { name: 'Save setup' }).click();
+    await expect(other.getByText('Book setup saved')).toBeVisible();
+    expect(kept.patches).toEqual([{ audience: 'identical again' }, { goals: 'Solo gli obiettivi' }]);
+    await other.close();
+  });
+
   test('the inferred area can be pinned, and Automatic takes the pin away', async ({ page }) => {
     const { book, patches } = await keepBook(page);
     await page.goto('/books/p1/settings');
@@ -278,6 +313,35 @@ const resource = (over: Record<string, unknown>) => ({ ...mockData().resources[0
 const examOk = resource({ id: 'rsOk', role: 'exams', filename: 'Temi_desame_2019-2023.pdf', pageCount: 96, size: 11_500_000, splitSessions: 14, splitQuestions: 63, splitWarning: null });
 const examBad = (over: Record<string, unknown> = {}) => resource({ id: 'rsBad', role: 'exams', filename: 'esami-2024.pdf', pageCount: 28, size: 3_100_000, splitSessions: 1, splitQuestions: 0, splitWarning: 'no_questions', ...over });
 const aiRun = (status: string, warnings: unknown[] = []) => ({ id: 'r7', projectId: 'p1', kind: 'prepare', status, createdAt: ago(1), finishedAt: status === 'running' ? null : ago(0), counts: status === 'running' ? { running: 1 } : { succeeded: 3 }, waiting: null, warnings });
+
+test.describe('Practice on a phone', () => {
+  test('opening a question brings the editor into view with focus on it, and Close editor goes back to the question', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 740 });
+    await mockApi(page);
+    await page.goto('/books/p1/practice?tab=exam');
+    const item = page.locator('.pr-item').nth(1);
+    await item.click();
+    const heading = page.locator('.pr-editor h2');
+    await expect(heading).toBeFocused();
+    await expect.poll(() => heading.evaluate((h) => { const r = h.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })).toBe(true);
+    await page.getByRole('button', { name: 'Close editor' }).click();
+    await expect(item).toBeFocused();
+    // Opening the question that is already open brings its editor back into view.
+    await item.click();
+    await expect(heading).toBeFocused();
+    await item.click();
+    await expect(heading).toBeFocused();
+  });
+
+  test('at 1440 px the editor opens beside the list and focus stays on the question', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/books/p1/practice?tab=exam');
+    const item = page.locator('.pr-item').nth(1);
+    await item.click();
+    await expect(page.locator('.pr-editor')).toBeVisible();
+    await expect(item).toBeFocused();
+  });
+});
 
 test.describe('Sources: exam split warning', () => {
   /** The resources list the way the service would keep it, so a role change or a finished split shows up on the next fetch. */

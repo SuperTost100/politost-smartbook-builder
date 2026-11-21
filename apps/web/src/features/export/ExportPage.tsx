@@ -146,9 +146,10 @@ export default function ExportPage() {
 
       <section className="ui-card ui-card--pad ex2-actions" aria-label="Export actions">
         <div className="ui-row">
-          <button type="button" className="ui-btn" onClick={() => validate.mutate(false)} disabled={validate.isPending}>{validate.isPending ? <><span className="ui-spinner" />Validating…</> : report ? 'Validate again' : 'Validate'}</button>
-          <button type="button" className="ui-btn" onClick={() => exportBook.mutate(false)} disabled={!!draftReason || exportBook.isPending}>Export draft</button>
-          <button type="button" className="ui-btn ui-btn--accent" onClick={() => exportBook.mutate(true)} disabled={!!approveReason || exportBook.isPending} aria-describedby={approveReason ? 'ex2-why' : undefined}>Approve and export</button>
+          {/* While a request runs the buttons are aria-disabled, not disabled, so the one pressed keeps keyboard focus. */}
+          <button type="button" className="ui-btn" onClick={() => { if (!validate.isPending) validate.mutate(false); }} aria-disabled={validate.isPending || undefined}>{validate.isPending ? <><span className="ui-spinner" />Validating…</> : report ? 'Validate again' : 'Validate'}</button>
+          <button type="button" className="ui-btn" onClick={() => { if (!exportBook.isPending) exportBook.mutate(false); }} disabled={!!draftReason} aria-disabled={exportBook.isPending || undefined}>Export draft</button>
+          <button type="button" className="ui-btn ui-btn--accent" onClick={() => { if (!exportBook.isPending) exportBook.mutate(true); }} disabled={!!approveReason} aria-disabled={exportBook.isPending || undefined} aria-describedby={approveReason ? 'ex2-why' : undefined}>Approve and export</button>
         </div>
         {approveReason && <p id="ex2-why" className="ex2-why ui-muted">Approve and export is off: {approveReason}{blockerIssues > 0 && <> <Link to={`/books/${pid}/review`}>Open review</Link></>}</p>}
         {draftReason && <p className="ex2-why ui-muted">Export draft is off: {draftReason}</p>}

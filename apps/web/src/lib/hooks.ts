@@ -68,6 +68,7 @@ export function useFocusWhenLost(target: RefObject<HTMLElement | null>, key: unk
     if (Object.is(last.current, key)) return;
     last.current = key;
     const at = document.activeElement;
-    if (!at || at === document.body) target.current?.focus({ preventScroll: true });
+    // Without preventScroll: the control that takes focus is brought into view, which on a phone can be far up the page.
+    if (!at || at === document.body) target.current?.focus();
   }, [key, target]);
 }
