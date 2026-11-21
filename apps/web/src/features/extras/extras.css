@@ -13,6 +13,8 @@
 .ex-checks .is-ok svg { color: var(--success); }
 .ex-checks .is-bad { color: var(--danger); }
 .ex-nocheck { font-size: 13px; }
+.ex-checks .is-warn svg { color: var(--warning); }
+.ex-lint-hint { font-size: 13px; margin: 2px 0 6px; }
 .ex-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 16px; }
 .ex-enr { padding: 16px; display: flex; flex-direction: column; gap: 14px; }
 .ex-enr__head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }

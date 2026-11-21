@@ -292,7 +292,6 @@ function FigureEditor({ details, stale, loadError, gone, retry, pid, nodeId, blo
       open
       onClose={requestClose}
       holdEscape={redrawing}
-      wrapTab
       inertBody={leaving}
       className="fd"
       title={<>{title} <span className={`ui-badge${details.kind === 'drawing' ? ' ui-badge--accent' : ''} fd-kind`}>{KIND_LABEL[details.kind]}</span></>}

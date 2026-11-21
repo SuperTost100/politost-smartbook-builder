@@ -1,4 +1,4 @@
-import { useEffect, useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { SUBJECT_AREAS, SUBJECT_PROFILES, inferSubjectArea, type BookOptions, type FigureKind, type ProjectInput, type SubjectArea } from '@smartbuilder/domain';
@@ -8,6 +8,7 @@ import { slugify } from '../../lib/format';
 import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
 import { ProgramCard } from './ProgramCard';
+import { changedFields, wholeNumberIn, type SetupValues } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -16,6 +17,12 @@ const DEFAULT_OPTIONS: BookOptions = {
 };
 
 type LangChoice = 'it' | 'en' | 'other';
+
+/** The number fields and the range each accepts, the same as the options schema of the service. */
+const NUMBERS = { exercisesPerTopic: [0, 20], exercisesPerHotTopic: [0, 30], reviewSamples: [1, 5] } as const;
+type NumberKey = keyof typeof NUMBERS;
+const numberTexts = (o: BookOptions) => ({ exercisesPerTopic: String(o.exercisesPerTopic), exercisesPerHotTopic: String(o.exercisesPerHotTopic), reviewSamples: String(o.reviewSamples) });
+const numberOk = (texts: Record<NumberKey, string>, k: NumberKey) => wholeNumberIn(texts[k], NUMBERS[k][0], NUMBERS[k][1]) !== null;
 
 const AREA_LABEL: Record<SubjectArea, string> = {
   mathematics: 'Mathematics', physics: 'Physics', chemistry: 'Chemistry', electronics: 'Electronics', 'computer-science': 'Computer science', mechanics: 'Mechanics', other: 'Other',
@@ -66,6 +73,10 @@ export default function BookSetup() {
   const [audience, setAudience] = useState('');
   const [goals, setGoals] = useState('');
   const [opts, setOpts] = useState<BookOptions>(DEFAULT_OPTIONS);
+  // What the number fields show, which can be text the options cannot hold (empty, 2.5) until the author corrects it.
+  const [numText, setNumText] = useState<Record<NumberKey, string>>(numberTexts(DEFAULT_OPTIONS));
+  // The book as this form loaded it: a save sends only what differs from it.
+  const loadedValues = useRef<SetupValues | null>(null);
   const [loaded, setLoaded] = useState(!editing);
   const [error, setError] = useState<string | null>(null);
 
@@ -77,12 +88,34 @@ export default function BookSetup() {
     if (p.language === 'it' || p.language === 'en') setLang(p.language);
     else { setLang('other'); setOtherLang(p.language); }
     setAudience(p.audience); setGoals(p.goals);
-    setOpts({ ...DEFAULT_OPTIONS, ...p.options });
+    const options = { ...DEFAULT_OPTIONS, ...p.options };
+    setOpts(options);
+    setNumText(numberTexts(options));
+    loadedValues.current = { title: p.title, subject: p.subject, slug: p.slug, authors: p.authors, language: p.language, audience: p.audience, goals: p.goals, options };
     setLoaded(true);
   }, [editing, project.data, loaded]);
 
   const onTitle = (v: string) => { setTitle(v); if (!slugTouched) setSlug(slugify(v)); };
   const set = <K extends keyof BookOptions>(k: K, v: BookOptions[K]) => setOpts((o) => ({ ...o, [k]: v }));
+  const setNumber = (k: NumberKey, text: string) => {
+    setNumText((t) => ({ ...t, [k]: text }));
+    const n = wholeNumberIn(text, NUMBERS[k][0], NUMBERS[k][1]);
+    if (n !== null) set(k, n);
+  };
+  const numbersValid = (Object.keys(NUMBERS) as NumberKey[]).every((k) => numberOk(numText, k));
+  const numberField = (k: NumberKey, id: string, label: string, hint?: string, narrow?: boolean) => {
+    const bad = !numberOk(numText, k);
+    const [lo, hi] = NUMBERS[k];
+    return (
+      <div className="ui-field">
+        <label className="ui-field__label" htmlFor={id}>{label}</label>
+        <input id={id} type="number" min={lo} max={hi} step={1} className={`ui-input${narrow ? ' su-narrow' : ''}`} value={numText[k]} onChange={(e) => setNumber(k, e.target.value)}
+          aria-invalid={bad} aria-describedby={[bad && `${id}-error`, hint && `${id}-hint`].filter(Boolean).join(' ') || undefined} />
+        {bad && <span id={`${id}-error`} className="ui-field__hint su-bad">Enter a whole number from {lo} to {hi}.</span>}
+        {hint && <p id={`${id}-hint`} className="ui-field__hint">{hint}</p>}
+      </div>
+    );
+  };
 
   const inferred = inferSubjectArea(subject, title);
   const area: SubjectArea = opts.subjectArea ?? inferred;
@@ -90,13 +123,12 @@ export default function BookSetup() {
   const language = lang === 'other' ? otherLang.trim() : lang;
   const authorList = authors.split(/[,;\n]/).map((a) => a.trim()).filter(Boolean);
   const slugValid = /^[a-z0-9-]+$/.test(slug) && slug.length > 0;
-  const valid = title.trim() && subject.trim() && slugValid && language.length >= 2;
+  const valid = title.trim() && subject.trim() && slugValid && language.length >= 2 && numbersValid;
 
   const save = useMutation({
     mutationFn: async () => {
       const body: ProjectInput = { title: title.trim(), subject: subject.trim(), slug, authors: authorList, language, audience, goals, options: opts };
-      // A saved book keeps the area it has unless the patch says null, so Automatic has to be sent as null.
-      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: { ...body, options: { ...opts, subjectArea: opts.subjectArea ?? null } } });
+      if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: changedFields(loadedValues.current!, { ...body, options: opts }) });
       return api('POST /api/projects', { body });
     },
     onSuccess: (p) => {
@@ -240,14 +272,8 @@ export default function BookSetup() {
       <section className="ui-card ui-card--pad su-section" aria-labelledby="su-ex">
         <h2 id="su-ex" className="ui-panel-title">Exercise targets</h2>
         <div className="su-two">
-          <div className="ui-field">
-            <label className="ui-field__label" htmlFor="su-ept">Exercises per topic</label>
-            <input id="su-ept" type="number" min={0} max={20} className="ui-input" value={opts.exercisesPerTopic} onChange={(e) => set('exercisesPerTopic', clamp(e.target.value, 0, 20))} />
-          </div>
-          <div className="ui-field">
-            <label className="ui-field__label" htmlFor="su-eph">Exercises per high-priority topic</label>
-            <input id="su-eph" type="number" min={0} max={30} className="ui-input" value={opts.exercisesPerHotTopic} onChange={(e) => set('exercisesPerHotTopic', clamp(e.target.value, 0, 30))} />
-          </div>
+          {numberField('exercisesPerTopic', 'su-ept', 'Exercises per topic')}
+          {numberField('exercisesPerHotTopic', 'su-eph', 'Exercises per high-priority topic')}
         </div>
       </section>
 
@@ -265,11 +291,7 @@ export default function BookSetup() {
           </div>
           <p className="ui-field__hint">With this choice, the jobs that start on Claude never use their fallback for this book, whatever the fallbacks in Connections say. A usage limit pauses the run until it resets, and the Run panel says when. Any other failure, such as a timeout, is retried and then stops the task.</p>
         </fieldset>
-        <div className="ui-field">
-          <label className="ui-field__label" htmlFor="su-samples">Reviewer reads per chapter</label>
-          <input id="su-samples" type="number" min={1} max={5} className="ui-input su-narrow" value={opts.reviewSamples} onChange={(e) => set('reviewSamples', clamp(e.target.value, 1, 5))} />
-          <p className="ui-field__hint">How many independent reviewer calls read a whole chapter, in its first review and once more after the fixes of that review. Each call finds a different part of the errors: in a test on known errors, 2 calls found 6 to 9 of 9 and 3 calls found 8 or 9. The cross review adds one call on another model. Use 3 for a book that must be clean; each extra call costs about 95k input tokens of the reviewer's model per chapter.</p>
-        </div>
+        {numberField('reviewSamples', 'su-samples', 'Reviewer reads per chapter', "How many independent reviewer calls read a whole chapter, in its first review and once more after the fixes of that review. Each call finds a different part of the errors: in a test on known errors, 2 calls found 6 to 9 of 9 and 3 calls found 8 or 9. The cross review adds one call on another model. Use 3 for a book that must be clean; each extra call costs about 95k input tokens of the reviewer's model per chapter.", true)}
       </section>
 
       {error && <div className="ui-banner ui-banner--danger" role="alert"><div className="ui-banner__body"><span className="ui-banner__title">The book was not saved</span><span>{error}</span></div></div>}
@@ -277,13 +299,8 @@ export default function BookSetup() {
       <div className="ui-row su-actions">
         <button type="submit" className="ui-btn ui-btn--accent" disabled={!valid || save.isPending}>{editing ? 'Save setup' : 'Create book'}</button>
         <button type="button" className="ui-btn" onClick={() => navigate(editing ? `/books/${id}/sources` : '/')}>Cancel</button>
-        {!valid && <span className="ui-muted su-why">{!title.trim() ? 'Add a title.' : !subject.trim() ? 'Add a subject.' : !slugValid ? 'Fix the slug.' : 'Add a language.'}</span>}
+        {!valid && <span className="ui-muted su-why">{!title.trim() ? 'Add a title.' : !subject.trim() ? 'Add a subject.' : !slugValid ? 'Fix the slug.' : !numbersValid ? 'Fix the number marked above.' : 'Add a language.'}</span>}
       </div>
     </form>
   );
-}
-
-function clamp(v: string, lo: number, hi: number) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.max(lo, Math.min(hi, Math.round(n))) : lo;
 }

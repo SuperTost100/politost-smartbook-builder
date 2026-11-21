@@ -8,7 +8,7 @@ import type { Rec } from './util.ts';
 export function mapEnrichment(r: Rec): Enrichment {
   const payload = json<Record<string, unknown>>(r.payload, {});
   const lintAccepted = json<string[]>(r.lint_accepted, []);
-  const lintOpen = r.kind === 'graph' ? lintGraph(payload).map(lintKey).filter((k) => !lintAccepted.includes(k)) : [];
+  const lintOpen = r.kind === 'graph' ? lintGraph(payload).map((f) => ({ key: lintKey(f), code: f.code, ...(f.trace ? { trace: f.trace } : {}), detail: f.detail })).filter((f) => !lintAccepted.includes(f.key)) : [];
   return { id: r.id, projectId: r.project_id, nodeId: r.node_id, kind: r.kind, payload, status: r.status, checks: json(r.checks, []), lintAccepted, spec: r.spec ? json(r.spec, null) : null, checkedRevisionId: r.checked_rev_id ?? null, lintOpen, createdAt: r.created_at };
 }
 

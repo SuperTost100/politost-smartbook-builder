@@ -2208,7 +2208,9 @@ describe('5. enrichment: pick once, one child task per extra', () => {
     assert.deepEqual(await enrichGraph(ctx, startTask('enrich.graph', { nodeId: 's1', purpose: 'p' })), { made: 1 });
     const id = ctx.db.get<{ id: string }>('SELECT id FROM enrichments')!.id;
     const stored = listEnrichments(ctx, P)[0]!;
-    assert.deepEqual(stored.lintOpen, ['placeholder:'], 'a warning the author has not accepted');
+    assert.deepEqual(stored.lintOpen.map((f) => f.key), ['placeholder:'], 'a warning the author has not accepted');
+    assert.equal(stored.lintOpen[0]!.code, 'placeholder');
+    assert.ok(stored.lintOpen[0]!.detail, 'the message the card shows before Accept anyway');
     assert.equal(stored.status, 'verified', 'a warning does not fail the graph');
     const accepted = updateEnrichmentPayload(ctx, id, stored.payload, { acceptLint: true });
     assert.deepEqual(accepted.lintAccepted, ['placeholder:'], 'Accept anyway takes warnings too');
@@ -4024,6 +4026,21 @@ describe('independent samples, the sweep the author asks for, repeats merged in 
     assert.deepEqual(inputs({ sweep: true, reviewMode: 'full' }), [{ chapterId: 'c1', mode: 'full' }]);
     assert.ok(generateSpecs(ctx, P).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
     assert.ok(generateSpecs(ctx, P, undefined, ['s1']).filter((s) => s.kind === 'chapter.review').every((s) => !s.input?.sweep));
+  });
+
+  test('a review run says what it was started for, so the run screen can name it', () => {
+    seedOutline([['c1', ['s1']]]);
+    seedRevision('s1', 'Una frase.');
+    (ctx.queue as unknown as { wake(): void }).wake = () => undefined;
+    const scopeOf = (scope: Record<string, unknown>) => ctx.queue.runSummary(startRun(ctx, P, 'review', scope).id)!.reviewScope;
+    assert.deepEqual(scopeOf({}), { mode: 'changed' });
+    assert.deepEqual(scopeOf({ sweep: true }), { mode: 'sweep' });
+    assert.deepEqual(scopeOf({ reviewMode: 'full' }), { mode: 'full' });
+    assert.deepEqual(scopeOf({ sweep: true, reviewMode: 'recheck' }), { mode: 'recheck' });
+    assert.deepEqual(scopeOf({ questionIds: [q({ chapter_id: 'c1' })] }), { exercises: 1 });
+    q({ chapter_id: 'c1' });
+    assert.deepEqual(scopeOf({ generatedQuestions: true }), { exercises: 2 });
+    assert.equal(ctx.queue.runSummary(ctx.queue.createRun(P, 'plan', []))!.reviewScope, null);
   });
 
   test('a fix of a wrong formula rewrites its body under the same key', () => {

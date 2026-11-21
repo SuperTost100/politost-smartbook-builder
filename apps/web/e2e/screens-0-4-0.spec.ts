@@ -10,17 +10,18 @@ const noOverflow = async (page: Page) => expect(await page.evaluate(() => docume
 
 // ---------- Book setup ----------
 
-/** The book as the service keeps it: a PATCH merges its options, and every later GET returns them. */
-async function keepBook(page: Page, subject?: string) {
+type KeptBook = { book: Record<string, unknown> & { options: Record<string, unknown> }; patches: { options?: Record<string, unknown> }[] };
+/** The book as the service keeps it: a PATCH merges its options, and every later GET returns them. Pass `kept` to share one book between pages. */
+async function keepBook(page: Page, subject?: string, kept?: KeptBook): Promise<KeptBook> {
   const base = mockData().projects[0];
-  const book = { ...base, subject: subject ?? base.subject, options: { ...base.options } as Record<string, unknown> };
-  const patches: { options?: Record<string, unknown> }[] = [];
+  const book = kept?.book ?? { ...base, subject: subject ?? base.subject, options: { ...base.options } as Record<string, unknown> };
+  const patches: { options?: Record<string, unknown> }[] = kept?.patches ?? [];
   await page.route(/\/api\/projects\/p1$/, (route) => {
     const req = route.request();
     if (req.method() === 'PATCH') {
       const body = req.postDataJSON() as { options?: Record<string, unknown> };
       patches.push(body);
-      book.options = { ...book.options, ...body.options };
+      Object.assign(book, { ...body, options: { ...book.options, ...body.options } });
       for (const [k, v] of Object.entries(book.options)) if (v === null) delete book.options[k]; // the service clears an option patched to null
     }
     return answer(route, book);
@@ -67,7 +68,53 @@ test.describe('Book setup', () => {
     await expect(page.getByRole('radio', { name: /Continue on the fallback model/ })).toBeChecked();
     await page.getByRole('button', { name: 'Save setup' }).click();
     await expect(page.getByText('Book setup saved')).toBeVisible();
-    expect(patches[0].options).toMatchObject({ subjectArea: null }); // null is how the options patch says "no area"
+    expect(patches[0]).toEqual({}); // nothing changed, so the area is not sent and stays unset
+  });
+
+  test('Reviewer reads per chapter refuses anything but a whole number from 1 to 5, and says so at the field', async ({ page }) => {
+    const { patches } = await keepBook(page);
+    await page.goto('/books/p1/settings');
+    const field = page.getByLabel('Reviewer reads per chapter');
+    const save = page.getByRole('button', { name: 'Save setup' });
+    await expect(field).toHaveAttribute('aria-describedby', 'su-samples-hint');
+    await expect(page.locator('#su-samples-hint')).toContainText('How many independent reviewer calls');
+    for (const text of ['', '2.5', '0', '6']) {
+      await field.fill(text);
+      await expect(page.getByText('Enter a whole number from 1 to 5.')).toBeVisible();
+      await expect(field).toHaveAttribute('aria-invalid', 'true');
+      await expect(field).toHaveAttribute('aria-describedby', 'su-samples-error su-samples-hint');
+      await expect(save).toBeDisabled();
+      await field.press('Enter');
+    }
+    expect(patches).toHaveLength(0);
+    await field.fill('4');
+    await expect(page.getByText('Enter a whole number from 1 to 5.')).toHaveCount(0);
+    await field.press('Enter');
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+    expect(patches).toEqual([{ options: { reviewSamples: 4 } }]);
+  });
+
+  test('two tabs opened before either saved keep both changes', async ({ page }) => {
+    const kept = await keepBook(page);
+    const other = await page.context().newPage();
+    await mockApi(other);
+    await keepBook(other, undefined, kept);
+    await page.goto('/books/p1/settings');
+    await other.goto('/books/p1/settings');
+    await expect(other.getByLabel('Audience')).toHaveValue(String(kept.book.audience));
+
+    await page.getByLabel('Audience').fill('Primo anno TEST');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+
+    await other.getByLabel('Reviewer reads per chapter').fill('3');
+    await other.getByRole('button', { name: 'Save setup' }).click();
+    await expect(other.getByText('Book setup saved')).toBeVisible();
+
+    expect(kept.patches).toEqual([{ audience: 'Primo anno TEST' }, { options: { reviewSamples: 3 } }]);
+    expect(kept.book.audience).toBe('Primo anno TEST');
+    expect(kept.book.options.reviewSamples).toBe(3);
+    await other.close();
   });
 
   test('the inferred area can be pinned, and Automatic takes the pin away', async ({ page }) => {
@@ -569,6 +616,71 @@ test.describe('Review: minor notes', () => {
     await page.getByLabel('Severity').selectOption('minor');
     await expect(page.locator('details.rv-minor')).toHaveAttribute('open', '');
     await expect(page.getByRole('list', { name: 'Blockers and major issues' })).toHaveCount(0);
+  });
+});
+
+test.describe('Review: the Run review dialog', () => {
+  test('Tab and Shift+Tab stay inside the dialog, and Escape returns focus to Run review', async ({ page }) => {
+    await reviewData(page, []);
+    await page.unroute(/\/api\/projects\/p1$/);
+    await page.route(/\/api\/projects\/p1$/, (route) => answer(route, { ...mockData().projects[0], activeRun: null, review: { clean: true, openSerious: 0, reviewedAt: ago(3), sweepsDue: 1 } }));
+    await page.goto('/books/p1/review');
+    const opener = page.getByRole('button', { name: 'Run review' }).first(); // the empty list has a second one
+    await opener.focus();
+    await page.keyboard.press('Enter');
+    const dialog = page.getByRole('dialog', { name: 'Run review' });
+    await expect(dialog).toBeVisible();
+    const inside = () => page.evaluate(() => !!document.activeElement?.closest('dialog'));
+    const names: string[] = [];
+    for (let i = 0; i < 8; i++) {
+      await page.keyboard.press('Tab');
+      expect(await inside()).toBe(true);
+      names.push(await page.evaluate(() => document.activeElement?.getAttribute('aria-label') || document.activeElement?.textContent || ''));
+    }
+    expect(names.slice(0, 5)).toEqual(['Cancel', 'Review only', 'Review and sweep', 'Close', 'Cancel']);
+    for (let i = 0; i < 5; i++) {
+      await page.keyboard.press('Shift+Tab');
+      expect(await inside()).toBe(true);
+    }
+    await page.keyboard.press('Escape');
+    await expect(dialog).toBeHidden();
+    await expect(opener).toBeFocused();
+  });
+});
+
+test.describe('Extras: graphs', () => {
+  const graph = {
+    id: 'g1', projectId: 'p1', nodeId: 's1', kind: 'graph', status: 'verified', checks: [{ method: 'numeric', ok: true, detail: 'Sampled 2 function(s).' }],
+    payload: { id: 'rc', title: 'Corrente nel circuito RC', type: 'plotly', config: { data: [] } }, lintAccepted: [], spec: null, checkedRevisionId: null, createdAt: ago(10),
+    lintOpen: [{ key: 'raw-notation:', code: 'raw-notation', detail: 'y axis title "Corrente i_C (A)" shows "_C" as written' }, { key: 'placeholder:Seno', code: 'placeholder', trace: 'Seno', detail: 'the label looks like a placeholder' }],
+  };
+
+  test('Accept anyway lists the lint findings it accepts, as the export report words them', async ({ page }) => {
+    await mockApi(page);
+    const patches: unknown[] = [];
+    await page.route(/\/api\/projects\/p1\/enrichments$/, (route) => answer(route, [graph]));
+    await page.route(/\/api\/enrichments\/g1$/, (route) => { patches.push(route.request().postDataJSON()); return answer(route, { ...graph, lintOpen: [] }); });
+    await page.goto('/books/p1/extras?tab=graphs');
+    const card = page.getByRole('article').filter({ hasText: 'Corrente nel circuito RC' });
+    await expect(card.getByText('Accept them only if the graph is right as it is.')).toBeVisible();
+    await expect(card).not.toContainText('coincide');
+    await expect(card.getByRole('listitem').filter({ hasText: 'raw-notation' })).toHaveText('raw-notation: y axis title "Corrente i_C (A)" shows "_C" as written');
+    await expect(card.getByRole('listitem').filter({ hasText: 'placeholder' })).toHaveText('placeholder on "Seno": the label looks like a placeholder');
+    await card.getByRole('button', { name: 'Accept anyway' }).click();
+    await expect(page.getByText('Accepted', { exact: true })).toBeVisible();
+    expect(patches).toEqual([{ payload: graph.payload, acceptLint: true }]);
+  });
+
+  test('at 375 px the tabs stay on one row with the selected one in view', async ({ page }) => {
+    await page.setViewportSize({ width: 375, height: 800 });
+    await mockApi(page);
+    await page.goto('/books/p1/extras?tab=graphs');
+    const tabs = page.getByRole('tablist', { name: 'Extras' });
+    await expect(tabs.getByRole('tab', { selected: true })).toHaveText(/Graphs/);
+    const tops = await tabs.getByRole('tab').evaluateAll((els) => els.map((e) => Math.round(e.getBoundingClientRect().top)));
+    expect(new Set(tops).size).toBe(1);
+    expect(await tabs.evaluate((t) => { const a = t.getBoundingClientRect(), b = t.querySelector('[aria-selected="true"]')!.getBoundingClientRect(); return b.left >= a.left - 1 && b.right <= a.right + 1; })).toBe(true);
+    await noOverflow(page);
   });
 });
 
