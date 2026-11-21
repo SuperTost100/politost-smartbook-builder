@@ -4,8 +4,8 @@ const MULTILINE = /\\begin\{|\\\\/;
 
 /**
  * The start of a statement as one line for the question list, about `max` characters long, with its formulas kept as inline
- * `$…$` for the renderer. A display formula becomes inline, unless it needs its own lines (an aligned system, a matrix): the
- * line stops there with "…". A formula is never cut in the middle. Markdown marks and directive braces are dropped from
+ * `$…$` for the renderer, or `\(…\)` when the formula has a dollar sign. A display formula becomes inline, unless it needs
+ * its own lines (an aligned system, a matrix): the line stops there with "…". A formula is never cut in the middle. Markdown marks and directive braces are dropped from
  * the text around the formulas.
  */
 export function statementPreview(statement: string, max = 150): string {
@@ -25,7 +25,8 @@ export function statementPreview(statement: string, max = 150): string {
     const tex = (m[1] ?? m[2] ?? m[3] ?? m[4] ?? '').trim().replace(/\s+/g, ' ');
     if (!tex) continue;
     if ((display && MULTILINE.test(tex)) || (used > 0 && used + tex.length > max)) return tidy(`${out.trimEnd()} …`);
-    out += `$${tex}$`;
+    // A formula with a literal dollar keeps \( \), because a $ inside $…$ would close it.
+    out += tex.includes('$') ? `\\(${tex}\\)` : `$${tex}$`;
     used += tex.length;
   }
   addText(statement.slice(last));

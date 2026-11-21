@@ -12,6 +12,10 @@ test('a one-line display formula becomes inline, a multi-line one ends the previ
   assert.equal(statementPreview('Risolvere il sistema $$\\begin{cases} x + y = 1 \\\\ x - y = 0 \\end{cases}$$ con Cramer.'), 'Risolvere il sistema …');
 });
 
+test('a formula with a literal dollar sign keeps \\( \\) so the dollar does not close it', () => {
+  assert.equal(statementPreview('Costa \\(\\$5\\) al pezzo.'), 'Costa \\(\\$5\\) al pezzo.');
+});
+
 test('braces inside a formula are kept, markdown marks around it are dropped', () => {
   assert.equal(statementPreview('**Esercizio.** Calcolare $\\frac{1}{2}$.'), 'Esercizio. Calcolare $\\frac{1}{2}$.');
 });

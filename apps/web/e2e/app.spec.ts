@@ -348,13 +348,19 @@ test('Practice shows a question status change without reloading', async ({ page,
   await expect(item.locator('.ui-badge').first()).toHaveText('verified', { timeout: 10_000 });
 });
 
-test('Practice summaries replace every kind of formula instead of showing LaTeX', async ({ page, request }) => {
-  const statement = 'Calcola $$\\lim_{x \\to 0} \\frac{1-\\cos x}{x^2}$$ poi \\(\\sqrt{2}\\) poi \\[\\int_0^1 t\\,dt\\] poi $\\alpha$ fine.';
+test('Practice summaries render every kind of formula instead of showing LaTeX', async ({ page, request }) => {
+  const statement = 'Calcola $$\\lim_{x \\to 0} \\frac{1-\\cos x}{x^2}$$ poi \\(\\sqrt{2}\\) poi \\[\\int_0^1 t\\,dt\\] poi $\\alpha$ e \\(\\$5\\) fine.';
   const created = await request.post(`/api/projects/${bookId}/questions`, { headers: H, data: { kind: 'exercise', origin: 'adapted', statement, hint: '', solution: 'Vale 1.', difficulty: 'medio', topicIds: [] } });
   expect(created.ok(), await created.text()).toBeTruthy();
   await page.goto(`/books/${bookId}/practice`);
   const item = page.locator('.pr-item').filter({ hasText: 'Calcola' }).filter({ hasText: 'fine' });
-  await expect(item.locator('.pr-item__text')).toHaveText('Calcola … poi … poi … poi … fine.');
+  // Each of the five formulas is rendered inline, the literal dollar included, and no delimiter or TeX source is left as text.
+  const text = item.locator('.pr-item__text');
+  await expect(text.locator('.katex')).toHaveCount(5);
+  await expect(text.locator('.katex-error')).toHaveCount(0);
+  await expect(text.locator('.katex-display')).toHaveCount(0);
+  const plain = await text.evaluate((el) => { const c = el.cloneNode(true) as HTMLElement; c.querySelectorAll('.katex').forEach((k) => k.replaceWith('·')); return c.textContent; });
+  expect(plain).toBe('Calcola · poi · poi · poi · e · fine.');
 });
 
 test('a proposal is accepted against the head that was shown; a 409 shows the message and Reload', async ({ page, request }) => {

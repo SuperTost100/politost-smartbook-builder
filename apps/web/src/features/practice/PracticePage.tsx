@@ -27,7 +27,7 @@ const previewHtml = new Map<string, string>();
 const StatementPreview = memo(function StatementPreview({ statement }: { statement: string }) {
   const text = statementPreview(statement);
   if (!text) return <span className="pr-item__text"><em className="ui-muted">Empty statement</em></span>;
-  if (!text.includes('$')) return <span className="pr-item__text ui-serif">{text}</span>;
+  if (!text.includes('$') && !text.includes('\\(')) return <span className="pr-item__text ui-serif">{text}</span>;
   let html = previewHtml.get(text);
   if (html === undefined) { html = renderInlineFragment(text); previewHtml.set(text, html); }
   return <span className="pr-item__text ui-serif" dangerouslySetInnerHTML={{ __html: html }} />;

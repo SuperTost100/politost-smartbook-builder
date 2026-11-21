@@ -105,8 +105,12 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/enrichments', async (req) => listEnrichments(ctx, projectOf(ctx, req)));
 
   app.patch('/api/enrichments/:eid', async (req) => {
-    const { payload, acceptLint, stopAccepting } = parse(z.object({ payload: z.record(z.string(), z.unknown()), acceptLint: z.boolean().optional(), stopAccepting: z.array(z.string()).max(100).optional() }), req.body);
-    return updateEnrichmentPayload(ctx, getEnrichment(ctx, idParam(req, 'eid')).id, payload, { acceptLint, stopAccepting });
+    // Stop accepting may leave the payload out: it then works on the stored graph, so a card that is behind another tab's
+    // save does not write its older payload back.
+    const body = parse(z.object({ payload: z.record(z.string(), z.unknown()).optional(), acceptLint: z.boolean().optional(), stopAccepting: z.array(z.string()).max(100).optional() })
+      .refine((b) => b.payload || b.stopAccepting, { message: 'Send the payload, or the findings to stop accepting.' }), req.body);
+    const cur = getEnrichment(ctx, idParam(req, 'eid'));
+    return updateEnrichmentPayload(ctx, cur.id, body.payload ?? cur.payload, { acceptLint: body.acceptLint, stopAccepting: body.stopAccepting });
   });
 
   app.delete('/api/enrichments/:eid', async (req) => {

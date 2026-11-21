@@ -139,9 +139,10 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
   try { const v = JSON.parse(text) as unknown; if (v && typeof v === 'object' && !Array.isArray(v)) parsed = v as Record<string, unknown>; else parseError = 'The payload must be a JSON object.'; } catch (err) { parseError = (err as Error).message; }
   const dirty = text !== stored;
   const save = useMutation({
-    mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: parsed! } }),
-    // The field shows what was stored, formatted, so the card is not left with an unsaved edit.
-    onSuccess: (row) => { const saved = JSON.stringify(row.payload, null, 2); base.current = saved; setText(saved); toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
+    mutationFn: (_sent: string) => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: parsed! } }),
+    // The field shows what was stored, formatted, so the card is not left with an unsaved edit. Text typed while the save
+    // was on its way stays.
+    onSuccess: (row, sent) => { const saved = JSON.stringify(row.payload, null, 2); base.current = saved; setText((t) => (t === sent ? saved : t)); toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
   // "Accept anyway" saves the stored graph again with all its lint findings accepted, warnings included, so it ships as it is.
@@ -151,8 +152,9 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
   // "Stop accepting" takes one finding out of the accepted list, so it fails the graph and reaches the export report again.
+  // It sends no payload, so the service works on the graph as stored.
   const stop = useMutation({
-    mutationFn: (key: string) => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: e.payload, stopAccepting: [key] } }),
+    mutationFn: (key: string) => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { stopAccepting: [key] } }),
     onSuccess: () => { toast('No longer accepted'); setRefocus('Accept anyway'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
@@ -216,7 +218,7 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
         </div>
       </div>
       <div className="ui-row">
-        <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate()}>Save</button>
+        <button type="button" className="ui-btn ui-btn--sm ui-btn--accent" disabled={!dirty || !!parseError || save.isPending} onClick={() => save.mutate(text)}>Save</button>
         <button type="button" className="ui-btn ui-btn--sm" disabled={!dirty} onClick={() => setText(stored)}>Revert</button>
         <span className="ui-grow" />
         <button type="button" className="ui-btn ui-btn--sm ui-btn--ghost ui-btn--danger" onClick={() => setConfirm(true)}><Icon name="trash" />Delete</button>

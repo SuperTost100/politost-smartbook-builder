@@ -886,11 +886,29 @@ describe('review fixes (server)', () => {
     assert.ok(keys.some((k: string) => k.startsWith('raw-notation:')), 'the warning is listed as accepted too');
     assert.deepEqual(accepted.lintOpen, []);
     assert.doesNotMatch(accepted.checks[1].detail, /\(warning\)/, 'an accepted warning reads as accepted in the check results');
-    const reopened = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: accepted.payload, stopAccepting: ['duplicate:Gay-Lussac'] })).body;
+    // No payload: Stop accepting works on the graph as stored.
+    const reopened = (await t.req('PATCH', `/api/enrichments/${eid}`, { stopAccepting: ['duplicate:Gay-Lussac'] })).body;
+    assert.deepEqual(reopened.payload, accepted.payload);
     assert.equal(reopened.status, 'issue');
     assert.deepEqual(reopened.lintOpen.map((f: { key: string }) => f.key), ['duplicate:Gay-Lussac']);
     assert.ok(!reopened.lintAccepted.includes('duplicate:Gay-Lussac'));
     assert.ok(reopened.lintAcceptedFindings.some((f: { key: string }) => f.key.startsWith('raw-notation:')), 'the other acceptance stays');
+    assert.equal((await t.req('PATCH', `/api/enrichments/${eid}`, {})).status, 400, 'a patch with neither a payload nor findings is refused');
+  });
+
+  it('6e. Stop accepting holds after a later save when the acceptance was stored under the raw trace name', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-unaccept-raw'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('y = x'), trace('y = x^2')], layout: {} } };
+    // Accepted before the formatter wrote "x²": the stored key keeps the raw name.
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'verified', checks: [], lint_accepted: ['duplicate:y = x^2'], created_at: now() });
+    const stopped = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: twins, stopAccepting: ['duplicate:y = x²'] })).body;
+    const dup = (e: { lintOpen: { key: string }[] }) => e.lintOpen.map((f) => f.key).filter((k) => k.startsWith('duplicate:'));
+    assert.deepEqual(dup(stopped), ['duplicate:y = x²']);
+    const saved = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: stopped.payload })).body;
+    assert.deepEqual(dup(saved), ['duplicate:y = x²'], 'a later save does not bring the acceptance back');
+    assert.equal(saved.status, 'issue');
   });
 
   it('7. the generate route forwards scope.nodeIds', async () => {

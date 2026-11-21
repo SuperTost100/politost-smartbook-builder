@@ -55,7 +55,7 @@ function shown(key: FieldKey, v: unknown): string {
   if (typeof v === 'boolean') return v ? 'On' : 'Off';
   if (Array.isArray(v)) return v.length ? v.join(', ') : 'None';
   const text = String(v ?? '').trim();
-  return text ? (text.length > 120 ? `${text.slice(0, 120)}…` : text) : 'Empty';
+  return text || 'Empty';
 }
 
 function Resistor({ kind }: { kind: 'american' | 'european' }) {
