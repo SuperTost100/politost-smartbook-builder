@@ -13,7 +13,7 @@ export const splitAuthors = (text: string) => text.split(/[,;\n]/).map((a) => a.
 export type SetupValues = Omit<ProjectInput, 'options'> & { options: BookOptions };
 export type SetupPatch = Partial<Omit<ProjectInput, 'options'>> & { options?: BookOptionsPatch };
 
-const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
+export const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b);
 
 /**
  * The fields the author changed since the form loaded, and inside `options` only the changed keys. The service merges the

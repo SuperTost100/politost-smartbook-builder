@@ -9,7 +9,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
 import { Dialog } from '../../components/Dialog';
 import { ProgramCard } from './ProgramCard';
-import { changedFields, compareStored, fieldValue, setupValues, splitAuthors, wholeNumberIn, withFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
+import { changedFields, compareStored, fieldValue, same, setupValues, splitAuthors, wholeNumberIn, withFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -120,21 +120,31 @@ export default function BookSetup() {
     setLoaded(true);
   }, [editing, project.data, loaded]);
 
-  /** Puts the given fields of `v` in the form, and in the baseline it compares with, as if the form had loaded them. */
-  const fill = (v: SetupValues, keys: readonly FieldKey[]) => {
+  /**
+   * Puts the given fields of `v` in the form, and in the baseline it compares with, as if the form had loaded them. With
+   * `sent`, a field changes only while it still shows what was sent, so text typed while the stored book was read stays.
+   */
+  const fill = (v: SetupValues, keys: readonly FieldKey[], sent?: SetupValues) => {
+    const swap = <T,>(next: T, was: (cur: T) => boolean) => (cur: T) => (!sent || was(cur) ? next : cur);
     for (const k of keys) {
       const value = fieldValue(v, k);
-      if (k === 'title') setTitle(v.title);
-      else if (k === 'subject') setSubject(v.subject);
-      else if (k === 'slug') { setSlug(v.slug); setSlugTouched(true); }
-      else if (k === 'authors') setAuthors(v.authors.join(', '));
-      else if (k === 'language') { if (v.language === 'it' || v.language === 'en') setLang(v.language); else { setLang('other'); setOtherLang(v.language); } }
-      else if (k === 'audience') setAudience(v.audience);
-      else if (k === 'goals') setGoals(v.goals);
+      if (k === 'title') setTitle(swap(v.title, (c) => c.trim() === sent?.title));
+      else if (k === 'subject') setSubject(swap(v.subject, (c) => c.trim() === sent?.subject));
+      else if (k === 'slug') { setSlug(swap(v.slug, (c) => c === sent?.slug)); setSlugTouched(true); }
+      else if (k === 'authors') setAuthors(swap(v.authors.join(', '), (c) => same(splitAuthors(c), sent?.authors)));
+      else if (k === 'language') {
+        const choice: LangChoice = v.language === 'it' || v.language === 'en' ? v.language : 'other';
+        const sentChoice = sent?.language === 'it' || sent?.language === 'en' ? sent.language : 'other';
+        setLang(swap(choice, (c) => c === sentChoice));
+        if (choice === 'other') setOtherLang(swap(v.language, (c) => sentChoice !== 'other' || c.trim() === sent?.language));
+      }
+      else if (k === 'audience') setAudience(swap(v.audience, (c) => c === sent?.audience));
+      else if (k === 'goals') setGoals(swap(v.goals, (c) => c === sent?.goals));
       else {
         const o = k.slice(8) as keyof BookOptions;
-        setOpts((cur) => ({ ...cur, [o]: value }));
-        if (o in NUMBERS) setNumText((t) => ({ ...t, [o]: String(value) }));
+        const kept = (cur: BookOptions) => !!sent && !same(cur[o], sent.options[o]);
+        setOpts((cur) => (kept(cur) ? cur : { ...cur, [o]: value }));
+        if (o in NUMBERS) setNumText((t) => (sent && t[o as NumberKey] !== String(sent.options[o]) ? t : { ...t, [o]: String(value) }));
       }
     }
     loadedValues.current = withFields(loadedValues.current!, v, keys);
@@ -191,12 +201,13 @@ export default function BookSetup() {
   // is not overwritten without asking, and the other fields saved since are taken over.
   // shortcut: the check and the save are two requests, so a save landing between them is not caught; fine for one author.
   const check = useMutation({
-    mutationFn: () => api('GET /api/projects/:id', { params: { id: id! } }),
-    onSuccess: (p) => {
-      const patch = changedFields(loadedValues.current!, body);
+    // `sent` is the form as submitted: the patch is made from it, and a field typed into after that keeps its text.
+    mutationFn: (_sent: SetupValues) => api('GET /api/projects/:id', { params: { id: id! } }),
+    onSuccess: (p, sent) => {
+      const patch = changedFields(loadedValues.current!, sent);
       const stored = setupValues(p, DEFAULT_OPTIONS);
       const { stale, refreshed } = compareStored(loadedValues.current!, stored, patch);
-      fill(stored, refreshed);
+      fill(stored, refreshed, sent);
       if (stale.length) setConflict({ fields: stale, stored, patch });
       else save.mutate(patch);
     },
@@ -206,7 +217,7 @@ export default function BookSetup() {
     e.preventDefault(); setError(null);
     // Save stays enabled while the stored book is read, so it keeps focus and gets it back when the dialog closes.
     if (!valid || check.isPending) return;
-    if (editing) check.mutate(); else save.mutate(undefined);
+    if (editing) check.mutate(body); else save.mutate(undefined);
   };
   const keepMine = () => { const c = conflict!; setConflict(null); save.mutate(c.patch); };
   const reload = () => { const c = conflict!; setConflict(null); fill(c.stored, c.fields.map((f) => f.key)); };

@@ -161,6 +161,38 @@ test.describe('Book setup', () => {
     await other.close();
   });
 
+  test('text typed while the stored book is read is kept, in a field another tab also saved', async ({ page }) => {
+    const kept = await keepBook(page);
+    const other = await page.context().newPage();
+    await mockApi(other);
+    await keepBook(other, undefined, kept);
+    await page.goto('/books/p1/settings');
+    await other.goto('/books/p1/settings');
+    await expect(other.getByRole('textbox', { name: 'Title', exact: true })).toHaveValue(String(kept.book.title));
+
+    await page.getByRole('textbox', { name: 'Title', exact: true }).fill('Titolo dal primo tab');
+    await page.getByRole('textbox', { name: 'Goals' }).fill('Obiettivi dal primo tab');
+    await page.getByRole('button', { name: 'Save setup' }).click();
+    await expect(page.getByText('Book setup saved')).toBeVisible();
+
+    // The read before the save is slow, and the author types into Goals while it runs.
+    let reads = 0;
+    await other.route(/\/api\/projects\/p1$/, async (route) => {
+      if (route.request().method() === 'GET' && ++reads === 1) await new Promise((r) => setTimeout(r, 600));
+      return route.fallback();
+    });
+    await other.getByRole('textbox', { name: 'Title', exact: true }).fill('Titolo dal secondo tab');
+    await other.getByRole('button', { name: 'Save setup' }).click();
+    await other.getByRole('textbox', { name: 'Goals' }).fill('Scritto durante la lettura');
+    const dialog = other.getByRole('dialog', { name: 'This field was saved elsewhere' });
+    await expect(dialog).toBeVisible();
+    await expect(other.getByRole('textbox', { name: 'Goals' })).toHaveValue('Scritto durante la lettura');
+    await dialog.getByRole('button', { name: 'Cancel' }).click();
+    await expect(other.getByRole('textbox', { name: 'Goals' })).toHaveValue('Scritto durante la lettura');
+    expect(kept.patches).toHaveLength(1);
+    await other.close();
+  });
+
   test('the inferred area can be pinned, and Automatic takes the pin away', async ({ page }) => {
     const { book, patches } = await keepBook(page);
     await page.goto('/books/p1/settings');
