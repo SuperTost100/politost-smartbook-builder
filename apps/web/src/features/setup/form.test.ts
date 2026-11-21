@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import type { BookOptions } from '@smartbuilder/domain';
-import { changedFields, splitAuthors, wholeNumberIn, type SetupValues } from './form.ts';
+import { changedFields, compareStored, splitAuthors, wholeNumberIn, withFields, type SetupValues } from './form.ts';
 
 test('a number field takes whole numbers in its range and refuses the rest', () => {
   assert.equal(wholeNumberIn('3', 1, 5), 3);
@@ -33,4 +33,27 @@ test('authors are compared as the form saves them, so a stored name with a comma
   const loaded = { ...book, authors: stored };
   assert.deepEqual(changedFields(loaded, { ...loaded, authors: splitAuthors('Doe, Jane, Rossi') }), {});
   assert.deepEqual(splitAuthors(' Ada ;\nBea,, '), ['Ada', 'Bea']);
+});
+
+test('a field this form changed that was saved elsewhere since is stale; other fields saved elsewhere are refreshed', () => {
+  const stored = { ...book, audience: 'Secondo tab', goals: 'Orale', options: { ...options, reviewSamples: 4 } };
+  const patch = changedFields(book, { ...book, audience: 'Primo tab', title: 'Analisi I' });
+  const { stale, refreshed } = compareStored(book, stored, patch);
+  assert.deepEqual(stale, [{ key: 'audience', stored: 'Secondo tab', mine: 'Primo tab' }]);
+  assert.deepEqual(refreshed.sort(), ['goals', 'options.reviewSamples']);
+  assert.deepEqual(compareStored(book, book, patch), { stale: [], refreshed: [] });
+});
+
+test('an option this form changed and another tab changed too is stale, and an area cleared elsewhere counts', () => {
+  const pinned = { ...book, options: { ...options, subjectArea: 'physics' as const } };
+  const patch = changedFields(pinned, { ...pinned, options: { ...options, subjectArea: 'chemistry' } });
+  assert.deepEqual(compareStored(pinned, book, patch).stale, [{ key: 'options.subjectArea', stored: undefined, mine: 'chemistry' }]);
+});
+
+test('withFields takes only the named fields', () => {
+  const stored = { ...book, audience: 'B', options: { ...options, ide: false } };
+  const next = withFields(book, stored, ['options.ide']);
+  assert.equal(next.audience, 'Primo anno');
+  assert.equal(next.options.ide, false);
+  assert.equal(book.options.ide, true, 'the base is not changed');
 });

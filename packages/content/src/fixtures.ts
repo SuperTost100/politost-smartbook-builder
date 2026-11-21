@@ -29,7 +29,7 @@ export function question(p: Partial<Question> & Pick<Question, 'id' | 'kind'>): 
 }
 
 export function enrichment(p: Partial<Enrichment> & Pick<Enrichment, 'id' | 'kind' | 'nodeId' | 'payload'>): Enrichment {
-  return { projectId: 'p1', status: 'verified', checks: [], lintAccepted: [], spec: null, checkedRevisionId: null, lintOpen: [], createdAt: '2026-01-01T00:00:00Z', ...p };
+  return { projectId: 'p1', status: 'verified', checks: [], lintAccepted: [], spec: null, checkedRevisionId: null, lintOpen: [], lintAcceptedFindings: [], createdAt: '2026-01-01T00:00:00Z', ...p };
 }
 
 export const SVG = new TextEncoder().encode(

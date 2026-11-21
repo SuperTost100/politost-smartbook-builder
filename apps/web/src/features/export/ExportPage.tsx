@@ -8,6 +8,7 @@ import { bytes, dateTime, plural, shortHash } from '../../lib/format';
 import { useBookId, useDocumentTitle } from '../../lib/hooks';
 import { Icon } from '../../components/Icon';
 import { useToast } from '../../components/Toast';
+import { revealClear } from '../../lib/reveal';
 import './export.css';
 
 function groupBy<T>(items: T[], key: (t: T) => string): [string, T[]][] {
@@ -73,7 +74,7 @@ export default function ExportPage() {
   const exportsQ = useExports(pid);
   const issuesQ = useIssues(pid);
   const [report, setReport] = useState<ValidationReport | null>(null);
-  // The export just made, brought into view above the toasts that announce it.
+  // The export just made, brought into view between the header and the toasts that announce it.
   const [made, setMade] = useState<string | null>(null);
 
   // `quiet`: the check that runs when the page opens shows its report without a toast.
@@ -183,7 +184,7 @@ function ExportItem({ row, latest, reveal }: { row: ExportRow; latest: boolean; 
   const [copied, setCopied] = useState(false);
   const ref = useRef<HTMLLIElement>(null);
   useEffect(() => {
-    if (reveal) ref.current?.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    if (reveal && ref.current) revealClear(ref.current);
   }, [reveal]);
   return (
     <li ref={ref} className="ex2-item ui-card">

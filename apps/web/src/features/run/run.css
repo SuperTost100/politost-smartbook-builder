@@ -28,3 +28,4 @@
 .rn-run:hover { background: var(--surface-raised); }
 .rn-run[aria-current='true'] { border-color: var(--accent); background: var(--accent-soft); }
 .rn-run__time { margin-left: auto; font-size: 12px; }
+.rn-calls { white-space: nowrap; }
