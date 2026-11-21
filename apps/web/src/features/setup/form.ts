@@ -45,7 +45,7 @@ export type FieldKey = Exclude<keyof SetupValues, 'options'> | `options.${keyof 
 export const fieldValue = (v: SetupValues | SetupPatch, key: FieldKey): unknown =>
   key.startsWith('options.') ? (v.options as Record<string, unknown> | undefined)?.[key.slice(8)] : (v as Record<string, unknown>)[key];
 
-const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
+export const keysOf = (v: SetupValues | SetupPatch): FieldKey[] => [
   ...Object.keys(v).filter((k) => k !== 'options') as FieldKey[],
   ...Object.keys(v.options ?? {}).map((k) => `options.${k}` as FieldKey),
 ];

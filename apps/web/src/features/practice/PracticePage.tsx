@@ -61,8 +61,10 @@ export default function PracticePage() {
   const setTab = (t: QuestionKind) => { const p = new URLSearchParams(params); p.set('tab', t); p.delete('q'); setParams(p, { replace: true }); };
   // The question the author opened, as opposed to one named by the address when the page loaded: only that one is brought
   // into view below the list on a narrow screen.
+  // `openings` counts the times a question was opened, so opening the one already open brings it into view again.
   const opened = useRef<string | null>(null);
-  const select = (id: string | null) => { opened.current = id; const p = new URLSearchParams(params); if (id) p.set('q', id); else p.delete('q'); setParams(p, { replace: true }); };
+  const [openings, setOpenings] = useState(0);
+  const select = (id: string | null) => { opened.current = id; if (id) setOpenings((n) => n + 1); const p = new URLSearchParams(params); if (id) p.set('q', id); else p.delete('q'); setParams(p, { replace: true }); };
   // Closing the editor puts focus back on its question in the list. A deleted question leaves the list too, so focus then
   // goes to the tab, which reads the new count.
   const tabRef = useRef<HTMLButtonElement>(null);
@@ -153,7 +155,7 @@ export default function PracticePage() {
             })}
           </ul>
         </div>
-        {selected && <QuestionEditor key={selected.id} q={selected} reveal={opened.current === selected.id} pid={pid} topics={topicList} chapters={manuscript.data ?? []} onClose={() => select(null)} />}
+        {selected && <QuestionEditor key={selected.id} q={selected} reveal={opened.current === selected.id ? openings : 0} pid={pid} topics={topicList} chapters={manuscript.data ?? []} onClose={() => select(null)} />}
       </div>
     </div>
   );
@@ -187,7 +189,7 @@ function Coverage({ questions, topics, tab, target, onPick, active }: { question
 
 type Field = 'statement' | 'hint' | 'solution';
 
-function QuestionEditor({ q, reveal, pid, topics, chapters, onClose }: { q: Question; reveal: boolean; pid: string; topics: Topic[]; chapters: { chapterId: string; number: number; title: string }[]; onClose: () => void }) {
+function QuestionEditor({ q, reveal, pid, topics, chapters, onClose }: { q: Question; /** Changes each time the author opens this question; 0 when the address opened it. */ reveal: number; pid: string; topics: Topic[]; chapters: { chapterId: string; number: number; title: string }[]; onClose: () => void }) {
   // Below 1100 px the editor sits under the whole list (practice.css), so opening a question scrolls to it and puts focus on
   // its heading. Beside the list there is nothing to move.
   const root = useRef<HTMLElement>(null);

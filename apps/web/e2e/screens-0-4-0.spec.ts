@@ -326,6 +326,11 @@ test.describe('Practice on a phone', () => {
     await expect.poll(() => heading.evaluate((h) => { const r = h.getBoundingClientRect(); return r.top >= 0 && r.bottom <= innerHeight; })).toBe(true);
     await page.getByRole('button', { name: 'Close editor' }).click();
     await expect(item).toBeFocused();
+    // Opening the question that is already open brings its editor back into view.
+    await item.click();
+    await expect(heading).toBeFocused();
+    await item.click();
+    await expect(heading).toBeFocused();
   });
 
   test('at 1440 px the editor opens beside the list and focus stays on the question', async ({ page }) => {

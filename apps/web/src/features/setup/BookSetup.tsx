@@ -9,7 +9,7 @@ import { useDocumentTitle } from '../../lib/hooks';
 import { useToast } from '../../components/Toast';
 import { Dialog } from '../../components/Dialog';
 import { ProgramCard } from './ProgramCard';
-import { changedFields, compareStored, fieldValue, same, setupValues, splitAuthors, wholeNumberIn, withFields, withoutFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
+import { changedFields, compareStored, fieldValue, keysOf, same, setupValues, splitAuthors, wholeNumberIn, withFields, withoutFields, type FieldKey, type SetupPatch, type SetupValues, type StaleField } from './form';
 import './setup.css';
 
 const DEFAULT_OPTIONS: BookOptions = {
@@ -190,10 +190,11 @@ export default function BookSetup() {
       if (editing) return api('PATCH /api/projects/:id', { params: { id: id! }, body: patch ?? {} });
       return api('POST /api/projects', { body });
     },
-    onSuccess: (p) => {
-      // The saved book is the new baseline. The page can stay mounted after the save (Back before the next screen has
-      // loaded), and a later save must compare with what this save stored.
-      if (editing) loadedValues.current = setupValues(p, DEFAULT_OPTIONS);
+    onSuccess: (p, patch) => {
+      // The fields this save sent take the saved values as their baseline. The page can stay mounted after the save (Back
+      // before the next screen has loaded), and a later save must compare with what this save stored. Other fields keep
+      // theirs, so a value another tab saved meanwhile is still caught by the check.
+      if (editing && patch) loadedValues.current = withFields(loadedValues.current!, setupValues(p, DEFAULT_OPTIONS), keysOf(patch));
       void qc.invalidateQueries({ queryKey: qk.projects });
       void qc.invalidateQueries({ queryKey: qk.project(p.id) });
       toast(editing ? 'Book setup saved' : 'Book created');

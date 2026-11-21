@@ -135,15 +135,15 @@ function BlockEditor({ block, edit, resolveAsset }: { block: MappedBlock; edit: 
       <div className="ui-meta">Editing block {block.index + 1} · {BLOCK_LABEL[block.kind]} · source</div>
       <SourceEditor value={text} onChange={edit.onChange} onSave={() => { if (!empty) edit.onSave(); }} onCancel={edit.onCancel} label={`Source of block ${block.index + 1}`} autoFocus minRows={3} />
       <LivePreview source={text} resolveAsset={resolveAsset} />
-      <div className="ms-edit__actions">
+      {/* While "Remove this block?" asks, Escape anywhere in this row answers Keep, as in the figure dialog. */}
+      <div className="ms-edit__actions" onKeyDown={(e) => { if (e.key === 'Escape' && deleteAsk.asking) { e.stopPropagation(); deleteAsk.dismiss(); } }}>
         <button type="button" className="ui-btn ui-btn--accent ui-btn--sm" onClick={edit.onSave} disabled={saving || empty || (unchanged && !edit.saved) || blocked} aria-describedby={blocked ? whyId : undefined}>{saving ? <><span className="ui-spinner" />Saving…</> : 'Save block'}</button>
         <button type="button" className="ui-btn ui-btn--sm" onClick={edit.onCancel}>Close</button>
         {edit.addFigure && <AddFigure {...edit.addFigure} />}
         <span className="ui-muted ms-edit__keys"><kbd className="ui-kbd">Ctrl</kbd> <kbd className="ui-kbd">Enter</kbd> saves and closes, <kbd className="ui-kbd">Esc</kbd> closes. Edits save when you pause.</span>
         <span className="ui-grow" />
         {deleteAsk.asking ? (
-          // Escape answers Keep, as in the figure dialog.
-          <span className="ms-edit__confirm" onKeyDown={(e) => { if (e.key === 'Escape') { e.stopPropagation(); deleteAsk.dismiss(); } }}>
+          <span className="ms-edit__confirm">
             <span className="ui-muted">Remove this block?</span>
             <button type="button" className="ui-btn ui-btn--danger-solid ui-btn--sm" onClick={edit.onDelete} disabled={saving || blocked}>Remove block</button>
             <button ref={deleteAsk.keepRef} type="button" className="ui-btn ui-btn--sm" onClick={deleteAsk.dismiss}>Keep</button>
