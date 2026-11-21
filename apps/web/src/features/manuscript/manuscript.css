@@ -129,3 +129,4 @@
   .ms-toolbar .ui-btn { padding: 0 9px; flex: none; }
   .ms-crumb { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
 }
+.ms-edit__confirm { display: contents; }

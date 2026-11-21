@@ -59,7 +59,10 @@ export default function PracticePage() {
   const opts = project.data?.options;
 
   const setTab = (t: QuestionKind) => { const p = new URLSearchParams(params); p.set('tab', t); p.delete('q'); setParams(p, { replace: true }); };
-  const select = (id: string | null) => { const p = new URLSearchParams(params); if (id) p.set('q', id); else p.delete('q'); setParams(p, { replace: true }); };
+  // The question the author opened, as opposed to one named by the address when the page loaded: only that one is brought
+  // into view below the list on a narrow screen.
+  const opened = useRef<string | null>(null);
+  const select = (id: string | null) => { opened.current = id; const p = new URLSearchParams(params); if (id) p.set('q', id); else p.delete('q'); setParams(p, { replace: true }); };
   // Closing the editor puts focus back on its question in the list. A deleted question leaves the list too, so focus then
   // goes to the tab, which reads the new count.
   const tabRef = useRef<HTMLButtonElement>(null);
@@ -150,7 +153,7 @@ export default function PracticePage() {
             })}
           </ul>
         </div>
-        {selected && <QuestionEditor key={selected.id} q={selected} pid={pid} topics={topicList} chapters={manuscript.data ?? []} onClose={() => select(null)} />}
+        {selected && <QuestionEditor key={selected.id} q={selected} reveal={opened.current === selected.id} pid={pid} topics={topicList} chapters={manuscript.data ?? []} onClose={() => select(null)} />}
       </div>
     </div>
   );
@@ -184,7 +187,16 @@ function Coverage({ questions, topics, tab, target, onPick, active }: { question
 
 type Field = 'statement' | 'hint' | 'solution';
 
-function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pid: string; topics: Topic[]; chapters: { chapterId: string; number: number; title: string }[]; onClose: () => void }) {
+function QuestionEditor({ q, reveal, pid, topics, chapters, onClose }: { q: Question; reveal: boolean; pid: string; topics: Topic[]; chapters: { chapterId: string; number: number; title: string }[]; onClose: () => void }) {
+  // Below 1100 px the editor sits under the whole list (practice.css), so opening a question scrolls to it and puts focus on
+  // its heading. Beside the list there is nothing to move.
+  const root = useRef<HTMLElement>(null);
+  const heading = useRef<HTMLHeadingElement>(null);
+  useEffect(() => {
+    if (!reveal || !matchMedia('(max-width: 1100px)').matches) return;
+    root.current?.scrollIntoView({ block: 'start', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+    heading.current?.focus({ preventScroll: true });
+  }, [reveal]);
   const qc = useQueryClient();
   const toast = useToast();
   const [draft, setDraft] = useState({ statement: q.statement, hint: q.hint, solution: q.solution, difficulty: q.difficulty, origin: q.origin, topicIds: q.topicIds, chapterId: q.chapterId });
@@ -223,11 +235,11 @@ function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pi
   };
 
   return (
-    <section className="pr-editor ui-card" aria-label="Question editor">
+    <section ref={root} className="pr-editor ui-card" aria-label="Question editor">
       <header className="pr-editor__head">
         <div className="ui-grow">
           <div className="ui-meta">{q.kind === 'exam' ? 'Exam question' : 'Exercise'}{q.examGroup ? ` · ${q.examGroup}` : ''}</div>
-          <h2 className="ui-panel-title">{q.number ? `Question ${q.number}` : 'Question'}</h2>
+          <h2 ref={heading} tabIndex={-1} className="ui-panel-title">{q.number ? `Question ${q.number}` : 'Question'}</h2>
         </div>
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--icon ui-btn--sm" aria-label="Close editor" onClick={onClose}><Icon name="x" /></button>
       </header>
@@ -279,8 +291,9 @@ function QuestionEditor({ q, pid, topics, chapters, onClose }: { q: Question; pi
       </section>
 
       <div className="ui-row pr-actions">
-        <button type="button" className="ui-btn ui-btn--accent" disabled={!dirty || save.isPending} onClick={() => save.mutate()}>Save question</button>
-        <button type="button" className="ui-btn" disabled={verify.isPending || dirty} title={dirty ? 'Save first' : undefined} onClick={() => verify.mutate()}><Icon name="refresh" />Verify again</button>
+        {/* aria-disabled, not disabled: a save leaves nothing to save, and the button pressed keeps keyboard focus. */}
+        <button type="button" className="ui-btn ui-btn--accent" aria-disabled={!dirty || save.isPending || undefined} onClick={() => { if (dirty && !save.isPending) save.mutate(); }}>Save question</button>
+        <button type="button" className="ui-btn" aria-disabled={verify.isPending || dirty || undefined} title={dirty ? 'Save first' : undefined} onClick={() => { if (!verify.isPending && !dirty) verify.mutate(); }}><Icon name="refresh" />Verify again</button>
         <span className="ui-grow" />
         <button type="button" className="ui-btn ui-btn--ghost ui-btn--danger" onClick={() => setConfirmDelete(true)}><Icon name="trash" />Delete</button>
       </div>

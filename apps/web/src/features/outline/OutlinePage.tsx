@@ -59,7 +59,8 @@ export default function OutlinePage() {
     setNewer(false);
   };
 
-  const refresh = () => { void qc.invalidateQueries({ queryKey: qk.outline(pid) }); void qc.invalidateQueries({ queryKey: qk.project(pid) }); };
+  // The Manuscript shows the approved outline's titles, so an approval has to reach its cached copy too.
+  const refresh = () => { for (const key of [qk.outline(pid), qk.project(pid), qk.manuscript(pid)]) void qc.invalidateQueries({ queryKey: key }); };
 
   const save = useMutation({
     mutationFn: (v: { base: string | null }) => api('PUT /api/projects/:id/outline', { params: { id: pid }, body: { outline: draft!, baseRevId: v.base } }),
