@@ -140,7 +140,7 @@ Small shortcuts, each with a comment in the code that says how to upgrade it: a 
 
 ## Tests and CI
 
-`npm test` runs 294 content tests (292 pass and 2 are skipped because they need two real books that are not in the repository) and 1,098 service tests and 22 web tests. `npm run test:e2e` runs 238 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
+`npm test` runs 294 content tests (292 pass and 2 are skipped because they need two real books that are not in the repository) and 1,098 service tests and 22 web tests. `npm run test:e2e` runs 239 Playwright tests against a real service with no model calls. GitHub CI runs typecheck, unit tests, the web build and the end-to-end tests on the Node version in `.nvmrc` (24).
 
 The figure renderers have a snapshot test, and every code block in the drawing cheat sheets is compiled by a test, so a sheet cannot go stale.
 
