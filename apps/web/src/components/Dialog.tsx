@@ -84,6 +84,9 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
 
   // Escape, answered here: onEscape first (a question in the dialog), then the close, unless work is running.
   const escape = () => { if (onEscape?.()) return; if (!holdEscape) closeRef.current(); };
+  // Set while a close request the cancel handler already answered is under way: the close the browser may still do after
+  // it must not reach the owner a second time.
+  const answered = useRef(false);
 
   if (!open) return <dialog ref={ref} className="ui-dialog" hidden />;
 
@@ -98,7 +101,8 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       // so the page and the screen agree.
       onClose={() => {
         if (!openRef.current) return;
-        closeRef.current();
+        if (!answered.current) closeRef.current();
+        answered.current = false;
         requestAnimationFrame(() => { const el = ref.current; if (openRef.current && el && !el.open) el.showModal(); });
       }}
       // Escape is handled on keydown and its default stopped, so the browser never starts its own close. A control inside
@@ -107,7 +111,13 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
         if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); escape(); return; }
         wrapFocus(e);
       }}
-      onCancel={(e) => { e.preventDefault(); escape(); }}
+      onCancel={(e) => {
+        e.preventDefault();
+        escape();
+        // A request the page could not stop is followed by a close event in the same turn; one it stopped is not.
+        answered.current = true;
+        requestAnimationFrame(() => { answered.current = false; });
+      }}
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
         // A click on the backdrop must not move focus to the page behind it.

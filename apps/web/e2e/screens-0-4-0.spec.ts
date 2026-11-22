@@ -835,6 +835,20 @@ test.describe('Extras: graphs', () => {
     expect(patches).toEqual([{ acceptLint: ['raw-notation:', 'placeholder:Seno'] }]);
   });
 
+  test('Accept anyway sends each finding key once, however many findings share it', async ({ page }) => {
+    await mockApi(page);
+    // Fifteen copies of one trace: 105 duplicate findings, 14 keys.
+    const dup = Array.from({ length: 105 }, (_, i) => ({ key: `duplicate:T${(i % 14) + 2}`, code: 'duplicate', trace: `T${(i % 14) + 2}`, detail: 'same data as "T1"' }));
+    const patches: { acceptLint?: string[] }[] = [];
+    await page.route(/\/api\/projects\/p1\/enrichments$/, (route) => answer(route, [{ ...graph, lintOpen: dup }]));
+    await page.route(/\/api\/enrichments\/g1$/, (route) => { patches.push(route.request().postDataJSON()); return answer(route, { ...graph, lintOpen: [], lintAcceptedFindings: dup }); });
+    await page.goto('/books/p1/extras?tab=graphs');
+    await page.getByRole('article').filter({ hasText: 'Corrente nel circuito RC' }).getByRole('button', { name: 'Accept anyway' }).click();
+    await expect(page.getByText('Accepted', { exact: true })).toBeVisible();
+    expect(patches[0].acceptLint).toHaveLength(14);
+    expect(new Set(patches[0].acceptLint).size).toBe(14);
+  });
+
   test('an accepted finding is marked accepted, and Stop accepting opens it again with focus kept on the card', async ({ page }) => {
     await mockApi(page);
     // The graph as the service keeps it: Accept anyway moves every open finding to the accepted list, Stop accepting moves one back.

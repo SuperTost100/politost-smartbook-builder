@@ -202,6 +202,14 @@ test.describe('figure dialog, edits that must not be lost', () => {
       await expect(dialog).toBeVisible();
       await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia da tenere');
     }
+    // A close request that does not come from a key (Android Back) answers the same way, without user activation in between.
+    for (let i = 0; i < 2; i++) {
+      await page.evaluate(() => (document.querySelector('dialog[open]') as HTMLDialogElement & { requestClose(): void }).requestClose());
+      await expect(ask).toBeVisible();
+      await page.evaluate(() => (document.querySelector('dialog[open]') as HTMLDialogElement & { requestClose(): void }).requestClose());
+      await expect(ask).toBeHidden();
+      await expect(dialog).toBeVisible();
+    }
     await page.keyboard.press('Escape');
     await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
     await expect(dialog).toBeHidden();
