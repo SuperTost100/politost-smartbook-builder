@@ -61,21 +61,32 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
   // The control that opened the dialog. The browser gives focus back to it on close only while focus is inside the
   // dialog, and a click on the backdrop can move it out first, so the component gives it back itself.
   const opener = useRef<HTMLElement | null>(null);
+  const shown = useRef(false);
+  const openRef = useRef(open);
+  openRef.current = open;
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
     if (open && !el.open) {
       opener.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+      shown.current = true;
       el.showModal();
     }
-    if (!open && el.open) {
-      el.close();
+    if (!open && shown.current) {
+      if (el.open) el.close();
+      shown.current = false;
       const at = document.activeElement;
       const lost = !at || at === document.body || at.contains(el);
       if (lost && opener.current?.isConnected) opener.current.focus();
       opener.current = null;
     }
   }, [open]);
+
+  // Escape, answered here: onEscape first (a question in the dialog), then the close, unless work is running.
+  const escape = () => { if (onEscape?.()) return; if (!holdEscape) closeRef.current(); };
+  // Set while a close request the cancel handler already answered is under way: the close the browser may still do after
+  // it must not reach the owner a second time.
+  const answered = useRef(false);
 
   if (!open) return <dialog ref={ref} className="ui-dialog" hidden />;
 
@@ -85,9 +96,28 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       ref={ref}
       className={cls}
       aria-labelledby={titleId}
-      onClose={() => closeRef.current()}
-      onKeyDown={wrapFocus}
-      onCancel={(e) => { e.preventDefault(); if (onEscape?.()) return; if (!holdEscape) closeRef.current(); }}
+      // The browser closed the dialog by itself (Chrome does so on a repeated Escape whose cancel event it no longer lets
+      // the page stop). The owner decides: when it keeps the dialog open, as with unsaved edits, the dialog opens again
+      // so the page and the screen agree.
+      onClose={() => {
+        if (!openRef.current) return;
+        if (!answered.current) closeRef.current();
+        answered.current = false;
+        requestAnimationFrame(() => { const el = ref.current; if (openRef.current && el && !el.open) el.showModal(); });
+      }}
+      // Escape is handled on keydown and its default stopped, so the browser never starts its own close. A control inside
+      // that already used the key (an editor) has stopped it first.
+      onKeyDown={(e) => {
+        if (e.key === 'Escape' && !e.defaultPrevented) { e.preventDefault(); escape(); return; }
+        wrapFocus(e);
+      }}
+      onCancel={(e) => {
+        e.preventDefault();
+        escape();
+        // A request the page could not stop is followed by a close event in the same turn; one it stopped is not.
+        answered.current = true;
+        requestAnimationFrame(() => { answered.current = false; });
+      }}
       onMouseDown={(e) => {
         if (e.target !== e.currentTarget) return;
         // A click on the backdrop must not move focus to the page behind it.

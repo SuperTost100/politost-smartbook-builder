@@ -932,6 +932,44 @@ describe('review fixes (server)', () => {
     assert.equal(row.status, 'verified');
   });
 
+  it('6h. Accept anyway without a payload accepts the listed findings of the stored graph and keeps a newer graph', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-accept-stale'));
+    const eid = newId();
+    const trace = (name: string, k = 1) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, k, 2 * k] });
+    const seen = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('Charles'), trace('Gay-Lussac')], layout: {} } };
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: seen, status: 'issue', checks: [], created_at: now() });
+    const card = (await t.req('GET', `/api/projects/${p.id}/enrichments`)).body[0];
+    const listed = card.lintOpen.map((f: { key: string }) => f.key);
+    assert.deepEqual(listed, ['duplicate:Gay-Lussac']);
+    // Another tab saves a newer graph: a third trace, a copy of the first, has a finding the card never showed.
+    const newer = (await t.req('PATCH', `/api/enrichments/${eid}`, { payload: { ...seen, title: 'G nuovo', config: { data: [trace('Charles'), trace('Gay-Lussac'), trace('Boyle')], layout: {} } } })).body;
+    const keys = (e: { lintOpen: { key: string }[] }) => [...new Set(e.lintOpen.map((f) => f.key))].sort();
+    assert.deepEqual(keys(newer), ['duplicate:Boyle', 'duplicate:Gay-Lussac']);
+    const accepted = (await t.req('PATCH', `/api/enrichments/${eid}`, { acceptLint: listed })).body;
+    assert.equal(accepted.payload.title, 'G nuovo', 'the newer graph is kept');
+    assert.deepEqual(accepted.lintAccepted, ['duplicate:Gay-Lussac']);
+    assert.deepEqual(keys(accepted), ['duplicate:Boyle'], 'a finding the card did not list stays open');
+    // A listed key that is no longer a finding of the stored graph is not stored.
+    const gone = (await t.req('PATCH', `/api/enrichments/${eid}`, { acceptLint: ['duplicate:Avogadro'] })).body;
+    assert.ok(!gone.lintAccepted.includes('duplicate:Avogadro'));
+  });
+
+  it('6i. Accept anyway from a card that is up to date accepts what it listed', async () => {
+    const { body: p } = await t.req('POST', '/api/projects', projectBody('graph-accept-current'));
+    const eid = newId();
+    const trace = (name: string) => ({ type: 'scatter', mode: 'lines', name, x: [0, 1, 2], y: [0, 1, 2] });
+    const twins = { id: 'g', title: 'G', type: 'plotly', config: { data: [trace('Charles'), trace('Gay-Lussac')], layout: { yaxis: { title: { text: 'Corrente i_C (A)' } } } } };
+    t.ctx.db.insert('enrichments', { id: eid, project_id: p.id, node_id: 's1', kind: 'graph', payload: twins, status: 'issue', checks: [], created_at: now() });
+    const card = (await t.req('GET', `/api/projects/${p.id}/enrichments`)).body[0];
+    const res = await t.req('PATCH', `/api/enrichments/${eid}`, { acceptLint: card.lintOpen.map((f: { key: string }) => f.key) });
+    assert.equal(res.status, 200);
+    assert.deepEqual(res.body.lintOpen, []);
+    assert.equal(res.body.status, 'verified');
+    assert.deepEqual(res.body.payload, card.payload);
+    // Keys need a graph, and an empty request is still refused.
+    assert.equal((await t.req('PATCH', `/api/enrichments/${eid}`, { acceptLint: true })).status, 400, 'true without a payload has no graph to read from the request');
+  });
+
   it('7. the generate route forwards scope.nodeIds', async () => {
     const { body: p } = await t.req('POST', '/api/projects', projectBody('node-scope'));
     await t.req('POST', `/api/projects/${p.id}/runs`, { kind: 'generate', scope: { nodeIds: ['s3'] } });
