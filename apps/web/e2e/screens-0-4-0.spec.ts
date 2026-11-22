@@ -831,20 +831,21 @@ test.describe('Extras: graphs', () => {
     await expect(card.getByRole('listitem').filter({ hasText: 'placeholder' })).toHaveText('placeholder on "Seno": the label looks like a placeholder');
     await card.getByRole('button', { name: 'Accept anyway' }).click();
     await expect(page.getByText('Accepted', { exact: true })).toBeVisible();
-    expect(patches).toEqual([{ payload: graph.payload, acceptLint: true }]);
+    // No payload: the service accepts the listed findings of the graph as stored.
+    expect(patches).toEqual([{ acceptLint: ['raw-notation:', 'placeholder:Seno'] }]);
   });
 
   test('an accepted finding is marked accepted, and Stop accepting opens it again with focus kept on the card', async ({ page }) => {
     await mockApi(page);
     // The graph as the service keeps it: Accept anyway moves every open finding to the accepted list, Stop accepting moves one back.
     let stored = { ...graph };
-    const patches: { acceptLint?: boolean; stopAccepting?: string[] }[] = [];
+    const patches: { acceptLint?: string[]; stopAccepting?: string[] }[] = [];
     await page.route(/\/api\/projects\/p1\/enrichments$/, (route) => answer(route, [stored]));
     await page.route(/\/api\/enrichments\/g1$/, (route) => {
-      const body = route.request().postDataJSON() as { acceptLint?: boolean; stopAccepting?: string[] };
+      const body = route.request().postDataJSON() as { acceptLint?: string[]; stopAccepting?: string[] };
       patches.push({ acceptLint: body.acceptLint, stopAccepting: body.stopAccepting });
       const all = [...stored.lintOpen, ...stored.lintAcceptedFindings];
-      const accepted = body.acceptLint ? all : stored.lintAcceptedFindings.filter((f) => !body.stopAccepting?.includes(f.key));
+      const accepted = body.acceptLint ? all.filter((f) => body.acceptLint!.includes(f.key) || stored.lintAcceptedFindings.includes(f)) : stored.lintAcceptedFindings.filter((f) => !body.stopAccepting?.includes(f.key));
       stored = { ...stored, lintAcceptedFindings: accepted, lintOpen: all.filter((f) => !accepted.includes(f)) };
       return answer(route, stored);
     });
@@ -861,7 +862,7 @@ test.describe('Extras: graphs', () => {
     await expect(card.getByRole('button', { name: 'Accept anyway' })).toBeFocused();
     await expect(card.getByRole('listitem').filter({ hasText: 'raw-notation' })).not.toContainText('accepted');
     await expect(card.getByRole('listitem').filter({ hasText: 'placeholder' })).toContainText('accepted');
-    expect(patches).toEqual([{ acceptLint: true, stopAccepting: undefined }, { acceptLint: undefined, stopAccepting: ['raw-notation:'] }]);
+    expect(patches).toEqual([{ acceptLint: ['raw-notation:', 'placeholder:Seno'], stopAccepting: undefined }, { acceptLint: undefined, stopAccepting: ['raw-notation:'] }]);
   });
 
   test('at 375 px the tabs stay on one row with the selected one in view', async ({ page }) => {

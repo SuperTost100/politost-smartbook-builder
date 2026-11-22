@@ -105,13 +105,14 @@ export function registerMaterialRoutes(app: FastifyInstance, ctx: AppContext) {
   app.get('/api/projects/:id/enrichments', async (req) => listEnrichments(ctx, projectOf(ctx, req)));
 
   app.patch('/api/enrichments/:eid', async (req) => {
-    // Stop accepting may leave the payload out: it then works on the stored graph, so a card that is behind another tab's
-    // save does not write its older payload back.
-    const body = parse(z.object({ payload: z.record(z.string(), z.unknown()).optional(), acceptLint: z.boolean().optional(), stopAccepting: z.array(z.string()).max(100).optional() })
-      .refine((b) => b.payload || b.stopAccepting, { message: 'Send the payload, or the findings to stop accepting.' }), req.body);
+    // Accept anyway (with the keys of the findings the card listed) and Stop accepting may leave the payload out: they then
+    // work on the stored graph, so a card that is behind another tab's save does not write its older payload back.
+    const keys = z.array(z.string()).max(100);
+    const body = parse(z.object({ payload: z.record(z.string(), z.unknown()).optional(), acceptLint: z.union([z.boolean(), keys]).optional(), stopAccepting: keys.optional() })
+      .refine((b) => b.payload || b.stopAccepting || Array.isArray(b.acceptLint), { message: 'Send the payload, or the findings to accept or to stop accepting.' }), req.body);
     const cur = getEnrichment(ctx, idParam(req, 'eid'));
     // Only a graph has lint findings to accept; on a lab example the update would only reset its checks.
-    if (body.stopAccepting && cur.kind !== 'graph') throw new HttpError(400, 'invalid', 'Only a graph has findings to stop accepting.');
+    if ((body.stopAccepting || Array.isArray(body.acceptLint)) && cur.kind !== 'graph') throw new HttpError(400, 'invalid', 'Only a graph has lint findings to accept or to stop accepting.');
     return updateEnrichmentPayload(ctx, cur.id, body.payload ?? cur.payload, { acceptLint: body.acceptLint, stopAccepting: body.stopAccepting });
   });
 

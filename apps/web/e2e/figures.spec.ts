@@ -187,6 +187,34 @@ test.describe('figure dialog, edits that must not be lost', () => {
     });
   }
 
+  test('Escape on the discard question answers Keep editing every time, and only Discard drops the edit', async ({ page }) => {
+    await open(page);
+    const dialog = await openDialog(page);
+    await dialog.getByLabel('Caption').fill('Didascalia da tenere');
+    const ask = dialog.getByText('Discard your changes to this figure?');
+    // Chrome lets a page stop only one Escape per user action; the dialog must not close on the later ones.
+    for (let i = 0; i < 4; i++) {
+      await page.keyboard.press('Escape');
+      await expect(ask).toBeVisible();
+      await expect(dialog.getByRole('button', { name: 'Keep editing' })).toBeFocused();
+      await page.keyboard.press('Escape');
+      await expect(ask).toBeHidden();
+      await expect(dialog).toBeVisible();
+      await expect(dialog.getByLabel('Caption')).toHaveValue('Didascalia da tenere');
+    }
+    await page.keyboard.press('Escape');
+    await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    // Nothing is left behind: the dialog opens again, and leaving the page does not ask.
+    let asked = false;
+    page.on('dialog', (d) => { asked = true; void d.accept(); });
+    await openDialog(page);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: /^Figure/ })).toBeHidden();
+    await page.reload();
+    expect(asked).toBe(false);
+  });
+
   test('an edited description or a source that is not rendered counts as unsaved, and an untouched dialog closes at once', async ({ page }) => {
     await open(page);
     let dialog = await openDialog(page);

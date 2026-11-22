@@ -146,9 +146,11 @@ function EnrichmentCard({ e, pid }: { e: Enrichment; pid: string }) {
     onSuccess: (row, sent) => { const saved = JSON.stringify(row.payload, null, 2); base.current = saved; setText((t) => (t === sent ? saved : t)); toast('Saved'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });
-  // "Accept anyway" saves the stored graph again with all its lint findings accepted, warnings included, so it ships as it is.
+  // "Accept anyway" accepts the findings this card lists, warnings included, so the graph ships as it is. It sends no payload:
+  // the service accepts those of the stored graph's findings, so a card behind another tab's save neither writes its older
+  // graph back nor accepts a finding it never showed (those stay listed after the refresh).
   const accept = useMutation({
-    mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { payload: e.payload, acceptLint: true } }),
+    mutationFn: () => api('PATCH /api/enrichments/:eid', { params: { eid: e.id }, body: { acceptLint: e.lintOpen.map((f) => f.key) } }),
     onSuccess: () => { toast('Accepted'); setRefocus('Stop accepting'); void qc.invalidateQueries({ queryKey: qk.enrichments(pid) }); },
     onError: (er) => toast(errorText(er), { tone: 'danger' }),
   });

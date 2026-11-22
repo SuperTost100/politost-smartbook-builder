@@ -198,10 +198,15 @@ export default function BookSetup() {
       void qc.invalidateQueries({ queryKey: qk.projects });
       void qc.invalidateQueries({ queryKey: qk.project(p.id) });
       toast(editing ? 'Book setup saved' : 'Book created');
-      navigate(editing ? `/books/${p.id}/sources` : `/books/${p.id}/sources`);
+      // A new book takes the place of the New book form in the history, so Back from its Sources goes to where the author
+      // was before and cannot offer the filled form again.
+      navigate(`/books/${p.id}/sources`, { replace: !editing });
     },
-    onError: (e) => setError(errorText(e)),
+    onError: (e) => { creating.current = false; setError(errorText(e)); },
   });
+  // Set from the first Create until the request fails, so a double click or a second Enter makes one book only. A ref,
+  // because both can arrive before the pending state has rendered.
+  const creating = useRef(false);
 
   // Before an edit is saved, the form reads the stored book: a field this form changed that another tab saved since it loaded
   // is not overwritten without asking, and the other fields saved since are taken over.
@@ -225,8 +230,9 @@ export default function BookSetup() {
   const submit = (e: FormEvent) => {
     e.preventDefault(); setError(null);
     // Save stays enabled while the stored book is read, so it keeps focus and gets it back when the dialog closes.
-    if (!valid || check.isPending) return;
-    if (editing) check.mutate(body); else save.mutate(undefined);
+    if (!valid || check.isPending || creating.current) return;
+    if (editing) check.mutate(body);
+    else { creating.current = true; save.mutate(undefined); }
   };
   const keepMine = () => { const c = conflict!; setConflict(null); save.mutate(c.patch); };
   const reload = () => { const c = conflict!; setConflict(null); fill(c.stored, c.fields.map((f) => f.key)); };
