@@ -671,3 +671,35 @@ test('an unclosed $$ in a hand edit is reported on its block and does not swallo
   await page.locator('.ms-block').nth(1).click();
   await expect(page.getByText(/Unclosed "\$\$"/).first()).toBeVisible();
 });
+
+test('a new book takes the place of the New book form in the history, and a double Create makes one book', async ({ page, request }) => {
+  let posts = 0;
+  page.on('request', (r) => { if (r.method() === 'POST' && new URL(r.url()).pathname === '/api/projects') posts++; });
+  const count = async (title: string) => ((await (await request.get('/api/projects', { headers: H })).json()) as { title: string }[]).filter((p) => p.title === title).length;
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New book' }).first().click();
+  await expect(page).toHaveURL(/\/new$/);
+  await page.getByLabel('Title', { exact: true }).fill('Libro creato una volta');
+  await page.getByLabel('Subject', { exact: true }).fill('Fisica');
+  await page.getByRole('button', { name: 'Create book' }).dblclick();
+  await expect(page).toHaveURL(/\/books\/[^/]+\/sources/);
+  expect(await count('Libro creato una volta')).toBe(1);
+  expect(posts, 'one create request for a double click').toBe(1);
+  // Back goes to the books list the author came from, not to the filled form, and Forward returns to the book.
+  await page.goBack();
+  await expect(page).toHaveURL(/\/$/);
+  await page.goForward();
+  await expect(page).toHaveURL(/\/books\/[^/]+\/sources/);
+  // Reached again, the form starts empty.
+  await page.goto('/new');
+  await expect(page.getByLabel('Title', { exact: true })).toHaveValue('');
+  // Enter pressed twice in a field also makes one book.
+  await page.getByLabel('Title', { exact: true }).fill('Libro con Invio');
+  await page.getByLabel('Subject', { exact: true }).fill('Fisica');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await expect(page).toHaveURL(/\/books\/[^/]+\/sources/);
+  expect(await count('Libro con Invio')).toBe(1);
+  expect(posts, 'one create request for a double Enter').toBe(2);
+  expect(await count('Libro creato una volta')).toBe(1);
+});

@@ -201,7 +201,7 @@ export interface Api {
   'GET /api/assets/:assetId/file': { res: Blob };
   'POST /api/projects/:id/assets': { res: Asset };
   'GET /api/projects/:id/enrichments': { res: Enrichment[] };
-  'PATCH /api/enrichments/:eid': { body: { payload?: Record<string, unknown>; acceptLint?: boolean; stopAccepting?: string[] }; res: Enrichment };
+  'PATCH /api/enrichments/:eid': { body: { payload?: Record<string, unknown>; acceptLint?: boolean | string[]; stopAccepting?: string[] }; res: Enrichment };
   'DELETE /api/enrichments/:eid': { res: { ok: true } };
 
   /** The course program; null fields until the author saves one. */

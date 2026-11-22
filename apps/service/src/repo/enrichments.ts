@@ -33,8 +33,9 @@ export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'cr
 
 /**
  * An edited graph goes through the numeric check and the graph lint again and becomes 'verified' or 'issue', like a
- * generated one. `acceptLint` accepts every lint finding of this payload, warnings included ("Accept anyway"): the acceptance
- * is kept with the graph, so later edits that keep the same finding on the same trace do not bring it back. `stopAccepting`
+ * generated one. `acceptLint` accepts lint findings of this payload, warnings included ("Accept anyway"): `true` accepts all
+ * of them, a list of keys only those of the list that are still findings, so a card that listed older findings never
+ * accepts one the author did not see. The acceptance is kept with the graph, so later edits that keep the same finding on the same trace do not bring it back. `stopAccepting`
  * takes the keys given back out of the accepted list ("Stop accepting"), so those findings fail the graph and reach the
  * export report again.
  * The payload is formatted first (formatGraphPayload: Unicode maths, the book's decimal separator, distinct colours, explicit
@@ -44,7 +45,7 @@ export function insertEnrichment(ctx: AppContext, e: Omit<Enrichment, 'id' | 'cr
  * A lab example is not run here (that needs the sandbox), so it goes back to 'draft'.
  * shortcut: an edited lab example ships unchecked, upgrade by running checkLabCode from the route.
  */
-export function updateEnrichmentPayload(ctx: AppContext, id: string, edit: Record<string, unknown>, opts: { acceptLint?: boolean; stopAccepting?: readonly string[] } = {}): Enrichment {
+export function updateEnrichmentPayload(ctx: AppContext, id: string, edit: Record<string, unknown>, opts: { acceptLint?: boolean | readonly string[]; stopAccepting?: readonly string[] } = {}): Enrichment {
   const cur = getEnrichment(ctx, id);
   let payload = edit;
   if (cur.kind === 'graph') {
@@ -53,7 +54,8 @@ export function updateEnrichmentPayload(ctx: AppContext, id: string, edit: Recor
     payload = format(edit);
     const edited = JSON.stringify(payload) !== JSON.stringify(format(cur.payload));
     const checked = checkFunctionGraph(payload);
-    const fresh = opts.acceptLint ? lintGraph(payload).map(lintKey) : [];
+    const listed = Array.isArray(opts.acceptLint) ? new Set(formatLintKeys(opts.acceptLint, { language })) : null;
+    const fresh = opts.acceptLint ? lintGraph(payload).map(lintKey).filter((k) => !listed || listed.has(k)) : [];
     // A finding accepted on "y = x^2" stays accepted on the "y = x²" the formatter writes.
     // A stopped key is matched in both forms, as written and as the formatter writes it ("y = x^2" and "y = x²"): a stored
     // key in either form would otherwise bring the acceptance back on the next save.
