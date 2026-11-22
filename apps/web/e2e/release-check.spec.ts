@@ -226,6 +226,22 @@ test.describe('wording and tone', () => {
     await expect(dialog).toBeHidden();
   });
 
+  test('answering Keep running leaves the run panel open behind the confirmation', async ({ page }) => {
+    await mockApi(page);
+    await page.goto('/books/p1/review');
+    await page.getByRole('button', { name: 'Open run panel' }).click();
+    const panel = page.getByRole('dialog').filter({ has: page.getByRole('button', { name: 'Cancel', exact: true }) }).first();
+    await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+    const confirm = page.getByRole('dialog', { name: 'Cancel this run' });
+    await confirm.getByRole('button', { name: 'Keep running' }).click();
+    await expect(confirm).toBeHidden();
+    await expect(panel).toBeVisible();
+    await panel.getByRole('button', { name: 'Cancel', exact: true }).click();
+    await page.keyboard.press('Escape');
+    await expect(confirm).toBeHidden();
+    await expect(panel).toBeVisible();
+  });
+
   test('skipping a file that is not a source is a notice, not an error', async ({ page }) => {
     await mockApi(page);
     await page.goto('/books/p1/sources');

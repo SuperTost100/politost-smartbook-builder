@@ -99,7 +99,10 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
       // The browser closed the dialog by itself (Chrome does so on a repeated Escape whose cancel event it no longer lets
       // the page stop). The owner decides: when it keeps the dialog open, as with unsaved edits, the dialog opens again
       // so the page and the screen agree.
-      onClose={() => {
+      onClose={(e) => {
+        // React lets a close or cancel event of a dialog nested in this one (a confirmation inside a drawer) reach this
+        // handler too: only this dialog's own events count.
+        if (e.target !== e.currentTarget) return;
         if (!openRef.current) return;
         if (!answered.current) closeRef.current();
         answered.current = false;
@@ -112,6 +115,7 @@ export function Dialog({ open, onClose, title, children, footer, variant = 'moda
         wrapFocus(e);
       }}
       onCancel={(e) => {
+        if (e.target !== e.currentTarget) return;
         e.preventDefault();
         escape();
         // A request the page could not stop is followed by a close event in the same turn; one it stopped is not.
