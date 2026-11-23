@@ -217,10 +217,10 @@ export function roundsOutput(code: string | undefined): false | ((printed: numbe
       .map((m) => ({ n: m[1] === undefined ? 6 : Number(m[1]), type: m[2]!.toLowerCase() })),
   ];
   const formats = (text.match(/%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/g) ?? []).length;
-  // A format this cannot read (format(x, spec)) leaves only the last printed digit, and so does round() or a formatted
-  // string read back as a number (float('%.3g' % x)): the program may still scale it (1000 * round(i, 4) prints 1.2 mA,
-  // known to 0.1 mA).
-  if (known.length < formats || /\bround\s*\(|\b(?:float|int)\s*\(\s*(?:[fF]?['"]|format\s*\()/.test(text)) return () => Infinity;
+  // A format this cannot read (format(x, spec)) leaves only the last printed digit, and so does any round() or float():
+  // a rounded number, or formatted text read back as one (float(s) with s = "%.4f" % i), may still be scaled before it is
+  // printed (1000 * round(i, 4) prints 1.2 mA, known to 0.1 mA).
+  if (known.length < formats || /\b(?:round|float)\s*\(/.test(text)) return () => Infinity;
   return (printed) => Math.max(...known.map(({ n, type }) => {
     if (type === 'f' || type === '%') return 10 ** -n;
     if (printed === 0) return Infinity;

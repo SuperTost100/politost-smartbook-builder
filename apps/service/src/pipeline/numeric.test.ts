@@ -87,6 +87,7 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(step('print(f"a = {a:.6g}")\nprint(f"b = {b:.1f}")', 1), 0.1, 'the coarsest format counts, whichever line it wrote');
     assert.equal(step('print(f"a = {a:.6g}")\nprint("I =", 1000 * round(i, 4), "mA")', 1.2), Infinity, 'one round() leaves the last printed digit for every line');
     assert.equal(step('print("N =", 1000 * float("%.3g" % n))', 1.2), Infinity, 'a format read back as a number may be scaled too');
+    assert.equal(step('s = "%.4f" % i\nprint("I =", 1000 * float(s), "mA")', 1.2), Infinity, 'also through a variable');
     // PR #161 review: 1000 * round(0.00123456, 4) prints 1.2, known to 0.1 mA, so the right 1.23456 mA is no mismatch.
     assert.equal(compareValues([{ name: 'I', value: '1.23456 mA' }], 'I = 1.2 mA', { rounded: roundsOutput('print("I =", 1000 * round(i, 4), "mA")') }), null);
     assert.equal(step('print("J = %g N*s" % J)', 2), 1e-5, 'Python prints %g with six significant figures');
