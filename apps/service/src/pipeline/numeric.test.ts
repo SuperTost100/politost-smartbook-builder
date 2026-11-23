@@ -81,12 +81,14 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     const step = (code: string, printed: number) => (roundsOutput(code) || (() => NaN))(printed);
     assert.equal(step('print(f"m = {m:.4g} kg")', 0.0123), 1e-5);
     assert.equal(step('print("resa = %.3f %%" % r)', 79.958), 1e-3);
-    assert.equal(step('print("p =", round(p, 4), "Pa")', 2.5), 1e-4);
+    assert.equal(step('print("p =", round(p, 4), "Pa")', 2.5), Infinity, 'round() returns a number the program may still scale');
     assert.equal(step('print(f"x = {x:.2F}")', 1.5), 1e-2);
     assert.equal(step('print("x = %.3G" % x)', 123), 1);
     assert.equal(step('print(f"a = {a:.6g}")\nprint(f"b = {b:.1f}")', 1), 0.1, 'the coarsest format counts, whichever line it wrote');
-    assert.equal(step('print("p =", round(p, n))', 2.5), Infinity, 'a precision that cannot be read leaves the last printed digit');
-    assert.equal(step('print("p =", round(math.sqrt(p)))', 2), 1);
+    assert.equal(step('print(f"a = {a:.6g}")\nprint("I =", 1000 * round(i, 4), "mA")', 1.2), Infinity, 'one round() leaves the last printed digit for every line');
+    assert.equal(step('print("N =", 1000 * float("%.3g" % n))', 1.2), Infinity, 'a format read back as a number may be scaled too');
+    // PR #161 review: 1000 * round(0.00123456, 4) prints 1.2, known to 0.1 mA, so the right 1.23456 mA is no mismatch.
+    assert.equal(compareValues([{ name: 'I', value: '1.23456 mA' }], 'I = 1.2 mA', { rounded: roundsOutput('print("I =", 1000 * round(i, 4), "mA")') }), null);
     assert.equal(step('print("J = %g N*s" % J)', 2), 1e-5, 'Python prints %g with six significant figures');
     assert.equal(compareValues([{ name: 'x', value: '1.23456' }], 'x = 1.23', { rounded: roundsOutput('print(f"x = {x:.2F}")') }), null, 'a rounded print of a right value is left unsettled');
     assert.equal(roundsOutput('print(f"m = {m} kg")\nprint("n =", n)'), false);

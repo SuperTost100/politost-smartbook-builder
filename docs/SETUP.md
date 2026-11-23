@@ -21,7 +21,7 @@ Nothing is downloaded while a figure renders, so a book keeps drawing after the 
 
 ## AI tools
 
-Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost100/cli-funnel), with every tool disabled except in one call: the web research that **Find outside sources** makes allows Claude Code's WebSearch and WebFetch, so that model can read pages on the web. Every other call only reads the text the builder sends and writes text back, except that Antigravity also loads your own Antigravity setup, such as the names of your skills, into its context. No call can run commands or touch your files.
+Smart Builder calls the tools through [cli-funnel](https://github.com/SuperTost100/cli-funnel), with every tool disabled except in one call: the web research that **Find outside sources** makes allows Claude Code's WebSearch and WebFetch, so that model can read pages on the web. Every other call only reads the text the builder sends and writes text back, with two exceptions that add your own text to the context but give no access: Antigravity loads the names of your skills (not your global `GEMINI.md`), and Cursor Agent loads any `AGENTS.md` or `.cursor/rules` file in a folder above cli-funnel's cache folder (`~/.cache/cli-funnel`). No call can run commands or touch your files.
 
 | Tool | Sign in | Used by default for |
 |---|---|---|

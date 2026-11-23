@@ -131,7 +131,7 @@ function parsePrinted(stdout: string, rounded: Rounding): Printed[] {
     if (!Number.isFinite(value)) continue;
     const { factor, unit } = splitUnit(m[3] ?? '');
     if (!knownUnit(unit)) continue;
-    // Python drops trailing zeros under round() and the g format, so a short print ({x:.6g} of 0.001) may be exact: the
+    // Python drops trailing zeros under the g format, so a short print ({x:.6g} of 0.001) may be exact: the
     // step is the last printed digit, or the format's own step when that is finer.
     const step = rounded ? Math.min(lastDigit(m[2]!), typeof rounded === 'function' ? rounded(value) : Infinity) * factor : 0;
     out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step });
@@ -215,17 +215,12 @@ export function roundsOutput(code: string | undefined): false | ((printed: numbe
     ...[...text.matchAll(/:[^{}'"]*?\.(\d+)([fFgGeE%]?)\}/g), ...text.matchAll(/%[-+ 0#]*\d*(?:\.(\d*))?([fFgGeE])\b/g), ...text.matchAll(/\bformat\s*\([^()]*?,\s*['"][^'"]*?\.(\d+)([fFgGeE%]?)['"]\s*\)/g)]
       // Python's default precision is six: "%g" shows six significant figures, "%f" six decimals.
       .map((m) => ({ n: m[1] === undefined ? 6 : Number(m[1]), type: m[2]!.toLowerCase() })),
-    // round(x) keeps no decimals, round(x, 3) three; round(x, n) is not read.
-    ...[...text.matchAll(/\bround\s*\(((?:[^()]|\([^()]*\))*)\)/g)].flatMap((m) => {
-      const args = m[1]!.replace(/\([^()]*\)/g, '').split(',');
-      const n = args.length > 1 ? args.at(-1)!.trim() : '0';
-      return /^-?\d+$/.test(n) ? [{ n: Number(n), type: 'f' }] : [];
-    }),
   ];
-  const rounds = (text.match(/\bround\s*\(/g) ?? []).length;
   const formats = (text.match(/%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/g) ?? []).length;
-  // A format this cannot read (round(x, n), format(x, spec)) leaves only the last printed digit.
-  if (known.length < rounds + formats) return () => Infinity;
+  // A format this cannot read (format(x, spec)) leaves only the last printed digit, and so does round() or a formatted
+  // string read back as a number (float('%.3g' % x)): the program may still scale it (1000 * round(i, 4) prints 1.2 mA,
+  // known to 0.1 mA).
+  if (known.length < formats || /\bround\s*\(|\b(?:float|int)\s*\(\s*(?:[fF]?['"]|format\s*\()/.test(text)) return () => Infinity;
   return (printed) => Math.max(...known.map(({ n, type }) => {
     if (type === 'f' || type === '%') return 10 ** -n;
     if (printed === 0) return Infinity;
