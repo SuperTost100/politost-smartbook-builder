@@ -12,7 +12,7 @@ import { TaskError, type TaskContext, type TaskSpec } from '../queue/queue.ts';
 import { comparePrompt, compareSchema, consistencyRecheckPrompt, consistencyRecheckSchema, type ConsistencyRecheck, reconcilePrompt, reconcileSchema, type MismatchCause, type ReconcileAnswer, solvePrompt, solveSchema, stepAuditPrompt, stepAuditSchema, authenticExtractPrompt, examReadParser, exercisesPrompt, formatRules, generatedQuestionsSchema, parseQuestionText, questionTextAnswerRule, sessionExtractPrompt, verifyItemsSchema, verifyPrompt, verifySchema, type CheckedItem, type ProblemKind } from './prompts.ts';
 import { bookFormulaKeys } from './draft.ts';
 import { isFormatIssue, settleQuestionFormatting } from './formatting.ts';
-import { compareValues, mismatchMessage, parseQuantity, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck } from './numeric.ts';
+import { compareValues, mismatchMessage, parseQuantity, printedValues, roundsOutput, readMismatches, recomputeFinalValues, runConsistency, type Comparison, type ConsistencyCheck, type NumericCheck, type StatedValue } from './numeric.ts';
 import { runPython, type PythonResult } from './python.ts';
 import { issuesChanged } from '../repo/issues.ts';
 import { effectiveOutline } from '../repo/outline.ts';
@@ -597,7 +597,7 @@ export function verifyVerdict(d: VerifyAnswer & { items?: CheckedItem[] }, numer
  * in mol/m³ as mol/L. The results are settled when the blind program compared every final value and every stated value was
  * compared by one of the two programs.
  */
-function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: string[], hasFinals: boolean): NumericCheck | null {
+function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, confirmed: NumericCheck | null, stated: StatedValue[], hasFinals: boolean): NumericCheck | null {
   const right = new Set((confirmed?.compared ?? []).filter((c) => !confirmed!.mismatches.some((m) => m.name === c.name)).map((c) => c.name));
   const stepsLeft = steps && { ...steps, mismatches: steps.mismatches.filter((m) => !right.has(m.name)) };
   if (!finals && !stepsLeft) return null;
@@ -605,11 +605,12 @@ function mergeChecks(finals: NumericCheck | null, steps: NumericCheck | null, co
   const compared = named(finals?.compared ?? []);
   const wrong = named(finals?.mismatches ?? []);
   const all = [...(finals?.compared ?? []), ...(stepsLeft?.compared ?? []).filter((c) => !compared.has(c.name))];
-  const seen = named(all);
   // Settled only when the blind program compared every final value (the step program follows the solution's own numbers,
   // so its match proves nothing about the answer) and every stated value was compared by one of the two, so a model's
-  // objection to a value neither could read still stands.
-  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (hasFinals ? !!finals?.complete : true) && stated.every((n) => seen.has(n)) };
+  // objection to a value neither could read still stands. A listing counts by its name and value: the final 0.55 kg
+  // compared does not cover an intermediate 0.50 kg under the same name.
+  const covered = (v: StatedValue) => all.some((c) => c.name === v.name && c.stated === v.value.trim());
+  return { compared: all, mismatches: [...(finals?.mismatches ?? []), ...(stepsLeft?.mismatches ?? []).filter((m) => !wrong.has(m.name))], complete: (hasFinals ? !!finals?.complete : true) && stated.every(covered) };
 }
 
 /** A recomputed value that differs from the solution's, and the program that printed it: the blind one or the step one. */
@@ -842,7 +843,7 @@ export async function solveAndCompare(q: { statement: string; solution: string; 
     }, stated, (prompt) => call(role, prompt, reconcileSchema, 'reconcile'))
     : [];
   const keep = (check: NumericCheck | null, program: OpenMismatch['program']) => check && { ...check, mismatches: check.mismatches.filter((m) => !reconciled.some((r) => r.cleared && r.program === (typed.has(m.name) && program === 'steps' ? 'blind' : program) && r.name === m.name)) };
-  const merged = mergeChecks(keep(finalCheck, 'blind'), keep(stepCheck, 'steps'), confirmed, stated.map((v) => v.name), finals.length > 0);
+  const merged = mergeChecks(keep(finalCheck, 'blind'), keep(stepCheck, 'steps'), confirmed, stated, finals.length > 0);
   // A cleared value is shown as the corrected program printed it, so a passing check never lists 0.0035 L against 3.5 L.
   const shown = (c: Comparison) => ({ ...c, computed: reconciled.find((r) => r.cleared && r.name === c.name)?.computed ?? c.computed });
   const recomputed = merged && { ...merged, compared: merged.compared.map(shown) };
