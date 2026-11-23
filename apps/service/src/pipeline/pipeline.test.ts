@@ -537,6 +537,17 @@ describe('15b. numeric final answers are recomputed in the sandbox', () => {
       return out;
     }));
     assert.equal((await questionVerify(ctx, startTask('question.verify', { questionId: right })) as { ok: boolean }).ok, true);
+    // PR #160 review: the blind program's match of the final 0,55 says nothing about the intermediate 0,50 listed under
+    // the same name, so the model's wrong value about it stands.
+    const step = q({ statement: 'Calcola m.', solution: 'Prima m = 0,50 kg, poi m = 0,55 kg.' });
+    const objection = { problems: [{ kind: 'wrong-value' as const, message: 'Il valore intermedio m = 0,50 kg è sbagliato: vale 0,52 kg.', suggestion: 's' }], computation: 'print("m = 0.55 kg")' };
+    fake.next(...check(objection).map((call) => (input: { prompt: string }) => {
+      const out = call(input);
+      if (input.prompt.includes('REFERENCE ANSWERS')) (out.structured as { statedValues: unknown[] }).statedValues = [{ name: 'm', value: '0,50 kg', final: false }, { name: 'm', value: '0,55 kg', final: true }];
+      return out;
+    }), review(objection));
+    await questionVerify(ctx, startTask('question.verify', { questionId: step }));
+    assert.equal(row(step).status, 'issue');
   });
 
   test('a computation that throws is ignored and the model verdict stands', async () => {

@@ -68,18 +68,37 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(compareValues([{ name: 'x', value: '1.23' }], 'x = 1.2', rounded), null);
     assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg\nother = 0.123', rounded), null, 'a plain print in a program that also rounds is not a match');
     assert.equal(compareValues([{ name: 'm', value: '2.80068 g' }], 'm = 0.002901 kg', rounded)!.mismatches.length, 1);
-    const settled = compareValues([{ name: 'a', value: '1.000 V' }, { name: 'm', value: '2.80068 g' }], 'a = 1.0 V\nm = 0.002801 kg', rounded)!;
+    const settled = compareValues([{ name: 'a', value: '1.000 V' }, { name: 'm', value: '2.80068 g' }], 'a = 1.0002 V\nm = 0.002801 kg', rounded)!;
     assert.deepEqual([settled.mismatches.length, settled.complete], [0, false], 'the uncompared value leaves the results unsettled');
+    // PR #160 review: 1.0 printed by "{v:.1f}" may be 1.04, so it settles neither 1.00 V nor 1.000 V. A match needs every
+    // value the printed digits allow to lie within the stated one's tolerance.
+    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }], 'a = 1.0 V', rounded), null);
+    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }], 'a = 1.00 V', rounded)!.mismatches.length, 0, 'the same precision still matches');
+    assert.equal(compareValues([{ name: 'a', value: '1.00 V' }], 'a = 1.3 V', rounded)!.mismatches.length, 1);
     // A program that prints plainly shows a float in full: a short print is an exact value, with no room from its last digit.
     assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg')!.mismatches.length, 1);
     assert.equal(compareValues([{ name: 'n', value: '3.4' }], 'n = 3')!.mismatches.length, 1);
-    assert.equal(roundsOutput('print(f"m = {m:.4g} kg")'), true);
-    assert.equal(roundsOutput('print("resa = %.3f %%" % r)'), true);
-    assert.equal(roundsOutput('print("p =", round(p, 4), "Pa")'), true);
-    assert.equal(roundsOutput('print(f"x = {x:.2F}")'), true);
-    assert.equal(roundsOutput('print("x = %.3G" % x)'), true);
+    const step = (code: string, printed: number) => (roundsOutput(code) || (() => NaN))(printed);
+    assert.equal(step('print(f"m = {m:.4g} kg")', 0.0123), 1e-5);
+    assert.equal(step('print("resa = %.3f %%" % r)', 79.958), 1e-3);
+    assert.equal(step('print("p =", round(p, 4), "Pa")', 2.5), Infinity, 'round() returns a number the program may still scale');
+    assert.equal(step('print(f"x = {x:.2F}")', 1.5), 1e-2);
+    assert.equal(step('print("x = %.3G" % x)', 123), 1);
+    assert.equal(step('print(f"a = {a:.6g}")\nprint(f"b = {b:.1f}")', 1), 0.1, 'the coarsest format counts, whichever line it wrote');
+    assert.equal(step('print(f"a = {a:.6g}")\nprint("I =", 1000 * round(i, 4), "mA")', 1.2), Infinity, 'one round() leaves the last printed digit for every line');
+    assert.equal(step('print("N =", 1000 * float("%.3g" % n))', 1.2), Infinity, 'a format read back as a number may be scaled too');
+    assert.equal(step('s = "%.4f" % i\nprint("I =", 1000 * float(s), "mA")', 1.2), Infinity, 'also through a variable');
+    // PR #161 review: 1000 * round(0.00123456, 4) prints 1.2, known to 0.1 mA, so the right 1.23456 mA is no mismatch.
+    assert.equal(compareValues([{ name: 'I', value: '1.23456 mA' }], 'I = 1.2 mA', { rounded: roundsOutput('print("I =", 1000 * round(i, 4), "mA")') }), null);
+    assert.equal(step('print("J = %g N*s" % J)', 2), 1e-5, 'Python prints %g with six significant figures');
     assert.equal(compareValues([{ name: 'x', value: '1.23456' }], 'x = 1.23', { rounded: roundsOutput('print(f"x = {x:.2F}")') }), null, 'a rounded print of a right value is left unsettled');
     assert.equal(roundsOutput('print(f"m = {m} kg")\nprint("n =", n)'), false);
+    // PR #160 review: Python drops the trailing zeros of {x:.6g}, so 0.001 is 0.00100000 and matches 1.0 ms, while 1.0
+    // from {v:.1f} may be 1.04 and settles nothing. A plain 0.5 next to .4g prints differs from 0.55.
+    const g6 = { rounded: roundsOutput('print(f"tau = {t:.6g} s")') };
+    assert.equal(compareValues([{ name: 'tau', value: '1.0 ms' }], 'tau = 0.001 s', g6)!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'v', value: '1.00 V' }], 'v = 1.0 V', { rounded: roundsOutput('print(f"v = {v:.1f} V")') }), null);
+    assert.equal(compareValues([{ name: 'm', value: '0.55 kg' }], 'm = 0.5 kg', { rounded: roundsOutput('print("m =", m, "kg")\nprint(f"x = {x:.4g}")') })!.mismatches.length, 1);
   });
 
   test('a sum written out states what follows its last equals sign', () => {
@@ -103,6 +122,10 @@ describe('the step and final checks of the exercise check (18 November)', () => 
     assert.equal(compareValues([{ name: 'p', value: '6.615e-24 kg m/s' }], 'p = 6.6165e-24 kg m/s')!.mismatches.length, 1);
     assert.equal(compareValues([{ name: 'p', value: '6.6165e-24 kg·m/s' }], 'p = 6.61648e-24 kg m/s')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'c', value: '0.0154 mol L^-1' }], 'c = 0.0153846 mol/L'), null, 'mol L^-1 and mol/L are written differently, so not compared');
+    // PR #160 review: spaces around a division sign are not a product.
+    assert.equal(compareValues([{ name: 'v', value: '12.00 m / s' }], 'v = 10 m/s')!.mismatches.length, 1);
+    assert.equal(compareValues([{ name: 'v', value: '12.00 m / s' }], 'v = 12.0 m/s')!.mismatches.length, 0);
+    assert.equal(compareValues([{ name: 'a', value: '9.81 m s ^ -2' }], 'a = 9.81 m s^-2')!.mismatches.length, 0);
   });
 
   test('a name stated with two different values is not compared, whatever the program printed', () => {
@@ -155,6 +178,12 @@ describe('comparing recomputed values with the stated ones', () => {
     assert.equal(compareValues([{ name: 'F', value: '1,500 N' }], 'F = 1500 N')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'F', value: '1,500 N' }], 'F = 1.5 N')!.mismatches.length, 0);
     assert.equal(compareValues([{ name: 'F', value: '1,500 N' }], 'F = 2000 N')!.mismatches.length, 1);
+    // PR #160 review: the second reading is built from the normalised value, so markup or full-width digits that the raw
+    // text keeps cannot make it parse the same text again without end.
+    for (const written of ['$1{,}500$ N', 'F = １.５００ N']) {
+      const q = parseQuantity(written)!;
+      assert.deepEqual([q.base, q.alt.map((a) => a.base)], [1.5, [1500]], written);
+    }
   });
 
   test('2e-3 is read as 0,002 and as 2·e − 3 (the Analisi 1 minimum of 20 November), and only a value that fits neither is a mismatch', () => {

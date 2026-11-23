@@ -59,7 +59,8 @@ const NUMBER = /^[≈=]?\s*([-+]?)(\d+(?:[.,]\d+)?|[.,]\d+)\s*(?:(?:×\s*10\s*\^
 function splitUnit(raw: string): { factor: number; unit: string } {
   if (COUNT_NOUN.test(raw.trim())) return { factor: 1, unit: '' };
   // Units written apart (kg m/s) are a product, as kg·m/s is: joined into one word they would read as an unknown unit.
-  const unit = raw.trim().replace(/\.$/, '').replace(/\s*×\s*|\s+/g, '×');
+  // Spaces around a division sign or a power (m / s, s ^ -2) are not a product, so they go first.
+  const unit = raw.trim().replace(/\.$/, '').replace(/\s*([/^])\s*/g, '$1').replace(/\s*×\s*|\s+/g, '×');
   // A percentage is a plain number written a hundred times larger: 50% and 0.5 are the same value.
   if (unit === '%') return { factor: 0.01, unit: '' };
   if (BASE_UNITS.has(unit)) return { factor: 1, unit };
@@ -89,7 +90,8 @@ function sigFigs(mantissa: string): { digits: number; exponent: number } {
 
 export function parseQuantity(text: string): Quantity | null {
   // "2+2+6+1 = 11" states 11: the value is what follows the last equals sign.
-  const m = NUMBER.exec(plain(text).split('=').at(-1)!.trim());
+  const rhs = plain(text).split('=').at(-1)!.trim();
+  const m = NUMBER.exec(rhs);
   if (!m) return null;
   const [, sign, mantissa, tenPower, eLetter, ePower, rest] = m;
   const shift = Number(tenPower ?? ePower ?? 0);
@@ -99,9 +101,10 @@ export function parseQuantity(text: string): Quantity | null {
   if (!knownUnit(unit)) return null;
   const { digits, exponent } = sigFigs(mantissa!);
   const quantity: Quantity = { base: asWritten * factor, asWritten, factor, unit, digits, exponent: exponent + shift, alt: [] };
-  // 1,500 and 1.500 are one and a half or fifteen hundred, depending on the language. Both readings are kept.
+  // 1,500 and 1.500 are one and a half or fifteen hundred, depending on the language. Both readings are kept. The second
+  // is read from the normalised value: the raw text may write the comma as {,} or the digits full width, and would not change.
   if (/^[1-9]\d{0,2}[.,]\d{3}$/.test(mantissa!)) {
-    const other = parseQuantity(text.replace(/(\d)[.,](\d{3})(?!\d)/, '$1$2'));
+    const other = parseQuantity(rhs.replace(/(\d)[.,](\d{3})(?!\d)/, '$1$2'));
     if (other) quantity.alt.push(other, ...other.alt);
   }
   // The books write a power of ten as 10^{-3}, so 2e-3 in a solution is as likely 2·e − 3 (Euler's number) as 0,002: a
@@ -116,7 +119,10 @@ export function parseQuantity(text: string): Quantity | null {
 
 const NAME_VALUE = /^\s*(.+?)\s*[=:]\s*([-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?)\s*(.*)$/;
 
-function parsePrinted(stdout: string, rounded: boolean): Printed[] {
+/** How a program rounds what it prints: `true` when it does, or the coarsest step its formats leave on a printed number (`roundsOutput`). */
+type Rounding = boolean | ((printed: number) => number);
+
+function parsePrinted(stdout: string, rounded: Rounding): Printed[] {
   const out: Printed[] = [];
   for (const line of stdout.split('\n').slice(0, MAX_PRINTED_VALUES)) {
     const m = NAME_VALUE.exec(plain(line));
@@ -125,7 +131,10 @@ function parsePrinted(stdout: string, rounded: boolean): Printed[] {
     if (!Number.isFinite(value)) continue;
     const { factor, unit } = splitUnit(m[3] ?? '');
     if (!knownUnit(unit)) continue;
-    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step: rounded ? lastDigit(m[2]!) * factor : 0 });
+    // Python drops trailing zeros under the g format, so a short print ({x:.6g} of 0.001) may be exact: the
+    // step is the last printed digit, or the format's own step when that is finer.
+    const step = rounded ? Math.min(lastDigit(m[2]!), typeof rounded === 'function' ? rounded(value) : Infinity) * factor : 0;
+    out.push({ name: m[1]!, value: value * factor, unit: unit || null, text: line.trim(), step });
   }
   return out;
 }
@@ -143,9 +152,9 @@ const key = (name: string) => plain(name).toLowerCase().replace(/[^\p{L}\p{N}]/g
  * True when the printed value differs from the stated one by more than one unit of the stated last digit, or of the printed
  * one when the program printed fewer digits (0.002801 kg against 2.80068 g).
  */
-function differs(stated: Quantity, computed: number, scale: number, printedStep = 0, relative = 0): boolean {
+function differs(stated: Quantity, computed: number, scale: number, printedStep = 0, relative = 0, slack = 0): boolean {
   const tolerance = Math.max(Math.abs(scale) * 10 ** (stated.exponent - stated.digits + 1), printedStep, relative * Math.abs(stated.base));
-  return Math.abs(computed - stated.base) > Math.max(tolerance, 1e-12 * Math.abs(stated.base)) * (1 + 1e-9);
+  return Math.abs(computed - stated.base) + slack > Math.max(tolerance, 1e-12 * Math.abs(stated.base)) * (1 + 1e-9);
 }
 
 /** 'skip' means the two cannot be compared with confidence: another unit, or an unmarked value that fits only the number as written in a prefixed unit. */
@@ -162,10 +171,11 @@ function inSiUnits(q: Quantity): boolean {
 
 function compareReading(stated: Quantity, printed: Printed, relative: number): 'match' | 'mismatch' | 'skip' {
   const scale = stated.factor;
-  // The printed precision can only keep a value from being a mismatch, never make it a match: a value that agrees only
-  // within the last printed digit of a rounding program may be a plain print of an exact value (0.5 for 0.55), so it is
-  // left uncompared and the results are not settled by it.
-  const verdict = (s: Quantity, sc: number) => !differs(s, printed.value, sc, 0, relative) ? 'match' : differs(s, printed.value, sc, printed.step, relative) ? 'mismatch' : 'skip';
+  // The printed precision can keep a value from being a mismatch, but a match must hold for every value the printed digits
+  // allow: half a printed step either side. A value that agrees only within the last printed digit of a rounding program
+  // may be a plain print of an exact value (0.5 for 0.55), and 1.0 from "{v:.1f}" may be 1.04, which 1.00 does not state,
+  // so such a value is left uncompared and the results are not settled by it.
+  const verdict = (s: Quantity, sc: number) => !differs(s, printed.value, sc, 0, relative, printed.step / 2) ? 'match' : differs(s, printed.value, sc, printed.step, relative) ? 'mismatch' : 'skip';
   if (printed.unit !== null) return printed.unit !== stated.unit ? 'skip' : verdict(stated, scale);
   // The program was told to print SI base units, so an unmarked value is read as one.
   if (!inSiUnits(stated)) return 'skip';
@@ -193,11 +203,30 @@ function pair(stated: StatedValue[], printed: Printed[], byName: boolean): [Stat
 }
 
 /**
- * True when a program rounds or formats the numbers it prints (round(x, 4), "%.3f", f"{x:.4g}"), so a printed value is known
+ * Whether a program rounds or formats the numbers it prints (round(x, 4), "%.3f", f"{x:.4g}"), so a printed value is known
  * only to its last printed digit. A plain print shows the float in full, and a value that prints short (0.5, 3) is exact.
+ * For a program that rounds, the result gives the coarsest step any of its formats can leave on a printed number, since
+ * nothing ties a printed line to the format that wrote it; Infinity when a format's precision cannot be read.
  */
-export function roundsOutput(code: string | undefined): boolean {
-  return /\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/.test(code ?? '');
+export function roundsOutput(code: string | undefined): false | ((printed: number) => number) {
+  const text = code ?? '';
+  if (!/\bround\s*\(|%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/.test(text)) return false;
+  const known = [
+    ...[...text.matchAll(/:[^{}'"]*?\.(\d+)([fFgGeE%]?)\}/g), ...text.matchAll(/%[-+ 0#]*\d*(?:\.(\d*))?([fFgGeE])\b/g), ...text.matchAll(/\bformat\s*\([^()]*?,\s*['"][^'"]*?\.(\d+)([fFgGeE%]?)['"]\s*\)/g)]
+      // Python's default precision is six: "%g" shows six significant figures, "%f" six decimals.
+      .map((m) => ({ n: m[1] === undefined ? 6 : Number(m[1]), type: m[2]!.toLowerCase() })),
+  ];
+  const formats = (text.match(/%[-+ 0#]*\d*\.?\d*[fFgGeE]\b|:[^{}]*\.\d+[fFgGeE%]?\}|\bformat\s*\(/g) ?? []).length;
+  // A format this cannot read (format(x, spec)) leaves only the last printed digit, and so does any round() or float():
+  // a rounded number, or formatted text read back as one (float(s) with s = "%.4f" % i), may still be scaled before it is
+  // printed (1000 * round(i, 4) prints 1.2 mA, known to 0.1 mA).
+  if (known.length < formats || /\b(?:round|float)\s*\(/.test(text)) return () => Infinity;
+  return (printed) => Math.max(...known.map(({ n, type }) => {
+    if (type === 'f' || type === '%') return 10 ** -n;
+    if (printed === 0) return Infinity;
+    const lead = Math.floor(Math.log10(Math.abs(printed)));
+    return type === 'e' ? 10 ** (lead - n) : 10 ** (lead - Math.max(n, 1) + 1);
+  }));
 }
 
 /**
@@ -205,10 +234,10 @@ export function roundsOutput(code: string | undefined): boolean {
  * that fraction of the value; `byName` pairs values only by name, never a lone stated value with a lone printed one;
  * `rounded` (see `roundsOutput`) widens it to the last printed digit.
  */
-export function compareValues(stated: StatedValue[], stdout: string, opts: { relative?: number; byName?: boolean; rounded?: boolean } = {}): NumericCheck | null {
+export function compareValues(stated: StatedValue[], stdout: string, opts: { relative?: number; byName?: boolean; rounded?: Rounding } = {}): NumericCheck | null {
   const parsed = stated.flatMap((s) => { const q = parseQuantity(s.value); return q ? [{ s, q }] : []; });
   if (!parsed.length) return null;
-  const printed = parsePrinted(stdout, !!opts.rounded);
+  const printed = parsePrinted(stdout, opts.rounded ?? false);
   const compared: Comparison[] = [];
   const mismatches: Comparison[] = [];
   for (const [s, p] of pair(parsed.map((x) => x.s), printed, !!opts.byName)) {
